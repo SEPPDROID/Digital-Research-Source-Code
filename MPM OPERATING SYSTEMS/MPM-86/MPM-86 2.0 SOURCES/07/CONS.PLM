@@ -1,0 +1,115 @@
+$title ('MP/M-86 2.0 Console Identification')
+console:
+do;
+
+$include(copyrt.lit)
+
+$include(vaxcmd.lit)
+
+$include(comlit.lit)
+
+dcl mpmproduct lit '11h';
+dcl cpmversion lit '30h';
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+  mon3:
+    procedure (func,info) address external;
+      dcl func byte, info address;
+    end mon3;
+
+  /**************************************
+   *                                    *
+   *       B D O S   Externals          *
+   *                                    *
+   **************************************/
+
+  print$char: procedure(char);
+    declare char byte;
+    call mon1(2,char);
+  end print$char;
+
+  print$console$buffer:
+    procedure (buffer$address);
+      declare buffer$address address;
+      call mon1 (9,buffer$address);
+    end print$console$buffer;
+
+  version:
+    procedure address;
+      return mon3(12,0);
+    end version;
+
+  /**************************************
+   *                                    *
+   *       X D O S   Externals          *
+   *                                    *
+   **************************************/
+
+  terminate:
+    procedure;
+      call mon1 (143,0);
+    end terminate;
+
+  get$console$number:
+    procedure byte;
+      return mon2 (153,0);
+    end get$console$number;
+
+  printb: procedure;
+    call print$char(' ');
+  end printb;
+
+  pdecimal: procedure(v,prec,zerosup);
+                         /* print value v, field size = (log10 prec) + 1  */
+                         /* with leading zero suppression if zerosup = true */
+    declare v address,                          /* value to print           */
+            prec address,                       /* precision                */
+            zerosup boolean,                    /* zero suppression flag    */
+            d byte;                             /* current decimal digit    */
+
+    do while prec <> 0;
+        d = v / prec;                           /* get next digit           */
+        v = v mod prec;                         /* get remainder back to v  */
+        prec = prec / 10;                       /* ready for next digit     */
+        if prec <> 0 and zerosup and d = 0 then
+            call printb;
+        else
+        do;
+            zerosup = false;
+            call print$char('0'+d);
+            end;
+        end;
+end pdecimal;
+
+dcl vers address initial (0);
+
+  /*
+    Main Program
+  */
+
+plmstart: procedure public;
+    vers = version;
+    if high(vers) <> mpmproduct or low(vers) <> cpmversion then
+    do;
+       call print$console$buffer(.(0dh,0ah,'Requires MP/M-86 2.0$'));
+       call mon1(0,0);
+    end;
+
+    call print$console$buffer (.(0dh,0ah,'Console = $'));
+    call p$decimal (get$console$number,100,true);
+    call terminate;
+end plmstart;
+
+end console;
+

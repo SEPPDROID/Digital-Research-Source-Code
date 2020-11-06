@@ -1,0 +1,533 @@
+.bp odd
+.pn 23
+.cs 5
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.he
+.ce 2
+.tc 4  Basic Disk Operating System Functions
+.sh
+Section 4
+.sp
+.sh
+Basic Disk Operating System (BDOS) Functions
+.qs
+.he CP/M-8000 Programmer's Guide                     4  BDOS Functions
+.sp
+.pp 5
+To access a file or a drive, to output characters to the console, or
+to  reset the  system, your program  must access the CP/M-8000
+file system through the Basic Disk Operating System (BDOS). 
+The BDOS provides functions that allow your program to perform 
+these tasks. Table 4-1 summarizes the BDOS functions.
+.sp 2
+.ce
+.sh
+Table 4-1.  CP/M-8000 BDOS Functions
+.qs
+.sp
+.ix BDOS functions
+.in 1
+.nf
+F#     Function                    Type
+.sp
+ 0  System Reset          System/Program Control
+ 1  Console Input         Character I/O, Console Operation
+ 2  Console Output        Character I/O, Console Operation 
+ 3  Auxiliary Input*      Character I/O, Additional Serial I/O
+ 4  Auxiliary Output*     Character I/O, Additional Serial I/O
+ 5  List Output           Character I/O, Additional Serial I/O
+ 6  Direct Console I/O    Character I/O, Console Operation
+ 7  Get I/O Byte*         I/O Byte
+ 8  Set I/O Byte*         I/O Byte
+ 9  Print String          Character I/O, Console Operation
+10  Read Console Buffer   Character I/O, Console Operation
+11  Get Console Status    Character I/O, Console Operation
+12  Return Version Number System Control
+13  Reset Disk System     Drive
+14  Select Disk           Drive
+15  Open File             File Access
+16  Close File            File Access
+17  Search for First      File Access
+18  Search for Next       File Access
+19  Delete File           File Access
+20  Read Sequential       File Access
+21  Write Sequential      File Access
+22  Make File             File Access
+23  Rename File           File Access
+24  Return Login Vector   Drive
+25  Return Current Disk   Drive       
+26  Set DMA Address       File Access
+28  Write Protect Disk    Drive
+29  Get Read-Only Vector  Drive
+30  Set File Attributes   File Access
+31  Get Disk Parameters   Drive
+32  Set/Get User Code     System/Program Control
+33  Read Random           File Access
+34  Write Random          File Access
+35  Compute File Size     File Access
+
+* Must be implemented in the BIOS
+.bp
+.in 0
+.fi
+.ce
+.sh
+Table 4-1.  (continued)
+.qs
+.sp
+.in 1
+.nf
+F#     Function                    Type
+.sp
+36  Set Random Record     File Access
+37  Reset Drive           Drive
+40  Write Random With     File Access
+      Zero Fill                                  
+46  Get Disk Free Space   Drive
+47  Chain To Program      System/Program Control
+48  Flush Buffers         System/Program Control
+50  Direct BIOS Call      System/Program Control
+59  Program Load          System/Program Control
+61  Set Exception Vector  Exception
+62  Set Supervisor State  Exception 
+63  Get/Set TPA Limits    Exception
+.in 0
+.fi
+.sp 2
+.tc    4.1  BDOS Functions and Parameters 
+.he CP/M-86K Programmer's Guide                   4.1  BDOS Functions
+.sh
+4.1  BDOS Functions and Parameters
+.qs
+.pp
+To invoke a BDOS function, you must specify one or more parameters. Each
+BDOS function is identified by a number, which is the first parameter you
+must specify. The function number is loaded in register R5.
+Some functions require a second parameter, which is
+loaded, depending on its size, in word register R7 or longword register RR6.
+Byte parameters are passed as 16-bit words. 
+The low order byte contains the data, and the high order byte should be
+zeroed.  For example, the second parameter for the Console Output Function
+(2) is an ASCII character, which is a byte parameter. The character is
+loaded in the low order byte of R7. Some BDOS
+functions return a value, which is passed in 
+register R7.  The hexadecimal value FFFF is returned in register R7
+when you specify an invalid function number in your program. Table 4-2 
+illustrates
+the syntax and summarizes the registers that BDOS functions use. 
+.ix BDOS parameters
+.sp 2
+.ce
+.sh
+Table 4-2.  BDOS Parameter Summary
+.sp 
+.in 13
+.nf
+BDOS  Parameter                   Register
+.sp
+Function Number                     R5
+Word Parameter                      R7
+Longword Parameter                  RR6
+Return Value, if any                R7
+.fi
+.in 0
+.sp 2
+.tc         4.1.1 Invoking BDOS Functions
+.sh
+4.1.1  Invoking BDOS Functions
+.qs
+.pp
+After the parameters for a function are loaded in the appropriate
+registers, the program must specify a SC #2 (system call) instruction to
+access the BDOS and invoke the function. The example below
+illustrates the assembler syntax required to invoke the Console
+Output Function (2). 
+.ix BDOS functions, invoking
+.sp
+.nf
+        ld     r5,#2   ;Moves the function number to R5
+.sp
+        ld     r7,#'U' ;Moves the ASCII character upper-case U 
+                       ;to R7
+.sp
+        sc    #2       ;Accesses the BDOS to invoke the function.
+.sp 
+.fi
+.pp
+The example above outputs the ASCII character upper-case U to the
+console.  The assembler moves instructions load register R5 with
+the number 2 for the BDOS Console Output Function and register
+R7 with the ASCII character upper-case U.  A pair of single ('') or 
+double ("") quotation marks must enclose an ASCII character.  The 
+SC #2 instruction
+invokes the BDOS Output Console Function, which echos the 
+character on the console's screen.
+.ix Invoking BDOS Functions
+.ix SC #2 Instruction
+.ix BDOS output console function
+.sp 2
+.he CP/M-8000 Programmer's Guide                   4.1  BDOS Functions
+.tc         4.1.2  Organization Of BDOS Functions
+.ix BDOS Functions, organization of
+.sh
+4.1.2  Organization Of BDOS Functions
+.qs
+.pp
+The parameters and operation performed by each BDOS function are
+described in the following sections. Each BDOS function is
+categorized according to the function it performs. The categories
+are listed below. 
+.sp
+.in 3
+.nf
+o File Access
+o Drive Access
+o Character I/O
+o System/Program Control
+o Exception
+.fi
+.in 0
+.pp
+As you read the description of the functions, notice that some
+functions require an address parameter designating the starting location 
+of the direct memory access (DMA) buffer or file control block (FCB). 
+The DMA buffer is an area in memory where a 128-byte record 
+resides before a disk write function and after a disk read 
+operation. Functions often use the DMA buffer to obtain or 
+transfer data. The FCB is a 33- or 36-byte data structure that file
+access functions use. The FCB is described in 
+Section 4.2.1.
+.sp 2
+.he CP/M-8000 Programmer's Guide            4.2  File Access Functions
+.tc    4.2  File Access Functions
+.sh 
+4.2  File Access Functions
+.qs
+.ix file access functions
+.pp
+This section describes file access functions that create, delete,
+search for, read, and write files. They include the 
+functions listed in Table 4-3.
+.bp
+.ce
+.sh
+Table 4-3.   File Access Functions
+.sp
+.in 1 
+.nf
+                   Function         Function Number
+.qs
+.sp 
+               Open File                  15
+.sp 
+               Close File                 16
+.sp
+               Search For First           17
+.sp
+               Search For Next            18
+.sp
+               Delete File                19
+.sp
+               Read Sequential            20
+.sp
+               Write Sequential           21
+.sp
+               Make File                  22
+.sp
+               Rename File                23
+.sp
+               Set DMA Address            26
+.sp 
+               Read Random                33
+.sp
+               Write Random               34
+.sp
+               Compute File Size          35
+.sp
+               Write Random With
+               Zero Fill                  40
+.fi
+.in 0
+.sp 2
+.tc         4.2.1  A File Control Block (FCB)
+.sh
+4.2.1  A File Control Block (FCB)
+.qs
+.pp
+Most of the file access functions in Table 4-3 require the
+address of a File Control Block (FCB).  A FCB is a 33- or 36-byte
+data structure that provides file access information. The FCB can
+be 33 or 36 bytes when a file is accessed sequentially, but it must be
+36 bytes when a file is accessed randomly.  The last three bytes
+in the 36-byte FCB contain the random record number, which is
+used by random I/O functions and the Compute File Size Function
+(35). The starting location of a FCB must be an even-numbered
+address.  The format of a FCB and definitions of each of its
+fields are below.
+.bp
+.nf
+Field     dr f1 f2 ... f8 t1 t2 t3 ex s1 s2 rc d0 ... dn cr r0 r1 r2
+.sp
+Byte      00 01 02 ... 08 09 10 11 12 13 14 15 16 ... 31 32 33 34 35
+.sp
+.nf
+   dr        drive code (0 - 16)
+             0 => use default drive for file
+             1 => auto disk select drive A,
+             2 => auto disk select drive B,
+             ...
+             16=> auto disk select drive P.
+
+   f1...f8   contain the filename in ASCII
+             upper-case. High bit should equal 0
+             when the file is opened. 
+
+   t1,t2,t3  contain the filetype in ASCII
+             upper-case. The high bit should equal 0
+             when the file is opened. For the Set File
+             Attributes Function (see Section 4.2.13),             
+             t1', t2', and t3' denote the high bit.  The
+             list below indicates which attributes are set
+             when these bits are set and equal the value 1.
+             t1' = 1 => Read-Only file
+             t2' = 1 => SYS file 
+             t3' = 1 => Archive
+
+    ex       contains the current extent number,
+             normally set to 00 by the user, but is in the
+             range 0 - 31 (decimal) for file I/O
+
+    s1       reserved for internal system use
+
+    s2       reserved for internal system use, set to zero for
+             Open (15), Make (22), Search (17,18) file functions.
+
+    rc       record count field, reserved for system use
+
+    d0...dn  filled in by CP/M, reserved for
+             system use
+
+    cr       current record to be read or written;  
+             for a sequential read or write file 
+             operation, the program normally sets 
+             this field to zero to access the first
+             record in the file
+
+    r0,r1,r2 optional, contain random record number 
+             in the range 0-3FFFFH; bytes r0, r1, and r2
+             are a 24-bit value with the most significant 
+             byte r0 and the least significant byte r2. 
+             Random I/O functions use the random record              
+             number in this field.
+.fi
+.pp
+For users of other versions of CP/M, note that both CP/M-80
+Version 2.2 and CP/M-8000 perform directory operations in a
+reserved area of memory that does not affect the DMA buffer
+contents, except for the Search For First (17) and Search For
+Next (18) Functions in which the directory record is copied to
+the current DMA buffer. 
+.sp 2
+.tc         4.2.2  File Processing Errors
+.sh
+4.2.2  File Processing Errors
+.qs
+.ix file processing errors
+.pp
+When a program calls a BDOS function to process a file, an error condition can 
+cause the BDOS to return one of five error messages to the console:
+.sp 
+.in 3
+.nf
+o CP/M Disk read error
+o CP/M Disk write error
+o CP/M Disk select error
+o CP/M Disk change error
+o CP/M Disk file error:  ffffffff.ttt is read-only.
+.fi
+.in 0
+.ix disk read error
+.ix disk write error
+.ix disk select error
+.ix disk change error
+.ix disk file error
+.sp 
+.in 0
+Except for the CP/M Disk file error, CP/M-8000 displays the error message at 
+the console in the format:
+.sp 
+.ti 8
+"error message text" on drive x
+.sp  
+The "error message text" is one of the error messages listed above. The
+variable x is a one-letter drive code that indicates the drive on which
+CP/M-8000 detects the error.  CP/M-8000 displays the CP/M Disk file error in
+the format shown above. 
+.pp
+When CP/M-8000 detects one of these errors, the BDOS traps it. 
+CP/M-8000 displays a message indicating the error and, depending on the 
+error, allows you to abort the program, retry the operation, or continue
+processing. Each of these errors and their options are described below.
+.ix read error
+.ix write error
+.pp
+CP/M issues a CP/M Disk read or write error when the BDOS receives a
+hardware error from the BIOS.  The BDOS specifies BIOS read and write
+sector commands when the BDOS executes file-related system functions. If
+the BIOS read or write routine detects a hardware error, the BIOS returns
+an error code to the BDOS that results in CP/M-8000 displaying a disk
+read or write error message at your console. In addition to the error
+message, CP/M-8000 also displays the option message:
+.sp
+.nf
+Do you want to Abort (A), Retry (R), or Continue with bad data (C)?
+.fi
+.sp
+In response to the option message, you type one of the 
+letters enclosed in parentheses and a RETURN.  Each of these 
+options is described below.
+.bp
+.ce
+.sh
+Table 4-4.  Read-Write Error Message Response Options
+.qs
+.in 5
+.sp
+.nf
+Option                         Action 
+.fi
+.sp
+.ll 60
+.in 18
+.ti -10
+A         The A option or CTRL-C aborts the program and returns control to
+the CCP. CP/M-8000 returns the system prompt (>) preceded by the drive code.
+.sp
+.ti -10
+R         The R option retries the operation that caused the error.  For
+example, it rereads or rewrites the sector. 
+If the operation succeeds, program execution continues
+as if no error occurred.  However, if the operation fails, the error
+message and option message is displayed again. 
+.sp
+.ti -10
+C         The C option ignores the error that occurred and continues
+program execution.  The C option is not an appropriate response for all
+types of programs. Program execution should not be continued in some cases.
+For example, if you are updating a data base and receive a read or write
+error but continue program execution, you can corrupt the index fields and
+the entire data base. For other programs, continuing program execution is
+recommended. For example, when you transfer a long text file and receive an
+error because one sector is bad, you can continue transferring the file.
+After the file is transferred, review the file. Using an editor, add the
+data that was not transferred due to the bad sector. 
+.in 0
+.ll 65
+.sp
+.pp
+Any response other than an A, R, C, or CTRL-C is invalid. The BDOS
+reissues the option message if you enter any other response. 
+.pp
+The CP/M Disk select error occurs when you select a disk but
+you receive an error due to one of the conditions below.
+.sp
+.in 3
+.nf
+o  You specified a disk drive not supported by the BIOS.
+o  The BDOS receives an error from the BIOS.
+o  You specified a disk drive outside the range A through P.
+.sp
+.mt 4
+.hm 1
+.in 0
+.fi
+Before the BDOS issues a read or write function to
+the BIOS, the BDOS issues a disk select function to the BIOS.  If the BIOS
+does not support the drive specified in the function, or if an error occurs,
+the BIOS returns an error to the BDOS, which in turn, causes CP/M-8000 to
+display the disk select error at your console.  If the error is caused by 
+a BIOS error, CP/M-8000 returns the option message:
+.sp
+.in 8
+Do you want to Abort (A) or Retry (R)?
+.sp
+.qi
+To select one of the options in the message, specify one of the letters
+enclosed in parentheses.  The A option terminates the program and
+returns control to the CCP. The R option tries to select the disk
+again.  If the disk select function fails, CP/M-8000 redisplays the disk
+select error message and the option message. 
+.pp
+.mb 5
+.fm 1
+However, if the error is caused because you specify a disk drive outside
+the range A through P, only the CP/M Disk select error is
+displayed.  CP/M-8000 aborts the program and returns control to the CCP.
+.pp
+Your console displays the CP/M Disk change error message when the BDOS
+detects the disk in the drive is not the same disk that was logged in 
+previously. Your program cannot recover 
+from this error. Your program
+terminates. CP/M-8000 returns program control to the CCP. 
+.pp
+You log in a disk by accessing the disk or resetting the disk
+or disk system.  The Select Disk Function (14) resets a disk. The Reset Disk 
+System Function (13) resets the disk system. Files
+cannot be open when your program invokes either of these functions. 
+.ix disk file error
+.pp
+You receive the CP/M Disk file error and option messages (shown below) if
+you call the BDOS to write to a file that is set to read-only status. 
+Either a STAT command or the BDOS Set File Attributes Function (30) sets a
+file to read-only status. 
+.sp
+.in 8
+CP/M Disk file error:  ffffffff.ttt is read-only.
+.sp
+Do you want to: Change it to read/write (C), or Abort (A)?
+.sp
+.qi
+The variable ffffffff.ttt in the error message denotes the filename and
+filetype.  To select one of the options, specify one of the letters
+enclosed in parentheses. Each option is described below. 
+.sp 2
+.ce
+.sh
+Table 4-5.  Disk File Error Response Options
+.qs
+.in 5
+.sp
+.nf
+Option                         Action 
+.fi
+.ll 60
+.in 16
+.sp
+.ti -8
+C       Changes the status of this file from read-only to 
+read-write and continues executing the program that was being 
+processed when this error occurred. 
+.sp
+.mt 5
+.hm 2
+.ti -8
+A       Terminates execution of the program that was being processed
+and returns program control to the CCP. The status of the file remains
+read-only. If you enter a CTRL-C, it  has the same effect as specifying the
+A option. 
+.in 0
+.ll 65
+.sp
+.pp
+CP/M-8000 reprompts with the option message if you enter any response
+other than those described above.
+.mb 6
+.fm 2
+.nx fourb

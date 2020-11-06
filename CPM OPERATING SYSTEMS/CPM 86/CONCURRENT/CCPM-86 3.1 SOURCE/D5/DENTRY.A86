@@ -1,0 +1,340 @@
+
+title	'CCP/M disk entry'
+
+include exerror.equ
+include diskhdr.equ
+include system.lib
+
+
+;*****************************************************
+;*
+;*	DISK I/O EQUATES
+;*
+;*****************************************************
+;
+max_retries	equ 	02	;retries on disk i/o
+				;before perm error
+
+eject ! include dskcomn.equ
+
+FIRST_CALL_FLAG	EQU	01H
+
+eject
+
+cgroup group code, data
+
+	cseg
+
+public	io_seldsk, io_read, io_write, io_flushbuf
+public	io_select
+
+extrn	sysdat:word
+extrn	supif:near, intdisp:near
+
+extrn	f_dsk_sel:near
+extrn	h_dsk_sel:near
+
+extrn	read:near, h_read:near, read_m_dsk:near
+extrn	write:near, h_write:near, write_M_dsk:near
+
+	dseg
+
+
+public	disk_modes, log_phy, phy_log
+public	idrive, itrack, isector, idmaoff, idmaseg
+
+
+eject ! include sysdat.lib
+
+	cseg
+
+
+;*****************************************************
+;*
+;* 	    DISK IO CODE AREA
+;*
+;*****************************************************
+
+;=========
+io_seldsk:	; Function 9:  Select Disk
+;=========
+;	input:	CL = disk to be selected
+;		DL = 00h if disk has not been previously selected
+;		   = 01h if disk has been previously selected
+;	output:	AX = 0 if illegal disk
+;		   = offset of DPH relative from
+;			XIOS Data Segment
+	cseg
+
+	cmp	cl,16
+	jb	sel_ok		;check for valid drive
+	mov	ax,0		;return error if not
+	ret
+
+sel_ok:
+	xor	bx,bx
+	mov	bl,cl
+	mov	cl,con_tab[bx]	; allows easy modification of logical to
+				; physical representation of drives
+
+io_select:			; RESKEW entry point
+	mov	idrive,cl
+
+	xor bx, bx
+	mov bl,cl
+	shl bx, 1
+	call select_tbl[bx]
+	
+io_sd_exit:
+
+
+	ret
+
+eject
+
+;=======
+io_read:	; Function 10: Read sector
+;=======
+; Reads the sector on the current disk, track and
+; sector into the current dma buffer.
+;	input:	parameters on stack
+;	output:	AL = 000h if no error occured
+;		AL = 001h if an error occured
+;		   = 0ffh if media density has changed
+
+
+	mov bp,sp
+
+	mov al,drive
+	cmp al,16! jb rdsk_ok	;check for valid drive
+	  mov al,1		;return error if not
+	  mov ah,ATTA_FAILED
+	  ret
+rdsk_ok:
+
+	xor	bx,bx
+	mov	bl,drive
+	mov	al,con_tab[bx]
+	mov	drive,al
+
+	mov idrive,al		;save DPH index in local variable
+
+;***	xor	bx,bx		; stores drive mode (0=CCP/M other=PC_MODE)
+;***	mov	bl,al
+;***	mov	bl,disk_modes[bx]
+;***	mov	c_mode,bl
+
+	xor ah,ah		;Index into the physical driver
+	mov si,ax
+	shl si,1
+	jmp read_tbl[si]	;jump to physical driver read routine
+
+eject
+
+;========
+io_write:	; Function 11: Write disk
+;========
+; Write the sector in the current Dma buffer
+; to the current disk on the current
+; track in the current sector.
+;	input:	CL = 0 - Defered Writes
+;		     1 - non-defered writes
+;		     2 - def-wrt 1st sect unalloc blk
+;	output:	AL = 000h if no error occured
+;		   = 001h if error occured
+;		   = 002h if read only disk
+;		   = 0ffh if media density has changed
+	
+	mov bp,sp		;set BP for indexing into IOPB
+	mov al,drive
+	cmp al,16! jb wdsk_ok	;check if valid drive
+	  mov al,1		;return error if not
+	  mov ah,ATTA_FAILED
+	  ret
+wdsk_ok:
+
+	xor	bx,bx
+	mov	bl,drive
+	mov	al,con_tab[bx]
+	mov	drive,al
+
+	mov idrive,al		;save DPH index in local variable
+
+;***	xor	bx,bx		; stores drive mode (0=CCP/M other=PC_MODE)
+;***	mov	bl,al
+;***	mov	bl,disk_modes[bx]
+;***	mov	c_mode,bl
+
+	xor ah,ah		;Index into the physical driver
+	mov si,ax
+	shl si,1
+	jmp write_tbl[si]	;jump to physical driver write routine
+
+;===========
+io_flushbuf:	; Function 12: Flush Buffer
+;===========
+;	input:	None
+;	output:	AL = 00h if no error occurs
+;		   = 01h if error occurs
+;		   = 02h if read/only disk
+
+	xor al,al	;no need to flush buffer with
+	ret		; no blocking/deblocking in XIOS
+
+
+ret_error:
+;--------
+
+	mov al, 01
+	mov ah,ATTA_FAILED
+
+	ret
+
+
+eject
+
+	dseg
+
+read_error_type		db	0
+write_error_type	db	0
+
+
+;*****************************************************
+;*
+;*	IOPB for disk I/O
+;*
+;*****************************************************
+
+; iopb	dd	loczero		;pointer for 8089
+opcode	db	0		;operation code
+idrive	db	0		;disk drive id
+itrack	dw	0		;track for I/O
+head	db	0		;head for I/O
+isector	db	0		;sector for I/O
+count	db	0		;number of sectors for I/O
+retcode	db	0		;return code from operation
+retmask	db	0		;return code mask
+retries	db	0		;number of error retries
+idmaoff	dw	0		;DMA offset address
+idmaseg	dw	0		;DMA segment address
+seclen	dw	0		;sector length
+	dw	0,0,0		;work area
+
+eject
+
+;
+; Disk Parameter block header table
+; Currently set up for 
+;	A hard disk
+;	B hard disk
+;	C hard disk
+;	D floppy
+;	E floppy
+;	M Memory disk
+
+select_tbl:
+		dw	offset h_dsk_sel	; first hard disk
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset f_dsk_sel	; first floppy
+		dw	offset f_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+		dw	offset h_dsk_sel
+
+read_tbl	dw	offset h_read
+		dw	offset h_read
+		dw	offset h_read
+		dw	offset read
+		dw	offset read
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset read_m_dsk
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+
+write_tbl	dw	offset h_write
+		dw	offset h_write
+		dw	offset h_write
+		dw	offset write
+		dw	offset write
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset write_m_dsk
+		dw	offset ret_error
+		dw	offset ret_error
+		dw	offset ret_error
+
+; used to allow easy modification of logical to physical drives
+
+con_tab		db	0
+		db	1
+		db	2
+		db	3
+		db	4
+		db	5
+		db	6
+		db	7
+		db	8
+		db	9
+		db	10
+		db	11
+		db	12
+		db	13
+		db	14
+		db	15
+
+; used to store operating modes for disk drivers
+;	if 0 then CP/M else DOS
+
+disk_modes	db	0,0,0,0
+		db	0,0,0,0
+		db	0,0,0,0
+		db	0,0,0,0
+
+; Floppy code uses to get correct physical floppy
+
+log_phy		db	255	; A
+		db	255	; B
+		db	255	; C
+		db	0	; D	physical floppy 0
+		db	1	; E	physical floppy 1
+		db	255
+		db	255
+		db	255
+		db	255
+		db	255
+		db	255
+		db	255
+		db	255	; M
+		db	255
+		db	255
+		db	255
+
+;	For Floppy routines to determine what logical drive is currently
+;	 using the physical drive.
+
+phy_log		db	0
+		db	0
+
+	end
+

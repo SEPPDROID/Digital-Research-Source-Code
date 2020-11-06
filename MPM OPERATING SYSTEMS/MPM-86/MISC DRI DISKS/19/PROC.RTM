@@ -1,0 +1,190 @@
+
+;*****************************************************
+;*
+;*	Process Routines
+;*
+;*****************************************************
+
+;======		=========================
+freepd:		; Free Process Descriptor
+;======		=========================
+; Assumes no memory and on no list except thread.
+;	input:	SI = pd address
+
+	mov di,(offset thrdrt)-p_thread
+freepd_npd:
+	mov bx,p_thread[di]	;find pd on thread
+	cmp bx,si ! je freepd_trd
+	    mov di,bx ! jmps freepd_npd
+freepd_trd:
+	mov ax,p_thread[si] ! mov p_thread[di],ax
+	mov ax,p_flag[si] ! and ax,pf_table
+	cmp ax,0 ! jz freepd_exit
+	    mov bx,pul ! mov p_link[si],bx
+	    mov pul,si
+freepd_exit:
+	ret
+
+;==========		================
+proc_creat:		; Create Process
+;==========		================
+;		DX = pd address in u_wrkseg
+
+	cmp dx,0 ! jne cp_doit
+	    sub bx,bx ! ret
+cp_doit:
+	call getpdadr		;si->pdaddr in rtm
+	jcxz cp_gpd
+	    mov bx,0ffffh ! ret
+cp_gpd:
+	mov dx,p_link[si]
+	push dx ! push si
+		; init uda fields
+cp_uda:
+		;set Parent
+
+	mov bx,rlr
+	mov p_parent[si],bx
+	and p_flag[bx],not pf_childabort
+	mov al,p_lst[si]
+	cmp al,nlstdev ! jb cp_slst
+	    mov al,0
+cp_slst:add al,ncondev
+	mov p_lst[si],al
+	and p_flag[si],not pf_resource
+
+		;share memory
+
+	cmp p_mem[bx],0 ! je cp_nm
+	    cmp p_mem[si],0 ! jne cp_nm
+		lea di,p_mem[bx]
+cp_mnxt:	mov di,ms_link[di]
+		cmp di,0 ! je cp_nm
+		    push di
+		    push ms_start[di] ! push si ! push bx
+		    mov cx,f_share ! mov dx,sp
+		    push ds ! mov ax,ss ! mov ds,ax
+		    call mpmif ! pop ds
+		    pop bx ! pop si ! pop ax ! pop di
+		    jmps cp_mnxt
+cp_nm:
+		;set physical UDA segment
+
+	mov ax,u_wrkseg
+	mov dx,p_uda[si] ! add dx,ax
+	mov p_uda[si],dx
+
+		;inherit password
+
+	push es ! push ds
+	mov cx,es ! mov es,dx ! mov ds,cx
+	mov si,offset u_df_password ! mov di,si
+	mov cx,4 ! rep movsw
+
+		;set initial segment values
+
+	mov ds,dx ! sub dx,dx
+	cmp ds:u_initcs,dx ! jne cp_uda1
+	    mov ds:u_initcs,ax
+cp_uda1:cmp ds:u_initds,dx ! jne cp_uda2
+	    mov ds:u_initds,ax
+cp_uda2:cmp ds:u_initss,dx ! jne cp_uda3
+	    mov ds:u_initss,ax
+cp_uda3:cmp ds:u_inites,dx ! jne cp_uda4
+	    mov ds:u_inites,ax
+cp_uda4:
+
+		;interrupt vector save areas
+		;DX = 0
+		; set ints 0-4
+
+	mov ds,dx
+	mov si,dx ! mov di,offset u_ivectors
+	mov cx,10 ! rep movs ax,ax
+
+		; set mpmint,debugint
+
+	mov si,offset i_mpm_ip
+	mov di,offset u_mpm_ip
+	mov cx,4 ! rep movs ax,ax
+
+		; set user's stack
+
+	push es ! pop ds
+	mov ax,ds:u_initss
+	mov ds:u_ss,ax
+	mov ax,ds:u_stack_sp
+	mov ds:u_sp,ax
+
+		; set other uda values
+
+	mov ds:u_error_mode,0
+	mov ds:u_pd_cnt,0
+	mov ds:u_mult_cnt,1
+	mov ds:u_in_int,true
+	mov ds:u_insys,0
+	mov bx,ds:u_initds
+	mov ds:u_ds_sav,bx
+	mov ds:u_dma_seg,bx
+	mov ax,ds:u_inites
+	mov ds:u_es_sav,ax
+	mov ds:u_dparam,dx
+	mov ds:u_flag_sav,0
+
+		; setup user stack for iret
+
+	mov ds,ds:u_ss
+	mov di,u_sp			;sp->offset
+	mov ax,u_initcs
+	mov 2[di],ax			;  ->segment
+	mov word ptr 4[di],0200h	;  ->flags
+	pop ds ! pop es
+
+		; put on thread list
+
+	pop si ! pushf ! cli
+	mov dx,thrdrt ! mov p_thread[si],dx
+	mov thrdrt,si
+
+		; put on dispatcher ready list
+
+	mov dx,drl ! mov p_link[si],dx
+	mov drl,si ! popf
+
+		; do the next process
+
+	pop dx ! jmp proc_creat
+
+
+getpdadr:
+;--------
+; Make sure pd address is in operating system.  If not, copy into
+; one in pd table.  Make address relative to sysdat
+;	input:	DX = pd address in u_wrkseg
+;	output:	SI = pd address in sysdat
+
+	push dx ! mov ax,u_wrkseg
+	push ax ! mov cl,4 ! shr dx,cl
+	add ax,dx
+	cmp ax,sysdat ! jb gpd_bad
+	    cmp ax,endseg ! jae gpd_bad
+		mov cx,sysdat ! add cx,1000h
+		cmp ax,cx ! jae gpd_bad
+		    pop ax ! sub ax,sysdat
+		    mov cl,4 ! shl ax,cl
+		    pop dx ! add dx,ax
+		    mov si,dx ! sub cx,cx ! ret
+gpd_bad:
+	pop ax ! pop dx ! pushf ! cli
+	mov di,pul
+	cmp di,0 ! jne gpd_have
+	    mov cx,e_no_pd ! popf ! ret
+gpd_have:
+	mov ax,p_link[di] ! mov pul,ax
+	push di ! push es ! push ds
+	mov ds,u_wrkseg ! pop es
+	mov si,dx ! mov cx,pdlen/2
+	rep movsw
+	push es ! pop ds ! pop es ! pop si
+	or p_flag[si],pf_table ! popf ! ret
+

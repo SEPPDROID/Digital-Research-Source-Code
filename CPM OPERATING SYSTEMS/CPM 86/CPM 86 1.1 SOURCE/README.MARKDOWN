@@ -1,0 +1,1 @@
+This folder contains a couple of original DRI CP/M-86 1.1 sources in Assembly language, including the ROM bootstrap and BIOS for the iSBC86/12 with Intel SBC 204 floppy controller.

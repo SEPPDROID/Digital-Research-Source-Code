@@ -1,0 +1,884 @@
+;*****************************************************
+;*
+;*	Submit MP/M-86
+;*
+;*****************************************************
+
+true		equ	0ffh
+false		equ	0
+unknown		equ	0
+mpmint			equ	224	  ; int vec for mpm ent.
+
+mpm_conin		equ	1
+mpm_conout		equ	2
+mpm_conwrite		equ	9
+mpm_conread		equ	10
+mpm_constat		equ	11
+mpm_version		equ	12
+mpm_diskselect		equ	14
+mpm_openfile		equ	15
+mpm_readfile		equ	20
+mpm_getdefdisk		equ	25
+mpm_setdma		equ	26
+mpm_usercode		equ	32
+mpm_terminate		equ	143
+mpm_setprior		equ	145
+mpm_conattach		equ	146
+mpm_condetach		equ	147
+mpm_setdefcon		equ	148
+mpm_clicmd		equ	150
+mpm_parse		equ	152
+mpm_getdefcon		equ	153
+mpm_getpdadr		equ	156
+mpm_setdeflst		equ	160
+mpm_getdeflst		equ	164
+
+					; fcb offsets
+mode2			equ	6	; 2nd open mode byte
+ftype			equ	9	; file type
+cr			equ	32	; offset of current record
+
+e_no_memory		equ	3   ; cant find memory
+e_no_pd		   	equ	12  ; no free pd's
+e_q_full	   	equ	15  ; full queue
+e_badfname	   	equ	24  ; illegal filename
+e_badftype	   	equ	25  ; illegal filetype
+e_bad_load	   	equ	28  ; bad ret. from BDOS load
+e_bad_read	   	equ	29  ; bad ret. from BDOS read
+e_bad_open	   	equ	30  ; bad ret. from BDOS open
+e_nullcmd	   	equ	31  ; null command sent
+
+p_prior			equ	05H		;process descriptor priority
+p_flag			equ	word ptr 06H	;flags
+p_name			equ	08H		;name of process
+p_parent		equ	1EH		;PD's parent
+
+pf_keep			equ	02H	;keep flag
+pf_childabort		equ	800H	;child aborted abnormally
+pf_ctlc			equ	080H	;control c occured
+
+;*****************************************************
+;*
+;*	Submit Code
+;*
+;*****************************************************
+
+	cseg
+	org	0
+
+	jmps submit
+
+	db	'COPYRIGHT (C) 1981,'
+	db	' DIGITAL RESEARCH '
+	db	'5 Oct 1981'
+	db	13,10,0,'$'
+
+
+;======
+submit:	; PROGRAM MAIN - INITIALIZATION
+;======
+	mov ax,ds
+	pushf ! pop bx
+	mov ss,ax
+	mov sp,offset stacktop
+	push bx ! popf
+
+	mov cl,mpm_version
+	call mpm
+	cmp bh,11H
+	jz okvers
+	    mov dx,offset wrongvers
+	    mov cl, mpm_conwrite ! call mpm
+	    mov cl,0 ! call mpm	    
+okvers:
+
+	;
+	;set priority better than parent
+	;
+
+	mov cl,mpm_getpdadr
+	call mpm			;get our PD address
+	mov pdadr,bx			;save PD address
+	mov sysdatseg,es		;and the system data area segment
+	mov bx,es:p_parent[bx]		;get our parent's PD address
+	cmp bx,0 ! jne psetpar		;see if parent exists
+	    mov dx,197 ! jmps setp	; oops, set to better than TMP
+psetpar:mov dx,es:p_prior[bx]		;our parent's priority
+	dec dx				;we run at one better,
+	cmp dx,64 ! jae setp
+	    mov dx,64			;don't compete w/system
+setp:	mov cl,mpm_setprior
+	call mpm			;set our priority
+
+	mov cl,mpm_setdma		;using default buffer at 80H for
+	mov dx,offset dma		;command tail and argument expansion
+	call mpm
+
+	mov si,offset fcb
+	mov byte ptr ftype[si],'S'	;look for file with type = SUB
+	mov byte ptr ftype+1[si],'U'
+	mov byte ptr ftype+2[si],'B'
+	mov byte ptr cr[si],0		;zero current record
+	or byte ptr mode2[si],80h	;open in R/O mode
+        mov dx,si
+	call openfile
+	cmp al,0ffh
+	jnz exists
+	mov dx,offset sopen_err
+	call con_write
+	jmp submitexit
+
+exists:
+	mov al,fcb		;save disk number where command file is
+	cmp al,0		;default disk ?
+	jnz save_disk_no
+	mov cl,mpm_getdefdisk
+	call mpm
+	inc al
+
+save_disk_no:
+	mov command_disk,al
+
+	mov cl,mpm_usercode		;save user number of 
+	mov dl,0ffh
+	call mpm			;command file
+	mov command_user,al
+
+	mov cx,mpm_getdefcon
+	call mpm			;save console number this
+	mov command_con,al			;program was run from
+					
+
+
+;
+;deblank command tail
+;
+	mov si,offset cmdtail + 1
+	mov di,offset deblankbuf
+firstwhites:
+	cmp byte ptr [si],' '
+	jnz tab
+	jmps morewhites
+tab:
+	cmp byte ptr [si],9
+	jnz deblank
+morewhites:
+	inc si
+	jmps firstwhites
+deblank:
+	mov al,byte ptr [si]
+	inc si
+	cmp al,' '
+	jz skipwhite
+	cmp al,9		;tab
+	jz skipwhite
+	jmps copychar
+
+copychar:
+	cmp al,0		;end of of command tail ?
+	jz putlastblank
+	mov [di],al
+	inc di
+	jmps deblank
+putlastblank:
+	mov byte ptr [di],' '
+	inc di
+	mov [di],al		;ends with space and zero
+	jmps dedone
+
+skipmore:
+	inc si
+skipwhite:			;input = si points at tab or blank
+	mov al,[si]
+	cmp al,' '
+	jz skipmore
+	cmp al,9		;tab
+	jz skipmore
+	mov byte ptr [di],' '
+	inc di
+	jmps deblank			;si points to non white char
+ 					;di is next char to copy
+dedone:
+
+
+;
+;fill argument tail
+;
+
+	mov bp,offset deblankbuf
+	mov bx,offset argtable
+	xor si,si			;pointer into deblankbuf
+	mov di,si			;index into argtable
+nxtfill:
+	mov al,byte ptr [bp + si]	;0th argument is '<filename>.sub'
+	cmp al,0
+	jz filldone
+	mov [bx + di],si
+	inc di
+	call skiparg			;skip over argument and blank
+	jmps nxtfill
+
+skiparg:
+	inc si
+	cmp byte ptr [bp + si],' '
+	jnz skiparg
+	inc si				;char after blank
+	ret
+
+filldone:
+	mov numargs,di
+	call crlf
+					;get first command from SUB file
+        mov cmdbuf,maxcmdlen ! mov dx,offset cmdbuf
+	call readbuffer			;read from file to next crlf
+        cmp bx,0 ! je topofcmdloop	;assume EOF if BX <> 0
+	;jmp submitexit
+
+;==========
+submitexit:
+;==========
+
+	mov cl,0 ! mov dx,0
+	;jmp mpm
+
+;===
+mpm:	; INTERFACE ROUTINE FOR SYSTEM ENTRY POINTS
+;===
+
+	int mpmint ! ret
+
+;===========
+topofcmdloop:	; LOOP FOREVER
+;===========
+
+	;
+	; check to see if control c was typed during last command 
+	;
+	    mov bx,pdadr
+	    mov es,sysdatseg
+	    test es:p_flag[bx],pf_childabort
+	    jz gonext
+
+                and es:p_flag[bx],not pf_childabort   ;turn off child abort flg
+		mov cl,11 ! mov si,offset fcb + 1
+		mov di, offset subfilename
+		push ds ! pop es
+		rep movs al,al
+		mov dx,offset askabortmsg
+		call con_write
+		call charin
+		and al,5fh		;make upper case
+		cmp al,'Y'
+		jnz gonext
+					;stop this submit and turn on
+					;pf_ctlc flag
+
+		    mov bx,pdadr ! mov es,sysdatseg
+		    or es:p_flag[bx],pf_ctlc
+submitexit1:	    jmp submitexit 
+
+gonext:
+
+	;
+	; print CR,LF if we just sent a command
+	;
+
+	    cmp cmdsent,false ! je noclearline
+		mov cmdsent,false
+		call crlf
+
+noclearline:
+
+	;
+	; set up and print user prompt
+	;
+
+		; get current default disk
+
+	    mov cl,mpm_getdefdisk ! call mpm
+	    mov defdisk,al
+
+		; get current default user #
+		; this call should be made on every
+		; loop in case the 'USER' program
+		; has changed the default user number
+
+	    mov cl,mpm_usercode ! mov dl,0ffh
+	    call mpm
+	    mov defuser,al
+
+		;create user part of prompt string
+
+	    mov promptutens,13
+	    mov promptuones,'0'
+	    cmp	al,10 ! jb ones
+	        mov promptutens,'1'
+		sub al,10
+ones:	    add promptuones,al
+
+		; create disk part of prompt string
+
+	    mov al,'A' ! add al,defdisk
+	    mov promptdisk,al	
+
+		; write user prompt
+
+	    mov dx,offset prompt
+	    cmp promptutens,13 ! jne writeprompt
+		mov dx,offset promptutens
+writeprompt:
+	    mov cl,mpm_conwrite ! call mpm	
+
+	;
+	; copy command to cli buffer, make upper case and
+	; expand command arguments
+	;
+
+	    mov si,offset cmd		;where command is 
+	    mov bp,offset clicmd	;copy w/ expanded args here
+	    xor di,di			;index into cli command
+	nextchar:
+	    mov al,[si]			;char from command
+	    inc si
+	    cmp al,'$'			;argument ?		
+	    jz argmaybe
+	noarg:
+	    call copyit
+	    jmps nextchar
+
+	argmaybe:
+	    cmp byte ptr [si],'0'	;is next char after '$' a digit ?
+	    jb  noarg
+	    cmp byte ptr [si],'9'
+	    ja  noarg
+	realarg:
+	    xor ax,ax			;copy argument throw out - '$' in al
+	    mov al,[si]
+	    sub al,'0'			;1st digit
+	    inc si	
+	    cmp byte ptr [si],'0'	;is there a second digit ?
+	    jb onedigit
+	    cmp byte ptr [si],'9'
+	    ja onedigit
+	    mov dl,10			;1st digit is tens in column
+	    mul dl
+	    mov dl,[si]			;2nd argument is ones column
+	    inc si
+	    sub dl,'0'
+	    add al,dl
+	onedigit:
+	    mov bx,ax 
+	copyarg:
+	    cmp bx,numargs		;
+	    jb oknum			;numargs in range 1 to n 
+	    jmps nextchar		;no such argument
+	oknum:
+	    mov bl,argtable[bx]		;argument address rel to deblankbuf
+	copymore:
+	    mov al,deblankbuf[bx]
+	    cmp al,' '
+	    jz nextchar			;end of argument
+	    call copyit
+	    inc bx
+	    jmps copymore
+
+					;utility subroutine
+	copyit:
+	    mov [bp + di],al		;mov to cli command buffer
+	    inc di
+	    cmp di,maxcmdlen		;cli buffer size
+	    jae donecopy
+	testend:
+	    cmp al,0
+	    jz donecopy
+	    ret
+	donecopy:
+	    mov byte ptr [bp + di], '$'
+	    pop ax			;return is garbage
+	    ;jmps echocommand		;fall through to echocommand
+
+	echocommand:
+	    				;print command after argument
+	    mov dx,offset clicmd	;substitution
+	    mov bx,dx ! cmp byte ptr [bx], '$'
+	    jnz writecommand
+		inc dx			;skip '$' if line begins with '$'
+writecommand:
+	    call con_write
+	
+	;
+	; echo newline
+	;
+
+	    call crlf
+
+	;
+	; make sure not a null command
+	;
+
+	    lea bx,cmd
+	    cmp blen,0 ! je gonextcmd
+		cmp byte ptr [bx],';' ! je gonextcmd
+
+	;
+	; see if disk change - if 'X:' change def disk to X
+	;
+
+		    cmp blen,2 ! jne notdrive
+		    cmp byte ptr 1[bx],':' ! jne try_builtin
+
+				; change default disk
+
+			mov dl,[bx]	;get disk name
+			and dl,5fh	;make Upper Case
+			sub dl,'A'	;make disk number
+
+				; check bounds
+
+			cmp dl,0 ! jb subex
+			cmp dl,15 ! jbe okdrive
+subex:			
+			jmp submitexit
+okdrive:
+				; select default disk
+
+			    mov cl,mpm_diskselect
+			    call mpm
+
+gonextcmd:	    jmp getnxtcmd
+
+notdrive:	    mov di,offset clicmd
+		    mov si, offset parseresult
+		    call parsefilename
+		    jcxz goodparse
+			mov cl,126
+			mov di,offset clicmd
+			mov al, ' '
+			push cs ! pop es
+			repne scasb 
+			mov byte ptr[di], '$'
+			jmp clierror
+
+goodparse:	    mov parseret,bx
+		    cmp parseresult,0 ! jz try_builtin
+			jmp not_builtin
+
+try_builtin:
+		    mov di,offset usercmd
+		    mov si,offset parseresult ! inc si
+		    push ds ! pop es
+		    mov cx,4 ! repz cmpsw
+		    jnz notuser
+
+		        mov si,offset parseresult
+			mov di,parseret ! cmp di,0
+			je pruser
+			    call parsefilename	; CX = 0 if ok
+  			    cmp cx,0 ! jne pruser
+			        mov si,offset parseresult ! inc si
+				mov dx,[si]
+				call a_to_b
+				cmp bl,15 ! ja usererr
+ 				    mov dl,bl ! call setuser
+				    jmp pruser
+usererr:			mov dx,offset usererrmsg
+				call con_write
+pruser:			mov dx,offset usermsg
+			call con_write
+			call getuser
+			mov dl,bl ! call prnum
+			call crlf
+			jmp getnxtcmd
+notuser:
+		    mov si,offset parseresult ! inc si
+		    mov di,offset printercmd
+		    push ds ! pop es
+		    mov cx,4 ! repz cmpsw
+		    jnz notprinter
+
+		        mov si,offset parseresult
+			mov di,parseret ! test di,di
+			    jz prprinter
+			call parsefilename	; CX = 0 if ok
+			cmp cx,0 ! jne prprinter; no tail
+			    mov si,offset parseresult ! inc si
+			    mov dx,[si]
+			    call a_to_b
+			    cmp bl,0ffh ! je printererr
+				    mov dl,bl ! call setlist
+				    jcxz prprinter
+printererr:			mov dx,offset printererrmsg
+				call con_write
+prprinter:		mov dx,offset printermsg
+			call con_write
+			call getlist
+			mov dl,bl ! call prnum
+			call crlf
+			jmp getnxtcmd
+
+notprinter:
+		    ; check for '$include' option
+
+		    mov si,offset parseresult ! inc si
+		    mov di,offset includecmd
+		    push ds ! pop es
+		    mov cx,4 ! repz cmpsw
+		    jnz notinclude
+
+		        mov si,offset parseresult
+			mov di,parseret ! test di,di
+			    jz notinclude
+			call parsefilename	; CX = 0 if ok
+			cmp cx,0 ! jne includerr; no tail
+			    mov si,pdadr
+			    add si,p_name
+			    mov di,offset clicmd
+			    mov cl,4
+			    push ds ! pop es
+			    push ds ! mov ds,sysdatseg
+			             		; overwrite $include with
+			    rep movsw		; name of this program
+						; for recursive submits
+			    pop ds
+			    mov dx,offset includemsg
+			    call con_write
+			    
+			    jmps clicall	; send submit command
+
+includerr:			mov dx,offset includerrmsg
+				call con_write
+				jmp submitexit
+
+notinclude:
+notbuiltin:
+
+;=======
+clicall:	; SEND CLI COMMAND
+;=======
+
+			; initialize Cli Control Block
+
+                    mov clicb_net,0
+			; make cli call
+
+		    mov cmdsent,true
+		    lea dx,clicb ! mov cl,mpm_clicmd
+		    call mpm
+		    cmp bx,0 ! jne clierror
+
+	;
+	; more commands in sub file to process ?
+	;
+
+getnxtcmd:
+		        mov cmdbuf,maxcmdlen ! mov dx,offset cmdbuf
+	    		call readbuffer		;read from file to next crlf
+		        cmp bx,0 ! je moretodo	;assume EOF if BX <> 0
+	    		jmp submitexit
+moretodo:
+
+	    		mov cl,mpm_conattach ! call mpm
+		        jmp topofcmdloop
+
+;========
+clierror:
+;========
+; Cli call unsuccesful, analyze and display error message
+;	input: CX = ERROR CODE
+
+		;null command?
+	cmp cx,e_nullcmd ! jne not_nullcmd
+	    mov cmdsent,false
+	    jmp getnxtcmd
+not_nullcmd:
+		;no memory?
+	cmp cx,e_no_memory ! jne memory_ok
+	    mov dx,offset memerr ! jmp showerr
+memory_ok:
+		;no pd in table?
+	cmp cx,e_no_pd ! jne pd_ok
+	    mov dx,offset pderr ! jmp showerr
+pd_ok:
+		;illegal command name?
+	cmp cx,e_badfname ! je fname_bad
+	cmp cx,e_badftype ! jne fname_ok
+fname_bad:  mov dx,offset fnameerr ! jmp showerr
+fname_ok:
+		;bad load?
+	cmp cx,e_bad_load ! je load_bad
+	cmp cx,e_bad_read ! jne load_ok
+load_bad:   mov dx,offset loaderr ! jmp showerr
+load_ok:
+		;bad open?
+	cmp cx,e_bad_open ! jne open_ok
+	    mov dx,offset openerr ! jmp showerr
+open_ok:
+		;RSP que full?
+	cmp cx,e_q_full ! jne que_ok
+	    mov dx,offset qfullerr ! jmp showerr
+que_ok:
+		;some other error...
+	mov dx,offset catcherr
+	;jmp showerr
+
+;=======
+showerr:
+;=======
+; Print Error String
+;	input: DX = address of Error String
+
+	call conwrite
+	jmp submitexit
+
+;==========
+readbuffer:
+;==========
+; Simulate Read Console buffer from a disk file.
+;	input:	DX = buffer address
+;	output: BX <> 0 if EOF
+
+	mov di,dx	
+	xor al,al
+	mov 1[di],al		;no chars read
+	cmp 0[di],al		;zero length buffer
+	jnz buf_ok		;return no error - nop
+	mov bx,0ffffh
+	ret 
+buf_ok:
+	mov si,di ! inc  si ! inc si
+				;si is next char
+read_another:
+	mov al,1[di]
+	cmp al,[di]
+	jae done_ok			;full buffer
+	    push di
+	    call readchar		;fills [si]
+	    pop di
+	    cmp bx,0			;non-zero or eof error
+	    jz not_error
+	    ret
+not_error:
+	    cmp byte ptr [si],0ah ! jne not_lf
+		jmps done_ok
+not_lf:	    cmp byte ptr [si],0dh ! je done_ok
+
+	    inc byte ptr 1[di]		;not cr, inc buffer count
+	    inc si			;inc char position
+	    jmp read_another
+done_ok:
+	    cmp byte ptr 1[di],0	;no characters read in buffer 
+	    jz read_another		;skip leading cr's and lf's
+	    mov byte ptr [si],0
+	    mov bx,0 ! ret
+;========
+readchar:
+;========
+; Read a character from file.
+;	input = si is address of where to put character
+;	output = bx <> 0 if error
+;
+	xor bh,bh
+	mov bl,buf_ptr			;char ptr in dma buffer
+	cmp bl,128
+	jb  no_read
+  	    push si
+	    mov dl,command_user		;user of command file
+	    mov cl,mpm_usercode
+	    call mpm
+            mov bx,offset fcb
+	    mov al,command_disk		;disk drive number of command file
+	    mov [bx],al			;re-open each time to allow deletion
+            or  byte ptr mode2[bx],80h	;of command file, open in R/O mode
+	    mov dx,bx
+	    call openfile
+	    cmp al,0ffh
+	    jz readerr
+	    mov dx,offset fcb
+	    call readfile		;read sequential
+	    cmp al,0
+	    jnz readerr
+	    mov cl,mpm_usercode		;set user back to what the command
+	    mov dl,defuser		;file has set it to
+	    call mpm
+	    mov bx,0
+	    pop si
+no_read:
+	mov al,dma[bx]
+	cmp al,1ah			;check for EOF
+	jz eof
+	mov [si],al
+	inc bl
+	mov buf_ptr,bl			;point to next char in disk buffer
+	xor bx,bx
+	ret	
+readerr:
+	pop si
+eof:
+	mov bx,0ffffh			;error or eof
+	ret
+
+;*****************************************************
+;*
+;*	SUBROUTINES
+;*
+;*****************************************************
+
+parsefilename:	;SI = fcb	DI = string
+		mov cx,mpm_parse
+		mov bx,offset pcb
+		mov [bx],di ! mov 2[bx],si
+		mov dx,bx ! jmp mpm
+
+a_to_b:		;dl = 1st char, dh = 2nd char
+		cmp dh,' ' ! jne atob2char
+		    mov dh,dl ! mov dl,'0'
+atob2char:	cmp dh,'0' ! jb atoberr
+		cmp dh,'9' ! ja atoberr
+		cmp dl,'0' ! jb atoberr
+		cmp dl,'9' ! ja atoberr
+		    sub dh,'0' ! sub dl,'0'
+		    mov ax,0 ! mov al,dl
+		    push dx ! mov cl,10 ! mul cl ! pop dx
+		    mov dl,dh ! mov dh,0 ! add ax,dx
+		    mov bx,ax ! ret
+atoberr:	mov bl,0ffh ! ret
+prnum:		; dl = num (0-15)
+		cmp dl,10 ! jb prnum_one
+		    push dx
+		    mov dl,'1' ! call prchar
+		    pop dx ! sub dl,10
+prnum_one:	add dl,'0'
+		jmp prchar
+
+charin:		mov cl,mpm_conin ! jmp mpm
+prchar:		mov cl,mpm_conout ! jmp mpm
+getuser:	mov dl,0ffh
+setuser:	mov cl,mpm_usercode ! jmp mpm
+setconsole:	mov cl,mpm_setdefcon ! jmp mpm
+setdisk:	mov cl,mpm_diskselect ! jmp mpm
+getdisk:	mov cl,mpm_getdefdisk ! jmp mpm
+setlist:	mov cl,mpm_setdeflst ! jmp mpm
+getlist:	mov cl,mpm_getdeflst ! jmp mpm
+attach:		mov cl,mpm_conattach ! jmp mpm
+detach:		mov cl,mpm_condetach ! jmp mpm
+conread:	mov cl,mpm_conread ! jmp mpm
+
+crlf:
+	mov dx,offset newline
+	;jmp con_write
+con_write:
+	mov cl,mpm_conwrite
+	jmp mpm
+openfile:
+	mov cl,mpm_openfile
+	jmp mpm
+readfile:
+	mov cl,mpm_readfile
+	jmp mpm
+
+;*****************************************************
+;*
+;*	Data Area
+;*
+;*****************************************************
+
+	dseg
+	org	05cH
+
+fcb	rb	024H
+
+	org	080h
+
+cmdtail		rb	128
+
+stack		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+stacktop	rw	0
+
+maxcmdlen	equ	128
+
+	; the Read Console Buffer and the
+	; Cli Control Block share the same memory
+
+dma		rb	128
+
+numargs		rw	1
+argtable	rb	64		;address of arguments in cmdtail 
+deblankbuf	rb	maxcmdlen + 1
+
+cmdbuf		rb	1	;single command gets put here
+blen		rb	1
+cmd		rb	maxcmdlen + 1
+
+clicb		rb	0	;command w/ expanded args goes here
+clicb_net	db	0
+clicmd		rb	maxcmdlen+1
+
+command_user	rb	1
+command_disk	rb	1
+command_con	rb	1
+defdisk		rb	1
+defuser		rb	1
+buf_ptr		db	128		;force initial read
+					;in readchar routine
+prompt		db	13
+promptutens	db	'0'
+promptuones	db	'0'
+promptdisk	db	'A'
+promptend	db	'>$'
+
+pcb		dw	offset clicmd
+		dw	offset parseresult
+
+parseret	dw	0
+parseresult	rb	36	
+cmdsent		db	false
+
+pdadr		rw	1		;our pd address
+sysdatseg	rw	1		;the system data area's segment
+
+;*****************************************************
+;*
+;*	CONSTANTS
+;*
+;*****************************************************
+
+wrongvers	db	'Requires MP/M-86'
+newline		db	10,13,'$'
+
+askabortmsg	db	13,10,10,'Terminate '
+subfilename	rb	11
+		db	' (Y/N) ? $'
+
+usercmd		db	'USER    '
+printercmd	db	'PRINTER '
+includecmd	db	'$INCLUDE'
+
+usererrmsg	db	13,10,'Invalid User Number, IGNORED',13,10,'$'
+usermsg		db	13,10,'User Number = $'
+printererrmsg	db	13,10,'Invalid Printer Number, IGNORED',13,10,'$'
+printermsg	db	13,10,'Printer Number = $'
+includerrmsg	db	13,10,'Include Error$'
+includemsg	db	'(submit)',10,13,'$'
+
+memerr		db	'?Not Enough Memory$'
+pderr		db	'?PD Table Full$'
+fnameerr	db	'?Illegal Command$'
+loaderr		db	'?Load Error$'
+openerr		db	'?Can''t Find Command$'
+catcherr	db	'?$'
+qfullerr	db	'?RSP Command Que Full$'
+
+;SUBMIT error messages
+sopenerr	db	'No ''SUB'' File Present$'
+argerr		db	'Illegal Argument$'
+	end
+

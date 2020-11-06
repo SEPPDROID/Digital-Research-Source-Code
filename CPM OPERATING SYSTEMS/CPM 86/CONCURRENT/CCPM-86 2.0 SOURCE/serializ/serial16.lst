@@ -1,0 +1,1434 @@
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   1
+
+
+                        ; Use   "gencmd serial data[m100]" when producing CMD file
+
+                        ; print control constants
+
+   000D                 cr              equ     00Dh    ; carriage return
+   000A                 lf              equ     00Ah    ; line feed
+   0007                 bell            equ     007h    ; self-explanatory
+   0008                 bs              equ     008h    ; backspace
+   000B                 vt              equ     00Bh    ; vertical tab
+
+                        ; ccpm call function codes
+
+   00E0                 ccpm            equ     224     ; ccpm interrupt
+
+   0001                 c_read          equ      1      ; request single character from console
+   0002                 c_write         equ      2      ; send single character to console
+   0009                 c_writebuf      equ      9      ; print string terminated by '$'
+   001F                 drv_dpb         equ     31      ; get DBP offset and segment base
+   000D                 drv_resetall    equ     13      ; reset disk system
+   000E                 drv_set         equ     14      ; select disk drive reg DL=disk #
+                                                        ;  (0=A,1=B,etc.)
+   0035                 mc_max          equ     53      ; find available memory space
+
+                        ; bdos function codes for direct BIOS calls
+
+   0032                 s_bios          equ     50      ; direct BIOS call function code
+   000D                 read_code       equ     13      ; read a 128 byte sector
+   000E                 write_code      equ     14      ; write a 128 byte sector
+
+                        ; program constants
+
+   00E5                 blank           equ     0E5h    ; data which an empty (blank)
+                                                        ;  sector will contain
+   FFFF                 false           equ     -1
+   0000                 true            equ      0
+
+                                cseg
+
+                        start:
+                        ; init serial_number
+ 0000 B90600                    mov     cx,length ser_def
+ 0003 B030                      mov     al,'0'
+ 0005 BBA508                    mov     bx,offset serial_number
+                        initlop10:
+ 0008 8807                      mov     byte ptr[bx],al
+ 000A 43                        inc     bx
+ 000B E2FB         0008         loop    initlop10
+
+                        ; give sign on
+ 000D E88205       0592         call    clear                   ; clear the monitor screen
+ 0010 BAD902                    mov     dx,offset msg0          ; print sign on message
+ 0013 E87705       058D         call    pmsg
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   2
+
+
+
+                        ; prompt operator for source and destination drives
+ 0016 BAC604                    mov     dx,offset msg12         ; send source message to
+ 0019 E87105       058D         call    pmsg                    ;  console
+ 001C E88105       05A0         call    get_char                ; get disk code
+ 001F 2C41                      sub     al,'A'                  ; correct it
+ 0021 A23601                    mov     dskS,al                 ; store code for source disk
+ 0024 BAE804                    mov     dx,offset msg13         ; send destination message
+ 0027 E86305       058D         call    pmsg                    ;  to console
+ 002A E87305       05A0         call    get_char                ; get disk code
+ 002D 2C41                      sub     al,'A'                  ; correct it
+ 002F A23701                    mov     dskD,al                 ; store code for dest disk
+
+                        ; prompt operator for source disk
+ 0032 BA0E05                    mov     dx,offset msg14         ; send message
+ 0035 E83B05       0573         call    pmsg_wait       
+
+                        ; the reset function clears out any previous information pertaining
+                        ;  to format, sector size, density, etc. and the next time a disk is
+                        ;  selected those values will be reinitialized.
+ 0038 B10D                      mov     cl,drv_resetall         ; reset disks
+ 003A CDE0                      int     ccpm
+
+                        ; when a disk is selected, CP/M initializes the Disk Parameter Header
+                        ;  and the Disk Parameter Block to conform with the format of the
+                        ;  selected disk.
+ 003C A03601                    mov     al,dskS                 ; select source disk
+ 003F A20601                    mov     disk,al
+ 0042 B132                      mov     cl,s_bios
+ 0044 BA0501                    mov     dx,offset sel_dsk_tab
+ 0047 CDE0                      int     ccpm
+
+                        ; when the "select disk" function is performed using a direct BIOS call
+                        ;  the offset of the DPH (in system's extra segment) is returned in the
+                        ;  BX register.  the first word of the DPH is the offset of the sector
+                        ;  translation table for the system.
+ 0049 891E4A01                  mov     xlt_offset,bx           ; save offset of system's
+                                                                ;  sector translation table
+
+                        ; move DPB into program data area
+ 004D FC                        cld
+ 004E B11F                      mov     cl,drv_dpb              ; get system extra segment
+ 0050 CDE0                      int     ccpm                    ;  value and offset of DPB
+ 0052 06                        push    es                      ; save ES value
+ 0053 8BF3                      mov     si,bx                   ; init source pointer
+ 0055 8E060900                  mov     es,data_base
+ 0059 BF3B01                    mov     di,offset DPB
+ 005C 1F                        pop     ds                      ; get system extra seg into DS
+ 005D B90F00                    mov     cx,15                   ; init byte counter
+ 0060 F3A4                      rep  movsb
+ 0062 1E                        push    ds                      ; save system extra seg value
+ 0063 06                        push    es                      ; restore DS value
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   3
+
+
+ 0064 1F                        pop     ds
+
+                        ; get system sector translation table into data segment of program
+ 0065 07                        pop     es                      ; recover extra seg value
+ 0066 8B1E4A01                  mov     bx,xlt_offset           ; get offset of trans table
+ 006A 268B37                    mov     si,es:word ptr[bx]      ;  into SI      
+ 006D 85F6                      test    si,si                   ; if SI = 0 then system doesn't
+ 006F 7514         0085         jnz     has_table               ;  have a translation table
+ 0071 BB4C01                    mov     bx,offset xlt_tab       ;  which means that I'll have 
+ 0074 8B0E3B01                  mov     cx,spt                  ;  to init "xlt_tab" myself
+ 0078 B000                      mov     al,0
+                        initlop0:
+ 007A 8807                      mov     byte ptr[bx],al
+ 007C FEC0                      inc     al
+ 007E 43                        inc     bx
+ 007F E2F9         007A         loop    initlop0
+ 0081 B001                      mov     al,1                    ; set skew factor = 1
+ 0083 EB15         009A         jmps    init_addr_tab
+                        has_table:
+ 0085 06                        push    es                      ; save extra seg again
+ 0086 8B1E4A01                  mov     bx,xlt_offset           ; get offset of trans table
+ 008A BF4C01                    mov     di,offset xlt_tab       ; DI = offset of program sector
+                                                                ;  translation table
+ 008D 8B0E3B01                  mov     cx,spt                  ; use sectors/track as
+                                                                ;  counter value
+ 0091 8E060900                  mov     es,data_base            ; init ES value
+ 0095 1F                        pop     ds                      ; init DS
+ 0096 F3A4                      rep  movsb
+ 0098 06                        push    es                      ; restore old DS value
+ 0099 1F                        pop     ds
+
+                        ; make sure that serial numbers that cross sector boundries will be
+                        ;  found
+                        init_addr_tab:
+ 009A 2BC0                      sub     ax,ax                   ; init address offset
+ 009C BE4C01                    mov     si,offset xlt_tab       ; SI -> xlt-tab
+ 009F 8B0E3B01                  mov     cx,spt                  ; init counter
+ 00A3 2AF6                      sub     dh,dh                   ; DH = 0
+                        initlop9:
+ 00A5 BBCC01                    mov     bx,offset addr_tab
+ 00A8 8A14                      mov     dl,byte ptr[si]         ; get sector number
+ 00AA 46                        inc     si                      ; move pointer
+ 00AB 2A164C01                  sub     dl,xlt_tab              ; subtract 1st sector number
+ 00AF 02D2                      add     dl,dl                   ; multiply by 2
+ 00B1 03DA                      add     bx,dx                   ; BX -> correct table entry
+ 00B3 8907                      mov     word ptr[bx],ax         ; put address into table
+ 00B5 058000                    add     ax,128                  ; AX = AX+bytes/sectorz
+ 00B8 E2EB         00A5         loop    initlop9
+
+                        ; depending on the system, each physical sector on a diskette can
+                        ;  be made up of a number of logical sectors (128 bytes long).  the
+                        ;  following code analyses the system sector translate table to 
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   4
+
+
+                        ;  determine the number of logical sectors in a physical sector.
+ 00BA BB4C01                    mov     bx,offset xlt_tab       ; BX -> xlt_tab
+                        xltlop0:
+ 00BD 8A07                      mov     al,byte ptr[bx]         ; AL = table entry
+ 00BF 43                        inc     bx                      ; BX -> next byte in table
+ 00C0 FEC0                      inc     al
+ 00C2 3A07                      cmp     al,byte ptr[bx]         ; see if the two numbers are in
+ 00C4 74F7         00BD         je      xltlop0                 ;  the right order
+ 00C6 81EB4C01                  sub     bx,offset xlt_tab       ; if they aren't then calculate
+                                                                ;  how long the sequence was
+ 00CA 891E3901                  mov     spb,bx                  ;  and save the value
+                        ; calculate skew of system sector translation table
+ 00CE 8A874C01                  mov     al,xlt_tab[bx]          ; get byte at xlt_tab+spb
+ 00D2 2A064C01                  sub     al,xlt_tab              ;  and subtract byte at xlt_tab
+ 00D6 8B1E3901                  mov     bx,spb                  ;  now divide by sectors/block
+ 00DA 2AE4                      sub     ah,ah                   ; prepare of division
+ 00DC F6F3                      div     bl
+ 00DE A23801                    mov     skew,al
+                        ; tell operator about skew
+                        skew_prompt:
+ 00E1 50                        push    ax                      ; save system skew
+ 00E2 E8AD04       0592         call    clear                   ; clear screen
+ 00E5 BA7D07                    mov     dx,offset msg21         ; send message
+ 00E8 E8A204       058D         call    pmsg
+ 00EB 5A                        pop     dx                      ; recover skew
+ 00EC 80CA30                    or      dl,030h                 ; make it ASCII
+ 00EF B102                      mov     cl,c_write
+ 00F1 CDE0                      int     ccpm
+                        ; ask operator if he/she would like to change the sector skew
+ 00F3 BA1E06                    mov     dx,offset msg16
+ 00F6 E89404       058D         call    pmsg
+ 00F9 E8A404       05A0         call    get_char                ; get Y/N response
+ 00FC 3C4E                      cmp     al,'N'                  ; check for No
+ 00FE 7445         0145         je      dont_change
+                        ; ask for new skew factor
+ 0100 BA5306                    mov     dx,offset msg17
+ 0103 E88704       058D         call    pmsg
+ 0106 E8B004       05B9         call    get_1num
+ 0109 A23801                    mov     skew,al
+                        ; make new sector translation table using skew factor supplied by
+                        ;  operator
+ 010C BE4C01                    mov     si,offset xlt_tab       ; BX is pointer into xlt_tab
+ 010F 8A1C                      mov     bl,byte ptr[si]         ; init beginning sector number
+ 0111 8AFB                      mov     bh,bl
+ 0113 8A163B01                  mov     dl,sptbyte              ; calculate sectors/track +
+ 0117 02D3                      add     dl,bl                   ;  first sector number
+ 0119 8A0E3801                  mov     cl,skew                 ; init loop counter
+ 011D 2AED                      sub     ch,ch
+                        xltlop1:
+ 011F 51                        push    cx                      ; save loop counter
+                        xltlop2:
+ 0120 8B0E3901                  mov     cx,spb                  ; init sectors/block counter
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   5
+
+
+ 0124 53                        push    bx                      ; save sector # registers
+                        xltlop3:
+ 0125 883C                      mov     byte ptr[si],bh         ; put sector number into table
+ 0127 46                        inc     si                      ; increment pointer
+ 0128 FEC7                      inc     bh                      ; increment sector number
+ 012A E2F9         0125         loop    xltlop3
+ 012C A13901                    mov     ax,spb                  ; calculate new starting sector
+ 012F 8A0E3801                  mov     cl,skew
+ 0133 F6E1                      mul     cl
+ 0135 5B                        pop     bx                      ; recover sector # registers
+ 0136 02F8                      add     bh,al                   ; add skew*spt to starting
+                                                                ;  sector number
+ 0138 3AFA                      cmp     bh,dl                   ; compare new starting sector #
+                                                                ;  to first sector # + spt
+ 013A 72E4         0120         jb      xltlop2
+ 013C 021E3901                  add     bl,spbbyte              ; add sectors/block to 1st
+                                                                ;  starting sector number
+ 0140 8AFB                      mov     bh,bl                   ; init starting sector
+                                                                ;  number of the next sector
+                                                                ;  block
+ 0142 59                        pop     cx                      ; recover loop counter
+ 0143 E2DA         011F         loop    xltlop1
+                        dont_change:
+                        ; ok, now calculate many how bytes there are on a track.
+                        ;  bytes/track = sectors/track * logical sector size
+ 0145 A13B01                    mov     ax,spt      
+ 0148 BB8000                    mov     bx,128
+ 014B F7E3                      mul     bx
+ 014D A31F01                    mov     bpt,ax                  ; save value
+
+ 0150 B135                      mov     cl,mc_max               ; find 64k or less of free
+ 0152 BA2101                    mov     dx,offset mcb           ;  memory
+ 0155 CDE0                      int     ccpm
+
+                        ; check the disk for blank tracks starting at last track. blank
+                        ;  tracks won't be copied
+ 0157 BA4708                    mov     dx,offset msg1          ; tell operator about search
+ 015A E83004       058D         call    pmsg
+ 015D FC                        cld                             ; set direction flag forward
+ 015E BA5204                    mov     dx,offset msg7          ; send 'Reading' message
+ 0161 E82904       058D         call    pmsg
+ 0164 8B0ED102                  mov     cx,last_trk             ; initialize track counter
+                        scan_loop:
+ 0168 51                        push    cx                      ; save track counter
+ 0169 880E0101                  mov     track,cl                ; get current track
+ 016D 8AC1                      mov     al,cl                   ; make track number ascii
+ 016F E8E203       0554         call    make_ascii
+ 0172 BA7204                    mov     dx,offset ascii_trk     ; print it
+ 0175 E81504       058D         call    pmsg
+ 0178 C706CC020000              mov     dma_addr,0              ; initialize dma offset
+ 017E E8E302       0464         call    seek                    ; seek to track
+ 0181 E83902       03BD         call    read                    ; read a track 
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   6
+
+
+ 0184 B0E5                      mov     al,blank                ; init AL with the character
+                                                                ;  which is found in blank
+                                                                ;  (empty) sectors
+ 0186 8E062101                  mov     es,m_base               ; init segment reg
+ 018A BF0000                    mov     di,0                    ; offset is set to zero
+ 018D 8B0E1F01                  mov     cx,bpt                  ; how many bytes to scan
+ 0191 F3AE                      repe  scasb                     ; scan until ZF=1 or CX=0
+ 0193 750F         01A4         jne     data_found              ; if ZF=1 then have found data
+ 0195 E83304       05CB         call    erase_trk               ; erase old track message
+ 0198 59                        pop     cx                      ; otherwise scan another track
+ 0199 E2CD         0168         loop    scan_loop               ;  if CX<>0
+
+                        ; the diskette is blank if program flow reaches this point
+ 019B BA2608                    mov     dx,offset error_msg0
+ 019E E8EC03       058D         call    pmsg                    ; inform operator that the
+ 01A1 E8DF03       0583         call    abort                   ;  source disk is blank and
+                                                                ;  abort operation
+
+                        data_found:
+ 01A4 59                        pop     cx                      ; if data is found then save
+ 01A5 890ED102                  mov     last_trk,cx             ;  the number of the non-blank
+                                                                ;  track
+                        ; the information on the source disk will more than likely need to be
+                        ;  paged into memory.  the following code calculates how many pages
+                        ;  or blocks will be needed.
+ 01A9 A12301                    mov     ax,m_length             ; calculate number of bytes
+ 01AC BB1000                    mov     bx,16                   ;  available to be used for
+ 01AF F7E3                      mul     bx                      ;  a buffer area
+ 01B1 8B1E1F01                  mov     bx,bpt
+ 01B5 F7F3                      div     bx
+ 01B7 8B0ED102                  mov     cx,last_trk             ; CX will contain number of
+ 01BB 2B0E4801                  sub     cx,off                  ;  tracks to be copied
+ 01BF 3BC1                      cmp     ax,cx                   ; if block1 track count<lst_trk
+ 01C1 7C0C         01CF         jl      over0                   ;  then get block2 track count 
+ 01C3 890E2B01                  mov     B1_trk_cnt,cx           ;  last_trk, block_cnt=
+ 01C7 C7062F010100              mov     block_cnt,1             ;  1 and jump to new_disk  
+ 01CD EB13         01E2         jmps    over07
+                        over0:
+ 01CF 48                        dec     ax
+ 01D0 A32B01                    mov     B1_trk_cnt,ax
+ 01D3 2BD2                      sub     dx,dx  
+ 01D5 8BD8                      mov     bx,ax                   ; bx holds divisor
+ 01D7 8BC1                      mov     ax,cx                   ;  hold dividend in division
+                                                                ;  operation
+ 01D9 F7F3                      div     bx                      ; do division
+ 01DB A32F01                    mov     block_cnt,ax            ; move result to memory
+ 01DE 89162D01                  mov     B2_trk_cnt,dx           ; remainder = block2 track
+                                                                ;  count
+                        over07:
+                        ; prompt operator for number of serial fields on source disk
+ 01E2 E8BD02       04A2         call    get_cnt
+ 01E5 3C00                      cmp     al,0                    ; if count = 0 then don't ask
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   7
+
+
+ 01E7 7403         01EC         jz      over09                  ;  for a starting serial number
+
+                        ; prompt operator for starting serial number
+ 01E9 E88F02       047B         call    get_serial
+                        over09:
+                        ; ask operator if he/she wants to verify the copy against the source
+                        ;  disk and if so, how often
+ 01EC E8A303       0592         call    clear                   ; clear monitor screen
+ 01EF BA7106                    mov     dx,offset msg18         ; ask question
+ 01F2 E89803       058D         call    pmsg
+ 01F5 C606270100                mov     ver_freq,0              ; init verification frequency
+                                                                ;  value
+ 01FA E8A303       05A0         call    get_char                ; get yes/no answer
+ 01FD 3C4E                      cmp     al,'N'                  ; check for no
+ 01FF 740C         020D         je      over01                  ; if no then dont verify
+                        ; ask operator for frequency of verification
+ 0201 BAA606                    mov     dx,offset msg19         ; send message
+ 0204 E88603       058D         call    pmsg
+ 0207 E8A502       04AF         call    get_2num                ; get response from operator
+ 020A A22701                    mov     ver_freq,al             ; save value
+                        over01:
+
+                        ; clear monitor screen
+ 020D E88203       0592         call    clear
+
+ 0210 C606290100                mov     dsk_cnt,0               ; init diskette counter
+
+                        ; this portion of code does the copying and serializing
+                        new_disk:
+ 0215 FC                        cld                             ; move current serial number
+ 0216 8E060900                  mov     es,data_base            ;  into insert serial message
+ 021A B90600                    mov     cx,length ser_def
+ 021D BEA508                    mov     si,offset serial_number
+ 0220 BF5005                    mov     di,offset serial_1
+ 0223 F3A4                      rep  movsb
+
+ 0225 BA4605                    mov     dx,offset msg3          ; prompt operator for
+ 0228 E84803       0573         call    pmsg_wait               ;  destination diskette
+
+                        ; home both disk drives
+ 022B E84402       0472         call    selectD
+ 022E E81002       0441         call    home
+ 0231 E83802       046C         call    selectS
+ 0234 E80A02       0441         call    home
+
+ 0237 A14801                    mov     ax,off                  ; don't copy reserved tracks
+ 023A A2CE02                    mov     trackS,al
+ 023D A2CF02                    mov     trackD,al
+
+ 0240 A12B01                    mov     ax,B1_trk_cnt           ; init track counter
+ 0243 A33101                    mov     track_cnt,ax
+
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   8
+
+
+ 0246 C606330100                mov     tog0,0                  ; decides whether to use
+                                                                ;  B1_trk_cnt or B2_trk_cnt
+
+ 024B C606340100                mov     serial_cnt,0            ; used to check if all the
+                                                                ;  serial fields were found
+
+ 0250 BA5204                    mov     dx,offset msg7          ; send 'Reading' message
+ 0253 E83703       058D         call    pmsg
+ 0256 E8EF01       0448         call    seekS                   ; read in a track so that
+ 0259 C706CC020000              mov     dma_addr,0              ;  there is always an extra
+ 025F E85B01       03BD         call    read                    ;  one in memory
+ 0262 E85F03       05C4         call    erase_msg               ; erase "Reading" message
+
+ 0265 8B0E2F01                  mov     cx,block_cnt            ; init block counter
+
+                        create_dsk:
+ 0269 51                        push    cx                      ; save block counter
+ 026A 8B0E1F01                  mov     cx,bpt                  ; intialize dma offset
+ 026E 890ECC02                  mov     dma_addr,cx
+ 0272 E8F701       046C         call    selectS                 ; select source disk
+ 0275 BA5204                    mov     dx,offset msg7          ; send 'Reading' message
+ 0278 E81203       058D         call    pmsg
+ 027B 8B0E3101                  mov     cx,track_cnt            ; init track counter
+                        lop0:
+ 027F 51                        push    cx                      ; save track counter
+ 0280 E8C501       0448         call    seekS                   ; seek track on source drive
+ 0283 E83701       03BD         call    read                    ; read a track
+ 0286 E84203       05CB         call    erase_trk               ; erase old track message
+ 0289 59                        pop     cx                      ; recover track counter
+ 028A E2F3         027F         loop    lop0
+ 028C E83503       05C4         call    erase_msg               ; erase "Reading" message
+
+ 028F E86002       04F2         call    serialize               ; insert current serial number
+                                                                ;  into all serial fields in
+                                                                ;  this block
+
+ 0292 C706CC020000              mov     dma_addr,0              ; same as above but write to
+                                                                ;  destination drive
+ 0298 E8D701       0472         call    selectD                 ; select destination drive
+ 029B BA6204                    mov     dx,offset msg8          ; send "Writing" message to
+ 029E E8EC02       058D         call    pmsg                    ;  console
+ 02A1 8B0E3101                  mov     cx,track_cnt
+                        lop1:
+ 02A5 51                        push    cx
+ 02A6 E8A801       0451         call    seekD
+ 02A9 E81801       03C4         call    write
+ 02AC E81C03       05CB         call    erase_trk               ; erase old track message
+ 02AF 59                        pop     cx
+ 02B0 E2F3         02A5         loop    lop1
+ 02B2 E80F03       05C4         call    erase_msg               ; erase "Writing" message
+
+                        ; move extra track (read and searched but not written) from end of
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE   9
+
+
+                        ;  buffer to the beginning of the buffer
+ 02B5 FC                        cld                             ; clear direction flag
+ 02B6 8B0E1F01                  mov     cx,bpt                  ; init counter
+ 02BA 8BC1                      mov     ax,cx                   ; calculate starting address 
+ 02BC 8B1E2B01                  mov     bx,B1_trk_cnt           ;  of data to be moved
+ 02C0 F7E3                      mul     bx
+ 02C2 8BF0                      mov     si,ax
+ 02C4 BF0000                    mov     di,0                    ; where block is to be moved
+ 02C7 A12101                    mov     ax,m_base               ; init segment registers
+ 02CA 1E                        push    ds                      ; save old values
+ 02CB 06                        push    es
+ 02CC 8ED8                      mov     ds,ax                   ; move in new values
+ 02CE 8EC0                      mov     es,ax
+ 02D0 F3A4                      rep  movsb                      ; do the move
+ 02D2 07                        pop     es                      ; recover values of segment
+ 02D3 1F                        pop     ds                      ;  registers
+
+ 02D4 59                        pop     cx                      ; recover block counter
+ 02D5 E292         0269         loop    create_dsk              ; do again if not last block
+ 02D7 803E330101                cmp     tog0,1                  ; check if we have reached this
+                                                                ;  point before
+ 02DC 7416         02F4         je      done                    ; if yes then we are done
+ 02DE C606330101                mov     tog0,1                  ; no, so toggle tog0
+ 02E3 A12D01                    mov     ax,B2_trk_cnt           ; if B2_trk_cnt=0
+ 02E6 3D0000                    cmp     ax,0                    ;  then we are done
+ 02E9 7409         02F4         je       done
+ 02EB A33101                    mov     track_cnt,ax            ; else do above again but with
+ 02EE B90100                    mov     cx,1                    ;  B2_trk_cnt = track count
+ 02F1 E975FF       0269         jmp     create_dsk
+                        done:
+ 02F4 BA6204                    mov     dx,offset msg8          ; send "Writing" message
+ 02F7 E89302       058D         call    pmsg                    ;  to console
+ 02FA E85401       0451         call    seekD                   ; write last track to dest
+ 02FD E8C400       03C4         call    write                   ;  drive
+
+ 0300 A03501                    mov     al,count_num            ; check if all serial fields
+ 0303 3A063401                  cmp     al,serial_cnt           ;  were found
+ 0307 7409         0312         je      serial_ok               ; if not then there is an error
+ 0309 BA9C07                    mov     dx,offset error_msg3    ; inform operator of error
+ 030C E87E02       058D         call    pmsg
+ 030F E87102       0583         call    abort                   ; abort operation
+                        serial_ok:
+
+ 0312 E8AF02       05C4         call    erase_msg               ; erase "Writing" message
+
+ 0315 FE062901                  inc     dsk_cnt                 ; increment diskette counter
+
+ 0319 A12901                    mov     ax,dsk_cntword          ; get number of diskettes done
+ 031C 8B0E2701                  mov     cx,ver_freqword         ; get verification frequency
+ 0320 E37C         039E         jcxz    dont_verify             ; don't verify if CX = 0
+ 0322 F6F1                      div     cl                      ; see if it's time to verify
+ 0324 84E4                      test    ah,ah                   ; if DX = 0 then it's time
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  10
+
+
+ 0326 7576         039E         jnz     dont_verify
+                        ; do the verification
+ 0328 BA6C07                    mov     dx,offset msg20         ; send "Verifying" message
+ 032B E85F02       058D         call    pmsg
+ 032E 8B0ED102                  mov     cx,last_trk             ; calculate number of tracks to
+ 0332 A14801                    mov     ax,off                  ;  compare
+ 0335 2BC8                      sub     cx,ax
+ 0337 41                        inc     cx                      ; correct result
+ 0338 A2CE02                    mov     trackS,al
+ 033B A2CF02                    mov     trackD,al
+                        verlop0:
+ 033E 51                        push    cx                      ; save track counter
+ 033F E83001       0472         call    selectD                 ; select dest disk
+ 0342 E80C01       0451         call    seekD                   ; seek to track on dest disk
+ 0345 C706CC020000              mov     dma_addr,0              ; init offset of 1st buffer
+ 034B E86F00       03BD         call    read                    ; read a track from source disk
+ 034E E87A02       05CB         call    erase_trk               ; erase old track message
+ 0351 E81801       046C         call    selectS                 ; select source drive
+ 0354 E8F100       0448         call    seekS                   ; seek to current track
+ 0357 8B0E1F01                  mov     cx,bpt                  ; init 2nd buffer offset
+ 035B 51                        push    cx                      ; temp save
+ 035C 890ECC02                  mov     dma_addr,cx
+ 0360 E85A00       03BD         call    read                    ; read a track from dest disk
+ 0363 E86502       05CB         call    erase_trk               ; erase old track message
+ 0366 59                        pop     cx                      ; recover track data length
+                                                                ;  into byte counter
+ 0367 2BF6                      sub     si,si                   ; init 1st pointer
+ 0369 8BF9                      mov     di,cx                   ; init 2nd pointer
+                        verlop1:
+ 036B 1E                        push    ds                      ; save value of data seg reg
+ 036C A12101                    mov     ax,m_base               ; get extra seg reg value
+ 036F 8EC0                      mov     es,ax                   ; init ES
+ 0371 8ED8                      mov     ds,ax                   ; init DS
+ 0373 F3A6                      repe  cmpsb                     ; verify
+ 0375 1F                        pop     ds                      ; recover data seg reg value
+ 0376 7423         039B         je      verlop2                 ; if ZF = 0 then verification
+                                                                ;  failed.  inform operator
+ 0378 4F                        dec     di                      ; correct 2nd buffer pointer
+ 0379 56                        push    si                      ; save pointer to 1st buffer
+ 037A 51                        push    cx                      ; save byte pointer
+ 037B BED302                    mov     si,offset ser_def       ; SI -> to ser_def
+ 037E B90600                    mov     cx,length ser_def       ; init counter
+ 0381 F3A6                      repe  cmpsb                     ; do compare
+ 0383 750A         038F         jne     verlop3
+ 0385 59                        pop     cx                      ; recover byte counter
+ 0386 83E905                    sub     cx,length ser_def-1     ; correct it
+ 0389 5E                        pop     si                      ; recover 1st buffer pointer
+ 038A 83C605                    add     si,length ser_def-1     ; correct it
+ 038D EBDC         036B         jmps    verlop1
+                        ; verification failed so inform operator to try it again
+                        verlop3:
+ 038F E80002       0592         call    clear
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  11
+
+
+ 0392 BAF207                    mov     dx,offset error_msg7
+ 0395 E8F501       058D         call    pmsg
+ 0398 E97AFE       0215         jmp     new_disk
+                        verlop2:
+ 039B 59                        pop     cx                      ; recover track counter
+ 039C E2A0         033E         loop    verlop0
+
+                        dont_verify:
+ 039E E8F101       0592         call    clear                   ; clear monitor screen
+ 03A1 FC                        cld                             ; insert current serial number
+ 03A2 B90600                    mov     cx,length ser_def       ;  into remove message
+ 03A5 8E060900                  mov     es,data_base
+ 03A9 BEA508                    mov     si,offset serial_number
+ 03AC BF9C05                    mov     di,offset serial_2
+ 03AF F3A4                      rep  movsb
+
+ 03B1 BA9105                    mov     dx,offset msg4          ; prompt operator to remove
+ 03B4 E8D601       058D         call    pmsg                    ;  copy
+
+ 03B7 E87201       052C         call    inc_serial              ; increment current serial
+                                                                ;  number
+
+ 03BA E958FE       0215         jmp     new_disk                ; do another disk
+
+
+                        ; read a track from the selected disk
+                        read:
+ 03BD C6061A010D                mov     io_tab,read_code
+ 03C2 EB07         03CB         jmps    track_io
+
+                        ; write a track to the selected disk drive
+                        write:
+ 03C4 C6061A010E                mov     io_tab,write_code
+ 03C9 EB00         03CB         jmps    track_io
+
+                        ; do track input or output on selected disk drive
+                        track_io:
+ 03CB B90400                    mov     cx,4                    ; initialize io retry counter
+                        io_retry:
+ 03CE 51                        push    cx                      ; save retry counter
+ 03CF E83E00       0410         call    track_setup             ; init dma base address
+ 03D2 C606190100                mov     sector,0                ; start with sector #0
+ 03D7 8B0E3B01                  mov     cx,spt                  ; init sector counter
+                        io_lop:
+ 03DB 51                        push    cx                      ; save sector counter
+ 03DC E83F00       041E         call    sectran                 ; perform sector translation
+ 03DF BA1401                    mov     dx,offset set_sector    ; set sector thru ccpm
+ 03E2 B132                      mov     cl,s_bios
+ 03E4 CDE0                      int     ccpm
+
+ 03E6 BA0F01                    mov     dx,offset set_dma_offset ; set dma offset thru ccpm
+ 03E9 B132                      mov     cl,s_bios
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  12
+
+
+ 03EB CDE0                      int     ccpm
+
+ 03ED B132                      mov     cl,s_bios               ; set read/write func thru ccpm
+ 03EF BA1A01                    mov     dx,offset io_tab
+ 03F2 CDE0                      int     ccpm
+ 03F4 84C0                      test    al,al           ; io error if not zero
+ 03F6 7510         0408         jnz     io_error                ; tell operator about io error
+ 03F8 FE061901                  inc     sector                  ; next sector to read
+ 03FC 59                        pop     cx                      ; recover sector counter
+ 03FD E2DC         03DB         loop    io_lop
+
+ 03FF 59                        pop     cx                      ; clean up stack
+ 0400 A11F01                    mov     ax,bpt                  ; init dma_addr for next
+ 0403 0106CC02                  add     dma_addr,ax             ;  track
+ 0407 C3                        ret     
+                        io_error:
+ 0408 59                        pop     cx                      ; clean up stack
+ 0409 E83500       0441         call    home                    ; home disk
+ 040C 59                        pop     cx                      ; recover retry counter
+ 040D E2BF         03CE         loop    io_retry
+ 040F C3                        ret
+                         
+                        track_setup:
+ 0410 A12101                    mov     ax,m_base               ; initialize dma base address
+ 0413 A30B01                    mov     dma_base,ax
+ 0416 B132                      mov     cl,s_bios
+ 0418 BA0A01                    mov     dx,offset set_dma_base
+ 041B CDE0                      int     ccpm
+ 041D C3                        ret
+
+                        ; do logical to physical sector translation
+                        sectran:
+ 041E 2AE4                      sub     ah,ah
+ 0420 A01901                    mov     al,sector
+ 0423 BB4C01                    mov     bx,offset xlt_tab
+ 0426 D7                        xlat    xlt_tab
+ 0427 A21501                    mov     tsector,al
+ 042A 2AE4                      sub     ah,ah
+ 042C 2A064C01                  sub     al,xlt_tab
+ 0430 02C0                      add     al,al
+ 0432 BBCC01                    mov     bx,offset addr_tab
+ 0435 03D8                      add     bx,ax
+ 0437 8B07                      mov     ax,word ptr[bx]
+ 0439 0306CC02                  add     ax,dma_addr
+ 043D A31001                    mov     dma_offset,ax
+ 0440 C3                        ret
+
+                        ; home the selected drive
+                        home:
+ 0441 C606010100                mov     track,0
+ 0446 EB1C         0464         jmps    seek
+
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  13
+
+
+                        ; seek to the selected track on the source drive
+                        seekS:
+ 0448 A0CE02                    mov     al,trackS
+ 044B FE06CE02                  inc     trackS
+ 044F EB07         0458         jmps    display_trk
+
+                        ; seek to the selected track on the destination drive
+                        seekD:
+ 0451 A0CF02                    mov     al,trackD
+ 0454 FE06CF02                  inc     trackD
+                        display_trk:
+ 0458 A20101                    mov     track,al
+ 045B E8F600       0554         call    make_ascii                      ; make track # ascii
+ 045E BA7204                    mov     dx,offset ascii_trk             ; send track number to
+ 0461 E82901       058D         call    pmsg                            ;  console
+
+                        ; seek to the selected track on the selected drive
+                        ;  "track" = desired track #
+                        seek:
+ 0464 B132                      mov     cl,s_bios
+ 0466 BA0001                    mov     dx,offset seek_trk_tab
+ 0469 CDE0                      int     ccpm
+ 046B C3                        ret
+
+                        ; select source disk
+                        selectS:
+ 046C 8A163601                  mov     dl,dskS
+ 0470 EB04         0476         jmps    select
+
+                        ; select destination disk
+                        selectD:
+ 0472 8A163701                  mov     dl,dskD
+
+                        ; select a disk drive for future operations
+                        select:
+ 0476 B10E                      mov     cl,drv_set
+ 0478 CDE0                      int     ccpm
+ 047A C3                        ret
+
+                        ; get starting serial number from operator
+                        get_serial:
+ 047B BAFC03                    mov     dx,offset msg2                  ; send prompt message
+ 047E E80C01       058D         call    pmsg                            ;  to console
+
+ 0481 BAA308                    mov     dx,offset con_buf0      ; point to console input buffer
+ 0484 B10A                      mov     cl,10                   ; CP/M read console buffer
+ 0486 CDE0                      int     ccpm
+ 0488 803EA40806                cmp     buf0_len,length ser_def ; check for correct number
+                                                                        ;  of digits
+ 048D 7501         0490         jne     bad_serial
+ 048F C3                        ret
+
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  14
+
+
+                        bad_serial:
+ 0490 C606A70406                mov     error_msg2,length ser_def
+ 0495 800EA70430                or      error_msg2,030h                 ; make it ASCII
+ 049A BA8E04                    mov     dx,offset error_msg1
+ 049D E8ED00       058D         call    pmsg
+ 04A0 EBD9         047B         jmps    get_serial
+
+                        ; get from the operator how many serial fields are on the source
+                        ;  diskette.  this is a safeguard to help prevent the wrong disk
+                        ;  from being used.
+                        get_cnt:
+ 04A2 BA1E04                    mov     dx,offset msg6                  ; send prompt message
+ 04A5 E8E500       058D         call    pmsg                            ;  to console
+ 04A8 E80400       04AF         call    get_2num                        ; get a number (0-99)
+                                                                        ; from operator
+ 04AB A23501                    mov     count_num,al                    ; save number
+ 04AE C3                        ret
+
+                        ; input two ASCII numbers into buffer 1 and translate them into a 
+                        ;  binary number which is returned in the AL register
+                        get_2num:
+ 04AF BAAE08                    mov     dx,offset con_buf1              ; get address of buffer
+ 04B2 B10A                      mov     cl,10
+ 04B4 CDE0                      int     ccpm
+ 04B6 803EAF0802                cmp     buf1_len,2                      ; can't have more than
+ 04BB 7609         04C6         jbe     input_ok0                       ;  two digits 0-99
+                        input_err0:
+ 04BD BAD107                    mov     dx,offset error_msg6            ; tell operator about
+ 04C0 E8CA00       058D         call    pmsg                            ;  error and try again
+ 04C3 E9E9FF       04AF         jmp     get_2num
+                        input_ok0:
+ 04C6 803EAF0800                cmp     buf1_len,0                      ; need at least one
+ 04CB 74F0         04BD         je      input_err0                      ;  digit. tell operator
+                                                                        ;  if there isn't
+ 04CD BBB008                    mov     bx,offset input_num             ; bx -> input buffer
+ 04D0 8A0EAF08                  mov     cl,buf1_len                     ; (cl) = digit count
+ 04D4 2AED                      sub     ch,ch                           ; zero upper half of cx
+ 04D6 03D9                      add     bx,cx                           ; make bx point to
+ 04D8 4B                        dec     bx                              ;  units digit of input
+
+ 04D9 8A37                      mov     dh,byte ptr[bx]                 ; get units digit
+ 04DB 80E60F                    and     dh,00Fh                         ; mask off upper nybble
+ 04DE E203         04E3         loop    tens                            ; if (cx) <> 2 then get
+                                                                        ;  tens digit
+ 04E0 E90C00       04EF         jmp     got_it                          ; only had one digit
+                        tens:
+ 04E3 4B                        dec     bx                              ; make bx -> to tens
+                                                                        ;  digit
+ 04E4 8A17                      mov     dl,byte ptr[bx]                 ; get tens digit
+ 04E6 80E20F                    and     dl,00Fh                         ; mask off upper nybble
+ 04E9 B00A                      mov     al,10                           ; load multiplier
+ 04EB F6E2                      mul     dl                              ; do multiply
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  15
+
+
+ 04ED 02F0                      add     dh,al                           ; add tens to units
+                        got_it:
+ 04EF 8AC6                      mov     al,dh                           ; save number
+ 04F1 C3                        ret
+
+                                
+                        serialize:      ; locate all occurrances of serial numbers in buffer
+
+ 04F2 FC                        cld                     ; set direction forward
+ 04F3 8E062101                  mov     es,m_base       ; point ES: to beginning of buffer
+ 04F7 BF0000                    mov     di,0
+ 04FA A11F01                    mov     ax,bpt
+ 04FD 8B1E3101                  mov     bx,track_cnt
+ 0501 43                        inc     bx              ; remember that an extra track was read
+ 0502 F7E3                      mul     bx
+ 0504 8BC8                      mov     cx,ax
+                        next_serial:
+ 0506 BED302                    mov     si,offset ser_def       ; point at pattern
+ 0509 AC                        lodsb                   ; get first char of pattern into AL
+ 050A F2AE                      repne scasb             ; look for next occurance of AL
+ 050C 751D         052B         jne     no_match        ; if not match, then we are done
+
+ 050E 57                        push    di              ; save scan pointer
+ 050F 51                        push    cx              ; save count
+ 0510 B90500                    mov     cx,(length ser_def)-1   ; residual length of pattern
+ 0513 F3A6                      repe cmpsb
+ 0515 59                        pop     cx              ; recover scan count
+ 0516 5F                        pop     di              ; recover scan pointer
+ 0517 75ED         0506         jne     next_serial     ; no, rest didn't match
+
+ 0519 51                        push    cx              ; save scan pointer
+ 051A 4F                        dec     di              ; move di back to start of field
+ 051B BEA508                    mov     si,offset serial_number ; si points to current serial
+                                                                ;  number
+ 051E B90600                    mov     cx,length ser_def ; counter for number of bytes to move
+ 0521 F3A4                      rep  movsb
+ 0523 59                        pop     cx              ; recover scan pointer
+ 0524 FE063401                  inc     serial_cnt
+ 0528 E9DBFF       0506         jmp     next_serial
+
+                        no_match:
+ 052B C3                        ret
+
+                        ; increment the ASCII serial number
+
+                        inc_serial:
+ 052C B90600                    mov     cx,length ser_def       ; length of serial number
+ 052F BBA508                    mov     bx,offset serial_number ; bx points to start of string
+ 0532 83C305                    add     bx,(length ser_def)-1 ; bx now points to end of string
+                        addlop:
+ 0535 51                        push    cx                      ; save length of pointer
+ 0536 8A07                      mov     al,byte ptr[bx]         ; get byte of serial number
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  16
+
+
+ 0538 FEC0                      inc     al                      ; add 1 to it
+ 053A 27                        daa                             ; decimal adjust it
+ 053B 9F                        lahf                            ; check to see if there was a
+ 053C 80E410                    and     ah,10h          ;  carry from the lower half of
+ 053F B104                      mov     cl,4                    ;  the al register
+ 0541 D2E4                      shl     ah,cl
+ 0543 7204         0549         jc      fix                     ; if yes then increment the next
+                                                                ;  byte of the serial number
+ 0545 8807                      mov     byte ptr[bx],al         ; else save byte and stop
+ 0547 59                        pop     cx                      ; clean up stack
+ 0548 C3                        ret
+                        fix:
+ 0549 240F                      and     al,0fh                  ; make high nybble of byte
+ 054B 0C30                      or      al,30h                  ;  equal to "3" again
+ 054D 8807                      mov     byte ptr[bx],al         ; save byte back in serial
+                                                                ;  number
+ 054F 4B                        dec     bx                      ; point at next higher byte
+ 0550 59                        pop     cx                      ; recover length of serial
+                                                                ;  number
+ 0551 E2E2         0535         loop    addlop                  ; do again if CX<>0
+ 0553 C3                        ret
+
+                        ; translate the 8 bit digit in AL to ASCII into "ascii_trk"
+                        make_ascii:
+ 0554 BA2020                    mov     dx,'  '                 ; fill "ascii_trk" with blanks
+ 0557 89167204                  mov     ascii_trk,dx
+ 055B 89167404                  mov     ascii_trk+2,dx
+ 055F BB7504                    mov     bx,offset ascii_trk+3   ; BX -> "ascii_trk"+3
+ 0562 B20A                      mov     dl,10                   ; init divisor
+                        makelop1:
+ 0564 2AE4                      sub     ah,ah                   ; make AH zero  
+ 0566 F6F2                      div     dl                      ; and divide by 10
+ 0568 80C430                    add     ah,'0'                  ; make remainder ascii
+ 056B 8827                      mov     byte ptr[bx],ah         ; store it in "ascii_trk"
+ 056D 4B                        dec     bx                      ; move pointer to next location
+ 056E 84C0                      test    al,al                   ; see if quotient zero yet
+ 0570 75F2         0564         jnz     makelop1                ; no, got more digits
+ 0572 C3                        ret
+
+                        ; print the message at [DX] and wait for RETURN key
+                        pmsg_wait:
+ 0573 E81700       058D         call    pmsg                    ; print the message
+                        wait_1:
+ 0576 B101                      mov     cl,c_read               ; CP/M Console Input
+ 0578 CDE0                      int     ccpm
+ 057A 3C03                      cmp     al,'C'-'@'              ; see if control-C
+ 057C 7405         0583         je      abort                   ; terminate program
+ 057E 3C0D                      cmp     al,cr                   ; see if ASCII carriage return
+ 0580 75F4         0576         jne     wait_1                  ; no, try again
+ 0582 C3                        ret                             ; back to caller
+
+                        ; abort the program
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  17
+
+
+                        abort:
+ 0583 BABD05                    mov     dx,offset abort_msg
+ 0586 E8EAFF       0573         call    pmsg_wait
+ 0589 B100                      mov     cl,0                    ; CP/M reboot function
+ 058B CDE0                      int     ccpm
+
+                        ; print the string whose offset is in dx and is terminated by '$'
+                        pmsg:
+ 058D B109                      mov     cl,c_writebuf
+ 058F CDE0                      int     ccpm
+ 0591 C3                        ret
+
+                        ; clears the monitor screen
+                        clear:
+ 0592 803ED002FF                cmp     clear_on,false          ; see if clear screen enable is
+ 0597 7406         059F         je      no_clear                ;  off
+ 0599 BA6708                    mov     dx,offset clear_msg
+ 059C E8EEFF       058D         call    pmsg
+                        no_clear:
+ 059F C3                        ret
+
+                        ; get ASCII input from operator and translate to upper case
+                        get_char:
+ 05A0 B101                      mov     cl,c_read               ; request single character
+ 05A2 CDE0                      int     ccpm                    ;  from console
+ 05A4 3C03                      cmp     al,'C'-'@'                      ; check for control-C
+ 05A6 74DB         0583         je      abort                   ; abort operation if yes
+ 05A8 245F                      and     al,05Fh                 ; xlate lower to upper chase
+                        ; echo choice back to operator
+                        echo_choice:
+ 05AA 50                        push    ax                      ; temp save
+ 05AB B208                      mov     dl,bs                   ; write over last input
+ 05AD B102                      mov     cl,c_write
+ 05AF CDE0                      int     ccpm
+ 05B1 5A                        pop     dx                      ; get temp save
+ 05B2 52                        push    dx
+ 05B3 B102                      mov     cl,c_write              ; write it out
+ 05B5 CDE0                      int     ccpm
+ 05B7 58                        pop     ax
+ 05B8 C3                        ret
+
+                        ; get a single ASCII number from operator and check for .
+                        get_1num:
+ 05B9 B101                      mov     cl,c_read
+ 05BB CDE0                      int     ccpm
+ 05BD 3C03                      cmp     al,'C'-'@'                      ; check for control-C
+ 05BF 74C2         0583         je      abort
+ 05C1 240F                      and     al,00Fh
+ 05C3 C3                        ret
+
+                        ; this code erases the "Reading" and "Writing" messages from the
+                        ;  monitor screen
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  18
+
+
+                        erase_msg:
+ 05C4 BA7804                    mov     dx,offset msg10
+ 05C7 E8C3FF       058D         call    pmsg
+ 05CA C3                        ret
+
+                        ; this code erases the old track numbers from the monitor screen
+                        erase_trk:
+ 05CB BA8804                    mov     dx,offset msg11
+ 05CE E8BCFF       058D         call    pmsg
+ 05D1 C3                        ret
+
+                                dseg
+                                org     0000h
+
+                                ; Page Zero Definitions
+
+ 0000                   code_length     rw      1       ; low 16 bits code segment length
+ 0002                   code_length_h   rb      1       ; high 8 bits code segment length
+ 0003                   code_base       rw      1       ; base paragraph of code segment
+ 0005                   model_8080      rb      1       ; 8080 model byte
+ 0006                   data_length     rw      1       ; low 16 bits data segment length
+ 0008                   data_length_h   rb      1       ; high 8 bits data segment length
+ 0009                   data_base       rw      1       ; base paragraph of data segment
+ 000B                                   rs      1       ; << reserved >>
+ 000C                   extra_length    rw      1       ; low 16 bits extra segment length
+ 000E                   extra_length_h  rb      1       ; high 8 bits extra segment length
+ 000F                   extra_base      rw      1       ; base paragraph of extra segment
+
+
+                                org     0100h
+
+ 0100 0A                seek_trk_tab    db      10      ; seek track function table
+ 0101                   track      rb   4
+
+ 0105 09                sel_dsk_tab     db      9       ; select disk drive
+ 0106                   disk            rb      4
+
+ 010A 11                set_dma_base    db      17      ; set dma base address function table
+ 010B                   dma_base        rw      2
+
+ 010F 0C                set_dma_offset  db      12      ; set dma offset address function table
+ 0110                   dma_offset      rw      2
+
+ 0114 0B                set_sector      db      11      ; set sector function table
+ 0115                   tsector         rb      4       ; holds translated sector #
+ 0119                   sector          rb      1       ; holds untranslated sector #
+
+ 011A                   io_tab          rb      1       ; select read/write function table
+ 011B                                   rw      2
+
+ 011F                   bpt    rw       1               ; how many bytes per track
+
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  19
+
+
+ 0121                   mcb             rw      0               ; memory control block
+ 0121                   m_base    rw    1               ; base address (segment address)
+ 0123 FF0F              m_length        dw      0FFFh   ; desired length of memory area
+ 0125                   m_ext      rw   1
+
+ 0127                   ver_freqword    rw      0
+ 0127 0000              ver_freq        db      0,0     ; holds verification frequency value
+ 0129                   dsk_cntword     rw      0
+ 0129 0000              dsk_cnt         db      0,0     ; number of copies made so far
+
+ 012B                   B1_trk_cnt    rw        1
+ 012D                   B2_trk_cnt    rw        1
+
+ 012F                   block_cnt       rw      1
+
+ 0131                   track_cnt       rw      1
+
+ 0133                   tog0        rb  1
+
+ 0134                   serial_cnt    rb        1
+
+ 0135                   count_num       rs      1       ; holds number of serial fields
+                                                        ;  to expect on source disk
+ 0136 00                dskS            db      0
+ 0137 01                dskD            db      1
+
+ 0138                   skew            rb      1       ; reserve storage for skew factor
+ 0139                   spb             rw      0       ; sectors/block
+ 0139                   spbbyte         rb      2
+
+ 013B                   DPB             rb      0       ; Disk Parameter Block
+ 013B                   spt             rw      0       ; sector per track
+ 013B                   sptbyte         rb      2
+ 013D                   bsh             rb      1       ; block shift factor
+ 013E                   blm             rb      1       ; block mask
+ 013F                   exm             rb      1       ; extent mask
+ 0140                   dsm             rw      1       ; total storage capacity of drive
+ 0142                   drm             rw      1       ; number of directory entries
+ 0144                   al0             rb      1
+ 0145                   al1             rb      1
+ 0146                   cks             rw      1
+ 0148                   off             rw      1       ; number of reserved tracks
+
+ 014A                   xlt_offset      rw      1       ; offset of system translate table
+
+ 014C                   xlt_tab         rb      128     ; will contain sector translation table
+ 01CC                   addr_tab        rw      128     ; will contain sector address offsets
+                                                        ;  from beginning of track address in
+                                                        ;  disk data buffer
+ 02CC                   dma_addr        rw      1       ; will hold dma offset by track
+
+ 02CE                   trackS          rb      1
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  20
+
+
+ 02CF                   trackD          rb      1
+
+ 02D0 00                clear_on        db      true
+
+ 02D1 4C00              last_trk        dw      76
+
+ 02D3 363534333231      ser_def         db      '654321'
+
+ 02D9 0D0A0A            msg0            db      cr,lf,lf
+ 02DC 2D2D2D2D2D2D                      db      '-------------------------'
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D
+ 02F5 2D2D2D2D2D2D                      db      '-------------------------'
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D
+ 030E 2D                                db      '-'
+ 030F 0D0A                              db      cr,lf
+ 0311 53455249414C                      db      'SERIAL16          V1.0  Serial No. '
+      313620202020
+      202020202020
+      56312E302020
+      53657269616C
+      204E6F2E20
+ 0334 585858582D30                      db      'XXXX-0000-999999'
+      3030302D3939
+      39393939
+ 0344 0D0A                              db      cr,lf
+ 0346 436F70797269                      db      'Copyright (C) 1982'
+      676874202843
+      292031393832
+ 0358 0D0A                              db      cr,lf
+ 035A 446967697461                      db      'Digital Research, Inc.          '
+      6C2052657365
+      617263682C20
+      496E632E2020
+      202020202020
+      2020
+ 037A 416C6C205269                      db      'All Rights Reserved'
+      676874732052
+      657365727665
+      64
+ 038D 0D0A                              db      cr,lf
+ 038F 2D2D2D2D2D2D                      db      '-------------------------'
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D
+ 03A8 2D2D2D2D2D2D                      db      '-------------------------'
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  21
+
+
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D2D2D2D2D2D
+      2D
+ 03C1 2D                                db      '-'
+ 03C2 0D0A0A                            db      cr,lf,lf
+ 03C5 4469736B6574                      db      'Diskette Generation Utility',cr,lf
+      74652047656E
+      65726174696F
+      6E205574696C
+      6974790D0A
+ 03E2 666F72204350                      db      'for CP/M-86 based systems'
+      2F4D2D383620
+      626173656420
+      73797374656D
+      73
+ 03FB 24                                db      '$'
+
+ 03FC 0D0A0A            msg2            db      cr,lf,lf
+ 03FF 456E74657220                      db      'Enter starting serial number  '
+      737461727469
+      6E6720736572
+      69616C206E75
+      6D6265722020
+ 041D 24                                db      '$'
+
+ 041E 070D0A0A          msg6            db      bell,cr,lf,lf
+ 0422 456E74657220                      db      'Enter number of serial fields on source disk'
+      6E756D626572
+      206F66207365
+      7269616C2066
+      69656C647320
+      6F6E20736F75
+      726365206469
+      736B
+ 044E 203F20                            db      ' ? '
+ 0451 24                                db      '$'
+
+ 0452 52656164696E      msg7            db      'Reading Track  '
+      672054726163
+      6B2020
+ 0461 24                                db      '$'
+
+ 0462 57726974696E      msg8            db      'Writing Track  '
+      672054726163
+      6B2020
+ 0471 24                                db      '$'
+
+ 0472                   msg9            rs      0
+ 0472                   ascii_trk       rw      2
+ 0476 20                                db      ' '
+ 0477 24                                db      '$'
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  22
+
+
+
+ 0478 080808080808      msg10           db      bs,bs,bs,bs,bs,bs,bs,bs,bs,bs
+      08080808
+ 0482 080808080808                      db      bs,bs,bs,bs,bs,bs
+ 0488 0808080808        msg11           db      bs,bs,bs,bs,bs
+ 048D 24                                db      '$'
+
+ 048E 0D0A0A            error_msg1      db      cr,lf,lf
+ 0491 53657269616C                      db      'Serial number must be '
+      206E756D6265
+      72206D757374
+      20626520
+ 04A7                   error_msg2      rb      1
+ 04A8 206469676974                      db      ' digits long. Try again !!!  '
+      73206C6F6E67
+      2E2054727920
+      616761696E20
+      2121212020
+ 04C5 24                                db      '$'
+
+ 04C6 0D0A0A0A          msg12           db      cr,lf,lf,lf
+ 04CA 536F75726365                      db      'Source Drive is (A,B,etc.) ? '
+      204472697665
+      206973202841
+      2C422C657463
+      2E29203F20
+ 04E7 24                                db      '$'
+
+ 04E8 0D0A0A            msg13           db      cr,lf,lf
+ 04EB 44657374696E                      db      'Destination Drive is (A,B,etc.) ? '
+      6174696F6E20
+      447269766520
+      69732028412C
+      422C6574632E
+      29203F20
+ 050D 24                                db      '$'
+
+ 050E 0D0A0A            msg14           db      cr,lf,lf
+ 0511 496E73657274                      db      'Insert Source Disk '
+      20536F757263
+      65204469736B
+      20
+ 0524 616E64207479                      db      'and type "Return" to continue '
+      706520225265
+      7475726E2220
+      746F20636F6E
+      74696E756520
+ 0542 0D0A0A                            db      cr,lf,lf
+ 0545 24                                db      '$'
+
+ 0546 0D0A0A            msg3            db      cr,lf,lf
+ 0549 496E73657274                      db      'Insert '
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  23
+
+
+      20
+ 0550                   serial_1        rb      length ser_def
+ 0556 20696E746F20                      db      ' into destination drive'
+      64657374696E
+      6174696F6E20
+      6472697665
+ 056D 0D0A                              db      cr,lf
+ 056F 7468656E2074                      db      'then type "Return" to continue'
+      797065202252
+      657475726E22
+      20746F20636F
+      6E74696E7565
+ 058D 0D0A0A                            db      cr,lf,lf
+ 0590 24                                db      '$'
+
+ 0591 070D0A0A          msg4            db      bell,cr,lf,lf
+ 0595 52656D6F7665                      db      'Remove '
+      20
+ 059C                   serial_2        rb      length ser_def
+ 05A2 2066726F6D20                      db      ' from destination drive'
+      64657374696E
+      6174696F6E20
+      6472697665
+ 05B9 0D0A0A                            db      cr,lf,lf
+ 05BC 24                                db      '$'
+
+ 05BD 0D0A0D0A          abort_msg       db      cr,lf,cr,lf
+ 05C1 0D0A2A2A2A20                      db      cr,lf,'*** Serialization terminated ***'
+      53657269616C
+      697A6174696F
+      6E207465726D
+      696E61746564
+      202A2A2A
+ 05E3 0D0A                              db      cr,lf
+ 05E5 0D0A5265706C                      db      cr,lf,'Replace disk in Drive A:'
+      616365206469
+      736B20696E20
+      447269766520
+      413A
+ 05FF 0D0A09207468                      db      cr,lf,'  then type ENTER to reboot ','$'
+      656E20747970
+      6520454E5445
+      5220746F2072
+      65626F6F7420
+      24
+
+ 061E 0D0A0A            msg16           db      cr,lf,lf
+ 0621 576F756C6420                      db      'Would you like to change the skew factor'
+      796F75206C69
+      6B6520746F20
+      6368616E6765
+      207468652073
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  24
+
+
+      6B6577206661
+      63746F72
+ 0649 2028592F4E29                      db      ' (Y/N) ? '
+      203F20
+ 0652 24                                db      '$'
+
+ 0653 0D0A0A            msg17           db      cr,lf,lf
+ 0656 456E74657220                      db      'Enter skew factor (1-9) ? '
+      736B65772066
+      6163746F7220
+      28312D392920
+      3F20
+ 0670 24                                db      '$'
+
+ 0671 0D0A0A            msg18           db      cr,lf,lf
+ 0674 446F20796F75                      db      'Do you want to perform copy verification'
+      2077616E7420
+      746F20706572
+      666F726D2063
+      6F7079207665
+      726966696361
+      74696F6E
+ 069C 2028592F4E29                      db      ' (Y/N) ? '
+      203F20
+ 06A5 24                                db      '$'
+
+ 06A6 0D0A0A0A          msg19           db      cr,lf,lf,lf
+ 06AA 31203D206576                      db      '1 = every disk is verified'
+      657279206469
+      736B20697320
+      766572696669
+      6564
+ 06C4 0D0A                              db      cr,lf
+ 06C6 32203D206576                      db      '2 = every 2nd disk is verified'
+      65727920326E
+      64206469736B
+      206973207665
+      726966696564
+ 06E4 0D0A                              db      cr,lf
+ 06E6 33203D206576                      db      '3 = every 3rd disk is verified'
+      657279203372
+      64206469736B
+      206973207665
+      726966696564
+ 0704 0D0A220D0A22                      db      cr,lf,'"',cr,lf,'"',cr,lf,'"',cr,lf
+      0D0A220D0A
+ 070F 3939203D2065                      db      '99 = every 99th disk is verified'
+      766572792039
+      397468206469
+      736B20697320
+      766572696669
+      6564
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  25
+
+
+ 072F 0D0A0A                            db      cr,lf,lf
+ 0732 486F77206F66                      db      'How often do you want the verification to'
+      74656E20646F
+      20796F752077
+      616E74207468
+      652076657269
+      666963617469
+      6F6E20746F
+ 075B 206F63637572                      db      ' occur (1-99) ? '
+      2028312D3939
+      29203F20
+ 076B 24                                db      '$'
+
+ 076C 566572696679      msg20           db      'Verifying Track '
+      696E67205472
+      61636B20
+ 077C 24                                db      '$'
+
+ 077D 0D0A0A            msg21           db      cr,lf,lf
+ 0780 546865206375                      db      'The current sector skew is '
+      7272656E7420
+      736563746F72
+      20736B657720
+      697320
+ 079B 24                                db      '$'
+
+ 079C 070D0A0A          error_msg3      db      bell,cr,lf,lf
+ 07A0 446964206E6F                      db      'Did not find all of the required serial '
+      742066696E64
+      20616C6C206F
+      662074686520
+      726571756972
+      656420736572
+      69616C20
+ 07C8 6669656C6473                      db      'fields'
+ 07CE 0D0A                              db      cr,lf
+ 07D0 24                                db      '$'
+
+ 07D1 0D0A0A            error_msg6      db      cr,lf,lf
+ 07D4 57726F6E672E                      db      'Wrong. Need one or two digits'
+      204E65656420
+      6F6E65206F72
+      2074776F2064
+      6967697473
+ 07F1 24                                db      '$'
+
+ 07F2 070D0A0A          error_msg7      db      bell,cr,lf,lf
+ 07F6 2A2A2A2A2056                      db      '**** Verification failed ****'
+      657269666963
+      6174696F6E20
+      6661696C6564
+      202A2A2A2A
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  26
+
+
+ 0813 0D0A0A                            db      cr,lf,lf
+ 0816 547279206974                      db      'Try it again.'
+      20616761696E
+      2E
+ 0823 0D0A                              db      cr,lf
+ 0825 24                                db      '$'
+
+ 0826 070D0A0A          error_msg0      db      bell,cr,lf,lf
+ 082A 205468652053                      db      ' The Source Disk is BLANK '
+      6F7572636520
+      4469736B2069
+      7320424C414E
+      4B20
+ 0844 0D0A                              db      cr,lf
+ 0846 24                                db      '$'
+
+ 0847 0D0A0A            msg1            db      cr,lf,lf
+ 084A 436865636B69                      db      'Checking for blank tracks'
+      6E6720666F72
+      20626C616E6B
+      20747261636B
+      73
+ 0863 0D0A0A                            db      cr,lf,lf
+ 0866 24                                db      '$'
+
+ 0867 0D0A0A0A0A0A      clear_msg       db      cr,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf
+      0A0A0A0A0A0A
+      0A0A0A
+ 0876 0A0A0A0A0A0A                      db      lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf
+      0A0A0A0A0A0A
+      0A0A0A
+ 0885 0A0A0A0A0A                        db      lf,lf,lf,lf,lf
+ 088A 0B0B0B0B0B0B                      db      vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt
+      0B0B0B0B0B0B
+      0B0B0B
+ 0899 0B0B0B0B0B0B                      db      vt,vt,vt,vt,vt,vt,vt,vt,vt
+      0B0B0B
+ 08A2 24                                db      '$'
+
+ 08A3 0A                con_buf0        db      10                      ; buffer used to read
+ 08A4                   buf0_len        rb      1                       ;  serial number
+ 08A5                   serial_number   rb      length ser_def
+ 08AB                                   rb      10-1-length ser_def
+
+ 08AE 05                con_buf1        db      5               ; another console input buffer
+ 08AF                   buf1_len        rb      1
+ 08B0                   input_num       rb      5
+
+
+ 08B5 00                                db      0               ; force out end of data segment
+
+
+CP/M ASM86 1.1  SOURCE: SERIAL16.A86                                                                         PAGE  27
+
+
+END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  6%

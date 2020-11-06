@@ -1,0 +1,1 @@
+$title	('Resident System Process  BDOS Interface')	name	monx;	cseg;	extrn	os;	public	mon1,mon2,mon2amon1:mon2:mon2a:	lhld	os	pchl;	end

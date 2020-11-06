@@ -1,0 +1,254 @@
+eol	equ	0
+
+	cseg
+
+	public	parse
+	public	parse2
+	public	conin
+	public	printdword
+	public	printword
+	public	printbyte
+
+	extrn	systemreset:near
+	extrn	printm:near
+	extrn	crlf:near
+	extrn	conout:near
+	extrn	blank:near
+
+;
+;	**************************************
+;	*                                    *
+;	*     file name parsing routines     *
+;	*                                    *
+;	**************************************
+;
+parse:				;parse into fcb whose offset is in [di]
+	push	ds
+	pop	es		;set es=cs
+	push	di		;save fcb address
+	sub	al,al
+	mov	cx,36		;fcblen
+rep	stos	al		;initialize fcb to 0
+	pop	di		;restore fcb address
+;
+parse2:				;enter here to parse without clearing
+				;assumes es = cs from parse:
+	mov	fcbadr,di	;save fcb address
+	inc	di		;point to first byte of filename
+	call	setupdisk	;check for d: and set drive byte
+	mov	cx,8
+	call	fillfield	;first item was disk, now get filename
+	mov	cx,3		;length of file type
+	cmp	lastchar,'.'
+	jz	filltype
+	call	fillbl		;fill type with blanks if no '.'
+	jmps	parseret
+filltype:
+	call	fillfield	;if '.', fill field from console buff
+parseret:
+	mov	al,lastchar
+	ret			;with last char scanned in [al]
+parseerr:
+	mov	dx,offset parsemessage
+	call	printm
+	call	systemreset
+;
+deblank:
+	call	conin
+	mov	lastchar,al
+	cmp	al,' '
+	jz	deblank		;deblank input
+	ret
+;
+setupdisk:			;set byte 0 of fcb according to char in fcb (1)
+	call	deblank
+	cmp	al,eol
+	jz	s1		;can't be drive, decrement conptr to rescan
+	call	conin
+	cmp	al,':'
+	jnz	s0		;not a drive, subtract 2 from conptr to rescan
+	mov	al,lastchar	;get drive char
+	sub	al,'A'-1
+	dec	di		;point to fcb (0)
+	stos	al		;store drive byte
+	ret
+s0:
+	dec	conptr
+s1:
+	dec	conptr
+	ret
+;
+pdelim:				;check char in [al] for delimiter; return ZF if so.
+	mov	di,offset delims
+	mov	cx,ndelims
+repnz	scas	al		;look in table
+	ret
+;
+fillfield:			;count in [cx], dest ptr in [di]
+	call	conin
+	mov	lastchar,al	;save last char scanned
+	cmp	al,'*'
+	jz	parseerr
+	cmp	al,'?'
+	jz	parseerr
+	push	di
+	push	cx
+	call	pdelim
+	pop	cx
+	pop	di
+	jz	fillbl		;if delimiter, fill field with ' '
+	jcxz	parseerr	;error if count exceeded
+	stos	al		;store char in fcb
+	dec	cx		;decrement count
+	jmps	fillfield
+fillbl:
+	mov	al,' '
+fillx:
+	jcxz	filldone
+rep	stos	al		;store '?' or ' '
+filldone:
+	ret
+;
+;
+printseginfo:			;print name, start and end address of segment whose
+				;number is in [al] if length is non-zero.
+	mov	es,userds
+	mov	cl,al		;save seg number
+	mov	bl,6
+	mul	bl		;6 bytes per segment in base page
+	mov	si,ax		;si now points to entry in base page
+	lods	es:ax		;get low 16 bits of length
+	mov	bx,ax		;save in bx
+	lods	es:al		;get high nibble of length
+	mov	dl,al		;save it
+	mov	ah,0
+	or	ax,bx		;test for zero length
+	jz	psiret		;if zero, no display
+	lods	es:ax		;get base
+	push	bx		;save low (length)
+	push	dx		;save high (length)
+	push	ax		;save base
+	mov	al,cl		;get seg number
+	mov	bl,3		;3 bytes per segment name
+	mul	bl		;calculate offset into table
+	add	ax,offset segnames	;ax now points to segment name
+	push	ax		;save it
+	call	crlf
+	pop	si
+	call	printm		;print segment name
+	call	blank
+	pop	es		;get base
+	push	es		;save base
+	mov	di,0
+	call	printdword	;print start address
+	call	blank
+	pop	bx		;get base
+	pop	ax		;get high (len)
+	mov	cl,12
+	shl	ax,cl		;move ls nibble of al to ms nibble of ah
+	add	ax,bx		;add ms nibble of length to base
+	mov	es,ax
+	pop	di		;get low (len)
+	call	printdword	;print end address
+psiret:
+	ret
+;
+ifcb:
+	push	conptr		;save input pointer
+	mov	di,5ch
+	call	parse
+	cmp	al,eol
+	jnz	i0		;only one filename
+	dec	conptr		;to rescan eol and blank second filename in fcb
+i0:
+	mov	di,6ch
+	call	parse2		;parse second filename
+	push	ds
+	pop	es		;point to SID's ds
+	pop	conptr		;restore input pointer
+	mov	di,81h		;move command tail to [es]:[di]
+	sub	cx,cx		;zero count
+i1:
+	call	conin		;get char from command tail
+	cmp	al,eol		;end of command tail?
+	jz	i2
+	stos	al		;store in user's base page
+	inc	cx		;increment count
+	jmps	i1		;loop until eol
+i2:
+	mov	al,0
+	stos	al		;store 0 at end of string
+	mov	es:.80h,cl	;store count at start of buffer
+	mov	si,5ch
+	mov	di,si
+	mov	es,userds
+	add	cx,38		;total bytes to move = # in command + 36 (fcb)
+				; +2 (0 at end of command and count byte)
+rep	movs	al,al		;move fcb from sid86 basepage to user's basepage
+idone:
+	ret
+
+
+conin:
+	mov	si,81h
+	add	si,conptr
+	lods	al
+	inc	conptr
+upper:	cmp	al,'a'		;less than 'a'
+	jb	upret		;or
+	cmp	al,'z'		;greater than 'z'
+	ja	upret		;then no change
+	and	al,5fh		;else convert to uc
+upret:	ret
+
+
+printdword:			;print double word as ssss:oooo
+	; called with:
+	;  es = segment
+	;  di = offset
+	push	di
+	mov	ax,es
+	call	printword	;print segment
+	mov	al,':'
+	call	conout
+	pop	ax
+;
+printword:			;print value in [ax] as 4 hex digits
+	push	ax
+	mov	al,ah
+	call	printbyte
+	pop	ax
+;
+printbyte:			;print value in [al] as 2 hex digits
+	push	ax
+	mov	cl,4
+	shr	al,cl		;shift al right 4 places
+	call	printnibble	;output upper nibble
+	pop	ax		;restore al (now we do lower nibble)
+;
+printnibble:			;print value in low 4 bits of [al] as a hex digit
+	and	al,0fh		;mask upper 4 bits
+	add	al,90h
+	daa
+	adc	al,40h
+	daa
+	call	conout
+	ret
+
+	dseg
+
+	public	conptr
+
+	extrn	userds:word
+
+conptr		dw	0
+lastchar	rb	1
+fcbadr		rw	1
+delims		db	' =.,:;[]<>',eol
+ndelims		equ	offset $ - offset delims
+segnames	db	'CS$', 'DS$', 'ES$', 'SS$'
+		db	'X1$', 'X2$', 'X3$', 'X4$'
+parsemessage	db	'BAD FILE NAME',0dh,0ah,'$'
+
+	end
+

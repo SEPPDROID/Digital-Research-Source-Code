@@ -1,0 +1,141 @@
+;************ biosio.z8k **************************
+;*
+;*	Direct disk I/O for the Disk copy program
+;*	for Olivetti M20 (Z8001) system.
+;*
+;* 830214 F. Zlotnick (Zilog) -- created, stolen from
+;*	the M20 Bios routines written by Steve Savitzky.
+;*
+;****************************************************
+
+;****************************************************
+;*
+;* Global declarations
+;*
+;****************************************************
+
+
+	.global	_disk_io
+	.global _bdos
+
+;****************************************************
+
+SUPV	.equ	62		; Supervisor state BDOS call
+BDOS_SC	.equ	2		; System call number 2
+
+;****************************************************
+;
+; 	Following macro stolen from Steve Savitzky
+;
+;****************************************************
+
+scall	.MACRO
+
+	.word	05f00h		; 5F00 = segmented call
+	.long	?1		; segmented address
+
+	.ENDM
+
+__text:	.sect
+
+;****************************************************
+;*
+;* NOTE	The Olivetti PROM routines are segmented.
+;*	The C portion of the copy program is non-segmented.
+;*
+;*	This assembly-language module is assembled
+;*	non-segmented, and serves as the interface.
+;*
+;*	Segmented operations are well-isolated, and
+;*	are either the same as their non-segmented
+;*	counterparts, or constructed using macros.
+;*
+;****************************************************
+
+
+
+;****************************************************
+;*
+;* C Stack frame equates
+;*
+;*	A C stack frame consists of the PC on top,
+;*	followed by the arguments, leftmost argument first.
+;*
+;*	The caller adjusts the stack on return.
+;*	Returned value is in r7 (int) or rr6 (long)
+;*
+;****************************************************
+
+PCSIZE	.equ	2		;PC size non-segmented
+INTSIZE	.equ	2		;INT data type size
+LONGSIZE .equ	4		;LONG data type size
+
+ARG1	.equ	PCSIZE		;integer arguments
+ARG2	.equ	ARG1+INTSIZE
+ARG3	.equ	ARG2+INTSIZE
+ARG4	.equ	ARG3+INTSIZE
+ARG5	.equ	ARG4+INTSIZE
+
+				
+
+;****************************************************
+;*
+;* Prom Subroutine Access
+;*
+;****************************************************
+
+_disk_io:	;err=disk_io(drv, cmd, count, blk, addr)
+
+	dec	r15,#14		;save registers
+	ldm	@r15,r8,#7
+
+	ldb	rh7,14+ARG1+1(r15)	;get args
+	ldb	rl7,14+ARG2+1(r15)
+	ld	r8, 14+ARG3(r15)
+	ld	r9, 14+ARG4(r15)
+	ldl	rr10,14+ARG5(r15)
+
+			;rh7 = drive #
+			;rl7 = command
+			;r8  = block count
+			;r9  = block number
+			;rr10 = segmented address
+
+;
+;	Now we must call the BDOS to get into segmented supervisor
+;	mode.  Dangerous!
+;
+;	First save r7, which gets stepped on by the ldl instruction
+;
+	ld	r12, r7			; r12 is available
+;
+	ldl	rr6,#0			; Must be long
+	ld	r5,#SUPV		; BDOS function
+	sc	#BDOS_SC
+;
+;	Watch it!  Now in system mode, and the stack pointer isn't yours!
+;
+;	Now restore r7
+;
+	ld	r7, r12
+;
+	scall	84000068h
+;
+;	That's all in segmented mode;  Now lets get back to
+;	user nonseg as fast as possible.
+;
+	ldctl	r1,FCW			; Get FCW in r1
+	and	r1,#03FFFh		; Mask seg and sysmode
+	ldctl	FCW,r1			; BOOM!
+			;r8  = block count not transferred
+			;rh7 = #retries
+			;rl7 = final error code (RETURNED)
+			;rh6 = error retried
+
+	and	r7,#0FFh	;value returned in r7
+
+	ldm	r8,@r15,#7	;restore regs
+	inc	r15,#14
+	ret
+
+

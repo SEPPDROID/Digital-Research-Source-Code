@@ -1,0 +1,156 @@
+title	'Unskew / Reskew'
+
+include exerror.equ
+include system.lib
+include	diskhdr.equ
+
+FIRST_CALL_FLAG	equ	01H
+
+	dseg
+
+extrn	disk_modes:byte
+
+	cseg
+
+public	read_write
+
+extrn	current_reskew:word
+extrn	io_select:near
+extrn	idrive:byte, itrack:word, isector:byte,idmaoff:word, idmaseg:word
+
+;----------
+read_write:	;unskews and reads or writes multi sectors
+;----------
+;
+;	input:	SI = read or write routine address
+;
+;	output:	AX = return code
+
+
+	mov cl, idrive
+	mov dl, FIRST_CALL_FLAG	; this is not the first select
+	call io_select		;get DPH address
+	or bx,bx! jnz dsk_ok	;check if valid
+ret_error:
+	  mov	ah,ATTA_FAILED
+	  mov al,1		; return error if not
+	  ret
+dsk_ok:
+	mov ax,xlt[bx]
+	mov xltbl,ax		;save translation table address
+	mov bx,dpb[bx]
+	push	bx
+	xor	bx,bx
+	mov	bl,idrive
+	mov	bl,disk_modes[bx]
+	cmp	bl,0		; Is this a CCP/M DPB?
+	pop	bx
+	jz	yes1
+	add	bx,12		; add offset to make DOS DPB look like CCP/M
+yes1:
+	mov ax,spt[bx]
+	mov maxsec,ax		;save maximum sector per track
+	mov cl,psh[bx]
+	mov ax,128
+	shl ax,cl		;compute physical record size
+	mov secsiz,ax		; and save it
+	call initdmatbl		;initialize dma offset table
+	cmp mcnt,0
+	je rw_sects
+rw_1:
+	  mov ax,sector		;is sector < max sector/track
+	  cmp ax,maxsec! jb same_trk
+	    call rw_sects	; no - read/write sectors on track
+	    call initdmatbl	; reinitialize dma offset table
+	    inc track		; next track
+	    xor ax,ax
+	    mov sector,ax	; initialize sector to 0
+same_trk:
+	  mov bx,xltbl		;get translation table address
+	  or bx,bx! jz no_trans	;if xlt <> 0
+	    xlat al		; translate sector number
+no_trans:
+	  xor bh,bh
+	  mov bl,al		;sector # is used as the index 
+	  shl bx,1		; into the dma offset table
+	  mov ax,dmaoff
+	  mov dmatbl[bx],ax	;save dma offset in table 
+	  add ax,secsiz		;increment dma offset by the
+	  mov dmaoff,ax		; physical sector size
+	  inc sector		;next sector
+	  dec mcnt		;decrement multi sector count
+	  jnz rw_1		;if mcnt <> 0 store next sector dma
+rw_sects:			;read/write sectors in dma table
+	mov	ah,DMA_OVERRUN
+	mov al,1		;preset error code
+	xor bx,bx		;initialize sector index
+rw_s1:
+	cmp current_reskew, 0
+	je no_reskew
+	  push bx! push ax
+	  mov ax, bx
+	  mov bx, current_reskew
+	  mov ah, 0
+	  xlat al
+	  mov di, ax
+	  pop ax! pop bx
+	  jmps re_skew_1
+no_reskew:
+	mov di,bx
+re_skew_1:
+	shl di,1		;compute index into dma table
+	cmp word ptr dmatbl[di],0ffffh
+	je no_rw		;nop if invalid entry
+	  push bx! push si	;save index and routine address
+	  mov ax,track		;get track # from IOPB
+	  mov itrack,ax
+	  mov ax,di		;sector # is index value
+	  shr ax, 1
+	  mov isector,al
+	  mov ax,dmatbl[di]	;get dma offset from table
+	  mov idmaoff,ax
+	  mov ax,dmaseg		;get dma segment from IOPB
+	  mov idmaseg,ax
+	  call si		;call read/write routine
+	  pop si! pop bx	;restore routine address and index
+	  or al,al! jnz err_ret	;if error occured return
+no_rw:
+	inc bx			;next sector index
+	cmp bx,maxsec		;if not end of table
+	jb rw_s1		; go read/write next sector
+err_ret:
+
+	ret			;return with error code in AL
+
+eject
+
+initdmatbl:	;initialize DMA offset table
+;----------
+	mov di,offset dmatbl
+	mov cx,maxsec		;length = maxsec + 1  sectors may
+	inc cx			; index relative to 0 or 1
+	mov ax,0ffffh
+	push es			;save UDA
+	push ds! pop es
+	rep stosw		;initialize table to 0ffffh
+	pop es			;restore UDA
+	ret
+
+
+	dseg
+
+;*****************************************************
+;*
+;*	DISK DATA AREA
+;*
+;*****************************************************
+
+xltbl	dw	0	;translation table address
+maxsec	dw	0	;max sectors per track
+secsiz	dw	0	;sector size
+dmatbl	rw	50	;dma address table
+
+
+	end
+
+

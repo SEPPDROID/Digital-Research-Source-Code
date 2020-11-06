@@ -1,0 +1,237 @@
+m_exp:
+	proc returns (ptr);
+	%replace
+		true  by '1'b,
+		false by '0'b;
+
+	dcl
+		lower char(26) static initial
+		('abcdefghijklmnopqrstuvwxyz'),
+		upper char(26) static initial
+		('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+	dcl
+		true_ptr   ptr external,
+		define_ptr ptr external,
+		nil_ptr    ptr external,
+		label_ptr  ptr external,
+		lambda_ptr ptr external,
+		cond_ptr   ptr external,
+		quote_ptr  ptr external;
+
+	dcl
+		accum char(128) var external,
+		scan entry,
+		compute_hash entry,
+		lookup returns(ptr),
+		enter returns(ptr),
+		cons entry(ptr,ptr) returns(ptr),
+		replacd entry(ptr,ptr) returns(ptr),
+		list entry returns(ptr);
+
+	dcl
+		m ptr;
+
+	syntax:
+		proc(n);
+		dcl
+			n fixed;
+		put edit(n,' Syntax Error at ',accum)
+			(skip,f(3),2a);
+			do while (accum ^= ';');
+			call scan();
+			end;
+		go to error_exit;
+		end syntax;
+
+	var:
+		proc returns(ptr);
+		dcl
+			p ptr;
+		if accum = 'T' then
+			return (true_ptr);
+		if accum = 'F' | accum = 'NIL' then
+			return (nil_ptr);
+		if index(lower,substr(accum,1,1)) = 0 then
+			call syntax(10);
+		accum = translate(accum,upper,lower);
+		call compute_hash();
+		p = lookup();
+		if p = null then
+			p = enter();
+		call scan();
+		return (p);
+		end var;
+
+	v_tail:
+		proc returns (ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan();
+			return (nil_ptr);
+			end;
+		if accum = ';' then
+			do;
+			call scan();
+			return (v_list());
+			end;
+		call syntax(20);
+		end v_tail;
+
+	v_list:
+		proc returns (ptr) recursive;
+		return (cons(var(),v_tail()));
+		end v_list;
+
+	func:
+		proc returns(ptr) recursive;
+		dcl
+			(v, e, f) ptr;
+		if accum = 'label' then
+			do;
+			call scan();
+			if accum ^= '[' then
+				call syntax(30);
+			call scan();
+			v = var();
+			if accum ^= ';' then
+				call syntax(40);
+			call scan();
+			f = func();
+			if accum ^= ']' then
+				call syntax(42);
+			call scan();
+			return (cons(label_ptr,
+				cons(v,cons(f,nil_ptr))));
+			end;
+		if accum = 'lambda' then
+			do;
+			call scan();
+			if accum ^= '[' then
+				call syntax(50);
+			call scan();
+			if accum ^= '[' then
+				call syntax(60);
+			call scan();
+			if accum = ']' then
+				do;
+				call scan();
+				v = nil_ptr;
+				end;
+			else
+				v = v_list();
+			if accum ^= ';' then
+				call syntax(70);
+			call scan();
+			e = exp();
+			if accum ^= ']' then
+				call syntax(80);
+			call scan();
+			return (cons(lambda_ptr,
+				cons(v,cons(e,nil_ptr))));
+			end;
+		return(var());
+		end func;
+
+	c_tail:
+		proc returns(ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan();
+			return (nil_ptr);
+			end;
+		if accum = ';' then
+			do;
+			call scan();
+			return (c_list());
+			end;
+		call syntax(90);
+		end c_tail;
+
+	c_list:
+		proc returns(ptr) recursive;
+		dcl
+			p ptr;
+		p = exp();
+		if accum ^= '-' then
+			call syntax(100);
+		call scan();
+		if accum ^= '>' then
+			call syntax(110);
+		call scan();
+		return (cons(cons(p,cons(exp(),nil_ptr)),c_tail()));
+		end c_list;
+
+	e_tail:
+		proc returns (ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan();
+			return (nil_ptr);
+			end;
+		if accum = ';' then
+			do;
+			call scan();
+			return (e_list());
+			end;
+		call syntax(120);
+		end e_tail;
+
+	e_list:
+		proc returns (ptr) recursive;
+		return (cons(exp(),e_tail()));
+		end e_list;
+
+	exp:
+		proc returns(ptr) recursive;
+		dcl
+			(f, el, ef) ptr;
+		if accum = '"' then
+			do;
+			call scan();
+			el = list();
+			if accum ^= '"' then
+				call syntax(122);
+			call scan();
+			return (cons(quote_ptr,cons(el,nil_ptr)));
+			end;
+		if accum = '[' then
+			do;
+			call scan();
+			return (cons(cond_ptr,c_list()));
+			end;
+		f = func();
+		if accum ^= '[' then
+			/* (lambda or label) */
+			return(f);
+		call scan();
+		if accum = ']' then
+			do;
+			call scan();
+			el = nil_ptr;
+			end;
+		else
+			el = e_list();
+		if accum ^= '=' then
+			return (cons(f,el));
+		call scan();
+		ef = exp();
+		/* (define (( (f (lambda el ef) )   )) ) */
+		el = cons(lambda_ptr,cons(el,cons(ef,nil_ptr)));
+		el = cons(el,nil_ptr);
+		f = cons(cons(cons(f,el),nil_ptr),nil_ptr);
+		return (cons(define_ptr,cons(f,nil_ptr)));
+		end exp;
+
+	m = exp();
+		do while (true);
+		if accum = ';' then
+			return (m);
+		if accum ^= ']' then
+			call syntax(130);
+		call scan();
+		end;
+	error_exit:
+	return (nil_ptr);
+	end m_exp;
+

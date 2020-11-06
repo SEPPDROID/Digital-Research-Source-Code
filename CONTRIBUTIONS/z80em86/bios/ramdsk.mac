@@ -1,0 +1,100 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                           RAM Disk driver                              *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+;
+; v1.00 - 26 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+; Entry point 1 : irdsk - Initialize
+; Entry point 2 : lrdsk - Login
+; Entry point 3 : wrdsk - Write sector
+; Entry point 4 : rrdsk - Read sector
+
+	.z80
+;
+	maclib	TPORTS.LIB
+	maclib	ASMTYPE.LIB
+;
+	public	irdsk, lrdsk, rrdsk, wrdsk
+;
+	extrn	@trk, @sect, @dma, @dbnk
+	extrn	ramdsk, dpb3
+;
+	dseg			;banked memory
+;
+; Entry point 1 - Initialize
+irdsk:	out	(blkcnt),a
+	cp	2
+	jr	c,kildsk
+	dec	a
+	ld	b,a		;number of blocks to format
+	cp	32
+	jr	c,fnddsm
+	xor	a		;setup maximum sized RAM disk
+fnddsm:	rlca
+	rla
+	rla
+	dec	a
+setdsm:	ld	(dpb3+5),a	;set maximum number of blocks
+	ld	c,0		;get user byte function
+	ld	hl,1		;access user byte number 1
+	out	(usrbyt),a	;see if system booted before
+	cp	030h		;CP/M ver 3.0 ?
+	ret	z
+	ld	c,1		;block #1
+format:	ld	d,0
+	ld	e,128		;
+	ld	a,0e5h		;format value
+	out	(blkfil),a	;fill 16k block with format byte
+	inc	c		;next block
+	djnz	format
+	ld	c,0ffh		;set user byte function
+	ld	a,030h		;set flag to CP/M ver 3.0
+	ld	hl,1		;access user byte number 1
+	out	(usrbyt),a
+	ret
+kildsk:	ld	hl,0
+	ld	(ramdsk),hl	;kill entry in disk table
+	ret
+;
+; Entry point 2 - Login
+lrdsk:	ret			;nothing required
+;
+; Entry point 3 - Write sector
+wrdsk:	ld	b,0ffh		;write operation flag
+	jr	secmve
+;
+; Entry point 4 - Read sector
+rrdsk:	ld	b,0		;read operation flag
+;
+secmve:	ld	hl,(@dma)	;transfer address
+if banked
+	ld	a,(@dbnk)
+	out	(bnkdma),a
+endif
+	ld	a,(@trk)	;track 0 to ?
+	inc	a		;skip block #0 (used for CCP storage)
+	ld	c,a
+	ld	a,(@sect)	;sector 0 to 127
+	ld	d,a
+	ld	e,1		;1 sector to move
+	inc	b		;test if read or write operation
+	jr	z,write		;write RAM-DISK if Z
+	out	(blkget),a	;read 1 sector
+	ret			;error code in A
+write:	out	(blkput),a	;write 1 sector
+	ret			;error code in A
+;
+	end

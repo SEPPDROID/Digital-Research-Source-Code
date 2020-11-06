@@ -1,0 +1,451 @@
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE ERRORM
+OBJECT MODULE PLACED IN ERMOD.OBJ
+COMPILER INVOKED BY:  :F0: ERMOD.PLM DEBUG OPTIMIZE(2) DATE(10/5/81) PAGEWIDTH(100) XREF
+
+
+
+              $title ('ERROR MESSAGE MODULE')
+   1          errorm:
+              do;
+
+              /*
+
+                modified  3/28/81  R. Silberstein
+                modified  3/30/81  R. Silberstein
+                modified  4/7/81   R. Silberstein
+                modified  4/24/81  R. Silberstein
+
+              */
+
+              /*
+                      This is the module to perform error message
+                      printout to the print file. The interface from
+                      other modules goes through the subroutine
+
+                              ERRMSG ( errornumber )
+
+                      This routine also increments the global variable
+                      "ERRORS" which contains the accumulated number
+                      of errors throughout the assembly.
+              */
+
+              $include (:f1:macro.lit)
+          =   $nolist
+              $include (:f1:struc.lit)
+          =   $nolist
+              $include (:f1:ermod.lit)
+          =   $nolist
+              $include (:f1:subr1.ext)
+          =   $nolist
+              $include (:f1:subr2.ext)
+          =   $nolist
+              $include (:f1:print.ext)
+          =   $nolist
+              $include (:f1:global.ext)
+          =   $nolist
+
+
+              /*       Error messages :       */
+
+  69   1      dcl
+              nulltext(1) byte data (0),       /* dummy text */
+              tex00(*)    byte data ('ILLEGAL FIRST ITEM',0),
+              tex01(*)    byte data ('MISSING PSEUDO INSTRUCTION',0),
+              tex02(*)    byte data ('ILLEGAL PSEUDO INSTRUCTION',0),
+              tex03(*)    byte data ('DOUBLE DEFINED VARIABLE',0),
+              tex04(*)    byte data ('DOUBLE DEFINED LABEL',0),
+              tex05(*)    byte data ('UNDEFINED INSTRUCTION',0),
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   2
+
+
+              tex06(*)    byte data ('GARBAGE AT END OF LINE - IGNORED',0),
+              tex07(*)    byte data ('OPERAND(S) MISMATCH INSTRUCTION',0),
+              tex08(*)    byte data ('ILLEGAL INSTRUCTION OPERANDS',0),
+              tex09(*)     byte data ('MISSING INSTRUCTION',0),
+              tex10(*)    byte data ('UNDEFINED ELEMENT OF EXPRESSION',0),
+              tex11(*)    byte data ('ILLEGAL PSEUDO OPERAND',0),
+              tex12(*)    byte data ('NESTED "IF" ILLEGAL - "IF" IGNORED',0),
+              tex13(*)    byte data ('ILLEGAL "IF" OPERAND - "IF" IGNORED',0),
+              tex14(*)    byte data ('NO MATCHING "IF" FOR "ENDIF"',0),
+              tex15(*)    byte data ('SYMBOL ILLEGALLY FORWARD REFERENCED - ',
+                                     'NEGLECTED',0),
+              tex16(*)    byte data ('DOUBLE DEFINED SYMBOL - ',
+                                     'TREATED AS UNDEFINED',0),
+              tex17(*)    byte data ('INSTRUCTION NOT IN CODE SEGMENT',0),
+              tex18(*)    byte data ('FILE NAME SYNTAX ERROR',0),
+              tex19(*)    byte data ('NESTED INCLUDE NOT ALLOWED',0),
+              tex20(*)    byte data ('ILLEGAL EXPRESSION ELEMENT',0),
+              tex21(*)    byte data ('MISSING TYPE INFORMATION IN OPERAND(S)',0),
+              tex22(*)    byte data ('LABEL OUT OF RANGE',0),
+              tex23(*)    byte data ('MISSING SEGMENT INFORMATION IN OPERAND',0),
+              tex24(*)    byte data ('ERROR IN CODEMACROBUILDING',0),
+
+              /*       Error-message pointer table:       */
+
+              texttab(*) address data (.tex00,.tex01,.tex02,.tex03,.tex04,
+                                       .tex05,.tex06,.tex07,.tex08,
+                                       .tex09,.tex10,.tex11,.tex12,.tex13,
+                                       .tex14,.tex15,.tex16,.tex17,.tex18,
+                                       .tex19,.tex20,.tex21,.tex22,.tex23,
+                                       .tex24,.nulltext);
+
+              /*       Additional text strings:       */
+
+  70   1      dcl
+              errnotext(*)   byte data ('** ERROR NO:',0),
+              neartext(*)    byte data (' **  NEAR: "',0),
+              spacetext(*)   byte data ('   ',0);
+
+              /*       Table of defined error numbers:      */
+
+  71   1      dcl
+              errtab (*) byte data (firstitem,missingpseudo,
+                                    illegalpseudo,doubledefvar,doubledeflab,
+                                    illegalmacro,end$of$line$err,opmismatch,
+                                    illioper,missinstr,udefsymbol,
+                                    pseudooperr,nestediferr,ifparerr,
+                                    missiferr,neglecterr,doubledefsymb,
+                                    instrerr,filesynterr,
+                                    nestedincludeerr,illexprelem,misstypeinfo,
+                                    laboutofrange,misssegminfo,codemacroerr);
+
+              /*          Subroutines:        */
+
+  72   1      printtext: proc(txt);
+  73   2        dcl txt address,ch based txt (1) byte,i byte;
+  74   2        i=0ffh;
+  75   2        do while ch(i:=i+1) <> 0;
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   3
+
+
+  76   3          call printsinglebyte(ch(i));
+  77   3        end$while;
+  78   2      end printtext;
+
+  79   1      locerrmsg: proc(erno);
+  80   2        dcl t address,help(5) byte,(helpstop,erno,i) byte;
+
+  81   2        errortype: proc byte;
+  82   3          i=0ffh;
+  83   3          do while (i:=i+1) < length(errtab);
+  84   4            if erno = errtab(i) then return i;
+                  end$while;
+  87   3          return length(errtab);
+  88   3        end errortype;
+
+  89   2        helpstop,accum(acclen)=0;
+  90   2        call decout(erno,.help(0));
+
+  91   2        t=texttab(errortype);    /* pick up correct error text */
+
+  92   2        call printtext(.errnotext); /* print error message line */
+  93   2        call printtext(.help(2));
+  94   2        if accum(0) <> cr then$do
+  96   3          call printtext(.neartext);
+  97   3          call printtext(.accum(0));  /* (print current token) */
+  98   3          CALL PRINTSINGLEBYTE ('"');
+  99   3        end$if;
+ 100   2        call printtext(.spacetext);
+ 101   2        call printtext(t);
+ 102   2        call printcrlf;
+ 103   2      end locerrmsg;
+
+              /*      Public routine:      */
+
+ 104   1      errmsg: proc(erno) public;
+ 105   2        dcl erno byte;
+ 106   2        if print$on OR PRINTSWITCHOFF then$do
+ 108   3          if not errorprinted then$do
+ 110   4            errorprinted=true;
+ 111   4            call locerrmsg(erno);
+ 112   4            errors=errors+1;
+ 113   4          end$if;
+                end$if;
+ 115   2      end errmsg;
+
+ 116   1      end$module errorm;
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   4
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+     66  0000H     4  ABSADDR. . . . . .    BYTE ARRAY(4) EXTERNAL(54)
+     66  0000H     1  ACCLEN . . . . . .    BYTE EXTERNAL(58)          89 
+     66  0000H     1  ACCLENSAVE . . . .    BYTE EXTERNAL(61)
+     66  0000H    80  ACCUM. . . . . . .    BYTE ARRAY(80) EXTERNAL(59)          89   94   97
+     66  0000H    80  ACCUMSAVE. . . . .    BYTE ARRAY(80) EXTERNAL(60)
+      2               ADDR . . . . . . .    LITERALLY         6    9   12   15   21   39   42
+                                              45   48   66 
+     29  0000H        ALPHANUMERIC . . .    PROCEDURE BYTE EXTERNAL(8) STACK=0000H
+     32  0000H        ASCIICHAR. . . . .    PROCEDURE BYTE EXTERNAL(9) STACK=0000H
+     66  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(OPERANDS)
+     66  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(CURRENTSYMBOL)
+      3               BASEREGBIT . . . .    LITERALLY
+      3               BASEREGCOUNT . . .    LITERALLY
+      3               BREGBIT. . . . . .    LITERALLY
+      3               BREGCOUNT. . . . .    LITERALLY
+     23  0000H     1  CH . . . . . . . .    BYTE PARAMETER        24 
+     32  0000H     1  CH . . . . . . . .    BYTE PARAMETER        33 
+     26  0000H     1  CH . . . . . . . .    BYTE PARAMETER        27 
+     35  0000H     1  CH . . . . . . . .    BYTE PARAMETER        36 
+     20  0000H     1  CH . . . . . . . .    BYTE PARAMETER        21 
+     73  0000H     1  CH . . . . . . . .    BYTE BASED(TXT) ARRAY(1)        75   76 
+     50  0000H     1  CH . . . . . . . .    BYTE PARAMETER        51 
+     29  0000H     1  CH . . . . . . . .    BYTE PARAMETER        30 
+     66  0000H     2  CIP. . . . . . . .    WORD EXTERNAL(23)
+      4               CODEMACROERR . . .    LITERALLY        71 
+     66  0000H     1  CODEMACROFLAG. . .    BYTE EXTERNAL(80)
+      3               CODEMACROHEAD. . .    LITERALLY
+     66  0000H     2  CODEMACROPTR . . .    WORD EXTERNAL(75)
+     11  0000H        COPY . . . . . . .    PROCEDURE EXTERNAL(2) STACK=0000H
+      2               CR . . . . . . . .    LITERALLY        94 
+     66  0000H     2  CSCIP. . . . . . .    WORD EXTERNAL(28)
+     66  0000H     1  CSEGSPEC . . . . .    BYTE EXTERNAL(26)
+     66  0000H     1  CSEGTYPE . . . . .    BYTE EXTERNAL(24)
+     66  0000H     2  CSEGVALUE. . . . .    WORD EXTERNAL(25)
+     66  0000H     1  CSPEC. . . . . . .    BYTE EXTERNAL(35)
+     66  0000H     2  CURCSEG. . . . . .    WORD EXTERNAL(31)
+     66  0000H     2  CURDSEG. . . . . .    WORD EXTERNAL(32)
+     66  0000H     2  CURESEG. . . . . .    WORD EXTERNAL(34)
+     66  0000H     9  CURRENTSYMBOL. . .    STRUCTURE EXTERNAL(71)
+     66  0000H     2  CURSSEG. . . . . .    WORD EXTERNAL(33)
+     47  0000H     2  D. . . . . . . . .    WORD PARAMETER        48 
+     38  0000H     2  D. . . . . . . . .    WORD PARAMETER        39 
+     41  0000H     2  D. . . . . . . . .    WORD PARAMETER        42 
+     11  0000H     2  D. . . . . . . . .    WORD PARAMETER        12 
+     44  0000H     2  D. . . . . . . . .    WORD PARAMETER        45 
+      2               DCL. . . . . . . .    LITERALLY
+     47  0000H        DECOUT . . . . . .    PROCEDURE EXTERNAL(14) STACK=0000H        90 
+     66  0000H     1  DEFAULTDRIVE . . .    BYTE EXTERNAL(78)
+     66  0001H     1  DESCR. . . . . . .    BYTE MEMBER(TOKEN)
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   5
+
+
+     23  0000H        DIGIT. . . . . . .    PROCEDURE BYTE EXTERNAL(6) STACK=0000H
+      4               DOUBLEDEFLAB . . .    LITERALLY        71 
+      4               DOUBLEDEFSYMB. . .    LITERALLY        71 
+      4               DOUBLEDEFVAR . . .    LITERALLY        71 
+     66  0000H     2  DSCIP. . . . . . .    WORD EXTERNAL(30)
+     66  0000H     1  DSPEC. . . . . . .    BYTE EXTERNAL(36)
+     64  0000H        EJECT. . . . . . .    PROCEDURE EXTERNAL(21) STACK=0000H
+      2               ELSEDO . . . . . .    LITERALLY
+      2               ENDCASE. . . . . .    LITERALLY
+      2               ENDDO. . . . . . .    LITERALLY
+      2               ENDFOREVER . . . .    LITERALLY
+      2               ENDIF. . . . . . .    LITERALLY       113 
+      2               ENDMODULE. . . . .    LITERALLY
+      2               ENDOFFILE. . . . .    LITERALLY
+      4               ENDOFLINEERR . . .    LITERALLY        71 
+      2               ENDPROC. . . . . .    LITERALLY
+      2               ENDWHILE . . . . .    LITERALLY        85 
+     66  0000H     1  EOFSET . . . . . .    BYTE EXTERNAL(62)
+     38  0000H        EQUAL. . . . . . .    PROCEDURE BYTE EXTERNAL(11) STACK=0000H
+     79  0000H     1  ERNO . . . . . . .    BYTE PARAMETER        80   84   90 
+    104  0004H     1  ERNO . . . . . . .    BYTE PARAMETER AUTOMATIC       105  111 
+    104  00C1H    42  ERRMSG . . . . . .    PROCEDURE PUBLIC STACK=0012H
+     70  0314H    13  ERRNOTEXT. . . . .    BYTE ARRAY(13) DATA        92 
+      1  0000H        ERRORM . . . . . .    PROCEDURE STACK=0000H
+     66  0000H     1  ERRORPRINTED . . .    BYTE EXTERNAL(65)         108  110 
+     66  0000H     2  ERRORS . . . . . .    WORD EXTERNAL(55)         112 
+     81  0099H    40  ERRORTYPE. . . . .    PROCEDURE BYTE STACK=0002H           91 
+     71  0332H    25  ERRTAB . . . . . .    BYTE ARRAY(25) DATA        83   84   87 
+     66  0000H     2  ESCIP. . . . . . .    WORD EXTERNAL(27)
+     66  0000H     1  ESPEC. . . . . . .    BYTE EXTERNAL(38)
+      2               FALSE. . . . . . .    LITERALLY
+     17  0000H     2  FCBADR . . . . . .    WORD PARAMETER        18 
+     17  0000H        FILEABORT. . . . .    PROCEDURE EXTERNAL(4) STACK=0000H
+      3               FILEISTRUCTURE . .    LITERALLY
+      3               FILEOSTRUCTURE . .    LITERALLY
+      4               FILESYNTERR. . . .    LITERALLY        71 
+     20  0000H        FILL . . . . . . .    PROCEDURE EXTERNAL(5) STACK=0000H
+      4               FIRSTITEM. . . . .    LITERALLY        71 
+     66  0000H     2  FIRSTMACROPTR. . .    WORD EXTERNAL(66)
+      2               FOREVER. . . . . .    LITERALLY
+      2               FORMFEED . . . . .    LITERALLY
+     66  0000H     1  FULLSYMBTAB. . . .    BYTE EXTERNAL(68)
+     67  0000H        GLOBALINIT . . . .    PROCEDURE EXTERNAL(81) STACK=0000H
+     66  0000H     5  HELP . . . . . . .    BYTE ARRAY(5) EXTERNAL(76)
+     80  0005H     5  HELP . . . . . . .    BYTE ARRAY(5)         90   93 
+     80  000AH     1  HELPSTOP . . . . .    BYTE        89 
+     41  0000H        HEX1OUT. . . . . .    PROCEDURE EXTERNAL(12) STACK=0000H
+     44  0000H        HEX2OUT. . . . . .    PROCEDURE EXTERNAL(13) STACK=0000H
+     66  0000H     1  I. . . . . . . . .    BYTE EXTERNAL(77)
+     80  000BH     1  I. . . . . . . . .    BYTE        82   83   84   85 
+     73  0004H     1  I. . . . . . . . .    BYTE        74   75   76 
+     66  0000H     1  IFLEVEL. . . . . .    BYTE EXTERNAL(70)
+     66  0000H     1  IFLIST . . . . . .    BYTE EXTERNAL(41)
+      4               IFPARERR . . . . .    LITERALLY        71 
+      4               ILLEGALMACRO . . .    LITERALLY        71 
+      4               ILLEGALPSEUDO. . .    LITERALLY        71 
+      4               ILLEXPRELEM. . . .    LITERALLY        71 
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   6
+
+
+      4               ILLIOPER . . . . .    LITERALLY        71 
+     66  0000H     1  INCLUDEDEFAULT . .    BYTE EXTERNAL(79)
+     66  0000H     1  INCLUDEON. . . . .    BYTE EXTERNAL(69)
+      3               INDEXREGBIT. . . .    LITERALLY
+      3               INDEXREGCOUNT. . .    LITERALLY
+      2               INIT . . . . . . .    LITERALLY
+      4               INSTRERR . . . . .    LITERALLY        71 
+     66  0000H     1  INTELHEXON . . . .    BYTE EXTERNAL(63)
+      3               IREGBIT. . . . . .    LITERALLY
+      3               IREGCOUNT. . . . .    LITERALLY
+      4               LABOUTOFRANGE. . .    LITERALLY        71 
+     66  0000H     2  LENGTH . . . . . .    WORD MEMBER(OPERANDS)
+     66  0000H     2  LENGTH . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+                      LENGTH . . . . . .    BUILTIN          83   87 
+     26  0000H        LETTER . . . . . .    PROCEDURE BYTE EXTERNAL(7) STACK=0000H
+      2               LF . . . . . . . .    LITERALLY
+      2               LIT. . . . . . . .    LITERALLY         2    3    4 
+     79  0027H   114  LOCERRMSG. . . . .    PROCEDURE STACK=000CH          111 
+     66  0000H     2  MACROPTR . . . . .    WORD EXTERNAL(67)
+     66  0000H     1  MAXCOL . . . . . .    BYTE EXTERNAL(42)
+      4               MISSIFERR. . . . .    LITERALLY        71 
+      4               MISSINGPSEUDO. . .    LITERALLY        71 
+      4               MISSINSTR. . . . .    LITERALLY        71 
+      4               MISSSEGMINFO . . .    LITERALLY        71 
+      4               MISSTYPEINFO . . .    LITERALLY        71 
+     47  0000H     2  N. . . . . . . . .    WORD PARAMETER        48 
+     44  0000H     2  N. . . . . . . . .    WORD PARAMETER        45 
+     41  0000H     1  N. . . . . . . . .    BYTE PARAMETER        42 
+     38  0000H     1  N. . . . . . . . .    BYTE PARAMETER        39 
+     20  0000H     1  N. . . . . . . . .    BYTE PARAMETER        21 
+     11  0000H     1  N. . . . . . . . .    BYTE PARAMETER        12 
+      8  0000H     2  N. . . . . . . . .    WORD PARAMETER         9 
+     70  0321H    13  NEARTEXT . . . . .    BYTE ARRAY(13) DATA        96 
+      4               NEGLECTERR . . . .    LITERALLY        71 
+      4               NESTEDIFERR. . . .    LITERALLY        71 
+      4               NESTEDINCLUDEERR .    LITERALLY        71 
+     66  0000H     1  NEXTCH . . . . . .    BYTE EXTERNAL(57)
+     66  0000H     1  NOERROR. . . . . .    BYTE EXTERNAL(64)
+     66  0000H     1  NOOPER . . . . . .    BYTE EXTERNAL(73)
+      3               NOOVERCOUNT. . . .    LITERALLY
+      3               NOOVERRIDEBIT. . .    LITERALLY
+     69  0034H     1  NULLTEXT . . . . .    BYTE ARRAY(1) DATA         69 
+     66  0006H     2  OFFSET . . . . . .    WORD MEMBER(OPERANDS)
+     66  0006H     2  OFFSET . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+     66  0000H    36  OPERANDS . . . . .    STRUCTURE ARRAY(4) EXTERNAL(74)
+      3               OPERANDSTRUC . . .    LITERALLY        66 
+      4               OPMISMATCH . . . .    LITERALLY        71 
+     14  0000H        OUTTEXT. . . . . .    PROCEDURE EXTERNAL(3) STACK=0000H
+     66  0000H     1  PAGESIZE . . . . .    BYTE EXTERNAL(48)
+     66  0000H     1  PASS . . . . . . .    BYTE EXTERNAL(22)
+     66  0000H   240  PREFIX . . . . . .    BYTE ARRAY(240) EXTERNAL(52)
+     66  0000H     1  PREFIXPTR. . . . .    BYTE EXTERNAL(53)
+     53  0000H        PRINTCRLF. . . . .    PROCEDURE EXTERNAL(16) STACK=0000H       102 
+     66  0000H     1  PRINTDEVICE. . . .    BYTE EXTERNAL(45)
+     59  0000H        PRINTINIT. . . . .    PROCEDURE EXTERNAL(19) STACK=0000H
+     55  0000H        PRINTNEWPAGE . . .    PROCEDURE EXTERNAL(17) STACK=0000H
+     66  0000H     1  PRINTON. . . . . .    BYTE EXTERNAL(39)         106 
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   7
+
+
+     50  0000H        PRINTSINGLEBYTE. .    PROCEDURE EXTERNAL(15) STACK=0000H        76   98
+     57  0000H        PRINTSOURCELINE. .    PROCEDURE EXTERNAL(18) STACK=0000H
+     66  0000H     1  PRINTSWITCHOFF . .    BYTE EXTERNAL(40)         106 
+     61  0000H        PRINTTERMINATE . .    PROCEDURE EXTERNAL(20) STACK=0000H
+     72  0000H    39  PRINTTEXT. . . . .    PROCEDURE STACK=0008H           92   93   96   97
+                                             100  101 
+      2               PROC . . . . . . .    LITERALLY         5    8   29   32   41   44   47
+                                              50   53   55   57   59   61   64   72   79   81
+                                             104 
+      4               PSEUDOOPERR. . . .    LITERALLY        71 
+     20  0000H     2  PT . . . . . . . .    WORD PARAMETER        21 
+      2               REENT. . . . . . .    LITERALLY
+     38  0000H     2  S. . . . . . . . .    WORD PARAMETER        39 
+     11  0000H     2  S. . . . . . . . .    WORD PARAMETER        12 
+     66  0000H    12  SAVESOURCE . . . .    BYTE ARRAY(12) EXTERNAL(44)
+      3               SEGMBIT. . . . . .    LITERALLY
+      3               SEGMCOUNT. . . . .    LITERALLY
+     66  0004H     2  SEGMENT. . . . . .    WORD MEMBER(OPERANDS)
+     66  0004H     2  SEGMENT. . . . . .    WORD MEMBER(CURRENTSYMBOL)
+      3               SEGTYPEBIT . . . .    LITERALLY
+      3               SEGTYPECOUNT . . .    LITERALLY
+     66  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(OPERANDS)
+     66  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+     66  0000H     1  SIMFORM. . . . . .    BYTE EXTERNAL(49)
+     66  0000H    80  SOURCEBUF. . . . .    BYTE ARRAY(80) EXTERNAL(50)
+     66  0000H    12  SOURCENAME . . . .    BYTE ARRAY(12) EXTERNAL(43)
+     66  0000H     1  SOURCEPTR. . . . .    BYTE EXTERNAL(51)
+      2               SPACE. . . . . . .    LITERALLY
+     70  032EH     4  SPACETEXT. . . . .    BYTE ARRAY(4) DATA        100 
+     66  0000H     2  SSCIP. . . . . . .    WORD EXTERNAL(29)
+     66  0000H     1  SSPEC. . . . . . .    BYTE EXTERNAL(37)
+      2               STRUC. . . . . . .    LITERALLY        66 
+     66  0002H     1  STYPE. . . . . . .    BYTE MEMBER(OPERANDS)
+     66  0002H     1  STYPE. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+     66  0000H     1  SYMBOLDEVICE . . .    BYTE EXTERNAL(46)
+      3               SYMBOLHEAD . . . .    LITERALLY
+      3               SYMBOLSTRUC. . . .    LITERALLY        66 
+     66  0000H     2  SYMBTABADR . . . .    WORD EXTERNAL(72)
+     80  0002H     2  T. . . . . . . . .    WORD        91  101 
+     14  0000H     2  T. . . . . . . . .    WORD PARAMETER        15 
+      2               TAB. . . . . . . .    LITERALLY
+     69  0035H    19  TEX00. . . . . . .    BYTE ARRAY(19) DATA        69 
+     69  0048H    27  TEX01. . . . . . .    BYTE ARRAY(27) DATA        69 
+     69  0063H    27  TEX02. . . . . . .    BYTE ARRAY(27) DATA        69 
+     69  007EH    24  TEX03. . . . . . .    BYTE ARRAY(24) DATA        69 
+     69  0096H    21  TEX04. . . . . . .    BYTE ARRAY(21) DATA        69 
+     69  00ABH    22  TEX05. . . . . . .    BYTE ARRAY(22) DATA        69 
+     69  00C1H    33  TEX06. . . . . . .    BYTE ARRAY(33) DATA        69 
+     69  00E2H    32  TEX07. . . . . . .    BYTE ARRAY(32) DATA        69 
+     69  0102H    29  TEX08. . . . . . .    BYTE ARRAY(29) DATA        69 
+     69  011FH    20  TEX09. . . . . . .    BYTE ARRAY(20) DATA        69 
+     69  0133H    32  TEX10. . . . . . .    BYTE ARRAY(32) DATA        69 
+     69  0153H    23  TEX11. . . . . . .    BYTE ARRAY(23) DATA        69 
+     69  016AH    35  TEX12. . . . . . .    BYTE ARRAY(35) DATA        69 
+     69  018DH    36  TEX13. . . . . . .    BYTE ARRAY(36) DATA        69 
+     69  01B1H    29  TEX14. . . . . . .    BYTE ARRAY(29) DATA        69 
+     69  01CEH    48  TEX15. . . . . . .    BYTE ARRAY(48) DATA        69 
+PL/M-86 COMPILER    ERROR MESSAGE MODULE                                         10/5/81    PAGE   8
+
+
+     69  01FEH    45  TEX16. . . . . . .    BYTE ARRAY(45) DATA        69 
+     69  022BH    32  TEX17. . . . . . .    BYTE ARRAY(32) DATA        69 
+     69  024BH    23  TEX18. . . . . . .    BYTE ARRAY(23) DATA        69 
+     69  0262H    27  TEX19. . . . . . .    BYTE ARRAY(27) DATA        69 
+     69  027DH    27  TEX20. . . . . . .    BYTE ARRAY(27) DATA        69 
+     69  0298H    39  TEX21. . . . . . .    BYTE ARRAY(39) DATA        69 
+     69  02BFH    19  TEX22. . . . . . .    BYTE ARRAY(19) DATA        69 
+     69  02D2H    39  TEX23. . . . . . .    BYTE ARRAY(39) DATA        69 
+     69  02F9H    27  TEX24. . . . . . .    BYTE ARRAY(27) DATA        69 
+     17  0000H     2  TEXTADR. . . . . .    WORD PARAMETER        18 
+     69  0000H    52  TEXTTAB. . . . . .    WORD ARRAY(26) DATA        91 
+      2               THENDO . . . . . .    LITERALLY        94  106  108 
+     66  0000H    30  TITLE. . . . . . .    BYTE ARRAY(30) EXTERNAL(47)
+     66  0000H     4  TOKEN. . . . . . .    STRUCTURE EXTERNAL(56)
+      2               TRUE . . . . . . .    LITERALLY       110 
+     72  0004H     2  TXT. . . . . . . .    WORD PARAMETER AUTOMATIC        73   75   76 
+     66  0000H     1  TYPE . . . . . . .    BYTE MEMBER(TOKEN)
+      3               TYPEBIT. . . . . .    LITERALLY
+      5  0000H        TYPECALC . . . . .    PROCEDURE BYTE EXTERNAL(0) STACK=0000H
+      3               TYPECOUNT. . . . .    LITERALLY
+      4               UDEFSYMBOL . . . .    LITERALLY        71 
+     35  0000H        UPPER. . . . . . .    PROCEDURE BYTE EXTERNAL(10) STACK=0000H
+     61  0000H     1  USEFACT. . . . . .    BYTE PARAMETER        62 
+      5  0000H     2  VAL. . . . . . . .    WORD PARAMETER         6 
+     66  0002H     2  VALUE. . . . . . .    WORD MEMBER(TOKEN)
+      8  0000H        WRDTEST. . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 00EBH    235D
+     CONSTANT AREA SIZE = 034BH    843D
+     VARIABLE AREA SIZE = 000CH     12D
+     MAXIMUM STACK SIZE = 0012H     18D
+     523 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

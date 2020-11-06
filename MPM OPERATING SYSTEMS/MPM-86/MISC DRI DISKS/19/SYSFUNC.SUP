@@ -1,0 +1,88 @@
+;*****************************************************
+;*
+;*	SYSTEM ENTRY FUNCTIONS
+;*
+;*****************************************************
+
+;===============	==========================
+not_implemented:	; Function not implemented
+;===============	==========================
+
+	mov cx,e_not_implemented
+	mov bx,0ffffh ! ret
+
+;=========		=========================
+bad_entry:		; Illegal System Function
+;=========		=========================
+
+	mov cx,e_bad_entry
+	mov bx,0ffffh ! ret
+
+;=============		===============
+version_entry:		; Get Version #
+;=============		===============
+
+	mov bx,vernum ! sub cx,cx ! ret
+
+;================	====================
+mpmversion_entry:	; Get MP/M Version #
+;================	====================
+
+	mov bx,mpmvernum ! sub cx,cx ! ret
+
+;==============		==================
+callbios_entry:		; Direct BIOS call
+;==============		==================
+
+	mov si,dx
+	push ds ! mov ds,u_wrkseg
+	mov al,[si] ! mov cx,1[si]
+	mov dx,3[si] ! pop ds
+	cmp al,1 ! ja goxios		; if BOOT,WBOOT; terminate
+	    mov cx,f_terminate
+	    mov dx,0 ! jmp mpmif
+goxios:	cmp al,7 ! jbe gx1				;7=reader input
+	    cmp al,15 ! je gx1				;15=list status
+		mov bx,0ffffh ! mov cx,bx ! ret
+gx1:	mov bx,rlr
+	cmp al,4 ! ja xlst				;4=console output
+	    mov dl,p_cns[bx]
+	    cmp al,4 ! je jxio
+		mov cl,dl ! jmps jxio
+xlst:	mov dl,p_lst[bx]
+	cmp al,15 ! jne jxio
+	    mov cl,dl
+jxio:	sub al,2 ! mov ah,0
+	jmp xiosif 
+
+;============		==============================
+sysdat_entry:		; Ret Addr of System Data Area
+;============		==============================
+
+	mov u_retseg,ds
+	sub bx,bx ! mov cx,bx ! ret
+
+;=========		============================
+tod_entry:		; Return current Time of Day
+;=========		============================
+
+		; copy tod struct into user area
+	push es ! mov es,u_wrkseg
+	mov di,dx
+	mov si,offset tod ! mov cx,todlen
+	rep movs al,al
+	pop es ! sub cx,cx ! mov bx,cx ! ret
+
+;============		======================
+serial_entry:		; Return Serial Number
+;============		======================
+
+		; copy serial field into user area
+
+	push es ! mov es,u_wrkseg
+	mov di,dx ! mov si,offset serial
+	push ds ! mov ax,cs ! mov ds,ax
+	mov cx,3 ! rep movsw
+	pop ds ! pop es
+	sub cx,cx ! mov bx,cx ! ret
+

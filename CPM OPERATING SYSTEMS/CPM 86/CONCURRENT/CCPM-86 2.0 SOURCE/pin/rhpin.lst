@@ -1,0 +1,175 @@
+8086/8087/8088 MACRO ASSEMBLER    RPIN                                                      17:10:27  04/22/83  PAGE    1
+
+
+VAX/VMS 8086/8087/8088 MACRO ASSEMBLER V1.0 ASSEMBLY OF MODULE RPIN
+OBJECT MODULE PLACED IN RHPIN.OBJ
+NO INVOCATION LINE CONTROLS
+
+
+LOC  OBJ                  LINE     SOURCE
+
+                             1     ;       Code and Data Interface for PIN RSP
+                             2     ;       Virtual console support for Concurrent CP/M
+                             3     
+                             4     ;       March 30, 1982
+                             5     
+                             6     name    rpin
+                             7     
+                             8     cgroup  group   code
+                             9     dgroup  group   dats 
+                            10     
+                            11     assume   cs:cgroup,ds:dgroup
+                            12     
+                            13             public  xdos,mon1,mon2,mon3,mon4,intsys
+                            14             public  rsplink, pd, ncopies, udaseg
+                            15             public  u_retseg, u_wrkseg, u_insys
+                            16             extrn  plmstart:near
+                            17     
+----                        18     code    segment public  'CODE'
+                            19     
+0000                        20     xdos    proc    
+0000 55                     21             push    bp
+0001 8BEC                   22             mov     bp,sp
+0003 8B5604                 23             mov     dx,[bp+4]
+0006 8B4E06                 24             mov     cx,[bp+6]
+0009 CDE0                   25             int     224
+000B 5D                     26             pop     bp
+000C C20400                 27             ret     4
+                            28     xdos    endp
+                            29     
+000F                        30     intsys  proc                            ;call O.S. as if we are
+000F 55                     31             push bp                         ;already in it
+0010 8BEC                   32             mov bp,sp
+0012 8B5E04                 33             mov bx,[bp+4]
+0015 8B5606                 34             mov dx,[bp+6]
+0018 8B4E08                 35             mov cx,[bp+8]
+                            36     
+001B 1E                     37             push ds
+001C 8E1E0000       R       38             mov ds,rsplink                  ;DS = Sysdat Segment
+0020 8B366800               39             mov si,ds:word ptr rlr
+0024 8E441090               40             mov es,[si+p_uda]
+0028 FF1E000090             41             call ds:dword ptr [supervisor]
+002D 1F                     42             pop ds
+                            43     
+002E 5D                     44             pop bp
+002F C20600                 45             ret 6
+                            46     intsys  endp
+                            47     
+  0000                      48     mon1    equ     xdos
+  0000                      49     mon2    equ     xdos
+  0000                      50     mon3    equ     xdos
+8086/8087/8088 MACRO ASSEMBLER    RPIN                                                     17:10:27  04/22/83  PAGE    2
+
+
+LOC  OBJ                  LINE     SOURCE
+
+  0000                      51     mon4    equ     xdos
+----                        52     code    ends
+                            53     
+----                        54     dats    segment  public 'DATA'
+                            55     
+  0068                      56     rlr             equ     68h     ;ready list root
+  0010                      57     p_uda           equ     10h     ;UDA in process descriptor
+  0000                      58     supervisor      equ     0       ;supervisor entry point for internal
+  0047                      59     nvcns           equ     47h
+  0010                      60     rsphdr_len      equ     16
+  0030                      61     pd_len          equ     30H
+  0100                      62     uda_len         equ     100H
+  0060                      63     insysoff        equ     60H
+  0000                      64     rsp_top         equ     0
+  0010                      65     rsp_pd          equ     rsp_top + rsphdr_len
+  0040                      66     rsp_uda         equ     rsp_pd + pd_len
+  0140                      67     rsp_bottom      equ     rsp_uda + uda_len
+                            68     
+0000                        69             org     rsp_top
+                            70                                     ;RSP header
+0000 0000                   71     rsplink dw      0               ;becomes system data page paragraph
+0002 0000                   72     sdatvar dw      0               ;tell gensys to one
+0004 00                     73     ncopies db      0
+0005 0000                   74             dw      0,0,0,0, 0
+0007 0000
+0009 0000
+000B 0000
+000D 0000
+000F 00                     75             db      0
+0010                        76             org     rsp_pd
+0010 0000                   77     pd      dw      0,0             ;link fields
+0012 0000
+0014 00                     78             db      0               ;status
+0015 B9                     79             db      185             ;initial priority better than TMP - worse than
+                            80                                     ;VOUT
+0016 0300                   81             dw      3               ;flags - system and keep
+
+0018 50494E20202020         82             db      'PIN     '      ;name
+     20
+0020 0400                   83     udaseg  dw      rsp_uda/10h     ;uda paragraph
+0022 00                     84             db      0,0             ;disk,user
+0023 00
+0024 00                     85             db      0,0             ;ldisk,luser
+0025 00
+0026 FF00                   86             dw      0ffh            ;puremem - re-entrant
+                            87                                     ;rest of pd
+                            88     
+0040                        89     org     rsp_uda                 ;start of uda
+0040 0000                   90     uda             dw      0
+0042 0000                   91                     dw      0       ;no default DMA
+0044 0000                   92                     dw      0,0,0,0, 0,0,0,0, 0,0,0,0
+0046 0000
+0048 0000
+004A 0000
+004C 0000
+004E 0000
+8086/8087/8088 MACRO ASSEMBLER    RPIN                                                     17:10:27  04/22/83  PAGE    3
+
+
+LOC  OBJ                  LINE     SOURCE
+
+0050 0000
+0052 0000
+0054 0000
+0056 0000
+0058 0000
+005A 0000
+005C 0000                   93                     dw      0,0,0,0, 0,0,0,0, 0,0,0,0
+005E 0000
+0060 0000
+0062 0000
+0064 0000
+0066 0000
+0068 0000
+006A 0000
+006C 0000
+006E 0000
+0070 0000
+0072 0000
+0074 3A01           R       94                     dw      offset stk_top
+0076 0000                   95                     dw      0,0,0,0, 0,0,0,0
+0078 0000
+007A 0000
+007C 0000
+007E 0000
+0080 0000
+0082 0000
+0084 0000
+0086 0000                   96     u_wrkseg        dw      0
+0088 0000                   97     u_retseg        dw      0
+00A0                        98     org     rsp_uda + insysoff
+00A0 01                     99     u_insys         db      1
+00A1 00                    100                     db      0       ;u_stat_save
+00A2 0000                  101                     dw      0       ;ccb
+00A4 0000                  102                     dw      0       ;lcb
+00A6 00                    103                     db      0       ;print string delimiter
+                           104             
+00A7 (147                  105                     db      93h dup (0cch)  ;fill rest of UDA stack with INT3s
+     CC
+     )
+                           106     
+013A 0000           E      107     stk_top         dw      plmstart
+013C 0000                  108                     dw      0,0             ;segment, flags: unknown
+013E 0000
+                           109     
+----                       110     dats ends
+                           111     end
+
+ASSEMBLY COMPLETE, NO ERRORS FOUND
+

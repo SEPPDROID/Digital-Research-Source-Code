@@ -1,0 +1,126 @@
+
+title	'Intel 8253 CTC module'
+
+;************************************************
+;						*
+;	COUNTER TIMER CHIP MODULE		*
+;	Last changed : 12/15/83			*
+;						*
+;************************************************
+
+include system.lib
+
+LATENCY		equ	false		; if the CTC is programmed for modes
+					; 2 or 3 then set this to true.
+
+
+; COUNTER TIMER EQUATES
+
+TIMER0_CTL_WORD		EQU	30H	; timer 0, two byte rl, mode 0
+TIMER0_LB		EQU	3CH
+TIMER0_HB		EQU	82H
+
+TIMER0_LATCH		EQU	0
+TIMER0_RESET_COUNT	EQU	823CH
+
+;
+; these are the compupro CTC PORT ADDRESSES
+
+CTC_PORT_BASE		equ	50H
+
+CTC_CTL_PORT		equ	ctc_port_base + 7
+Timer_0			equ	ctc_port_base + 4
+
+	cseg
+
+public	ctc_init			
+public	reset_tick_ctc			; called by the tick module
+public	int_latency			; called by the tick module
+
+
+;
+; now set up the timer for 16.67 milliseconds
+; timer 0, two byte rl, mode 0
+
+;========
+ctc_init:
+;==============
+reset_tick_ctc:
+;==============
+;
+; 	At this time the CTC is only used to generate the real time tick
+;	for CCP/M.  Therefore initing and reseting the tick do the same thing.
+;
+
+	mov al, TIMER0_CTL_WORD		; select timer 0 mode 0
+	out CTC_CTL_PORT, al		; two byte count
+
+	mov al,TIMER0_LB		; load the LSB
+	out timer_0, al	
+
+	mov al, TIMER0_HB		; load the MSB
+	out timer_0, al
+
+	; at this point the CTC starts counting
+
+	ret
+
+;===========
+int_latency:
+;===========
+; Interrupt latency measurement entry point.
+;
+; ENTRY:	from the tick interrupt service routine
+;
+; EXIT:		max_latency is updated if the current latency is
+;		greater than any previous latency since cold boot.
+;
+; NOTE:		all registers are preserved, two levels ( 4 bytes )
+;		of stack are used.
+
+
+	if not LATENCY
+
+	ret
+
+	endif
+
+	if LATENCY
+
+	push ax				; save the CPU environment we're
+	push dx				; going to use
+
+	mov al, TIMER0_LATCH		; latch the timer's count
+	out CTC_CTL_PORT, al
+
+	in al, TIMER_0			; get the timers lsb
+	mov ah, al			; store it
+	in al, TIMER_0			; get the timers msb
+
+	xchg ah, al			; arrange the CTC's latched count
+					; as a 16 bit word
+
+	mov dx, TIMER0_RESET_COUNT	; subtract the initialization count
+	sub dx, ax			; from the count just read
+	cmp dx, max_latency
+	jbe no_latency_update
+	                                ; the latency just measure is the
+	                                ; worst case 
+	  mov max_latency, dx		; update maximum latency read so far
+no_latency_update:
+
+	pop dx				; restore the CPU environment
+	pop ax
+
+	ret
+
+	endif
+
+	dseg
+
+max_latency	dw	0
+
+	end
+
+
+

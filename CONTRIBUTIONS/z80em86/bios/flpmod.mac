@@ -1,0 +1,107 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                          Floppy disk driver                            *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+;
+; v1.00 - 17 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+; Entry point 1  : ifdsk - Initialize
+; Entry point 2  : lfdsk - Login
+; Entry point 3  : wfdsk - Write sector
+; Entry point 4  : rfdsk - Read sector
+
+	.z80
+;
+	maclib	TPORTS.LIB
+	maclib	ASMTYPE.LIB
+;
+	public	ifdsk, lfdsk, rfdsk, wfdsk
+;
+	extrn	@dtbl, @adrv, @rdrv, @dbnk, @dma, @trk, @sect, @cnt
+;
+	dseg			;banked memory
+
+; Entry point 1 - Initialize floppy drive
+ifdsk:	ret
+
+; Entry point 2 - Login floppy drive
+lfdsk:	ret
+
+; Entry point 3 - Write floppy sector
+wfdsk:	or	0ffh		;write operation flag value
+	jp	fdisk
+
+; Entry point 4 - Read floppy sector
+rfdsk:	xor	a		;read operation flag value
+
+fdisk:	push	af		;save operation flag
+	ld	a,(@rdrv)
+	ld	h,a
+	ld	l,0		;side #0
+	ld	a,(@trk)
+	sla	h
+	jp	c,side0		;single sided disk if carry
+	sla	h
+	jp	c,dsdisk	;double sided disk if carry
+	cp	40
+	jp	c,side0		;side 0 of up-down if carry
+	ld	b,a		;side 1 of up-down
+	ld	a,79
+	sub	b
+	jp	side1
+dsdisk:	srl	a
+	jp	nc,side0
+side1:	ld	l,1		;set side #1
+side0:	ld	(track),a
+	ld	a,l
+	ld	(side),a
+	ld	hl,12		;offset into DPH for DPB address
+	add	hl,de
+	ld	e,(hl)		;LSB of DPB address
+	inc	hl
+	ld	d,(hl)		;MSB of DPB address
+	ld	hl,15		;offset into DPB for PSH
+	add	hl,de
+	ld	a,(hl)
+	ld	(secsze),a	;sector size code
+	ld	a,(@rdrv)
+	ld	e,a		;contains physical select code
+	ld	a,(side)
+	ld	d,a
+	ld	a,(track)
+	ld	b,a
+	ld	a,(@sect)
+	ld	c,a
+if banked
+	ld	a,(@dbnk)
+	out	(bnkdma),a
+endif
+	ld	hl,(@dma)
+	pop	af		;restore operation flag
+	ld	a,(secsze)
+	jp	z,readop
+	out	(wrflop),a
+	jp	result
+readop:	out	(rdflop),a
+result:	or	a
+	ret	z
+	ld	a,1
+	ret
+;
+secsze:	db	0
+side:	db	0
+track:	db	0
+;
+	end

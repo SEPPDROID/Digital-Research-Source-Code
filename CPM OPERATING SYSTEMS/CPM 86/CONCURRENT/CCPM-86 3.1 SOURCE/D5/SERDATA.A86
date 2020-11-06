@@ -1,0 +1,228 @@
+
+title	'Serial Data Structures'
+
+;***************************************************
+;						   *
+;	SERIAL IO DATA STRUCTURES MODULE           *
+;	Last changed : 2/15/84			   *
+;						   *
+;***************************************************
+ 
+include serdata.equ
+include flags.equ
+include chrcomm.equ
+
+eject
+
+public  ciqctl
+public  icdesctbl
+public	ocdesctbl
+public	oq0desc
+public	oq7desc
+public	oq8desc
+
+cgroup	group	code, data, siq_seg
+
+	cseg
+
+extrn	conin_0:near
+
+	dseg	
+
+icdesctbl	dw	ciqctl	; 0	system support usart
+		dw	ci1qctl	; 1	interfacer 3 usart 0
+		dw	0       ; 2     interfacer 3 usart 1
+		dw	0       ; 3	interfacer 3 usart 2
+		dw	0       ; 4 	interfacer 3 usart 3
+		dw	0       ; 5	interfacer 3 usart 4
+		dw	0       ; 6	interfacer 3 usart 5
+		dw	ci7qctl ; 7	interfacer 3 usart 6
+		dw	ci8qctl	; 8     interfacer 3 usart 7
+
+eject
+
+siq_seg		dseg	para
+
+                                ; Q control structure for main system console
+
+ciqctl	db	C0IN_F		; System flag
+	dw	0		; Q status
+	db	27H		; Command register image
+	dw	0		; un-processed characters
+	dw	0		; interrupt side input Q index
+	dw	0		; processes side output Q index
+	db	SS_U		; Usart number ( System support board code )
+	db	05fH		; Usart command port
+	db	05dH		; Usart status port 
+	db	05cH		; Usart data port
+	db	SS_U		; transmitter interrupt mask
+	dw	0		; input escape Q index
+	dw	0		; output escape Q index
+	db	0		; last char read from Q
+	db	0		; last status byte read from Q
+	dw	conin_0		; current state for this console
+	db	0		; physical console number
+	db	0		; virtual console number
+	db	0		; error reset count
+	rb	06H		; pad
+	rb	10H		; the state machines escape Q
+	rb	80H		; the usarts data Q
+	rb	80H		; the usarts status Q
+
+                                ; Q control structure for 2nd physical console
+                                ; It is USART 0 on the Interfacer 3 board.
+
+ci1qctl	db	C1IN_F		; system flag
+	dw	0		; Q status
+	db	27H		; Command register image
+	dw	0		; un-processed characters
+	dw	0		; interrupt side input Q index
+	dw	0		; processes side output Q index
+	db	00H		; Usart number ( System support board code )
+	db	013H		; Usart command port
+	db	011H		; Usart status port 
+	db	010H		; Usart data port
+	db	US_0		; transmitter interrupt mask
+	dw	0		; input escape Q index
+	dw	0		; output escape Q index
+	db	0		; last char read from Q
+	db	0		; last status byte read from Q
+	dw	conin_0		; current state for this console
+	db	0		; physical console number
+	db	0		; virtual console number
+	db	0		; error reset count
+	rb	06H		; pad
+	rb	10H		; the state machines escape Q
+	rb	80H		; the usarts data Q
+	rb	80H		; the usarts status Q
+				
+				; Q control structure for printer 1.
+				; 6th USART on the system support board.
+				; 8th bit in data byte is masked off.
+
+ci7qctl db	c7IN_F
+	dw	0014H		; Q status
+	db	27H		; Command register image
+	dw	0		; un-processed characters
+	dw	0		; last char read from Q
+	db	0		; Last status byte read from Q
+	dw	conin_0		; current state for this console
+	db	0		; physical cons #
+	db	0		; virtual console #
+	db	0		; error reset count
+	rb	6h		; pad
+	rb	10h		; state machine escape Q
+	rb	80h		; usart data q
+	rb	80h		; usart status q
+
+                                ; Q control structure for printer 0.
+                                ; 7th USART on the system support board. 
+                                ; This Q is set up for Xon Xoff protocol.
+                                ; 8th bit in data byte is masked off.
+
+ci8qctl	db	C8IN_F		; system flag
+	dw	0014H		; Q status
+	db	27H		; Command register image
+	dw	0		; un-processed characters
+	dw	0		; interrupt side input Q index
+	dw	0		; processes side output Q index
+	db	07H		; Usart number ( System support board code )
+	db	013H		; Usart command port
+	db	011H		; Usart status port 
+	db	010H		; Usart data port
+	db	US_7		; transmitter interrupt mask
+	dw	0		; input escape Q index
+	dw	0		; output escape Q index
+	db	0		; last char read from Q
+	db	0		; last status byte read from Q
+	dw	conin_0		; current state for this console
+	db	0		; physical console number
+	db	0		; virtual console number
+	db	0		; error reset count
+	rb	06H		; pad
+	rb	10H		; the state machines escape Q
+	rb	80H		; the usarts data Q
+	rb	80H		; the usarts status Q
+
+
+;***********************************************************
+;                      					   *
+;       OUTPUT  DATA  CONTROL  STRUCTURES                  *
+;        					           *
+;***********************************************************
+
+cgroup    group    soq_seg
+
+          dseg
+
+ocdesctbl	dw	offset oq0desc	; system support
+		dw	offset oq1desc	; interfacer 3 from here on down
+		dw	0               ; offset oq2desc
+		dw	0               ; offset oq3desc
+		dw	0               ; offset oq4desc
+		dw	0               ; offset oq5desc
+		dw	0               ; offset oq6desc	
+		dw	offset oq7desc  ; printer 1
+		dw	offset oq8desc  ; printer 0
+
+soq_seg         dseg    para
+
+
+oq0desc		db	c0out_f			; Concurrents flag #
+		db	0			; local flag byte, bit vector
+		rb	4			; char count & position
+		db	5CH			; IO PORT
+		db	5DH			; STATUS PORT
+		db	NO_SELECT		; Usart number
+		db	0			; escape count
+		db	0			; output bit mask
+		db	0			; current Vcon
+		db	0			; pad
+		db	TXRDY, DSR, 0
+		rb	onmsgs
+
+
+oq1desc		db	c1out_f
+		db	0
+		rb	4
+		db	10H
+		db	11H
+		db	0
+		db	0
+		db	01
+		db	4
+		db	0
+		db	TXRDY, DSR, 0
+		rb	onmsgs
+						; printer 1
+oq7desc		db	c7out_f
+		db	0A0H
+		rb	4
+		db	10H
+		db	11H
+		db	6
+		db	0
+		db	40h
+		dw	0
+		db	TXRDY, DSR, 0
+		rb	onmsgs
+
+						; printer 0
+						; set for xon xoff mode
+
+oq8desc		db	c8out_f
+		db	20H
+		rb	4
+		db	10H
+		db	11H
+		db	7
+		db	0
+		db	80h
+		dw	0
+		db	TXRDY, DSR, 0
+		rb	onmsgs
+
+
+	end
+
+

@@ -1,0 +1,764 @@
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   1
+
+
+                        ;*****************************************************
+                        ;*
+                        ;*      Terminal Message Processor
+                        ;*
+                        ;*      The TMP determines the user interface to CCP/M.
+                        ;*      Much of the interface is available though
+                        ;*      system calls.  This TMP takes advantage of
+                        ;*      as much as possible for simplicity.  The TMP
+                        ;*      could, for instance,  be easily modified to
+                        ;*      force logins and have non-standard defaults.
+                        ;*
+                        ;*      With a little more work, the TMP could do all
+                        ;*      command parsing and File Loading instead of
+                        ;*      using the CLI COMMAND FUNCTION.  
+                        ;*      Suggestions are given in the CCP/M-86 SYSTEM'S GUIDE.
+                        ;*
+                        ;*****************************************************
+
+
+                        title 'Terminal Message Processor - CCP/M-86 2.0'
+
+                        ;       Some common equates
+
+   00FF                 true            equ     0ffh
+   0000                 false           equ     0
+   000D                 cr              equ     13              ; carraige return
+   000A                 lf              equ     10              ; linefeed
+   0009                 tab             equ     9               ; tab char
+
+
+                        ;       CCP/M-86 system functions used by the TMP
+
+   00E0                 osint           equ     224             ; interrupt number for CCP/M
+                                                                ; system calls
+
+   0002                 c_write         equ     2               ; console functions
+   0009                 c_writebuf      equ     9
+   000A                 c_readbuf       equ     10
+   0092                 c_attachc       equ     146
+   0093                 c_detachc       equ     147
+   0094                 c_setnum        equ     148
+
+   00A0                 l_setnum        equ     160             ; list device functions
+   00A4                 l_getnum        equ     164
+
+   000F                 f_open          equ     15              ; file functions
+   0010                 f_close         equ     16
+   0014                 f_read          equ     20
+   001A                 f_setdma        equ     26
+   0098                 f_parse         equ     152
+
+   000E                 drv_set         equ     14              ; drive functions
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   2
+
+
+   0019                 drv_get         equ     25
+   0027                 drv_free        equ     39
+
+   0020                 dir_usernum     equ     32              ; directory functions
+
+   0096                 p_cli           equ     150             ; process control functions
+
+
+                        ;       Process descriptor flags
+
+   0000                 ps_run          equ     00      ; on ready list root
+   0001                 pf_sys          equ     001h    ; system process
+   0002                 pf_keep         equ     002h    ; do not terminate
+
+
+                        ;       Some locations in the system data segment
+
+   0040                 s_ccpmseg  equ  word ptr 40H    ;begin CCPM segment
+   004B                 s_sysdisk  equ  byte ptr 04bh   ;system disk
+   0047                 s_ncns     equ  byte ptr 47H    ;sys. consoles
+   0078                 s_version  equ  word ptr 78h    ;ofst ver. str in SUP
+
+
+                        ;       Some RSP format equates
+
+   0000                 rsp_top      equ  0
+   0008                 rsp_md       equ  008h
+   0010                 rsp_pd       equ  010h
+   0040                 rsp_uda      equ  040h
+   0140                 rsp_bottom   equ  140h
+
+
+                        ;       Error codes returned by the CLI
+
+   0003                 e_no_memory        equ  3   ; cant find memory
+   000C                 e_no_pd            equ  12  ; no free pd's
+   000F                 e_q_full           equ  15  ; full queue
+   0017                 e_illdisk          equ  23  ; illegal disk #
+   0018                 e_badfname         equ  24  ; illegal filename
+   0019                 e_badftype         equ  25  ; illegal filetype
+   001C                 e_bad_load         equ  28  ; bad ret. from BDOS load
+   001D                 e_bad_read         equ  29  ; bad ret. from BDOS read
+   001E                 e_bad_open         equ  30  ; bad ret. from BDOS open
+   001F                 e_nullcmd          equ  31  ; null command sent
+   0025                 e_ill_lst          equ  37  ; illegal list device
+   0026                 e_ill_passwd       equ  38  ; illegal password
+   0028                 e_abort            equ  40  ; aborted in CLI
+
+
+                        ;*****************************************************
+                        ;*
+                        ;*      TMP Shared Code and Constant Area
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   3
+
+
+                        ;*
+                        ;*****************************************************
+
+                                cseg
+                                org     0
+ 0000 EB2F         0031         jmps tmp
+ 0002 434F50595249              db 'COPYRIGHT (c) 1983, DIGITAL RESEARCH  3/28/83. '
+      474854202863
+      292031393833
+      2C2044494749
+      54414C205245
+      534541524348
+      2020332F3238
+      2F38332E20
+
+                        ;===
+                        tmp:    ; PROGRAM MAIN - INITIALIZATION
+                        ;===
+
+
+                        ;       Set default console # = TMP#
+
+ 0031 8A160400E81E 0356         mov dl,defconsole ! call setconsolenum
+      03           0356
+
+
+                        ;       Set default disk = system drive
+
+ 0038 1E8E1E0000                push ds ! mov ds,sysdatseg
+ 003D 8A164B001F                mov dl,.s_sysdisk ! pop ds      ;get system drive from
+ 0042 E81503       035A         call setdisk                    ;system data segment
+
+ 0045 32D2                      xor dl,dl                       ;all TMPs come up user 0
+ 0047 E8F602       0340         call setuser
+
+ 004A E81D03       036A         call attach                     ;print version
+ 004D 1E8E1E0000                push ds ! mov ds,sysdatseg
+ 0052 8B167800                  mov dx,.s_version
+ 0056 8E1E4000                  mov ds,.s_ccpmseg
+ 005A E8F5021F     0352         call print_ds_string ! pop ds
+ 005E E80D03       036E         call detach
+
+ 0061 1E07                      push ds ! pop es
+ 0063 BE1B00                    mov si,offset pd_ascii_num
+ 0066 BFD301                    mov di,offset startupnum
+ 0069 B90300                    mov cx,3
+ 006C F3A4                      rep movsb
+
+ 006E BACA01                    mov dx,offset fcb
+ 0071 B10F                      mov cl,f_open                   ;try to open the startup file
+ 0073 E80203       0378         call ccpm                       ;on default drive which is
+ 0076 3CFF                      cmp al,0ffh                     ;the system drive
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   4
+
+
+ 0078 744C         00C6         je nostartup
+ 007A BA4201                        mov dx,offset clicb_cmd     ;use the CLI buffer for this
+ 007D B11A                          mov cl,f_setdma             ;one time one sector read
+ 007F E8F602       0378             call ccpm
+ 0082 BACA01                        mov dx,offset fcb
+ 0085 B114                          mov cl,f_read
+ 0087 E8EE02       0378             call ccpm
+ 008A 50                            push ax
+ 008B BACA01                        mov dx,offset fcb
+ 008E B110                          mov cl,f_close
+ 0090 E8E502       0378             call ccpm
+ 0093 58                            pop ax
+ 0094 84C0                          test al,al
+ 0096 752E         00C6             jnz nostartup
+ 0098 8CD8                              mov ax,ds
+ 009A 8EC0                              mov es,ax
+ 009C B00D                              mov al,cr
+ 009E B98000                            mov cx,128
+ 00A1 BF4201                            mov di,offset clicb_cmd
+ 00A4 F2AE                              repne scasb
+ 00A6 751E         00C6                 jne nostartup           ;didn't find a carriage return
+ 00A8 47                                    inc di                      ;include cr lf in line
+ 00A9 C60524                                mov byte ptr [di],'$'
+ 00AC 81EF4201                              sub di,offset clicb_cmd
+ 00B0 8BC7                                  mov ax,di
+ 00B2 2D0200                                sub ax, 2
+ 00B5 A24101                                mov read_blen, al
+ 00B8 BACB04                                mov dx,offset supmsg
+ 00BB E88A02       0348                     call printstring
+ 00BE BA4201                                mov dx,offset clicb_cmd
+ 00C1 E88E02       0352                     call print_ds_string
+ 00C4 EB3F         0105                     jmps startup
+                        nostartup:
+
+                                        ; THIS IS WHERE A LOGIN ROUTINE MIGHT
+                                        ; BE IMPLEMENTED.  THE DATA FILE THAT
+                                        ; CONTAINS THE USER NAME AND PASSWORD
+                                        ; MIGHT ALSO CONTAIN AN INITIAL DEFAULT
+                                        ; DISK AND USER NUMBER FOR THAT USER.
+
+                        ;===========
+                        nextcommand:    ; LOOP FOREVER
+                        ;===========
+
+                                        ; free drive
+ 00C6 BAFFFFE8AA02 0376             mov dx,0ffffh ! call drive_free
+
+                                        ; attach console
+ 00CC E89B02       036A             call attach
+
+                                        ; print CR,LF if we just sent command
+ 00CF 803EC3010074 00DE             cmp cmdsent,false ! je noclearline
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   5
+
+
+      08           00DE
+ 00D6 C606C30100                        mov cmdsent,false
+ 00DB E86702       0345                 call crlf
+                        noclearline:
+
+                                        ; set up and print user prompt
+                                        ; get current default user # and disk
+                                        ; this call should be made on every
+                                        ; loop in case the last command
+                                        ; has changed the default.
+
+ 00DE B20DE85602   0339             mov dl,cr ! call prchar
+ 00E3 E85802       033E             call getuser
+
+ 00E6 84DB7405     00EF             test bl,bl ! jz nozero      ;don't print user 0 prompt
+ 00EA 8AD3E83802   0327             mov dl,bl ! call prnum
+                        nozero:
+ 00EF E86C02       035E             call getdisk
+ 00F2 B24102D3                      mov dl,'A' ! add dl,bl
+ 00F6 E84002       0339             call prchar 
+ 00F9 BABB03                        mov dx,offset prompt
+ 00FC E84902       0348             call print_string
+
+                                        ; Read Command from Console
+ 00FF BA4001E86D02 0372             mov dx,offset read_buf ! call conreadbuf
+
+                        startup:
+                                        ; echo newline
+ 0105 B20AE82F02   0339             mov dl,lf ! call prchar
+
+                                        ; make sure not a null command
+ 010A 8D1E4201                      lea bx,clicb_cmd
+ 010E 803E41010074 0178             cmp read_blen,0 ! je gonextcmd
+      63           0178
+                        deblank:
+ 0115 803F207405   011F             cmp byte ptr [bx],' ' ! je zapblank
+ 011A 803F097507   0126             cmp byte ptr [bx],tab ! jne noblanks
+                        zapblank:
+ 011F 43FE0E4101EB 0115             inc bx ! dec read_blen ! jmps deblank
+      EF           0115
+                        noblanks:
+ 0126 8D0642013BC3 013F             lea ax,clicb_cmd ! cmp ax,bx ! je chksemi
+      7411         013F
+                                                ; remove leading blanks
+ 012E 1E0732ED8A0E                      push ds ! pop es ! xor ch,ch ! mov cl,read_blen
+      4101
+ 0136 8BF88BF3FCF3                      mov di,ax ! mov si,bx ! cld ! rep movsb
+      A4
+ 013D 8BD8                              mov bx,ax
+                        chksemi:                ; see if line starts with semicolon
+ 013F 803F3B7434   0178             cmp byte ptr [bx],';' ! je gonextcmd
+
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   6
+
+
+                                                ; see if disk change
+                                                ; if 'X:' change def disk to X
+ 0144 803E41010275 017B                     cmp read_blen,2 ! jne clicall
+      30           017B
+ 014B 807F013A                              cmp byte ptr 1[bx],':'
+ 014F 752A         017B                     jne clicall
+
+                                                        ; change default disk
+ 0151 8A17                                      mov dl,[bx]     ;get disk name
+ 0153 80E25F                                    and dl,5fh      ;Upper Case
+ 0156 80EA41                                    sub dl,'A'      ;disk number
+
+                                                        ; check bounds
+ 0159 80FA00720B   0169                         cmp dl,0 ! jb baddrive
+ 015E 80FA0F7706   0169                         cmp dl,15 ! ja baddrive
+
+                                                        ; select default disk
+ 0163 E8F401E90F00 035A                             call setdisk ! jmp gonextcmd
+
+ 0169 BAC003E8D901 0348 baddrive:   mov dx,offset errstr ! call printstring
+ 016F BA3804E8D301 0348             mov dx,offset drverr ! call printstring ! call crlf
+      E8CD01       0348
+
+ 0178 E94BFF       00C6 gonextcmd:  jmp nextcommand
+
+                        ;=======
+                        clicall:        ; SEND CLI COMMAND
+                        ;=======
+                                                ; put null at end of input
+ 017B BB4201                                mov bx,offset clicb_cmd
+ 017E A04101B400                            mov al,read_blen ! mov ah,0
+ 0183 03D8C60700                            add bx,ax ! mov byte ptr [bx],0
+
+                                                ; copy command string for error
+                                                ; reporting later and to check
+                                                ; for built in commands...
+ 0188 B94000                                mov cx,64
+ 018B BE4201                                mov si,offset clicb_cmd
+ 018E BFEB01                                mov di,offset savebuf
+ 0191 1E07                                  push ds ! pop es
+ 0193 F3A5                                  rep movsw
+
+                                                ; parse front to see if
+                                                ; built in command
+ 0195 BECA01                                mov si,offset fcb
+ 0198 BFEB01                                mov di,offset savebuf
+ 019B E83F01       02DD                     call parsefilename
+ 019E E310         01B0                     jcxz goodparse
+ 01A0 2BDB8A1E4101                              sub bx,bx ! mov bl,read_blen
+ 01A6 81C3EB01                                  add bx,offset savebuf
+ 01AA C60724                                    mov byte ptr [bx],'$'
+ 01AD E9E300       0293                         jmp clierror
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   7
+
+
+
+
+ 01B0 891EC401          goodparse:          mov parseret,bx
+ 01B4 83FB007508   01C1                     cmp bx,0 ! jne haveatail
+ 01B9 8A1E4101                                  mov bl,read_blen
+ 01BD 81C3EB01                                  add bx,offset savebuf
+ 01C1 C6072443          haveatail:          mov byte ptr [bx],'$' ! inc bx
+ 01C5 803ECA010074 01CF                     cmp fcb,0 ! je try_builtin
+      03           01CF
+ 01CC E9A900       0278                         jmp not_builtin
+                                                ; is it USER command?
+
+ 01CF BECA0146          try_builtin:        mov si,offset fcb ! inc si
+ 01D3 BFBB04                                mov di,offset usercmd
+ 01D6 0E07                                  push cs ! pop es
+ 01D8 B90400F3A7                            mov cx,4 ! repz cmpsw
+ 01DD 7545         0224                     jnz notuser
+ 01DF BECA01                                    mov si,offset fcb
+ 01E2 8B3EC401                                  mov di,parseret
+ 01E6 83FF007425   0210                         cmp di,0 ! je pruser
+ 01EB 47                                            inc di
+ 01EC E8EE00       02DD                             call parsefilename
+ 01EF 83F900751C   0210                             cmp cx,0 ! jne pruser
+ 01F4 BECA01                                          mov si,offset fcb
+ 01F7 46                                              inc si
+ 01F8 8B14                                            mov dx,[si]
+ 01FA E8F000       02ED                               call a_to_b
+ 01FD 80FB0F7708   020A                               cmp bl,15 ! ja usererr
+ 0202 8AD3                                              mov dl,bl
+ 0204 E83901       0340                                 call setuser
+ 0207 E90600       0210                                 jmp pruser
+ 020A BA5104            usererr:                      mov dx,offset usererrmsg
+ 020D E83801       0348                               call printstring
+ 0210 BA7204            pruser:                 mov dx,offset usermsg
+ 0213 E83201       0348                         call printstring
+ 0216 E82501       033E                         call getuser
+ 0219 8AD3E80901   0327                         mov dl,bl ! call prnum
+ 021E E82401       0345                         call crlf
+ 0221 E9A2FE       00C6                         jmp nextcommand
+                        notuser:
+ 0224 BECA0146                              mov si,offset fcb ! inc si
+ 0228 BFC304                                mov di,offset printercmd
+ 022B 0E07                                  push cs ! pop es
+ 022D B90400F3A7                            mov cx,4 ! repz cmpsw
+ 0232 7544         0278                     jnz notprinter
+ 0234 BECA01                                    mov si,offset fcb
+ 0237 8B3EC401                                  mov di,parseret
+ 023B 83FF007424   0264                         cmp di,0 ! je prprinter
+ 0240 47                                            inc di
+ 0241 E89900       02DD                             call parsefilename
+ 0244 83F900751B   0264                             cmp cx,0 ! jne prprinter
+ 0249 BECA01                                          mov si,offset fcb
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   8
+
+
+ 024C 46                                              inc si
+ 024D 8B14                                            mov dx,[si]
+ 024F E89B00       02ED                               call a_to_b
+ 0252 80FBFF                                          cmp bl,0ffh
+ 0255 7407         025E                               je printererr
+ 0257 8AD3                                              mov dl,bl
+ 0259 E80601       0362                                 call setlist
+ 025C E306         0264                                 jcxz prprinter
+ 025E BA8304            printererr:                   mov dx,offset printemsg
+ 0261 E8E400       0348                               call printstring
+ 0264 BAA704            prprinter:              mov dx,offset printermsg
+ 0267 E8DE00       0348                         call printstring
+ 026A E8F900       0366                         call getlist
+ 026D 8AD3E8B500   0327                         mov dl,bl ! call prnum
+ 0272 E8D000       0345                         call crlf
+ 0275 E94EFE       00C6                         jmp nextcommand
+                        notprinter:
+                        not_builtin:
+                                                ; initialize Cli Control Block
+
+ 0278 C606410100                            mov clicb_net,0
+                                                ; make cli call
+
+ 027D C606C301FF                            mov cmdsent,true
+ 0282 8D164101B196                          lea dx,clicb ! mov cl,p_cli
+ 0288 E8ED00       0378                     call ccpm
+ 028B 83FB007503   0293                     cmp bx,0 ! jne clierror
+ 0290 E933FE       00C6                         jmp nextcommand
+
+                        ;========
+                        clierror:
+                        ;========
+                        ; Cli call unsuccesful, analyze and display err msg
+                        ;       input: CX = ERROR CODE
+
+ 0293 BE7703                    mov si,(offset clierrtab)-4
+                        nexterr:
+ 0296 83C604                    add si,4
+ 0299 2E83BC0000FF 02A8         cmp cs:word ptr [si],0ffffh ! je unknownerr
+      7407         02A8
+ 02A1 2E3B8C000075 0296         cmp cx,cs:[si] ! jne nexterr
+      EE           0296
+                        unknownerr:
+ 02A8 2E8B940200                mov dx,cs:2[si]
+                                ; jmps showerr
+
+
+                        showerr:        ; Print Error String
+                        ;-------        ; input: DX = address of Error
+                                        ;             string in CSEG
+                                        ;        if DX=0 then NULL COMMAND
+
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE   9
+
+
+ 02AD 83FA007508   02BA         cmp dx,0 ! jne perr
+ 02B2 C606C30100E9 00C6             mov cmdsent,false ! jmp nextcommand
+      0CFE         00C6
+ 02BA 52E88700     0345 perr:   push dx ! call crlf
+ 02BE BAC003E88400 0348         mov dx,offset errstr ! call printstring
+ 02C4 5AE88000E87A 0348         pop dx ! call printstring ! call crlf
+      00           0348
+ 02CB BA4604E87700 0348         mov dx,offset cmdstr ! call printstring
+ 02D1 BAEB01E87B00 0352         mov dx,offset savebuf ! call print_ds_string ! call crlf
+      E86B00       0352
+ 02DA E9E9FD       00C6         jmp nextcommand 
+
+                        parsefilename:  ; SI = fcb   DI = string
+ 02DD B99800                            mov cx,f_parse
+ 02E0 BBC601                            mov bx,offset pcb
+ 02E3 893F897702                        mov [bx],di ! mov 2[bx],si
+ 02E8 8BD3E98B00   0378                 mov dx,bx ! jmp ccpm
+                        a_to_b:         ;dl = 1st char, dh = 2nd char
+ 02ED 80FE207504   02F6                 cmp dh,' ' ! jne atob2char
+ 02F2 8AF2B230                              mov dh,dl ! mov dl,'0'
+ 02F6 80FE307229   0324 atob2char:      cmp dh,'0' ! jb atoberr
+ 02FB 80FE397724   0324                 cmp dh,'9' ! ja atoberr
+ 0300 80FA30721F   0324                 cmp dl,'0' ! jb atoberr
+ 0305 80FA39771A   0324                 cmp dl,'9' ! ja atoberr
+ 030A 80EE3080EA30                          sub dh,'0' ! sub dl,'0'
+ 0310 B800008AC2                            mov ax,0 ! mov al,dl
+ 0315 52B10A                                push dx ! mov cl,10
+ 0318 F6E15A                                mul cl ! pop dx
+ 031B 8AD6B600                              mov dl,dh ! mov dh,0
+ 031F 03C2                                  add ax,dx
+ 0321 8BD8C3                                mov bx,ax ! ret
+ 0324 B3FFC3            atoberr:        mov bl,0ffh ! ret
+                        prnum:          ; dl = num (0-15)
+ 0327 80FA0A720A   0336                 cmp dl,10 ! jb prnum_one
+ 032C 52                                    push dx
+ 032D B231E80700   0339                     mov dl,'1' ! call prchar
+ 0332 5A80EA0A                              pop dx ! sub dl,10
+ 0336 80C230            prnum_one:      add dl,'0'
+                                        ; jmp prchar
+ 0339 B102E93A00   0378 prchar:         mov cl,c_write ! jmp ccpm
+ 033E B2FF              getuser:        mov dl,0ffh
+ 0340 B120E93300   0378 setuser:        mov cl,dir_usernum ! jmp ccpm
+ 0345 BABD03            crlf:           mov dx,offset crlfstr
+                                        ;jmps printstring
+ 0348 1E8CC88ED8        printstring:    push ds ! mov ax,cs ! mov ds,ax
+ 034D E802001FC3   0352                 call print_ds_string ! pop ds ! ret
+ 0352 B109EB22     0378 print_ds_string:mov cl,c_writebuf ! jmps ccpm
+ 0356 B194EB1E     0378 setconsolenum:  mov cl,c_setnum ! jmps ccpm
+ 035A B10EEB1A     0378 setdisk:        mov cl,drv_set ! jmps ccpm
+ 035E B119EB16     0378 getdisk:        mov cl,drv_get ! jmps ccpm
+ 0362 B1A0EB12     0378 setlist:        mov cl,l_setnum ! jmps ccpm
+ 0366 B1A4EB0E     0378 getlist:        mov cl,l_getnum ! jmps ccpm
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE  10
+
+
+ 036A B192EB0A     0378 attach:         mov cl,c_attachc ! jmps ccpm
+ 036E B193EB06     0378 detach:         mov cl,c_detachc ! jmps ccpm
+ 0372 B10AEB02     0378 con_readbuf:    mov cl,c_readbuf ! jmps ccpm
+ 0376 B127              drivefree:      mov cl,drv_free !; jmps ccpm
+
+                        ;====
+                        ccpm:   ; INTERFACE ROUTINE FOR SYSTEM ENTRY POINTS
+                        ;====
+
+ 0378 CDE0C3                    int osint ! ret
+
+                        ;*****************************************************
+                        ;*
+                        ;*      CONSTANTS (IN SHARED CODE SEGMENT)
+                        ;*
+                        ;*****************************************************
+
+ 037B 1F000000          clierrtab       dw      e_nullcmd,      0       ;null command
+ 037F 0300CD03                          dw      e_no_memory,    memerr  ;No memory
+ 0383 0C00DF03                          dw      e_no_pd,        pderr   ;No unused PD
+ 0387 1800ED03                          dw      e_badfname,     fnameerr;Ill. command
+ 038B 1700ED03                          dw      e_illdisk,      fnameerr;Ill. disk
+ 038F 2600ED03                          dw      e_ill_passwd,   fnameerr;Ill. password
+ 0393 1900ED03                          dw      e_badftype,     fnameerr;Ill. type
+ 0397 1C00FB03                          dw      e_bad_load,     loaderr ;
+ 039B 1D00FB03                          dw      e_bad_read,     loaderr ;
+ 039F 1E000604                          dw      e_bad_open,     openerr ;
+ 03A3 0F001904                          dw      e_q_full,       qfullerr;
+ 03A7 28002E04                          dw      e_abort,        aborterr;
+
+                                                ; a few extra entries for future errors
+
+ 03AB FFFFFB03                          dw      0ffffh,         catcherr;
+ 03AF FFFFFB03                          dw      0ffffh,         catcherr;
+ 03B3 FFFFFB03                          dw      0ffffh,         catcherr;
+ 03B7 FFFFFB03                          dw      0ffffh,         catcherr;
+
+ 03BB 3E24              prompt          db      '>$'
+ 03BD 0D0A24            crlfstr         db      13,10,'$'
+ 03C0 43502F4D2045      errstr          db      'CP/M Error: $'
+      72726F723A20
+      24
+ 03CD 4E6F7420456E      memerr          db      'Not Enough Memory$'
+      6F756768204D
+      656D6F727924
+ 03DF 504420546162      pderr           db      'PD Table Full$'
+      6C652046756C
+      6C24
+ 03ED 426164204669      fnameerr        db      'Bad File Spec$'
+      6C6520537065
+      6324
+ 03FB                   catcherr        rb      0                       ;Unknown Errs give
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE  11
+
+
+ 03FB 4C6F61642045      loaderr         db      'Load Error$'           ;  Load Error Msg
+      72726F7224
+ 0406 43616E277420      openerr         db      'Can''t Find Command$'
+      46696E642043
+      6F6D6D616E64
+      24
+ 0419 52535020436F      qfullerr        db      'RSP Command Que Full$'
+      6D6D616E6420
+      517565204675
+      6C6C24
+ 042E 434C49204162      aborterr        db      'CLI Abort$'
+      6F727424
+ 0438 496E76616C69      drverr          db      'Invalid Drive$'
+      642044726976
+      6524
+
+ 0446 436F6D6D616E      cmdstr          db      'Command = $'
+      64203D2024
+ 0451 0D0A496E7661      usererrmsg      db      13,10,'Invalid User Number,'
+      6C6964205573
+      6572204E756D
+      6265722C
+ 0467 2049474E4F52                      db      ' IGNORED',13,10,'$'
+      45440D0A24
+ 0472 0D0A55736572      usermsg         db      13,10,'User Number = $'
+      204E756D6265
+      72203D2024
+
+ 0483 0D0A496E7661      printemsg       db      13,10,'Invalid Printer Number,'
+      6C6964205072
+      696E74657220
+      4E756D626572
+      2C
+ 049C 2049474E4F52                      db      ' IGNORED',13,10,'$'
+      45440D0A24
+ 04A7 0D0A5072696E      printermsg      db      13,10,'Printer Number = $'
+      746572204E75
+      6D626572203D
+      2024
+
+ 04BB 555345522020      usercmd         db      'USER    '
+      2020
+ 04C3 5052494E5445      printercmd      db      'PRINTER '
+      5220
+
+ 04CB 537461727420      supmsg          db      'Start up command: $'
+      757020636F6D
+      6D616E643A20
+      24
+
+                        ;*****************************************************
+                        ;*
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE  12
+
+
+                        ;*      TMP Data Area - this area is copied once for
+                        ;*              each system console.  The 'defconsole'
+                        ;*              field is unique for each copy
+                        ;*              - Each Data Area is run by a common
+                        ;*              shared code segment.
+                        ;*
+                        ;*****************************************************
+
+                                DSEG
+                                org     rsp_top
+
+ 0000 0000              sysdatseg       dw      0
+ 0002 4700              sdatvar         dw      s_ncns
+ 0004 0000              defconsole      db      0,0
+ 0006 000000000000                      dw      0,0,0,0,0
+      00000000
+
+                                org     rsp_pd
+
+ 0010 00000000          pd              dw      0,0             ; link fields
+ 0014 00                                db      ps_run          ; status
+ 0015 C6                                db      198             ; priority
+ 0016 0300                              dw      pf_sys+pf_keep  ; flags
+ 0018 546D70                            db      'Tmp'           ; Name
+ 001B 2020202020        pd_ascii_num    db      '     '         ; Ascii number field set by GENSYS
+ 0020 0400                              dw      offset uda/10h  ; uda seg
+ 0022 0000                              db      0,0             ; disk,user
+ 0024 0000                              db      0,0             ; ldisk,luser
+ 0026 FFFF                              dw      0ffffh          ; mem
+ 0028 00000000                          dw      0,0             ; dvract,wait
+ 002C 0000                              db      0,0             ; org,net
+ 002E 0000                              dw      0               ; parent
+ 0030 0000                              db      0,0             ; cns,abort
+ 0032 0000                              db      0,0             ; cin,cout
+ 0034 0000                              db      0,0             ; lst,sf3
+ 0036 0000                              db      0,0             ; sf4,sf5
+ 0038 00000000                          dw      0,0             ; reserved
+ 003C 00000000                          dw      0,0             ; pret,scratch
+
+                                org     rsp_uda
+
+ 0040 000000000000      uda             dw      0,0,0,0                 ;0-7 note: no default DMA
+      0000
+ 0048 000000000000                      dw      0,0,0,0                 ;8-fh
+      0000
+ 0050 000000000000                      dw      0,0,0,0                 ;10-17
+      0000
+ 0058 000000000000                      dw      0,0,0,0                 ;18-1f
+      0000
+ 0060 000000000000                      dw      0,0,0,0                 ;20-27
+      0000
+ 0068 000000000000                      dw      0,0,0,0                 ;28-2f
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE  13
+
+
+      0000
+ 0070 000000003A01                      dw      0,0,offset stack_top,0  ;30-37
+      0000
+ 0078 000000000000                      dw      0,0,0,0                 ;38-3f
+      0000
+ 0080 000000000000                      dw      0,0,0,0                 ;40-47
+      0000
+ 0088 000000000000                      dw      0,0,0,0                 ;48-4f
+      0000
+ 0090 000000000000                      dw      0,0,0,0                 ;50-57
+      0000
+ 0098 000000000000                      dw      0,0,0,0                 ;58-5f
+      0000
+ 00A0 01                                db      1                       ;60 INSYS <> 0
+                                                                        ;don't switch from
+                                                                        ;from UDA stack
+                                                                        ;on entry to SUP
+ 00A1 00                                db      0                       ;61
+ 00A2 00000000                          dw      0,0                     ;62-64
+ 00A6 00                                db      0                       ;66
+ 00A7 0000                              dw      0                       ;67-68
+ 00A9 00                                db      0                       ;69
+
+ 00AA CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch            ;6A-6F
+ 00B0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;70
+      CCCC
+ 00B8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 00C0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;80
+      CCCC
+ 00C8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 00D0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;90
+      CCCC
+ 00D8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 00E0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;A0
+      CCCC
+ 00E8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 00F0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;B0
+      CCCC
+ 00F8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 0100 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;C0
+      CCCC
+ 0108 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 0110 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;D0
+      CCCC
+ 0118 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+CP/M ASM86 1.1  SOURCE: TMP.A86       Terminal Message Processor - C                                         PAGE  14
+
+
+ 0120 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;E0
+      CCCC
+ 0128 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+      CCCC
+ 0130 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;F0
+      CCCC
+ 0138 CCCC                      dw      0cccch
+
+ 013A 3100              stack_top       dw      offset tmp      ; code starting point
+ 013C 0000                              dw      0               ; code seg - set by GENSYS
+ 013E 0000                              dw      0               ; init. flags - set by GENSYS
+
+                                                                ; UDA is 100H bytes long
+
+   0080                 maxcmdlen       equ     128
+
+                                ; the Read Console Buffer and the
+                                ; Cli Control Block share the same memory
+
+ 0140                   read_buf        rb      0
+ 0140 80                read_maxcmd     db      128
+ 0141                   clicb           rb      0
+ 0141                   clicb_net       rb      0
+ 0141                   read_blen       rb      1
+ 0142                   clicb_cmd       rb      maxcmdlen + 1
+
+ 01C3 00                cmdsent         db      false
+
+ 01C4 0000              parseret        dw      0
+
+ 01C6 EB01              pcb             dw      offset savebuf
+ 01C8 CA01                              dw      offset fcb
+
+ 01CA 005354415254      fcb             db      0, 'STARTUP '
+      555020
+ 01D3 202020            startupnum      db      '   '
+ 01D6                                   rb      20
+ 01EA 00                                db      0       ;current record
+
+ 01EB                   savebuf         rb      128
+
+ 026B 00                                db      0       ;ensure hex is formed
+                                end
+
+
+END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  5%

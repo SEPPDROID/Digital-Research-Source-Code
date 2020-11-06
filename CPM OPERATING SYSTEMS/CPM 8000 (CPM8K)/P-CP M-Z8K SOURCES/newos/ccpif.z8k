@@ -1,0 +1,98 @@
+;******* ccpif.z8k -- CCP interface *****************
+;*
+;* 821015 S. Savitzky (Zilog) derived from 68K version
+;*
+;****************************************************
+
+__text:	.sect
+
+;****************************************************
+;*
+;* EXTERNALS
+;*
+;****************************************************
+
+	.global	_bdosinit
+	.global  _main
+
+;****************************************************
+;*
+;* GLOBALS
+;*
+;****************************************************
+
+	.global	 ccp		; main entry point
+	.global  _autost
+	.global  _usercmd
+	.global	 _submit
+	.global	 _morecmds
+	
+;****************************************************
+;*
+;* JUMP VECTOR
+;*
+;****************************************************
+
+ccp:	jr	ccpstart	; start ccp with possible 
+				;    initial command
+	jp  	ccpclear	; clear autostart flag
+
+
+
+;****************************************************
+;*
+;* DATA
+;*
+;****************************************************
+
+__data:	.sect
+
+copy:	.byte 	" COPYRIGHT (C) 1982, Digital Research "
+
+_autost:		; autostart command flag  
+	.byte 	0
+sysinit:		; set if system initialized
+	.byte	0
+_submit:
+	.byte	0
+_morecmds:
+	.byte	0
+
+__bss:	.sect
+
+_usercmd: 		; user command buffer
+	.block	130
+stackp:			; saved stack pointer
+	.block	2
+
+
+
+;****************************************************
+;*
+;* PROGRAM INTERFACE
+;*
+;*	ccpclear -- clear autostart flag
+;*	ccpstart -- normal entry from boot
+;*		    jumped to with valid stack ptr.
+;*	ccploop	 -- main loop (internal)
+;*
+;****************************************************
+
+__text:	.sect
+
+ccpclear:
+	clrb	_autost		; clear the autostart flag
+
+ccpstart:
+	ld	stackp,r15	; save stack pointer
+	tsetb	sysinit		; system initialized?
+	jr mi	ccploop		;  yes
+				;  no: init flag now set
+	call	_bdosinit	;      init bdos
+
+ccploop:
+	ld	r15,stackp	; reset stack pointer
+	call	_main		; call the CCP
+	jr	ccploop		; loop forever
+
+

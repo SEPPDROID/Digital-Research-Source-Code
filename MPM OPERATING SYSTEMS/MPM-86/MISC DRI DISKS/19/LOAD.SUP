@@ -1,0 +1,591 @@
+
+;*****************************************************
+;*
+;*      Program Load
+;*
+;*****************************************************
+
+;===========
+cload_entry:    ; entry point to load for a chain command
+;===========
+;       Assumes UDA is set in passed PD.
+
+        push bx ! mov bx,1
+        jmps load
+
+;==========
+load_entry:     ; User entry point to load .CMD file for execution
+;==========
+;       input:  DX = address of open FCB in u_wrkseg
+;       output: BX = segment addr of Base Page
+;                  = 0ffffh if error
+;               CX = Error Code
+
+        sub bx,bx
+        ;jmp load
+;====
+load:           ; Intermodule entry point to load .CMD file
+;====
+;       input:  DX = addr of open FCB in u_wrkseg
+;               BX = addr of unused PD to initialize
+;                    0 - do not init PD
+;                    1 - chain load (PD addr on stack)
+;       output: BX = seg addr of Base Page
+;                  = 0ffffh if error
+;               CX = Error Code
+
+                ; Get MXLoad Queue
+
+        push dx ! push bx
+        mov cx,f_qread ! mov dx,offset mxloadqpb
+        call mpmif
+        mov load_chain,false
+        pop load_pd ! pop load_fcb
+        cmp load_pd,1 ! jne ld_read
+            pop load_pd ! mov load_chain,true
+
+                ; Read the Header
+
+ld_read:
+        mov bx,load_fcb
+        mov fcb_nxtrec[bx],0            ;read 1st record
+        mov dx,offset load_dma
+        mov cx,sysdat
+        call diskread ! jcxz have_header
+            jmp load_exit
+have_header:
+        mov load_indma,0
+
+                ; Initialize ldtab
+
+                        ; Zero ldtab
+        mov cx,ldtabsiz/2 ! sub ax,ax
+        mov di,offset ldtab
+        push es ! mov es,sysdat
+        rep stos ax ! pop es
+                        ; 1st ldtab entry is UDA and LSTK
+                        ; if a PD was specified...
+        mov load_nldtabents,0
+        mov si,offset ldtab
+        cmp load_pd,0 ! jne form_uda
+                jmp get_ch_info
+form_uda:   mov ldtab_min[si],(lstklen+ulen)/16 ;min=max=UDA+STK paragraphs
+            mov ldtab_max[si],(lstklen+ulen)/16
+            mov ax,load_pd ! mov ldtab_pd[si],ax
+            mov ldtab_attrib[si],mf_load
+            add si,ldtablen
+            inc load_nldtabents
+            cmp load_chain,true ! jne get_ch_info
+
+                        ;free any memory obtained by process
+                        ;except uda,ldstack segment
+
+                push si
+                mov bx,load_pd ! mov ax,p_uda[bx]
+                mov bx,rlr ! mov bx,p_mem[bx]
+ld_fnext:       cmp bx,0 ! je ld_freeit
+                    cmp ms_start[bx],ax ! je ld_freenxt
+                        and ms_flags[bx],not mf_load
+ld_freenxt:         mov bx,ms_link[bx] ! jmps ld_fnext
+ld_freeit:      push ax ! mov cl,0ffh ! push cx
+                push cx ! push cx
+                mov dx,sp ! mov cx,ss ! mov ds,cx
+                mov cx,f_freemem ! call mpmif
+                pop cx ! pop cx ! pop cx
+                mov ds,sysdat ! pop ax
+
+                        ; free load memory except uda,ldstack
+
+                mov bx,offset ldtab ! mov ldtab_start[bx],ax
+                sub cx,cx ! push cx
+                add ax,(lstklen+ulen)/16 ! push ax
+                mov dx,sp ! mov ax,ss ! mov ds,ax
+                mov cx,f_memfree ! call mpmif
+                pop ax ! pop ax
+                mov ds,sysdat
+
+                        ;transfer memory to new pd
+
+                mov bx,rlr
+                mov ax,p_mem[bx] ! mov p_mem[bx],0
+                mov bx,load_pd ! mov p_mem[bx],ax
+                pop si
+                
+get_ch_info:
+                        ;go through CMD header and init
+                        ;a ldtab entry per header entry.
+                        ;alloc abs mem
+
+        mov cx,ch_entmax ! mov bx,offset load_dma
+        mov dx,8                ; DX = position in file
+ch_more:cmp ch_form[bx],0 ! jne ch_doit
+        jmp ch_next
+ch_doit:    mov al,ch_form[bx] ! mov ldtab_type[si],al   ;type of seg
+            mov ax,ch_length[bx] ! mov ldtab_flen[si],ax ;length
+            mov ldtab_fstrt[si],dx ! add dx,ax           ;pos in file
+            mov ax,ch_base[bx] ! mov ldtab_start[si],ax  ;abs seg
+            mov ax,ch_min[bx] ! mov ldtab_min[si],ax     ;min needed
+            mov ax,ch_max[bx]
+            cmp ax,0 ! jne setmax
+                mov ax,ch_min[bx]
+setmax:     mov ldtab_max[si],ax                         ;max wanted
+            mov ax,load_pd ! mov ldtab_pd[si],ax         ;pd to alloc to
+            cmp ax,0 ! je not_load
+                mov ax,mf_load
+                jmps not_load
+skipjmp:jmps ch_more
+not_load:   cmp ch_form[bx],1 ! jne try_shared
+                add ax,mf_code ! jmps set_attrib
+try_shared: cmp ch_form[bx],9 ! jne set_attrib
+                add ax,mf_code+mf_share
+set_attrib: mov ldtab_attrib[si],ax                     ;memory flags
+                        ;if abs, allocate memory
+            cmp ldtab_start[si],0 ! je ch_notabs        ;see if abs mem
+                jmps ch_alloc
+ch_notabs:  cmp ldtab_type[si],9 ! jne ch_nxt           ;see if shared code
+            call  shared_code_load                      ;allocate memory
+            jz ch_nxt ! jmp load_giveup                 ;for share code
+ch_alloc:       push bx ! push dx ! push cx ! push si
+                mov cx,f_malloc ! mov dx,si
+                call mpmif ! pop si
+                mov ax,ldtab_start[si] ! mov ldtab_id[si],ax
+                cmp cx,0 ! pop cx ! pop dx ! pop bx
+                je ch_nxt
+                        ;couldn't find memory
+                    mov bx,0ffffh ! mov cx,e_no_memory
+                    jmp load_giveup
+ch_nxt: add si,ldtablen
+        inc load_nldtabents
+ch_next:add bx,chlen
+        loop skipjmp
+
+                ; alloc all other memory
+                ; SI -> mpb for non_abs mem req.
+                        ;add all parts together for a single malloc
+        mov bx,offset ldtab
+        mov cx,load_nldtabents
+        mov load_nrelsegs,0
+lt_more:cmp ldtab_min[bx],0 ! je lt_next
+            cmp ldtab_start[bx],0 ! jne lt_next
+                mov ax,ldtab_min[bx] ! add ldtab_min[si],ax
+                mov ax,ldtab_max[bx] ! add ldtab_max[si],ax
+                inc load_nrelsegs
+lt_next:add bx,ldtablen ! loop lt_more
+                        ;malloc
+        mov ax,ldtab_max[si] ! mov load_maxwanted,ax
+        mov ax,ldtab_min[si] ! mov load_minwanted,ax
+        cmp load_pd,0 ! je noloadf
+            mov ldtab_attrib[si],mf_load
+noloadf:mov ax,load_pd ! mov ldtab_pd[si],ax
+        push si ! mov dx,si ! mov cx,f_malloc
+        call mpmif ! pop si
+        mov ax,ldtab_start[si] ! mov ldtab_id[si],ax
+        cmp bx,0ffffh ! jne lt_spread
+                        ;Not Enough Memory - release any
+                        ; memory already allocated
+load_giveup:push cx
+            mov bx,offset ldtab
+            mov cx,load_nldtabents ! inc cx
+lg_more:    cmp ldtab_id[bx],0 ! je lg_next
+                push cx ! push bx ! push ds
+                        ;push MFPB on stack
+                push ldtab_pd[bx]
+                push ldtab_id[bx]
+                mov dx,sp ! push ss ! pop ds            
+                mov cx,f_memfree
+                call mpmif
+                pop cx ! pop cx
+
+                pop ds ! pop bx ! pop cx
+lg_next:    add bx,ldtablen ! loop lg_more
+            mov bx,0ffffh ! pop cx ! jmp load_exit
+lt_spread:
+                        ;spread the memory allocated
+                        ;amongst the nrelsegs
+ls_spread1:             ;1st give everyone the minimum
+        mov bx,offset ldtab
+        mov cx,load_nldtabents
+ls_more:cmp ldtab_start[bx],0 ! jne ls_next
+            mov ax,ldtab_min[bx]
+            sub ldtab_min[si],ax
+            cmp ax,ldtab_max[bx] ! jne ls_next
+                mov dx,ldtab_start[si] ! mov ldtab_start[bx],dx
+                add ldtab_start[si],ax
+                dec load_nrelsegs
+ls_next:add bx,ldtablen ! loop ls_more
+                        ;spread whats left amongst those that need more
+        mov bx,offset ldtab
+        mov cx,load_nldtabents
+lsl_mre:cmp ldtab_start[bx],0 ! jne lsl_nxt
+            mov ax,ldtab_start[si] ! mov ldtab_start[bx],ax
+            mov ax,ldtab_min[si]
+            cmp ax,0 ! je adj_start
+                push cx ! sub cx,cx
+                mov dx,cx ! mov cl,load_nrelsegs
+                div cx ! pop cx
+                cmp dx,0 ! je evendiv
+                    inc ax
+evendiv:        mov dx,ldtab_max[bx] ! sub dx,ldtab_min[bx]
+                cmp ax,dx ! jbe nottoomuch
+                    mov ax,dx
+nottoomuch:     add ldtab_min[bx],ax ! sub ldtab_min[si],ax
+adj_start:  mov ax,ldtab_min[bx] ! add ldtab_start[si],ax
+            dec load_nrelsegs
+lsl_nxt:add bx,ldtablen ! loop lsl_mre
+
+                ; fill memory from file
+
+        mov si,offset ldtab
+        mov cx,load_nldtabents
+lf_mre: cmp ldtab_flen[si],0 ! je lf_nxt
+            push cx ! push ldtab_start[si] ! push si
+            call load_group
+            pop si ! pop ldtab_start[si]
+            cmp cx,0 ! pop cx
+            je lf_nxt
+                jmp load_giveup
+lf_nxt: add si,ldtablen ! loop lf_mre
+
+                ; init Base Page
+                ;       1st Data Group has Base Page
+                ;       if none then first nonshared
+                ;       Code Group (8080 model) 
+
+        mov load_8080,0
+        mov si,offset ldtab
+        mov cx,load_nldtabents
+lb_more:cmp ldtab_type[si],2 ! je lb_found
+            add si,ldtablen ! loop lb_more
+                mov si,offset ldtab
+                mov cx,load_nldtabents
+lbc_mre:        cmp ldtab_type[si],1 ! je lb_found8080
+                    add si,ldtablen ! loop lbc_mre
+                        mov cx,e_no_cseg ! jmp load_giveup
+lb_found8080:   mov load_8080,1
+lb_found:
+        push es ! mov es,ldtab_start[si]
+        mov load_basep,es
+        sub ax,ax ! mov di,ax
+        mov cx,05bh/2 ! rep stos ax
+        mov al,load_8080 ! mov es:.5,al
+        mov si,offset ldtab
+        mov cx,load_nldtabents
+lbb_mre:cmp ldtab_type[si],0 ! je lbb_nxt
+            mov ax,6 ! mov bl,ldtab_type[si]
+            and bl,7            ; For SHARED CODE operation
+            dec bl ! mul bl ! mov bx,ax
+            mov dx,ldtab_min[si] ! push dx
+            mov cl,12 ! shr dx,cl ! mov es:2[bx],dl
+            pop dx ! mov cl,4 ! shl dx,cl
+            dec dx ! mov es:[bx],dx
+            mov ax,ldtab_start[si] ! mov es:3[bx],ax
+lbb_nxt:add si,ldtablen ! loop lbb_mre
+
+                ;if 8080 model, copy CS info into DS info
+
+        cmp load_8080,1 ! jne lnot8080
+            push ds ! push es ! pop ds ! mov si,0
+            mov di,6 ! mov cx,3
+            rep movsw ! pop ds
+lnot8080:
+        pop es
+
+                ; init PD ,UDA and LDSTK
+
+        mov bx,load_basep
+        cmp load_pd,0 ! jne lip_1
+            jmp load_exit
+lip_1:  mov si,offset ldtab
+        mov bx,load_pd
+        mov ax,ldtab_start[si]
+        mov p_uda[bx],ax
+                ; remember where lstk,uda are
+        mov load_uda,ax
+        push es ! mov es,ax
+        add ax,(ulen/16) ! mov load_lstk,ax
+                ; initialize UDA,LDSTK with zeros
+        sub di,di ! mov ax,di
+        mov cx,(ulen + lstklen)/2
+        rep stos ax ! pop es
+                ; setup p_uda for creat_proc
+        mov ax,sysdat
+        sub p_uda[bx],ax
+        mov p_stat[bx],ps_run
+        mov p_prior[bx],200
+                ; init load disk/user
+        mov al,p_user[bx] ! mov p_luser[bx],al
+        mov al,p_dsk[bx] ! mov p_ldsk[bx],al
+        push es ! mov es,u_wrkseg
+        mov di,load_fcb
+        cmp es:byte ptr [di],0 ! je ldisk_set
+            mov al,es:[di] ! mov p_ldsk[bx],al
+ldisk_set:
+        pop es
+                        ; init UDA
+        push es ! mov es,load_uda
+        mov u_dma_ofst,(offset bpg_dma)
+        mov bx,load_basep
+        mov u_dma_seg,bx
+        mov ax,load_lstk
+        push ds ! mov ds,bx
+        mov u_initds,bx
+        mov u_inites,bx
+        mov u_initss,ax
+        mov ax,bpg_cseg
+        cmp ax,0 ! jne have_cs
+            pop ds ! pop es ! mov cx,e_no_cseg
+            jmp load_giveup
+have_cs:mov u_initcs,ax
+        mov ax,bpg_eseg
+        cmp ax,0 ! je noes
+            mov u_inites,ax
+noes:   mov u_stack_sp,(offset ls_sp)
+        sub dx,dx ! mov al,bpg_8080
+        cmp al,0 ! je not8080mod
+            mov dx,0100h
+not8080mod:
+        mov ds,u_initss
+        mov ls_offset,dx
+        mov ls_flags,0200h
+        mov ls_roffset,offset user_retf
+        mov ls_rcseg,cs
+        pop ds ! pop es
+        mov bx,load_basep
+        sub cx,cx
+load_exit:
+        push cx ! push bx
+        mov cx,f_qwrite ! mov dx,offset mxloadqpb
+        call mpmif ! pop bx ! pop cx ! ret
+
+load_giveup1:   jmp load_giveup
+
+load_group:             ;load a group described in ldtab
+;----------
+;       input:  SI = addr of ldtab entry
+;       output: CX = Error Code
+
+                ; see if first part already in DMA
+        mov bx,si
+        mov ax,load_indma
+        mov cx,ldtab_fstrt[bx]
+                ;CX = starting paragraph to transfer
+                ;BX -> ldtab entry
+        cmp cx,load_indma ! jb read_first
+                ;starts at or after the pp. in dma
+            sub cx,load_indma
+            cmp cx,8 ! jae read_first
+                        ;starts in the dma
+                mov dx,8 ! sub dx,cx
+                        ;CX = # of pp. to skip
+                        ;DX = length of remaining buffer
+                cmp dx,ldtab_flen[bx] ! jbe transfer
+                    mov dx,ldtab_flen[bx]
+transfer:       mov si,offset load_dma
+                mov ax,cx ! mov cl,4 ! shl ax,cl
+                add si,ax
+                        ;SI -> beginning of transfer area
+                        ;       in load_dma
+                mov ax,dx ! mov cl,3 ! shl ax,cl
+                mov cx,ax
+                        ;CX = number of words to transfer
+                sub di,di
+                push es ! mov es,ldtab_start[bx]
+                rep movsw ! pop es
+                add ldtab_start[bx],dx
+                sub ldtab_flen[bx],dx ! add ldtab_fstrt[bx],dx
+read_first:
+        cmp ldtab_flen[bx],0 ! jne read_1st
+            sub cx,cx ! ret
+read_1st:
+        cmp ldtab_flen[bx],8 ! jae xfer_direct
+            push bx ! mov dx,offset load_dma
+            mov cx,sysdat
+            call diskread ! pop bx
+            jcxz read_again
+                ret
+read_again: mov ax,ldtab_fstrt[bx]
+            mov load_indma,ax
+            mov si,bx ! jmp load_group
+xfer_direct:
+        push bx ! sub dx,dx
+        mov cx,ldtab_start[bx]
+        test ldtab_attrib[bx],mf_noload         ; Test if shared code
+        jnz xfer2
+        call diskread ! pop bx
+        jcxz xfer_1
+            ret
+xfer_1: add ldtab_start[bx],8
+        add ldtab_fstrt[bx],8
+        sub ldtab_flen[bx],8
+        jmps read_first
+;
+xfer2:  call skip_code_in_file                  ; Do not reload code
+        pop bx ! jmps read_first
+;
+
+diskread:
+;       input:  DX = dma offset
+;               CX = dma segment
+
+        push es ! xchg dx,cx ! push cx
+        mov cx,f_setdmab ! call mpmif
+
+        pop dx ! mov cx,f_setdma
+        call mpmif ! pop es
+
+        mov cx,f_freadseq ! mov dx,load_fcb
+        push ds ! mov ds,u_wrkseg
+        push es ! call mpmif ! pop es ! pop ds
+
+        sub cx,cx
+        cmp bl,0ffh ! jne dr_ret
+            mov cx,e_bad_read ! mov bx,0ffffh ! ret
+dr_ret: mov bx,rlr
+        test p_flag[bx],pf_ctlc ! jz dr_r1
+            mov cx,e_abort ! mov bx,0ffffh
+dr_r1:  ret
+;
+shared_code_load:
+;
+;        Allocate memory for shared code.
+;
+         pushf ! cli            ; Disable while examining thread list
+         push bx ! push dx ! push cx ! push si
+         mov ax,load_pd
+         call find_another_PD_with_same_name ! jnz no_other_PD
+;
+;            Another PD with same name exists:
+;
+             call test_share ! jnz no_other_PD  ;Test if found PD
+                                                ; has shared code
+;
+;                Another PD with same name and with shared
+;                code exists.
+;                DI = PD address
+;                BX = start of shared code memory descriptor
+;
+                 push ds
+                 mov bx,ms_start[bx]            ; Do a "share code" call
+                 push bx
+                 push load_pd                   ; Requestor PD
+                 push di                        ; Owner PD
+                 push ss ! pop ds
+                 mov dx,sp ! mov cx,f_share
+                 call mpmif
+                 pop di ! pop bx ! pop bx ! pop ds
+                 mov ax,cx                      ; Return code
+                 pop si
+                 mov ldtab_start[si],bx
+                 mov ldtab_id[si],bx
+                 or ldtab_attrib[si],mf_noload  ; Set NO reLOAD flag
+share_code_exit:
+         pop cx ! pop dx ! pop bx ! popf
+         or ax,ax ! ret
+;
+no_other_PD: mov cx,f_malloc                    ; Allocate memory
+             mov dx,si
+             call mpmif
+             pop si
+             mov ax,ldtab_start[si]
+             mov ldtab_id[si],ax
+             mov ax,cx                          ; Return code
+             jmps share_code_exit
+;
+find_another_PD_with_same_name:
+;
+;        AX = address of new program PD
+;
+         push si ! push bx ! push es
+         push ds ! pop es
+         mov si,ax ! lea si,p_name[si]
+         mov bx,thrdrt                          ; Thread list root
+pd_same_nxt:
+         lea di,p_name[bx]
+         mov cx,8                               ; Length of PD name
+repz     cmps al,al
+         jz identical_PD_found
+             mov bx,p_thread[bx]                ; Try next
+             or bx,bx
+             jnz pd_same_nxt
+;
+         mov al,0ffh                            ; Not found
+         jmps pd_same_ex
+;
+identical_PD_found:
+         mov di,bx ! mov al,0
+pd_same_ex:
+         pop es ! pop bx ! pop si
+         or al,al ! ret
+;
+test_share:
+;
+;        Test if PD with same name has shared code.
+;        DI = Process descriptor
+;
+         mov al,0                               ; Return status
+         mov bx,p_mem[di]
+test_share_retry:
+         or bx,bx ! jz test_shar_err            ; Jump if NO shared code
+             cmp ms_flags[bx],mf_load+mf_code+mf_share
+             jz test_shar_OK
+             mov bx,ms_link[bx]
+             jmps test_share_retry
+test_shar_err:
+         mov al,0ffh
+test_shar_OK:
+         or al,al ! ret
+;
+skip_code_in_file:
+;
+;        Shared code. Skip code in file.
+;
+         mov cx,f_setrndrec             ; Compute random record
+         call load_bdos
+         mov ax,ldtab_flen[bx]
+         push ax ! sub dx,dx
+         mov cx,8 ! div cx
+         neg dx ! add dx,8 ! and dx,7
+         mov ldtab_flen[bx],dx
+;
+         push si ! push ds              ; Advance beyond shared
+         mov si,load_fcb                ; code area in file
+         mov ds,u_wrkseg
+         add fcb_ranrec[si],ax
+         pop ds ! pop si
+
+         pop ax
+         add ldtab_start[bx],ax         ; Advance load table pointers
+         add ldtab_fstrt[bx],ax
+         add ax,ldtab_flen[bx] ! mov load_indma,ax
+
+         push es ! push bx              ; Read first NON-CODE record
+         mov dx,sysdat
+         mov cx,f_setdmab
+         call mpmif
+         mov dx,offset load_dma
+         mov cx,f_setdma
+         call mpmif
+         pop bx ! pop es
+         mov cx,f_freadrdm
+         call load_bdos
+         mov dx,ldtab_flen[bx]
+         mov ldtab_flen[bx],0
+         or dx,dx ! jz scif1
+             push bx
+             mov cx,sysdat ! mov dx,offset load_dma
+             call diskread ! pop bx
+scif1:   ret
+;
+load_bdos:
+;        Perform BDOS call.
+;        CX = funcion code.
+;
+         push es ! push ds ! push bx
+         mov dx,load_fcb ! mov ds,u_wrkseg
+         call mpmif
+         mov cx,bx                      ; Return code
+         pop bx ! pop ds ! pop es
+         ret
+;
+end
+

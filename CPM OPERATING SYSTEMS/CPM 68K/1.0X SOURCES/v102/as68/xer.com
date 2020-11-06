@@ -1,0 +1,13 @@
+$ xer AS68INIT.LIS
+$ xer DIR.LIS
+$ xer EXPR.LIS
+$ xer MAIN.LIS
+$ xer MISC.LIS
+$ xer PASS1A.LIS
+$ xer PASS2.LIS
+$ xer SYMT.LIS
+$ xer VERSION.LIS
+$ xer AS68.LST
+$ xer COUT.LST
+$ xer CTYPE.LST
+$ xer MACHINE.LST

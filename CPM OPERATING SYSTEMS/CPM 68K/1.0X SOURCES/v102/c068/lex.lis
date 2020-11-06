@@ -1,0 +1,842 @@
+1File: LEX.C                                                               Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "parser.h"
+     9   #define	SOI	'\01'
+    10   #define	STEL	HSIZE/2
+    11    
+    12   	/*
+    13   	 * the following are the cases within gettok, all other cases are
+    14   	 * single character unambiguous tokens.  Note that we need to take
+    15   	 * special care not to interfere with the single character unambiguous
+    16   	 * operators, this is why there is a gap between WHITSP and EXCLAM.
+    17   	 */
+    18   #define	BADC	0					/*bad character*/
+    19   #define	WHITSP	101					/*white space*/
+    20   #define	EXCLAM	102					/*exlamation point*/
+    21   #define	DQUOTE	103					/*double quote*/
+    22   #define	PERCNT	104					/*percent sign*/
+    23   #define	AMPER	105					/*ampersand*/
+    24   #define	SQUOTE	106					/*single quote*/
+    25   #define	STAR	107					/*asterisk or mult sign*/
+    26   #define	PLUS	108					/*plus sign*/
+    27   #define	MINUS	109					/*minus sign*/
+    28   #define	SLASH	110					/*divide sign*/
+    29   #define	DIGIT	111					/*0..9*/
+    30   #define	LCAROT	112					/*less than sign*/
+    31   #define	EQUAL	113					/*equals sign*/
+    32   #define	RCAROT	114					/*greater than*/
+    33   #define	ALPHA	115					/*a..z,A..Z and underbar*/
+    34   #define	CAROT	116					/*^*/
+    35   #define	BAR		117					/*vertical bar*/
+    36    
+    37   char ctype[] {
+    38   	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,
+    39   	BADC,	WHITSP,	WHITSP,	WHITSP,	WHITSP,	WHITSP,	BADC,	BADC,
+    40   	BADC,	BADC,	BADC,	BADC,	WHITSP,	BADC,	BADC,	BADC,
+    41   	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,	BADC,
+    42   	WHITSP,	EXCLAM,	DQUOTE,	BADC,	BADC,	PERCNT,	AMPER,	SQUOTE,
+    43   	LPAREN,	RPAREN,	STAR,	PLUS,	COMMA,	MINUS,	PERIOD,	SLASH,
+    44   	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,
+    45   	DIGIT,	DIGIT,	COLON,	SEMI,	LCAROT,	EQUAL,	RCAROT,	QMARK,
+    46   	BADC,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    47   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    48   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    49   	ALPHA,	ALPHA,	ALPHA,	LBRACK,	BADC,	RBRACK,	CAROT,	ALPHA,
+    50   	BADC,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    51   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    52   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    53   	ALPHA,	ALPHA,	ALPHA,	LCURBR,	BAR,	RCURBR,	COMPL,	BADC
+    54   };
+    55    
+    56   	/*key word table*/
+    57   struct resword {
+    58   	char *r_name;
+    59   	int	r_value;
+1File: LEX.C                                                               Page       2
+    60   } reswords[] {
+    61   	"auto",		R_AUTO,
+    62   	"break",	R_BREAK,
+    63   	"case",		R_CASE,
+    64   	"char",		R_CHAR,
+    65   	"continue",	R_CONTINUE,
+    66   	"do",		R_DO,
+    67   	"default",	R_DEFAULT,
+    68   	"double",	R_DOUBLE,
+    69   	"goto",		R_GOTO,
+    70   	"else",		R_ELSE,
+    71   	"extern",	R_EXTERNAL,
+    72   	"float",	R_FLOAT,
+    73   	"for",		R_FOR,
+    74   	"if",		R_IF,
+    75   	"int",		R_INT,
+    76   	"long",		R_LONG,
+    77   	"register",	R_REGISTER,
+    78   	"return",	R_RETURN,
+    79   	"short",	R_SHORT,
+    80   	"sizeof",	R_SIZEOF,
+    81   	"static",	R_STATIC,
+    82   	"struct",	R_STRUCT,
+    83   	"switch",	R_SWITCH,
+    84   	"typedef",	R_TYPEDEF,
+    85   	"union",	R_UNION,
+    86   	"unsigned",	R_UNSIGNED,
+    87   	"while",	R_WHILE,
+    88   	0,
+    89   };
+    90    
+    91   #define	SELFMOD		0200
+    92   #define	ASMASK		0177
+    93    
+    94   	/*
+    95   	 * this table is used to check for an operator after an equals sign.
+    96   	 * note that =-, =* and =& may all have an ambiguous meaning if not
+    97   	 * followed by a space, this is checked for in gettok.
+    98   	 */
+    99   char asmap[] {
+   100   	EQUALS,							/*==*/
+   101   	EQADD,							/*=+*/
+   102   	EQSUB|SELFMOD,					/*=-*/
+   103   	EQMULT|SELFMOD,					/*=**/
+   104   	EQDIV,							/*=/*/
+   105   	EQOR,							/*=|*/
+   106   	EQAND|SELFMOD,					/*=&*/
+   107   	EQXOR,							/*=^*/
+   108   	EQMOD,							/*=%*/
+   109   };
+   110    
+   111   char escmap[] "\b\n\r\t";
+   112   int pbchar;							/*pushed back character*/
+   113   struct symbol *symtab[HSIZE];		/*hash table*/
+   114   struct symbol *symbols;			/*pointer to next avail symbol buf*/
+   115   int nsyms;							/*number of symbol bufs in memory*/
+   116    
+   117   /*
+   118    * getdec - get a decimal number
+1File: LEX.C                                                               Page       3
+   119    *		Uses Horner's method to get decimal number.  Note that
+   120    *		multiplication by 10 is cleverly programmed as two shifts and two
+   121    *		adds.  This is because long multiplies are painful on both the
+   122    *		PDP-11 and 68000.
+   123    */
+   124   long getdec()						/* returns number*/
+   125   {
+   126   	register long value;
+   127   	register char c;
+   128    
+   129   	for( value = 0; (c=ngetch()) >= '0' && c <= '9'; ) {
+   130   		value =<< 1;				/*value = value*2*/
+   131   		value =+ value << 2;		/*value*2 + value*8 = value*10*/
+   132   		value =+ (c-'0');
+   133   	}
+   134   	putback(c);
+   135   	return(value);
+   136   }
+   137    
+   138   #define BIAS	127L
+   139   #define EXPSIZ	4
+   140   #define FRACSIZ	20
+   141    
+   142   long toieee();
+   143   long toffp();
+   144   float power10();
+   145    
+   146   /*
+   147    *	getfp - get a floating point constant
+   148    *		we've already gotten the significant digits, now build a
+   149    *		floating point number with possible decimal digits and an
+   150    *		exponent, yields an ieee formated floating point number,
+   151    *		unless the fflag is on, then a ffp constant is generated.
+   152    */
+   153   long
+   154   getfp(significant)
+   155   long significant;
+   156   {
+   157   	register char c;
+   158   	register long places;	/* decimal places */
+   159   	int esign;
+   160   	float exp, fraction, fp;
+   161    
+   162   	places = 0L; esign = 0; fraction = significant; exp = 0.0;
+   163   	if ((c = ngetch()) == '.')	/* get decimal places */
+   164   		for( ; (c=ngetch()) >= '0' && c <= '9';) {
+   165   			fraction = fraction * 10.0;
+   166   			fraction = fraction + (c - '0');
+   167   			places++;
+   168   		}
+   169    
+   170   	if (c=='e' || c=='E') {	/* exponent exists */
+   171   		esign = (peekis('-')) ? 1 : (peekis('+')) ? 0 : 0;
+   172   		for( ; (c=ngetch()) >= '0' && c <= '9'; ) {
+   173   			exp = exp * 10.0;
+   174   			exp = exp + (c - '0');
+   175   		}
+   176   	}
+   177    
+1File: LEX.C                                                               Page       4
+   178   	putback(c);
+   179   	if (esign)
+   180   		exp = -exp;
+   181   	places = exp - places;
+   182   	fp = fraction * power10(places);
+   183   	if (fflag)
+   184   		return( toffp(fp) );
+   185   	else
+   186   		return ( toieee(fp) );
+   187   }
+   188    
+   189   float
+   190   power10(pwr)			/* used by getfp, 10^pwr */
+   191   long pwr;
+   192   {
+   193   	float f;
+   194    
+   195   	if (pwr < 0L)	/* negative power */
+   196   		for (f = 1.0; pwr < 0L; pwr++)
+   197   			f = f / 10.0;
+   198   	else			/* positive power */
+   199   		for (f = 1.0; pwr > 0L; pwr--)
+   200   			f = f * 10.0;
+   201   	return(f);
+   202   }
+   203    
+   204   long
+   205   toffp(f)		/* converts current machine float to ffp rep */
+   206   float f;
+   207   {
+   208   	register long exp;
+   209   	register int sign, count;
+   210   	long l;
+   211    
+   212   	if (f == 0.0)
+   213   		return(0L);
+   214   	if (f < 0.0) {
+   215   		sign = 1;
+   216   		f = -f;
+   217   	}
+   218   	else
+   219   		sign = 0;
+   220   	exp = 0L;
+   221   	for( ; f >= 1.0; f = f / 2.0)
+   222   		exp++;
+   223   	for( ; f < 0.5; f = f * 2.0)
+   224   		exp--;
+   225   	f = f * 16777216.0;	/* 2 ^ 24 */
+   226   	l = f;
+   227   	l =<< 8;
+   228   	if (sign)
+   229   		l =| 0x80;
+   230   	exp =+ 0x40;
+   231   	l =| (exp & 0x7f);
+   232   	return(l);
+   233   }
+   234    
+   235   long
+   236   toieee(f)		/* converts current machine float to ieee rep */
+1File: LEX.C                                                               Page       5
+   237   float f;
+   238   {
+   239   	register long exp;
+   240   	register int sign, count;
+   241   	long l;
+   242    
+   243   	if (f == 0.0)
+   244   		return(0L);
+   245   	if (f < 0.0) {
+   246   		sign = 1;
+   247   		f = -f;
+   248   	}
+   249   	else
+   250   		sign = 0;
+   251   	exp = 0L;
+   252   	for( ; f >= 2.0; f = f / 2.0)
+   253   		exp++;
+   254   	for( ; f < 1.0; f = f * 2.0)
+   255   		exp--;
+   256   	f = f - 1.0;
+   257   	f = f * 8388608.0;	/* 2 ^ 23 */
+   258   	l = f;
+   259   	if (sign)
+   260   		l =| 0x80000000;
+   261   	exp = (exp + BIAS)<<23;
+   262   	l =| (exp & 0x7f800000);
+   263   	return(l);
+   264   }
+   265    
+   266   #define toupper(c)	((c) & ~32)
+   267   /* gethex - get an hexidecimal number*/
+   268   /*		Uses Horner's method to get hexidecimal number*/
+   269   long gethex()						/* returns number*/
+   270   {
+   271   	register long value;
+   272   	register char c, ch;
+   273    
+   274   	value = 0;
+   275   	while( 1 ) {
+   276   		if( (c=ngetch()) >= '0' && c <= '9' )
+   277   			c =- '0';
+   278   		else if((ch=toupper(c)) >= 'A' && ch <= 'F' )	/* [vlh] */
+   279   			c = ch - ('A'-10);
+   280   		else
+   281   			break;
+   282   		value = (value<<4) + c;
+   283   	}
+   284   	putback(c);
+   285   	return(value);
+   286   }
+   287    
+   288   /* getoct - get an octal number*/
+   289   /*		Uses Horner's method to get octal number*/
+   290   long getoct(flag)					/* returns number*/
+   291   int flag;							/* string flag 1=>in string, else 0*/
+   292   {
+   293   	register long value;
+   294   	register char c;
+   295   	register int count;
+1File: LEX.C                                                               Page       6
+   296    
+   297   	count = 0;
+   298   	for( value = 0; (c=ngetch()) >= '0' && c <= '7'; ) {
+   299   		if( flag && ++count > 3 )
+   300   			break;
+   301   		value = (value<<3) + (c-'0');
+   302   	}
+   303   	putback(c);
+   304   	return(value);
+   305   }
+   306    
+   307   /*
+   308    * gettok - get next token from input
+   309    *		Checks pushed-packed token buffer, supresses / * * / comments,
+   310    *		folds multiple character special symbols into single word token.
+   311    */
+   312   gettok()							/* returns token type*/
+   313   {
+   314   	register int c, nextc, i;
+   315   	register char *p;
+   316   	register long value;
+   317   	char sym[SSIZE];
+   318    
+   319   	if( peektok ) {
+   320   		i = peektok;
+   321   		peektok = 0;
+   322   		return(i);
+   323   	}
+   324   	while( (c=ngetch()) != EOF ) {
+   325   		switch(ctype[c]) {
+   326    
+   327   		case BADC:					/*bad character*/
+   328   			error("invalid character");
+   329   			break;
+   330    
+   331   		case SEMI:
+   332   			cvalue = 0;	/* [vlh] not reserved word... */
+   333   		default:
+   334   			return( ctype[c] );
+   335    
+   336   		case WHITSP:				/*skip all white space*/
+   337   			break;
+   338    
+   339   		case EXCLAM:				/*!= or !*/
+   340   			return( peekis('=') ? NEQUALS : NOT );
+   341    
+   342   		case DQUOTE:				/*quoted string*/
+   343   			getstr(cstr,STRSIZE,'"');
+   344   			cvalue = nextlabel++;
+   345   			return(STRING);
+   346    
+   347   		case PERCNT:				/*%= or %*/
+   348   			return( peekis('=') ? EQMOD : MOD );
+   349    
+   350   		case AMPER:					/*&=, && or &*/
+   351   			return( peekis('=') ? EQAND : peekis('&') ? LAND : AND );
+   352    
+   353   		case SQUOTE:				/*character constant*/
+   354   			getstr(cstr,STRSIZE,'\'');
+1File: LEX.C                                                               Page       7
+   355   			if( cstrsize > CHRSPWORD+1 ) {
+   356   				error("character constant too long");
+   357   				cstrsize = CHRSPWORD + 1;
+   358   			}
+   359   			cvalue = 0;
+   360   			for( p = cstr; --cstrsize > 0; ) {
+   361   				cvalue =<< BITSPCHAR;
+   362   				cvalue =| (*p++ & 0377);
+   363   			}
+   364   			return(CINT);
+   365    
+   366   		case STAR:					/**= or **/
+   367   			return( peekis('=') ? EQMULT : MULT );
+   368    
+   369   		case PLUS:					/*+=, ++ or +*/
+   370   			return( peekis('=') ? EQADD : peekis('+') ? PREINC : ADD );
+   371    
+   372   		case MINUS:					/*-=, --, -> or -*/
+   373   			return( peekis('=') ? EQSUB : peekis('-') ? PREDEC :
+   374   					peekis('>') ? APTR : SUB );
+   375    
+   376   		case SLASH:					/*/ *..* /, //..., /= or /*/
+   377   			if( peekis('*') ) {
+   378   				while( (c=ngetch()) != EOF )
+   379   					if( c == '*' && peekis('/') )
+   380   						break;
+   381   				if( c == EOF ) {
+   382   					error("no */ before EOF");
+   383   					return(EOF);
+   384   				}
+   385   				continue;
+   386   			}
+   387   			if( peekis('/') ) {
+   388   				while( (c=ngetch()) != EOF && c != EOLC )
+   389   					;
+   390   				continue;
+   391   			}
+   392   			return( peekis('=') ? EQDIV : DIV );
+   393    
+   394   		case DIGIT:					/*number constant (long or reg)*/
+   395   			i = 0;					/*flags if long constant*/
+   396   			if( c != '0' ) {
+   397   				putback(c);
+   398   dofp:
+   399   				value = getdec();
+   400   				if ((c=ngetch())=='.' || c=='e' || c=='E') { /*[vlh] 3.4 */
+   401   					putback(c);
+   402   					clvalue = getfp(value);
+   403   					return(CFLOAT);
+   404   				}
+   405   				putback(c);
+   406   				if( value > 32767 || value < -32768 )
+   407   					i++;
+   408   			}
+   409   			else if( peekis('x') || peekis('X') ) {
+   410   				value = gethex();
+   411   				if( value < 0 || value >= 0x10000L )
+   412   					i++;
+   413   			}
+1File: LEX.C                                                               Page       8
+   414   			else {
+   415   				if (peekis('.')) {
+   416   					putback('.');
+   417   					goto dofp;
+   418   				}
+   419   				value = getoct(0);
+   420   				if( value < 0 || value >= 0x10000L )
+   421   					i++;
+   422   			}
+   423   			if( peekis('l') || peekis('L') || i ) {
+   424   				clvalue = value;
+   425   				return(CLONG);
+   426   			}
+   427   			cvalue = value;
+   428   			return(CINT);
+   429    
+   430   		case LCAROT:				/*<=, <<, <<= or <*/
+   431   			return( peekis('=') ? LESSEQ : peekis('<') ?
+   432   					(peekis('=') ? EQLSH : LSH) : LESS );
+   433    
+   434   		case EQUAL:					/*==, =<<, =>>, =+, ..., =*/
+   435   			if( peekis('<') ) {
+   436   				if( peekis('<') )
+   437   					return(EQLSH);
+   438   			}
+   439   			else if( peekis('>') ) {
+   440   				if( peekis('>') )
+   441   					return(EQRSH);
+   442   			}
+   443   			else if( (i=index("=+-*/|&^%",(c=ngetch()))) >= 0 ) {
+   444   				i = asmap[i];
+   445   				if( i & SELFMOD ) {
+   446   					if( (nextc=ngetch()) != ' ' )
+   447   						if (!wflag)	/*[vlh] old fashion initialization*/
+   448   							error("=%c assumed",c);
+   449   					putback(nextc);
+   450   				}
+   451   				return( i & ASMASK );
+   452   			}
+   453   			else
+   454   				putback(c);
+   455   			return(ASSIGN);
+   456    
+   457   		case RCAROT:				/*>=, >>, >>= or >*/
+   458   			return( peekis('=') ? GREATEQ : peekis('>') ?
+   459   					(peekis('=') ? EQRSH : RSH) : GREAT );
+   460    
+   461   		case ALPHA:					/*[A-Za-z][A-Za-z0-9]**/
+   462   			p = &sym[0];
+   463   			i = SSIZE;
+   464   			for(; ctype[c] == ALPHA || ctype[c] == DIGIT; c=ngetch(),i-- )
+   465   				if( i > 0 )
+   466   					*p++ = c;
+   467   			if( i > 0 )
+   468   				*p = '\0';
+   469   			putback(c);
+   470   			csp = lookup(sym);
+   471   			if( csp->s_attrib & SRESWORD ) {
+   472   				cvalue = csp->s_offset;
+1File: LEX.C                                                               Page       9
+   473   				return(RESWORD);
+   474   			}
+   475   			smember = 0;
+   476   			return(SYMBOL);
+   477    
+   478   		case CAROT:					/*^= or ^*/
+   479   			return( peekis('=') ? EQXOR : XOR );
+   480    
+   481   		case BAR:					/*|=, || or |*/
+   482   			return( peekis('=') ? EQOR : peekis('|') ? LOR : OR );
+   483    
+   484   		}
+   485   	}
+   486   	return(EOF);
+   487   }
+   488    
+   489   /*
+   490    * peekis - peeks at next character for specific character
+   491    *		Gets next (possibly pushed back) character, if it matches
+   492    *		the given character 1 is returned, otherwise the character
+   493    *		is put back.
+   494    */
+   495   peekis(tc)							/* returns 1 if match, 0 otherwise*/
+   496   int tc;								/* test character*/
+   497   {
+   498   	register int c;
+   499    
+   500   	if( (c=ngetch()) == tc )
+   501   		return(1);
+   502   	putback(c);
+   503   	return(0);
+   504   }
+   505    
+   506   /* ngetch - get a possibly pushed back character*/
+   507   /*		Checks pbchar variable, returns it if non-zero, handles counting*/
+   508   /*		of new lines and whether you are in an include or not.*/
+   509   ngetch()							/* returns character read or EOF*/
+   510   {
+   511   	register int c;
+   512   	register char *ifile;
+   513    
+   514   	if( pbchar ) {
+   515   		c = pbchar;
+   516   		pbchar = 0;
+   517   	}
+   518   	else if( (c=getc(&ibuf)) == EOLC ) {
+   519   		if( inclflag )
+   520   			inclflag = 0;
+   521   		else
+   522   			lineno++;
+   523   	}
+   524   	else if( c == SOI) {	/*[vlh]add incl filename & line # */
+   525   		inclflag++;
+   526   		ifile = &inclfile;
+   527   		while ((c=getc(&ibuf)) != SOI)
+   528   			*ifile++ = c&0377;
+   529   		*ifile = 0;
+   530   		inclline = getdec() & 077777;
+   531   		c = ' ';
+1File: LEX.C                                                               Page      10
+   532   	}
+   533   	else if( c < 0 )
+   534   		c = EOF;
+   535   	return(c);
+   536   }
+   537    
+   538   /*
+   539    * peekc - peek at the next non-whitespace character after token
+   540    *		This allows for the problem of having to look at two tokens
+   541    *		at once.  The second token is always a semi-colon or colon,
+   542    *		so we only look at the single character, rather than going
+   543    *		thru gettok.
+   544    */
+   545   peekc(tc)							/* returns 1 if match, 0 otherwise*/
+   546   int tc;								/* character to look for*/
+   547   {
+   548   	register int c;
+   549    
+   550   	while( ctype[(c=ngetch())] == WHITSP) ;
+   551   	if( c == tc )
+   552   		return(1);
+   553   	putback(c);
+   554   	return(0);
+   555   }
+   556    
+   557   /* putback - puts back a single character*/
+   558   /*		Checks pbchar for error condition.*/
+   559   putback(c)							/* returns - none*/
+   560   int c;
+   561   {
+   562   	if( pbchar )
+   563   		error("too many chars pushed back");
+   564   	else
+   565   		pbchar = c;
+   566   }
+   567    
+   568   /* getstr - get a quoted (single or double) character string*/
+   569   /*		Gets specified number of characters, handling escapes.*/
+   570   getstr(str,nchars,endc)				/* returns - none*/
+   571   char *str;							/* pointer to string buffer*/
+   572   int nchars;							/* max number of characters*/
+   573   char endc;							/* ending string character*/
+   574   {
+   575   	register char *p;
+   576   	register int i;
+   577   	register int c;
+   578   	register int j;
+   579    
+   580   	cstrsize = 1;
+   581   	p = str;
+   582   	for( i = nchars; (c=ngetch()) != endc; i-- ) {
+   583   		if( c == EOF || c == EOLC ) {
+   584   			error("string cannot cross line");
+   585   			break;
+   586   		}
+   587   		if( c == '\\' ) {
+   588   			if( (c=ngetch()) >= '0' && c <= '7' ) {
+   589   				putback(c);
+   590   				if( (c=getoct(1)) < 0 || c > 255 ) {
+1File: LEX.C                                                               Page      11
+   591   					error("bad character constant");
+   592   					continue;
+   593   				}
+   594   			}
+   595   			else if( (j=index("bnrt",c)) >= 0 )
+   596   				c = escmap[j];
+   597   			else if( c == EOLC )	/*escape followed by nl->ignore*/
+   598   				continue;
+   599   		}
+   600   		if( i > 0 ) {				/*room left in string?*/
+   601   			cstrsize++;
+   602   			*p++ = c;
+   603   		}
+   604   		else if( !i )			/*only say error once...*/
+   605   			error("string too long");
+   606   	}
+   607   	if( i <= 0 )				/*string overflow?*/
+   608   		p--;
+   609   	*p = '\0';
+   610   }
+   611    
+   612   /* syminit - initialize the symbol table, install reswords*/
+   613   /*		Goes thru the resword table and installs them into the symbol*/
+   614   /*		table.*/
+   615   syminit()							/* returns - none*/
+   616   {
+   617   	register struct resword *rp;
+   618    
+   619   	for( rp = &reswords[0]; rp->r_name != 0; rp++ )
+   620   		install(rp->r_name,SRESWORD|SDEFINED,rp->r_value);
+   621   }
+   622    
+   623   /* install - install a symbol in the symbol table*/
+   624   /*		Allocates a symbol entry, copies info into it and links it*/
+   625   /*		into the hash table chain.*/
+   626   char *install(sym,attrib,offset)	/* returns pointer to symbol struct*/
+   627   char *sym;							/* symbol to install*/
+   628   int attrib;							/* attribues of symbol*/
+   629   int offset;							/* symbol offset (resword value)*/
+   630   {
+   631   	register struct symbol *sp;
+   632   	register int i;
+   633    
+   634   	while( !(sp=symbols) ) {
+   635   		if( !(sp=sbrk(SYMSIZE)) )
+   636   			ferror("symbol table overflow");
+   637   		for( i = SYMSIZE/(sizeof *symbols); --i >= 0; ) {
+   638   			sp->s_next = symbols;
+   639   			symbols = sp++;
+   640   		}
+   641   	}
+   642   	symbols = sp->s_next;
+   643   	sp->s_attrib = attrib;
+   644   	sp->s_sc = 0; sp->s_type = 0; sp->s_dp = 0; sp->s_ssp = 0;
+   645   	sp->s_offset = offset;
+   646   	sp->s_struc = (instruct) ? strucptr[smember+instruct] : 0;
+   647   	symcopy(sym,sp->s_symbol);			/*copy symbol to symbol struct*/
+   648   	i = symhash(sym,instruct|smember);	/*link into chain list*/
+   649   	sp->s_next = symtab[i];
+1File: LEX.C                                                               Page      12
+   650   	symtab[i] = sp;
+   651   	return(sp);
+   652   }
+   653    
+   654   /* lookup - looks up a symbol in symbol table*/
+   655   /*		Hashes symbol, then goes thru chain, if not found, then*/
+   656   /*		installs the symbol.*/
+   657   char *lookup(sym)					/* returns pointer to symbol buffer*/
+   658   char *sym;							/* pointer to symbol*/
+   659   {
+   660   	register struct symbol *sp, *hold;
+   661   	register char *p;
+   662   	int exact;		/* same name, diff type or offset */
+   663    
+   664   	p = sym;
+   665   	for( sp = symtab[symhash(p,0)]; sp != 0; sp = sp->s_next )
+   666   		if((sp->s_attrib&(SRESWORD|STYPEDEF)) && symequal(p,sp->s_symbol))
+   667   			return(sp);
+   668   	if (!(smember|instruct)) {	/*[vlh]*/
+   669   		for( sp=symtab[symhash(p,0)]; sp!=0; sp=sp->s_next )
+   670   			if( symequal(p,sp->s_symbol) )	return(sp);
+   671   	}
+   672   	else {	/* doing a declaration or an expression */
+   673   		hold = 0; exact = 0;
+   674   		for( sp=symtab[symhash(p,instruct|smember)]; sp!=0; sp=sp->s_next )
+   675   			if( symequal(p,sp->s_symbol) )
+   676   				if (symsame(sp,hold,&exact)) return(sp);
+   677   				else if (!hold && !exact) hold = sp;
+   678   		if (hold && !exact) return(hold);
+   679   	}
+   680   	return(install(p,0,0));
+   681   }
+   682    
+   683   /* freesyms - frees all local symbols at end of function declaration*/
+   684   /*		Searches thru symbol table, deleting all symbols marked as locals*/
+   685   freesyms()							/* returns - none*/
+   686   {
+   687   	register int i, tinfo;
+   688   	register struct symbol *sp, *tp, *nextp, **htp;
+   689    
+   690   	for( htp = &symtab[0], i = HSIZE; --i >= 0; htp++ )
+   691   		for( tp = 0, sp = *htp; sp != 0; sp = nextp ) {
+   692   			nextp = sp->s_next;
+   693   			if( !(sp->s_attrib&SDEFINED) ) {
+   694   				error("undefined label: %.8s",sp->s_symbol);
+   695   				sp->s_attrib =| SDEFINED;
+   696   			}
+   697   			if( sp->s_attrib & (SGLOBAL|SRESWORD) )
+   698   				tp = sp;
+   699   			else {
+   700   				if( tp )
+   701   					tp->s_next = sp->s_next;
+   702   				else
+   703   					*htp = sp->s_next;
+   704   				sp->s_next = symbols;
+   705   				symbols = sp;
+   706   			}
+   707   		}
+   708   }
+1File: LEX.C                                                               Page      13
+   709    
+   710   /* chksyms - checks symbol table for undefined symbols, etc.*/
+   711   /*		Goes thru the symbol table checking for undeclared forward*/
+   712   /*		referenced structures, and outputs local symbols for debugger.*/
+   713   chksyms()							/* returns - none*/
+   714   {
+   715   	register struct symbol **htp, *sp;
+   716   	register int i, sc;
+   717    
+   718   	for( htp = &symtab[0], i = HSIZE; --i >= 0; htp++ )
+   719   		for( sp = *htp; sp != 0; sp = sp->s_next ) {
+   720   			sc = sp->s_sc;
+   721   			if(sc!=0 && sp->s_ssp>=0 && (btype(sp->s_type))==FRSTRUCT) {
+   722   				sp->s_ssp = frstab[sp->s_ssp]->s_ssp;	/* 3.4 ssp>0 */
+   723   				sp->s_type = (sp->s_type&~TYPE) | STRUCT;
+   724   			}
+   725   			if( sc == PDECLIST ) {
+   726   				error("not in parameter list: %.8s",sp->s_symbol);
+   727   				sp->s_sc = AUTO;
+   728   			}
+   729   			if( infunc )
+   730   				outlocal(sp->s_type,sp->s_sc,sp->s_symbol,sp->s_offset);
+   731   		}
+   732   }
+   733    
+   734   /* symhash - compute hash value for symbol*/
+   735   /*		Sums the symbols characters and takes that modulus the hash table*/
+   736   /*		size.*/
+   737   symhash(sym,stel)					/* returns hash value for symbol*/
+   738   char *sym;							/* pointer to symbol*/
+   739   int stel;							/* structure element flag*/
+   740   {
+   741   	register char *p;
+   742   	register int hashval, i;
+   743    
+   744   	hashval = (stel ? STEL : 0 );
+   745   	for( p = sym, i = SSIZE; *p != '\0' && i > 0; i-- )
+   746   		hashval =+ *p++;
+   747   	return( hashval % HSIZE );
+   748   }
+   749    
+   750   /* symequal - check for symbol equality*/
+   751   /*		Does comparison between two symbols.*/
+   752   symequal(sym1,sym2)					/* returns 1 if equal, 0 otherwise*/
+   753   char *sym1;							/* pointer to first symbol*/
+   754   char *sym2;							/* pointer to second symbol*/
+   755   {
+   756   	register char *p, *q;
+   757   	register int i;
+   758    
+   759   	for( p = sym1, q = sym2, i = SSIZE; *p == *q++; )
+   760   		if( *p++ == '\0' || --i == 0 )
+   761   			return(1);
+   762   	return(0);
+   763   }
+   764    
+   765   /* symsame - symbol member same as declared */
+   766   symsame(sp,hold,exact)	/* [vlh] */
+   767   struct symbol *sp, *hold;
+1File: LEX.C                                                               Page      14
+   768   int *exact;
+   769   {
+   770   	if (strucptr[smember+instruct])
+   771   		if (strucptr[smember+instruct]==sp->s_struc) return(1);
+   772   	if (hold)
+   773   		if (sp->s_type != hold->s_type || sp->s_offset != hold->s_offset)
+   774   			*exact = 1;
+   775   	return(0);
+   776   }
+   777    
+   778   /* symcopy - symbol copy*/
+   779   /*		Copies one symbol to another.*/
+   780   symcopy(sym1,sym2)					/* returns - none*/
+   781   char *sym1;							/* pointer to symbol to copy*/
+   782   char *sym2;							/* pointer to area to copy to*/
+   783   {
+   784   	register char *p, *q;
+   785   	register int i;
+   786    
+   787   	for( p = sym1, q = sym2, i = SSIZE; --i >= 0; )
+   788   		*q++ = ( *p ? *p++ : '\0');
+   789   }
+   790    
+   791   /* index - find the index of a character in a string*/
+   792   /*		This is identical to Software Tools index.*/
+   793   index(str,chr)						/* returns index of c in str or -1*/
+   794   char *str;							/* pointer to string to search*/
+   795   char chr;							/* character to search for*/
+   796   {
+   797   	register char *s;
+   798   	register int i;
+   799    
+   800   	for( s = str, i = 0; *s != '\0'; i++ )
+   801   		if( *s++ == chr )
+   802   			return(i);
+   803   	return(-1);
+   804   }
+   805    
+   806   /* next - if next token matches given token, skip and return success*/
+   807   /*		This allows for clean parsing of declarations.*/
+   808   next(tok)							/* returns 1 if matched, 0 otherwise*/
+   809   int tok;
+   810   {
+   811   	register int token;
+   812    
+   813   	if( (token=gettok()) == tok )
+   814   		return(1);
+   815   	peektok = token;
+   816   	return(0);
+   817   }
+   818    
+   819   /* pbtok - put back the given token*/
+   820   /*		This merely sets the peektok variable*/
+   821   pbtok(tok)							/* returns - none*/
+   822   int tok;
+   823   {
+   824   	if( peektok )
+   825   		error("too many tokens pushed back");
+   826   	peektok = tok;
+1File: LEX.C                                                               Page      15
+   827   }

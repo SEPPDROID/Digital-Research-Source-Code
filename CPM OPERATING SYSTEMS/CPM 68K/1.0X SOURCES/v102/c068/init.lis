@@ -1,0 +1,329 @@
+1File: INIT.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /*
+     9   	C68 Parser - include file
+    10   */
+    11   #include "icode.h"
+    12    
+    13   /*symbol attribute fields*/
+    14   #define	SRESWORD	001			/*is symbol a reserved word?*/
+    15   #define	SGLOBAL		002			/*is symbol global?*/
+    16   #define	STYPEDEF	004			/*typedef declaration?*/
+    17   #define	SDEFINED	010			/*symbol defined?*/
+    18    
+    19   	/*reserved words*/
+    20   #define	R_AUTO		1
+    21   #define	R_BREAK		2
+    22   #define	R_CASE		3
+    23   #define	R_CHAR		4
+    24   #define	R_CONTINUE	5
+    25   #define	R_DO		6
+    26   #define	R_DEFAULT	7
+    27   #define	R_DOUBLE	8
+    28   #define	R_GOTO		9
+    29   #define	R_ELSE		10
+    30   #define	R_EXTERNAL	11
+    31   #define	R_FLOAT		12
+    32   #define	R_FOR		13
+    33   #define	R_IF		14
+    34   #define	R_INT		15
+    35   #define	R_LONG		16
+    36   #define	R_REGISTER	17
+    37   #define	R_RETURN	18
+    38   #define	R_SHORT		19
+    39   #define	R_SIZEOF	20
+    40   #define	R_STATIC	21
+    41   #define	R_STRUCT	22
+    42   #define	R_SWITCH	23
+    43   #define	R_TYPEDEF	24
+    44   #define	R_UNION		25
+    45   #define	R_UNSIGNED	26
+    46   #define	R_WHILE		27
+    47    
+    48   	/*
+    49   	 * mixed-mode conversions, entries in 2-d array indexed by:
+    50   	 * (int,unsn,long,doub,ptr)
+    51   	 */
+    52   #define	INT_CHAR		1
+    53   #define	UNSN_CHAR		1
+    54   #define	LONG_CHAR		1
+    55   #define DOUB_CHAR		1
+    56   #define PTR_CHAR		1
+    57   #define	INT_UNSN		0		/*no conversion is generated*/
+    58   #define	INT_LONG		2
+    59   #define	INT_DOUB		3
+1File: INIT.C                                                              Page       2
+    60   #define	INT_PTR			4
+    61   #define	UNSN_INT		0		/*no conversion is generated*/
+    62   #define	UNSN_LONG		6
+    63   #define	UNSN_DOUB		7
+    64   #define	UNSN_PTR		8
+    65   #define	LONG_INT		9
+    66   #define	LONG_UNSN		10
+    67   #define	LONG_DOUB		11
+    68   #define	LONG_PTR		12
+    69   #define	DOUB_INT		13
+    70   #define	DOUB_UNSN		14
+    71   #define	DOUB_LONG		15
+    72   #define	PTR_INT			16
+    73   #define	PTR_UNSN		17
+    74   #define	PTR_LONG		18
+    75   #define	PTR_PTR			19
+    76   #define	BADCONV			20
+    77    
+    78   	/* miscellaneous constants */
+    79   #define	OPSSIZE		40			/*operator stack size*/
+    80   #define	OPDSIZE		80			/*operand stack size*/
+    81   #define	HSIZE		517			/*hash table size, 3.4 made prime */
+    82   #define	SYMSIZE		1024		/*size to alloc for symbol structures*/
+    83   #define	SWSIZE		256			/*max no. of cases in a switch*/
+    84   #define	DSIZE		1000		/*dimension table size*/
+    85   #define	BITSPWORD	16			/*bits per word*/
+    86   #define AREGLO		010			/*A reg flag*/
+    87   #define HICREG		2			/*highest reg # used for code generation*/
+    88   #define	BITSPCHAR	8			/*bits per char*/
+    89   #define	CHRSPWORD	2			/*chars per word*/
+    90   #define	STRSIZE		300			/*max string length*/
+    91   #define	NFARGS		40			/*max no. of args to function*/
+    92   #define	NFRSTR		20			/*max no. of forward ref struct proto*/
+    93    
+    94   	/*symbol table node*/
+    95   struct symbol {
+    96   	char s_attrib;			/* defined, resword, global, typedef */
+    97   	char s_sc;				/* auto, static, external, register */
+    98   	int s_type;				/* 4bits specified, 2 bit fields for ptr... */
+    99   	int s_dp;				/* index into dimension table */
+   100   	int s_ssp;				/* dimension table/function arg table */
+   101   	int s_offset;			/* offset inside of structure */
+   102   	char s_symbol[SSIZE];	/* symbol identifier, to SSIZE chars */
+   103   	struct symbol *s_struc;	/* if struct, ptr to parent (sys III) */
+   104   	struct symbol *s_next;	/* next symbol table entry */
+   105   };
+   106    
+   107   	/*expression tree operator node*/
+   108   struct tnode {
+   109   	int t_op;
+   110   	int t_type;
+   111   	int t_dp;
+   112   	int t_ssp;
+   113   	struct tnode *t_left;
+   114   	struct tnode *t_right;
+   115   };
+   116    
+   117   	/*expression tree node for symbol - only keeps location*/
+   118   struct symnode {
+1File: INIT.C                                                              Page       3
+   119   	int t_op;
+   120   	int t_type;					/*data type of symbol*/
+   121   	int t_dp;					/*dimension pointer of symbol*/
+   122   	int t_ssp;					/*structure size index to dtab*/
+   123   	int t_sc;					/*storage class of symbol*/
+   124   	int t_offset;				/*offset of symbol*/
+   125   	int t_label;
+   126   };
+   127    
+   128   	/*expressioon tree node for external symbol - need to keep name*/
+   129   struct extnode {
+   130   	int t_op;
+   131   	int t_type;
+   132   	int t_dp;
+   133   	int t_ssp;
+   134   	int t_sc;
+   135   	int t_offset;
+   136   	int t_reg;
+   137   	int t_symbol[SSIZE];		/*symbol name*/
+   138   };
+   139    
+   140   	/*expression tree node for integer constant*/
+   141   struct conode {
+   142   	int t_op;
+   143   	int t_type;
+   144   	int t_dp;
+   145   	int t_ssp;
+   146   	int t_value;				/*constant value*/
+   147   };
+   148    
+   149   struct lconode {
+   150   	int t_op;
+   151   	int t_type;
+   152   	int t_dp;
+   153   	int t_ssp;
+   154   	long t_lvalue;				/*constant value*/
+   155   };
+   156    
+   157   struct swtch {
+   158   	int sw_label;
+   159   	int sw_value;
+   160   } swtab[SWSIZE]=0;
+   161    
+   162   	/*operator and operand stack used by expr*/
+   163   struct ops {					/*operator stack*/
+   164   	int o_op;					/*operator*/
+   165   	int o_pri;					/*priority*/
+   166   } opstack[OPSSIZE]=0, *opp=0;
+   167    
+   168   char *opdstack[OPDSIZE]=0;		/*operand stack*/
+   169   char **opdp=0;					/*operand stack pointer*/
+   170   char *opap=0;						/*ptr to next available loc in exprarea*/
+   171   struct tnode *frp=0;				/*pointer to function return info node*/
+   172   int cswp=0;						/*current low switch table index*/
+   173   int clabel=0;						/*continue label*/
+   174   int blabel=0;						/*break label*/
+   175   int rlabel=0;						/*return label*/
+   176   int dlabel=0;						/*default label*/
+   177   int	lineno=0;					/*current line number of input*/
+1File: INIT.C                                                              Page       4
+   178   int	errcnt=0;						/*count of errors*/
+   179   int inclflag=0;					/*in include file, don't incr line #'s*/
+   180   int inclline=0;					/*[vlh]line# in incl file for err rpting*/
+   181   char inclfile[13]=0;				/*[vlh]include filename for err rpting*/
+   182   int equalstop=0;				/*stop lex at '=', used for external init*/
+   183   int commastop=0;				/*stop parse @ comma(used for const expr)*/
+   184   int colonstop=0;				/*stop parse @ colon(used for case value)*/
+   185   int instruct=0;					/*set when in structure declaration*/
+   186   int smember=0;					/*set when seen . or ->*/
+   187   int infunc=0;						/*set when in function body*/
+   188   int tdflag=0;						/*declaration is a typedef proto*/
+   189   char *tdp=0;						/*points to typedef prototype*/
+   190   int localsize=0;					/*length of local variables*/
+   191   int naregs=0;						/*keeps track of ptr registers alloc'd*/
+   192   int	ndregs=0;						/*keep track of data registers alloc'd*/
+   193   int loadreg=0;					/*need to load registers...*/
+   194   int	boffset=0;					/*current bit offset in structure*/
+   195   int eflag=0;						/*[vlh] 3.4 IEEE floats */
+   196   int fflag=0;						/*[vlh] 3.4 FFP floats */
+   197   int xflag=0;						/*translate int's to long's*/
+   198   int wflag=0;						/*[vlh] don't generate warning mesgs*/
+   199   int reducep=0;					/*[vlh] if(procid); reduction*/
+   200   int peektok=0;					/*peeked at token*/
+   201    
+   202   	/*dimension table*/
+   203   long dtab[DSIZE]=0;				/* [vlh] 3.4 int => long */
+   204   int cdp=0;						/*next entry in dtab to alloc*/
+   205    
+   206   	/*lexical analyzer values*/
+   207   int cvalue=0;						/*current token value if keyword or CINT*/
+   208   int	cstrsize=0;					/*current string size*/
+   209   long clvalue=0;					/*current token value if long constant*/
+   210   struct symbol *csp=0;				/*current token symbol ptr if SYMBOL*/
+   211   char cstr[STRSIZE]=0;				/*current token value if CSTRING*/
+   212   struct symbol *dsp=0;				/*declarator symbol pointer*/
+   213    
+   214   	/* -1 -> not instruct, 0 -> unnamed struct */
+   215   struct symbol *strucptr[10]=0;	/*[vlh] ptrs to struc symbols*/
+   216    
+   217   	/*function argument table, used to collect function parameters*/
+   218   struct farg {
+   219   	struct symbol *f_sp;
+   220   	int f_offset;
+   221   } fargtab[NFARGS]=0;
+   222    
+   223   	/*forward referenced structure prototype names*/
+   224   struct symbol *frstab[NFRSTR]=0;
+   225   int frstp=0;
+   226    
+   227   	/*output buffers for intermediate code and strings*/
+   228   struct io_buf obuf=0, sbuf=0, ibuf=0, *obp=0;
+   229    
+   230   #define	stypedef(sp)	(sp->s_attrib&STYPEDEF)
+   231   #define	walign(add)	((add+1)&(~1))
+   232   #define	array(type)		((type&SUPTYP)==ARRAY)
+   233   #define	function(type)	((type&SUPTYP)==FUNCTION)
+   234   #define	pointer(type)	((type&SUPTYP)==POINTER)
+   235   #define	notarray(type)		((type&SUPTYP)!=ARRAY)
+   236   #define	notfunction(type)	((type&SUPTYP)!=FUNCTION)
+1File: INIT.C                                                              Page       5
+   237   #define	notpointer(type)	((type&SUPTYP)!=POINTER)
+   238   #define	btype(type)		(type&TYPE)
+   239   #define	suptype(type)	(type&SUPTYP)
+   240   #define	alltype(type)	(type&(SUPTYP|TYPE))
+   241   #define	asgop(op)		((opinfo[op]&OPASSIGN)!=0)
+   242   #define	relop(op)		((opinfo[op]&OPREL)!=0)
+   243   #define	lintegral(op)	((opinfo[op]&OPLWORD)!=0)
+   244   #define	rintegral(op)	((opinfo[op]&OPRWORD)!=0)
+   245   #define	rasop(op)		((opinfo[op]&OPRAS)!=0)
+   246   #define	binop(op)		((opinfo[op]&OPBIN)!=0)
+   247   #define	unaryop(op)		((opinfo[op]&OPBIN)==0)
+   248   #define	leaf(op)		((opinfo[op]&OPTERM)!=0)
+   249   #define	lvalop(op)		((opinfo[op]&OPLVAL)!=0)
+   250   #define	oppriority(op)	(opinfo[op]&OPPRI)
+   251   #define	makeiop(op)		(op|(0254<<8))
+   252   	/* checks for symbol with structure element storage class */
+   253   #define isstel(tp)	(tp->t_op==SYMBOL && (sesc(tp)))
+   254   #define sesc(t)		(t->t_sc==STELCL||t->t_sc==UNELCL||t->t_sc==BFIELDCL)
+   255   	/* peek at next token, if not read token put back, else delete */
+   256   	/* 1 if matched, 0 otherwise */
+   257   #define peek(tok)	( (peektok=gettok()) == tok )
+   258    
+   259   #define outcommon(sym,size)	printf("\t.comm _%.8s,%ld\n",sym,size)
+   260   #define outgoto(lab)		if( lab > 0 ) printf("\tbra L%d\n",lab)
+   261   	/* change to text segment */
+   262   #define outtext()		printf("\t.text\n")
+   263   	/* change segment to bss */
+   264   #define outbss()		printf("\t.bss\n")
+   265   	/* output global symbol references */
+   266   #define outextdef(sym)	printf("\t.globl _%.8s\n",sym)
+   267   	/* outputs reserved memory [vlh] 3.4 %d => %ld */
+   268   #define outresmem(size)	printf("\t.ds.b %ld\n",size)
+   269   	/* output padding for word alignments */
+   270   #define outpad()		printf("\t.even\n")
+   271   	/* output long constant to assembler */
+   272   #define outlcon(val)			printf("\t.dc.l %d\n",val)
+   273   	/* output label constant */
+   274   #define outclab(lab)			printf("\t.dc.l L%d\n",lab)
+   275   	/* output a label */
+   276   #define outlab(lab)				printf("\tL%d:",lab)
+   277   	/* output function label */
+   278   #define outflab(sym)			printf("\t_%.8s:\n\t~~%.8s:\n",sym,sym)
+   279   	/* output data label */
+   280   #define outdlab(sym)			printf("\t_%.8s:\n",sym)
+   281    
+   282   	/*functions returning pointers*/
+   283   char *expr();
+   284   char *talloc();
+   285   char *tnalloc();
+   286   char *enalloc();
+   287   char *snalloc();
+   288   char *cnalloc();
+   289   char *lcnalloc();
+   290   char *fpcnalloc();
+   291   char *popopd();
+   292   char *cvopgen();
+   293   char *arrayref();
+   294   char *funcref();
+   295   char *install();
+1File: INIT.C                                                              Page       6
+   296   char *lookup();
+   297   char *balpar();
+   298   char *sbrk();
+   299    
+   300   long initlist();
+   301   long dsize();
+   302   long psize();
+   303   long dodecl();
+   304   long dlist();
+   305   long getdec();
+   306   long gethex();
+   307   long getoct();
+   308   long getfp();
+   309   long toieee();
+   310   long toffp();
+   311    
+   312   int inittype=0;
+   313   int strassign=0;
+   314   int begseq=0;
+   315    
+   316   #define	EXPSIZE		1024
+   317   int exprarea[EXPSIZE]=0;
+   318    
+   319   int opdontop=0;
+   320   int pbchar=0;
+   321    
+   322   struct symbol *symbols=0;
+   323   struct symbol *symtab[HSIZE]=0;

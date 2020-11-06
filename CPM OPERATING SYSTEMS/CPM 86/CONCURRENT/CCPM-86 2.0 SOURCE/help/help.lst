@@ -1,0 +1,1450 @@
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE HELP
+OBJECT MODULE PLACED IN HELP.OBJ
+COMPILER INVOKED BY:  :F0: HELP.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+              $title ('Help Utility Version 1.1')
+   1          help:
+              do;
+
+              /*
+                Copyright (C) 1983
+                Digital Research
+                P.O. 579
+                Pacific Grove, CA 93950
+                
+                Revised:
+                  13 Feb 83  whf: fix paging bug
+                  28 Jan 83  by Bill Fitler: add in Bruce's changes to date
+                  07 Oct 82  by Bruce Skidmore
+              */
+
+              $include(:f2:vaxcmd.lit)
+          =
+          =   /**** VAX commands for generation - read the name of this program 
+          =           for PROGNAME below.
+          =
+          =       $ util := PROGNAME
+          =       $ ccpmsetup             ! set up environment
+          =       $ assign 'f$directory()' f1:        ! use local dir for temp files
+          =       $ plm86 'util'.plm xref 'p1' optimize(3) debug
+          =       $ link86 f2:scd.obj, 'util'.obj  to 'util'.lnk
+          =       $ loc86 'util'.lnk od(sm(code,dats,data,stack,const)) -
+          =             ad(sm(code(0),dats(10000h))) ss(stack(+32)) to 'util'.
+          =       $ h86 'util'
+          =
+          =   ***** Then, on a micro:
+          =       A>vax progname.h86 $fans
+          =       A>gencmd progname data[b1000]
+          =
+          =   ***** Notes: Stack is increased for interrupts.  Const(ants) are last
+          =           to force hex generation.
+          =   ****/
+
+   2   1      declare plmstart label public;
+
+              /**********************************************
+                       Interface Procedures
+              **********************************************/
+   3   1        mon1:
+                  procedure (func,info) external;
+   4   2            declare func byte;
+   5   2            declare info address;
+   6   2          end mon1;
+
+   7   1        mon2:
+                  procedure (func,info) byte external;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   2
+
+
+   8   2            declare func byte;
+   9   2            declare info address;
+  10   2          end mon2;
+
+  11   1        mon3:
+                  procedure (func,info) address external;
+  12   2            declare func byte;
+  13   2            declare info address;
+  14   2          end mon3;
+
+
+
+              /**********************************************
+                        Global Variables
+              **********************************************/
+
+  15   1        declare (list$mode,nopage$mode,create$mode,extract$mode,page$mode) byte;
+  16   1        declare (offset,eod) byte;
+
+  17   1        declare fcb (13) byte external;
+  18   1        declare fcb2 (36) byte;
+                    
+  19   1        declare maxb address external;
+  20   1        declare fcb16 (1) byte external;
+  21   1        declare tbuff (128) byte external;
+
+  22   1        declare control$z literally '1AH';
+  23   1        declare cr literally '0DH';
+  24   1        declare lf literally '0AH';
+  25   1        declare tab literally '09H';
+  26   1        declare slash literally '''/''';
+  27   1        declare true literally '0FFH';
+  28   1        declare false literally '00H';
+
+  29   1        declare (cnt,index) byte;
+  30   1        declare sub(12) byte;
+  31   1        declare com(11) structure(
+                   name(15) byte);
+
+  32   1        declare sysbuff(8) structure(
+                   subject(12) byte,
+                   record address,
+                   rec$offset byte,
+                   level byte) at (.memory);
+
+  33   1       declare name(12) byte;
+  34   1       declare level byte;
+  35   1       declare gindex address;
+  36   1       declare tcnt byte;
+  37   1       declare version address;
+  38   1       declare page$len byte;
+  39   1       declare clear$screen (26) byte initial (cr,lf,lf,lf,lf,lf,lf,
+                                                          lf,lf,lf,lf,lf,lf,
+                                                          lf,lf,lf,lf,lf,lf,
+                                                          lf,lf,lf,lf,lf,lf,'$');
+
+                /**************************************
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   3
+
+
+                 *                                    *
+                 *       B D O S   Externals          *
+                 *                                    *
+                 **************************************/
+
+  40   1        read$console:
+                  procedure byte;
+  41   2            return mon2 (1,0);
+  42   2          end read$console;
+
+  43   1        write$console:
+                  procedure (char);
+  44   2            declare char byte;
+  45   2            call mon1 (2,char);
+  46   2          end write$console;
+
+  47   1        print$console$buf:
+                  procedure (buff$adr);
+  48   2            declare buff$adr address;
+  49   2            call mon1 (9,buff$adr);
+  50   2          end print$console$buf;
+
+  51   1        read$console$buff:
+                  procedure (buff$adr);
+  52   2            declare buff$adr address;
+  53   2            call mon1(10,buff$adr);
+  54   2          end read$console$buff;
+
+  55   1        direct$con$io:
+                  procedure(func) byte;
+  56   2            declare func byte;
+  57   2              return mon2(6,func);
+  58   2          end direct$con$io;
+
+  59   1        get$version:
+                  procedure  address;
+  60   2            return mon3(12,0);
+  61   2          end get$version;
+
+  62   1        delete$file:
+                  procedure (fcb$address);
+  63   2            declare fcb$address address;
+  64   2            call mon1(19,fcb$address);
+  65   2          end delete$file;
+
+  66   1        open$file:
+                  procedure (fcb$address) byte;
+  67   2            declare fcb$address address;
+  68   2            declare fcb based fcb$address (1) byte;
+  69   2            fcb(12) = 0; /* EX = 0 */
+  70   2            fcb(32) = 0; /* CR = 0 */
+  71   2            return mon2 (15,fcb$address);
+  72   2          end open$file;
+
+  73   1        close$file:
+                  procedure (fcb$address) byte;
+  74   2            declare fcb$address address;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   4
+
+
+  75   2            return mon2 (16,fcb$address);
+  76   2          end close$file;
+
+  77   1        read$record:
+                  procedure (fcb$address) byte;
+  78   2            declare fcb$address address;
+  79   2            return mon2 (20,fcb$address);
+  80   2          end read$record;
+
+  81   1        write$record:
+                  procedure (fcb$address) byte;
+  82   2            declare fcb$address address;
+  83   2            return mon2(21,fcb$address);
+  84   2          end write$record;
+
+  85   1        make$file:
+                  procedure (fcb$address) byte;
+  86   2            declare fcb$address address;
+  87   2            declare fcb based fcb$address (1) byte;
+  88   2            fcb(12) = 0; /* EX = 0 */
+  89   2            fcb(32) = 0; /* CR = 0 */
+  90   2            return mon2(22,fcb$address);
+  91   2          end make$file;
+
+  92   1        read$rand:
+                  procedure (fcb$address) byte;
+  93   2            declare fcb$address address;
+  94   2            return mon2(33,fcb$address);
+  95   2          end read$rand;
+
+  96   1        set$dma:
+                  procedure (dma$address);
+  97   2            declare dma$address address;
+  98   2            call mon1(26,dma$address);
+  99   2          end set$dma;
+
+ 100   1        set$rand$rec:
+                  procedure (fcb$address);
+ 101   2            declare fcb$address address;
+ 102   2            call mon1(36,fcb$address);
+ 103   2          end set$rand$rec;
+
+ 104   1        set$user:
+                  procedure (usernum);
+ 105   2            declare usernum byte;
+ 106   2            call mon1(32,usernum);
+ 107   2          end set$user;
+
+ 108   1        declare cmdrv byte external;      /* declared in assembler interface */
+ 109   1        get$sysdrive:
+                  procedure byte;
+ 110   2            if (high(get$version) and 0FDH) <> 14H then   /* CCP/M-86 ? */
+ 111   2              return 0;       /* no: sysdrive defaults to A */
+ 112   2            return cmdrv;     /* yes: sysdrive is drive we loaded from */
+ 113   2          end get$sysdrive;
+
+ 114   1        terminate:
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   5
+
+
+                  procedure;
+ 115   2            call mon1 (0,0);
+ 116   2          end terminate;
+
+              /*********************************************
+                          Error Procedure
+
+                    Displays error messages and
+                    terminates if required.
+              *********************************************/
+ 117   1      error:
+                procedure(term$code,err$msg$adr);
+ 118   2          declare term$code byte;
+ 119   2          declare err$msg$adr address;
+
+ 120   2          call print$console$buf(.(cr,lf,'ERROR:  $'));
+ 121   2          call print$console$buf(err$msg$adr);
+ 122   2          call print$console$buf(.(cr,lf,'$'));
+ 123   2          if term$code then
+ 124   2            call terminate;
+ 125   2        end error;
+
+              /*********************************************
+                          Move Procedure
+
+                    Moves specified number of bytes
+                    from the Source address to the
+                    Destination address.
+              *********************************************/
+ 126   1      movef:
+                procedure (mvcnt,source$addr,dest$addr);
+ 127   2           declare (source$addr,dest$addr) address;
+ 128   2           declare mvcnt byte;
+ 129   2           call move(mvcnt,source$addr,dest$addr);
+ 130   2           return;
+ 131   2        end movef;
+
+              /*********************************************
+                          Compare Function
+
+                    Compares 12 byte strings
+
+                    Results:  0 - string1 = string2
+                              1 - string1 < string2
+                              2 - string1 > string2
+              *********************************************/
+ 132   1      compare:
+                procedure(str1$addr,str2$addr) byte;
+ 133   2           declare (str1$addr,str2$addr) address;
+ 134   2           declare string1 based str1$addr (12) byte;
+ 135   2           declare string2 based str2$addr (12) byte;
+ 136   2           declare (result,i) byte;
+ 137   2           result,
+                   i = 0;
+ 138   2           do while ((i < 12) and (string1(i) <> ' '));
+ 139   3              if string1(i) <> string2(i) then
+ 140   3              do;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   6
+
+
+ 141   4                if string1(i) < string2(i) then
+ 142   4                do;
+ 143   5                   result = 1;
+ 144   5                end;
+                        else
+ 145   4                do;
+ 146   5                   result = 2;
+ 147   5                end;
+ 148   4                i = 11;
+ 149   4              end;
+ 150   3              i = i + 1;
+ 151   3           end;
+ 152   2           return result;
+ 153   2        end compare;
+
+              /*********************************************
+                       Increment Procedure
+
+                  Increments through a record.
+              *********************************************/
+ 154   1      inc:
+                procedure (inci) byte;
+ 155   2          declare inci byte;
+ 156   2            inci = inci + 1;
+ 157   2            if inci > 127 then
+ 158   2            do;
+ 159   3               if read$record(.fcb) = 0 then
+ 160   3               do;
+ 161   4                  inci = 0;
+ 162   4               end;
+                       else
+ 163   3               do;
+ 164   4                  eod = true;
+ 165   4                  inci = 0;
+ 166   4               end;
+ 167   3            end;
+ 168   2            return inci;
+ 169   2        end inc;
+
+              /**************************************
+                      Page$check Procedure
+
+                  Halts display after page$len lines
+              **************************************/
+ 170   1      page$check:
+                procedure(line$cnt$addr) byte;
+ 171   2           declare line$cnt$addr address;
+ 172   2           declare line$cnt based line$cnt$addr byte;
+ 173   2           declare quit byte;
+ 174   2           quit = 0;
+ 175   2           if (not nopage$mode) and (page$mode) then
+ 176   2           do;
+ 177   3              if (line$cnt:=line$cnt+1) > page$len then
+ 178   3              do;
+ 179   4                 call print$console$buf(.(cr,lf,'Press RETURN to continue $'));
+ 180   4                 line$cnt = 0;
+ 181   4                 do while (line$cnt = 0);
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   7
+
+
+ 182   5                    line$cnt = direct$con$io(0FDH);
+ 183   5                 end;
+ 184   4                 call print$console$buf(.(cr,'                             ',
+                                                                                cr,'$'));
+ 185   4                 if line$cnt = 3 /* control c */ then
+ 186   4                 do;
+ 187   5                    line$cnt = close$file(.fcb);
+ 188   5                    call terminate;
+ 189   5                 end;
+                         else
+ 190   4                 do;
+ 191   5                    if line$cnt <> cr then
+ 192   5                    do;
+ 193   6                       quit = true;
+ 194   6                    end;
+ 195   5                    line$cnt = 0;
+ 196   5                 end;
+ 197   4              end;
+                      else
+ 198   3              do;
+ 199   4                 call write$console(lf);
+ 200   4              end;
+ 201   3          end;
+                  else
+ 202   2          do;
+ 203   3             line$cnt = 0;
+ 204   3             call write$console(lf);
+ 205   3          end;
+ 206   2          return quit;
+ 207   2       end page$check;
+
+              /*******************************************
+                           Init Procedure
+
+                     Reads the index into memory
+              *******************************************/
+ 208   1      init:
+                procedure;
+ 209   2           declare (buf$size,max$buf,init$i) address;
+ 210   2           declare end$index byte;
+ 211   2           buf$size = maxb - .memory;
+ 212   2           max$buf = buf$size;
+ 213   2           end$index = 0;
+ 214   2           init$i = 7;
+ 215   2           do while (not end$index) and (max$buf > 127);
+ 216   3              call set$dma(.sysbuff(init$i-7).subject);
+ 217   3              if read$record(.fcb) <> 0 then
+ 218   3              do;
+ 219   4                 init$i = close$file(.fcb);
+ 220   4                 call error(true,.('Reading HELP.HLP index.$'));
+ 221   4              end;
+ 222   3              if sysbuff(init$i).subject(0) = '$' then end$index = true;
+ 224   3              if not end$index then
+ 225   3              do;
+ 226   4                 max$buf = max$buf - 128;
+ 227   4                 init$i = init$i + 8;
+ 228   4              end;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   8
+
+
+ 229   3           end;
+ 230   2           call set$dma(.tbuff);
+ 231   2           if (max$buf < 128) and (not end$index) then
+ 232   2           do;
+ 233   3              init$i = close$file(.fcb);
+ 234   3              call error(true,.('Too many entries in Index Table.',
+                                   '  Not enough memory.$'));
+ 235   3           end;
+ 236   2        end init;
+
+
+              /*******************************************
+                          Parse Procedure
+
+                    Parses the command tail
+              *******************************************/
+ 237   1      parse:
+                procedure byte;
+ 238   2          declare (index,begin,cnt,i,stop,bracket) byte;
+ 239   2          index = 0;
+ 240   2          if tbuff(0) <> 0 then
+ 241   2          do;
+ 242   3             do index = 1 to tbuff(0);
+ 243   4                if tbuff(index) = tab then tbuff(index) = ' ';
+ 245   4                else if tbuff(index) = ',' then tbuff(index) = ' ';
+                     end;
+ 248   3             index = 1;
+ 249   3             do while(index < tbuff(0)) and (tbuff(index) = ' ');
+ 250   4               index = index + 1;
+ 251   4             end;
+ 252   3             if tbuff(index) = '.' then
+ 253   3               do;
+ 254   4                 begin = level;
+ 255   4                 tbuff(index) = ' ';
+ 256   4               end;
+                     else
+ 257   3               begin = 0;
+ 258   3             do index = begin to 10;
+ 259   4                call movef(15,.('             ',cr,'$'),.com(index).name);
+ 260   4             end;
+ 261   3             index = begin;
+ 262   3             cnt = 1;
+ 263   3             stop,
+                     bracket = 0;
+ 264   3             do while (tbuff(cnt) <> 0) and (not stop);
+ 265   4                if (tbuff(cnt) <> 20H) then
+ 266   4                do;
+ 267   5                   i = 0;
+ 268   5                   do while (((tbuff(cnt) <> 20H) and (tbuff(cnt) <> '[')) and
+                                      (tbuff(cnt) <> 0)) and ((i < 12) and (index < 11));
+ 269   6                      if (tbuff(cnt) > 60H) and (tbuff(cnt) < 7BH) then
+ 270   6                      do;
+ 271   7                         com(index).name(i) = tbuff(cnt) - 20H;
+ 272   7                      end;
+                              else
+ 273   6                      do;
+ 274   7                         com(index).name(i) = tbuff(cnt);
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE   9
+
+
+ 275   7                      end;
+ 276   6                      cnt = cnt + 1;
+ 277   6                      i = i + 1;
+ 278   6                   end;
+ 279   5                   index = index + 1;
+ 280   5                   if (bracket or (index > 10)) then
+ 281   5                   do;
+ 282   6                      stop = true;
+ 283   6                   end;
+                           else
+ 284   5                   if tbuff(cnt) = '[' then
+ 285   5                   do;
+ 286   6                      if com(index-1).name(0) = ' ' then index = index - 1;
+ 288   6                      com(index).name(0) = '[';
+ 289   6                      cnt = cnt + 1;
+ 290   6                      index = index + 1;
+ 291   6                      bracket = true;
+ 292   6                   end;
+                        end;
+                        else
+ 294   4                do;
+ 295   5                   cnt = cnt + 1;
+ 296   5                end;
+ 297   4             end;
+ 298   3          end;
+ 299   2          list$mode,
+                  nopage$mode,
+                  create$mode,
+                  extract$mode = false;
+ 300   2          if index > 0 then
+ 301   2          do;
+ 302   3             i = 0;
+ 303   3             do while (i < 10);
+ 304   4                if com(i).name(0) = '[' then
+ 305   4                do;
+ 306   5                   if (com(i+1).name(0) = 'C') then
+ 307   5                   do;
+ 308   6                      create$mode = true;
+ 309   6                      index = index - 2;
+ 310   6                   end; 
+ 311   5                   else if (com(i+1).name(0) = 'E') then
+ 312   5                        do;
+ 313   6                           extract$mode = true;
+ 314   6                           index = index - 2;
+ 315   6                        end;
+ 316   5                        else if (com(i+1).name(0) = 'N') then
+ 317   5                             do;
+ 318   6                                nopage$mode =true;
+ 319   6                                index = index - 2;
+ 320   6                             end;
+ 321   5                             else if (com(i+1).name(0) = 'L') then
+ 322   5                                  do;
+ 323   6                                     list$mode = true;
+ 324   6                                     nopage$mode = true;
+ 325   6                                     index = index - 2;
+ 326   6                                  end;
+ 327   5                                  else if (com(i+1).name(0) <> ' ') then
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  10
+
+
+ 328   5                                       do;
+ 329   6                                         index = index - 2;
+ 330   6                                       end;
+                                               else
+ 331   5                                           do;
+ 332   6                                             index = index - 1;
+ 333   6                                           end;
+ 334   5                   i = 10;
+ 335   5                end;
+ 336   4                i = i + 1;
+ 337   4             end;
+ 338   3          end;
+ 339   2          return index;
+ 340   2        end parse;
+
+              /******************************************
+                      Create$index Procedure
+
+                   Creates HELP.HLP from HELP.DAT
+              ******************************************/
+ 341   1      create$index:
+                procedure;
+ 342   2          declare (cnt, i, rec$cnt) byte;
+ 343   2          declare (index,count,count2,max$buf,save$size) address;
+ 344   2          declare fcb3(36) byte;
+ 345   2          call print$console$buf(.(cr,lf,'Creating HELP.HLP....$'));
+ 346   2          do i = 0 to 7;
+ 347   3             call movef(12,.('$           '),.sysbuff(i).subject);
+ 348   3          end;
+ 349   2          rec$cnt,
+                  index = 0;
+ 350   2          save$size = maxb - .memory;
+ 351   2          max$buf = save$size;
+ 352   2          call movef(13,.(0,'HELP    DAT',0),.fcb);
+ 353   2          if open$file(.fcb) = 0FFH then
+ 354   2          do;
+ 355   3             call error(true,.('HELP.DAT not on current drive.$'));
+ 356   3          end;
+ 357   2          eod = 0;
+ 358   2          do while (not eod) and (read$record(.fcb) = 0);
+ 359   3             i = 0;
+ 360   3             do while(i < 128) and (not eod);
+ 361   4                if tbuff(i) = control$z then
+ 362   4                do;
+ 363   5                   eod = true;
+ 364   5                end;
+                        else
+ 365   4                do;
+ 366   5                   if tbuff(i) = slash then
+ 367   5                   do;
+ 368   6                      cnt = 0;
+ 369   6                      do while(not eod) and (tbuff(i) = slash);
+ 370   7                         i = inc(i);
+ 371   7                         cnt = cnt + 1;
+ 372   7                      end;
+ 373   6                      if (cnt = 3) and (not eod) then
+ 374   6                      do;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  11
+
+
+ 375   7                         sysbuff(index).level = tbuff(i) - '0';
+ 376   7                         i = inc(i);
+ 377   7                         cnt = 0;
+ 378   7                         do while ((cnt < 12) and (not eod)) and (tbuff(i) <> cr);
+ 379   8                            if (tbuff(i) > 60H) and (tbuff(i) < 7BH) then
+ 380   8                            do;
+ 381   9                               sysbuff(index).subject(cnt) = tbuff(i) - 20H;
+ 382   9                            end;
+                                    else
+ 383   8                            do;
+ 384   9                               sysbuff(index).subject(cnt) = tbuff(i);
+ 385   9                            end;
+ 386   8                            i = inc(i);
+ 387   8                            cnt = cnt + 1;
+ 388   8                         end;
+ 389   7                         if (not eod) then
+ 390   7                         do;
+ 391   8                            call set$rand$rec(.fcb);
+ 392   8                            call movef(1,.fcb(33),.sysbuff(index).record);
+ 393   8                            call movef(1,.fcb(34),.sysbuff(index).record+1);
+ 394   8                            sysbuff(index).record = sysbuff(index).record - 0001H;
+ 395   8                            sysbuff(index).rec$offset = i;
+ 396   8                            index = index + 1;
+ 397   8                            if ((index mod 8) = 0) then
+ 398   8                            do;
+ 399   9                               rec$cnt = rec$cnt + 1;
+ 400   9                               max$buf = max$buf - 128;
+ 401   9                               if (max$buf < 128) and (not eod) then
+ 402   9                               do;
+ 403  10                                  cnt = close$file(.fcb);
+ 404  10                                  call error(true,
+                                                     .('Too many entries in Index Table.',
+                                                       '  Not enough memory.$'));
+ 405  10                               end;
+                                       else
+ 406   9                               do count = index to index + 7;
+ 407  10                                  call movef(12,.('$           '),
+                                                                  .sysbuff(count).subject);
+ 408  10                               end;
+ 409   9                            end;
+ 410   8                         end;
+ 411   7                      end;
+ 412   6                   end;
+                           else
+ 413   5                   do;
+ 414   6                      i = inc(i);
+ 415   6                   end;
+ 416   5                end;
+ 417   4             end;
+ 418   3          end;
+ 419   2          call set$dma(.sysbuff);
+ 420   2          rec$cnt = rec$cnt + 1;
+                  /********************************
+                       create HELP.HLP
+                  ********************************/
+ 421   2          call movef(13,.(0,'HELP    HLP',0),.fcb3);
+ 422   2          call delete$file(.fcb3);
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  12
+
+
+ 423   2          if make$file(.fcb3) = 0FFH then
+ 424   2          do;
+ 425   3             cnt = close$file(.fcb2);
+ 426   3             call delete$file(.fcb2);
+ 427   3             cnt = close$file(.fcb);
+ 428   3             call error(true,.('Unable to Make HELP.HLP.$'));
+ 429   3          end;
+ 430   2          call movef(4,.(0,0,0,0),.fcb2+32);
+ 431   2          cnt = read$rand(.fcb2);
+ 432   2          do count = 0 to index - 1;
+ 433   3             sysbuff(count).record = sysbuff(count).record + rec$cnt;
+ 434   3          end;
+ 435   2          do count = 0 to rec$cnt - 1;
+ 436   3             call set$dma(.memory(shl(count,7)));
+ 437   3             if write$record(.fcb3) <> 0 then
+ 438   3             do;
+ 439   4                cnt = close$file(.fcb3);
+ 440   4                call delete$file(.fcb3);
+ 441   4                cnt = close$file(.fcb2);
+ 442   4                call delete$file(.fcb2);
+ 443   4                cnt = close$file(.fcb);
+ 444   4                call error(true,.('Writing file HELP.HLP.$'));
+ 445   4             end;
+ 446   3          end;   
+ 447   2          call movef(4,.(0,0,0,0),.fcb+32);
+ 448   2          cnt = read$rand(.fcb);
+ 449   2          eod = 0;
+ 450   2          do while (not eod);
+ 451   3               count = 0;
+ 452   3               max$buf = save$size;
+ 453   3               do while (not eod) and (max$buf > 127);
+ 454   4                  call set$dma(.memory(shl(count,7)));
+ 455   4                  if read$record(.fcb) <> 0 then
+ 456   4                  do;
+ 457   5                     eod = true;
+ 458   5                  end;
+                          else
+ 459   4                  do;
+ 460   5                     max$buf = max$buf - 128;
+ 461   5                     count = count + 1;
+ 462   5                  end;
+ 463   4               end;
+ 464   3               do count2 = 0 to count-1;
+ 465   4                  call set$dma(.memory(shl(count2,7)));
+ 466   4                  if write$record(.fcb3) <> 0 then
+ 467   4                  do;
+ 468   5                     i = close$file(.fcb3);
+ 469   5                     call delete$file(.fcb3);
+ 470   5                     i = close$file(.fcb);
+ 471   5                     call error(true,.('Writing file HELP.HLP.$'));
+ 472   5                  end;
+ 473   4               end;
+ 474   3          end;
+ 475   2          if close$file(.fcb) = 0FFH then
+ 476   2          do;
+ 477   3             cnt = close$file(.fcb3);
+ 478   3             call error(true,.('Closing file HELP.DAT.$'));
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  13
+
+
+ 479   3          end;
+ 480   2          if close$file(.fcb3) = 0FFH then
+ 481   2          do;
+ 482   3             call error(true,.(false,'Closing file HELP.HLP.$'));
+ 483   3          end;
+ 484   2          call print$console$buf(.('HELP.HLP created',cr,lf,'$'));
+ 485   2        end create$index;
+
+              /********************************************
+                      Extract$file Procedure
+
+                   Creates HELP.DAT from HELP.HLP
+              ********************************************/
+ 486   1      extract$file:
+                procedure;
+ 487   2          declare (end$index,i) byte;
+ 488   2          declare (count,count2,max$buf,save$size) address;
+                    
+ 489   2            call print$console$buf(.(cr,lf,'Extracting data....$'));
+ 490   2            call movef(13,.(0,'HELP    HLP',0),.fcb);
+ 491   2            if open$file(.fcb) = 0FFH then
+ 492   2            do;
+ 493   3               call error(true,.('Unable to find file HELP.HLP.$'));
+ 494   3            end;
+ 495   2            call movef(13,.(0,'HELP    DAT',0),.fcb2);
+ 496   2            call delete$file(.fcb2);
+ 497   2            if make$file(.fcb2) = 0FFH then
+ 498   2            do;
+ 499   3               i = close$file(.fcb);
+ 500   3               call error(true,.('Unable to Make HELP.DAT.$'));
+ 501   3            end;
+ 502   2            call set$dma(.sysbuff);
+ 503   2            end$index = 0;
+ 504   2            do while ((i := read$record(.fcb)) = 0) and (not end$index);
+ 505   3                  if sysbuff(7).subject(0) = '$' then end$index = true;
+ 507   3            end;
+ 508   2            eod = 0;
+ 509   2            if i <> 0 then eod = true;
+ 511   2            i = write$record(.fcb2);
+ 512   2            save$size = maxb - .memory;
+ 513   2            do while (not eod);
+ 514   3               count = 0;
+ 515   3               max$buf = save$size;
+ 516   3               do while (not eod) and (max$buf > 127);
+ 517   4                  call set$dma(.memory(shl(count,7)));
+ 518   4                  if read$record(.fcb) <> 0 then
+ 519   4                  do;
+ 520   5                     eod = true;
+ 521   5                  end;
+                          else
+ 522   4                  do;
+ 523   5                     max$buf = max$buf - 128;
+ 524   5                     count = count + 1;
+ 525   5                  end;
+ 526   4               end;
+ 527   3               do count2 = 0 to count-1;
+ 528   4                  call set$dma(.memory(shl(count2,7)));
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  14
+
+
+ 529   4                  if write$record(.fcb2) <> 0 then
+ 530   4                  do;
+ 531   5                     i = close$file(.fcb2);
+ 532   5                     call delete$file(.fcb2);
+ 533   5                     i = close$file(.fcb);
+ 534   5                     call error(true,.('Writing file HELP.DAT.$'));
+ 535   5                  end;
+ 536   4               end;
+ 537   3            end;
+ 538   2            if close$file(.fcb) = 0FFH then
+ 539   2            do;
+ 540   3               call error(false,.('Unable to Close HELP.HLP.$'));
+ 541   3            end;
+ 542   2            if close$file(.fcb2) = 0FFH then
+ 543   2            do;
+ 544   3               call delete$file(.fcb2);
+ 545   3               call error(true,.('Unable to Close HELP.DAT.$'));
+ 546   3            end;
+ 547   2            call print$console$buf(.('Extraction complete',cr,lf,lf,
+                                                   'HELP.DAT created',cr,lf,'$'));
+
+ 548   2        end extract$file;
+
+              /***********************************************
+                        Display$ind Procedure
+
+                    Displays the avialable topics
+              ***********************************************/
+ 549   1      display$ind:
+                procedure;
+ 550   2          declare (disp$level,i,eod,written) byte;
+ 551   2          declare (offset,index,count) address;
+ 552   2          declare name (14) byte;
+ 553   2           offset,
+                   written,
+                   eod = 0;
+ 554   2           disp$level = level + 1;
+ 555   2           if disp$level < 10 then
+ 556   2           do;
+ 557   3              if level = 0 then
+ 558   3              do;
+ 559   4                 offset = 0;
+ 560   4              end;
+                      else
+ 561   3              do;
+ 562   4                 offset = gindex;
+ 563   4              end;
+ 564   3              count = 0;
+ 565   3           end;
+                   else
+ 566   2           do;
+ 567   3              eod = true;
+ 568   3           end;
+ 569   2           index = offset;
+ 570   2           offset = 0;
+ 571   2           do while (not eod);
+ 572   3                if sysbuff(index).subject(0) = '$' then
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  15
+
+
+ 573   3                do;
+ 574   4                   eod = true;
+ 575   4                end;
+                        else
+ 576   3                do;
+ 577   4                   if sysbuff(index).level = disp$level then
+ 578   4                   do;
+ 579   5                      if not written then
+ 580   5                      do;
+ 581   6                         written = true;
+ 582   6                         i = page$check(.tcnt);
+ 583   6                         if disp$level = 1 then
+ 584   6                         do;
+ 585   7                            call print$console$buf(.(cr,'Topics available:$'));
+ 586   7                         end;
+                                 else
+ 587   6                         do;
+ 588   7                            call print$console$buf(.(cr,'Additional topics ',
+                                                                'available:$'));
+ 589   7                         end;
+ 590   6                         i = page$check(.tcnt);
+ 591   6                         call print$console$buf(.(cr,'$'));
+ 592   6                      end;
+ 593   5                      if (count mod 6) = 0 then 
+ 594   5                      do;
+ 595   6                         i = page$check(.tcnt);
+ 596   6                         call write$console(cr);
+ 597   6                      end;
+ 598   5                      do i = 0 to 13;
+ 599   6                         name(i) = ' ';
+ 600   6                      end;
+ 601   5                      name(13) = '$';
+ 602   5                      call movef(12,.sysbuff(index).subject,.name);
+ 603   5                      call print$console$buf(.name);
+ 604   5                      count = count + 1;
+ 605   5                   end;
+                           else
+ 606   4                   do;
+ 607   5                      if sysbuff(index).level < disp$level then eod = true;
+ 609   5                   end;
+ 610   4                   index = index + 1;
+ 611   4                end;
+ 612   3          end;
+ 613   2          if written then
+ 614   2            do;
+ 615   3               i = page$check(.tcnt);
+ 616   3               call print$console$buf(.(cr,lf,'$'));
+ 617   3            end;
+ 618   2          call set$dma(.tbuff);
+ 619   2       end display$ind;
+
+              /*********************************************
+                       Search$file Procedure
+
+                   Searches the index table for the key
+              *********************************************/
+ 620   1      search$file:
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  16
+
+
+                procedure byte;
+ 621   2          declare (eod, error, cnt, found, saved, save$level) byte;
+ 622   2          declare index address;
+ 623   2          eod,
+                  error,
+                  found,
+                  saved,
+                  index = 0;
+ 624   2          do while(not eod) and (not error);
+ 625   3                if sysbuff(index).subject(0) <> '$' then
+ 626   3                do;
+ 627   4                   if sysbuff(index).level = level + 1 then
+ 628   4                   do;
+ 629   5                      cnt = compare(.com(level).name,.sysbuff(index).subject);
+ 630   5                      if cnt = 0 then
+ 631   5                      do;
+ 632   6                         call movef(12,.sysbuff(index).subject,.com(level).name);
+ 633   6                         level = level + 1;
+ 634   6                         if (not saved) then
+ 635   6                         do;
+ 636   7                            save$level = level;
+ 637   7                            saved = true;
+ 638   7                         end;
+ 639   6                         if ((level > 8) or (com(level).name(0) = ' '))
+                                                 or (com(level).name(0) = '[') then
+ 640   6                         do;
+ 641   7                            found = true;
+ 642   7                            eod = true;
+ 643   7                         end;
+                                 else
+ 644   6                         do;
+ 645   7                            index = index + 1;
+ 646   7                            found = 0;
+ 647   7                         end;
+ 648   6                      end;
+                              else
+ 649   5                      do;
+ 650   6                         index = index + 1;
+ 651   6                      end;
+ 652   5                   end;
+                           else
+ 653   4                   do;
+ 654   5                      if saved then
+ 655   5                      do;
+ 656   6                         if save$level < sysbuff(index).level then
+ 657   6                         do;
+ 658   7                            index = index + 1;
+ 659   7                         end;
+                                 else
+ 660   6                         do;
+ 661   7                             error = true;
+ 662   7                         end;
+ 663   6                      end;
+                              else
+ 664   5                      do;
+ 665   6                         index = index + 1;
+ 666   6                      end;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  17
+
+
+ 667   5                   end;
+ 668   4                end;
+                        else
+ 669   3                do;
+ 670   4                   error = true;
+ 671   4                end;
+ 672   3          end;
+ 673   2          if found then
+ 674   2          do;
+ 675   3             gindex = index + 1;
+ 676   3             call movef(1,.sysbuff(index).record,.fcb(33));
+ 677   3             call movef(1,.sysbuff(index).record+1,.fcb(34));
+ 678   3             fcb(35) = 0;
+ 679   3             offset = sysbuff(index).rec$offset;
+ 680   3             level = sysbuff(index).level;
+ 681   3          end;
+ 682   2          return error;
+ 683   2       end search$file;
+
+              /**************************************
+                      Token Display Procedure
+
+                    Displays the Parsed Tokens
+              **************************************/
+ 684   1      display$tokens:
+                procedure (no$tokens);
+ 685   2          declare (token$cnt1, token$cnt2, no$tokens) byte;
+ 686   2          token$cnt1 = 0;
+ 687   2          do while (token$cnt1 < no$tokens) and (not eod);
+ 688   3             eod = page$check(.tcnt);
+ 689   3             if (not eod) then
+ 690   3             do;
+ 691   4                do token$cnt2 = 0 to token$cnt1;
+ 692   5                   call print$console$buf(.('  $'));
+ 693   5                end;
+ 694   4                call print$console$buf(.com(token$cnt1).name);
+ 695   4                token$cnt1 = token$cnt1 + 1;
+ 696   4             end;
+ 697   3          end;
+ 698   2        end display$tokens;
+
+              /**************************************
+                         Print Procedure
+
+                     Displays the Help text
+              **************************************/
+ 699   1      print:
+                procedure;
+ 700   2          declare (i,ii,char,eod2) byte;
+ 701   2          declare temp(3) byte;
+ 702   2          call write$console(cr);
+ 703   2          call display$tokens(level);
+ 704   2          if (not eod) then eod = page$check(.tcnt);
+ 706   2          if (not eod) then
+ 707   2          do;
+ 708   3             if read$rand(.fcb) <> 0 then
+ 709   3             do;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  18
+
+
+ 710   4                offset =close$file(.fcb);
+ 711   4                call error(true,.('Reading file HELP.HLP.$'));
+ 712   4             end;
+                     else
+ 713   3             do;
+ 714   4                eod2 = 0;
+ 715   4                do while ((not eod2) and (not eod)) and (read$record (.fcb) = 0);
+ 716   5                   i = offset - 1;
+ 717   5                   do while (((i:=i+1) <= 127) and (not eod2));
+ 718   6                      if (char := tbuff(i)) = control$z then eod = true;
+ 720   6                      ii = 0;
+ 721   6                      do while((not eod2) and (not eod)) and
+                                                      ((ii < 3) and (tbuff(i) = slash));
+ 722   7                         ii = ii + 1;
+ 723   7                         i = inc(i);
+ 724   7                         temp(ii-1) = tbuff(i);
+ 725   7                      end;
+ 726   6                      if ii = 3 then eod2 = true; else temp(ii) = '$';
+ 729   6                      if ((not eod) and (not eod2)) then
+ 730   6                      do;
+ 731   7                         if (char = lf) and (not nopage$mode) then
+ 732   7                         do;
+ 733   8                            eod = page$check(.tcnt);
+ 734   8                         end;
+                                 else
+ 735   7                         do;
+ 736   8                            call write$console (char);
+ 737   8                         end;
+ 738   7                         if ii > 0 then call print$console$buf(.temp);
+ 740   7                         ii = 0;
+ 741   7                      end;
+ 742   6                   end;
+ 743   5                   offset = 0;
+ 744   5                end;
+ 745   4             end;
+ 746   3          end;
+ 747   2          eod = 0;
+ 748   2        end print;
+
+              /**************************************
+                       Prompt Procedure
+
+                Prompts for input from the user
+              ***************************************/
+ 749   1      prompt:
+                procedure byte;
+ 750   2          declare temp byte;
+ 751   2          call movef(1,.(128),.tbuff-1);
+ 752   2          temp = page$check(.tcnt);
+ 753   2          call print$console$buf(.(cr,'HELP> $'));
+ 754   2          call read$console$buff(.tbuff-1);
+ 755   2          tbuff(tbuff(0)+1) = 0;
+ 756   2          tcnt = -1;
+ 757   2          temp = parse;
+ 758   2          if (temp <> 0) and (not list$mode)
+                  then call print$console$buf(.clear$screen);
+ 760   2          return temp;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  19
+
+
+ 761   2       end prompt;
+                   
+
+              /**************************************
+                       Main Program
+              **************************************/
+
+ 762   1      declare oret byte;
+
+ 763   1      declare last$dseg$byte byte
+                initial (0);
+
+ 764   1      plmstart:
+                do;
+ 765   2          eod,
+                  tcnt = 0;
+ 766   2          version = get$version;
+
+              /******** CP/M 3
+                  if (high(version) = 1) or (low(version) < 30h) then
+                    do;
+                      call error(true,.('Requires CP/M Version 3$'));
+                    end;
+                  page$len = mon2(49,.(1ch,0,));
+                  if mon2(49,.(2ch,0)) = 0 then
+                    page$mode = true;
+                  else
+                    page$mode = false;
+              *********/
+
+ 767   2          page$len = 22;
+ 768   2          page$mode = true;
+
+ 769   2          cnt = parse;
+ 770   2          if create$mode then
+ 771   2          do;
+ 772   3             call create$index;
+ 773   3          end;
+                  else
+ 774   2          if extract$mode then
+ 775   2          do;
+ 776   3             call extract$file;
+ 777   3          end;
+                  else
+ 778   2          do;
+ 779   3             call movef(13,.(0,'HELP ',0A0H,'  HLP',0),.fcb); /* open read/only */
+ 780   3             oret = open$file (.fcb);
+ 781   3             if oret = 0FFH then
+ 782   3               do;
+ 783   4                 fcb(0) = get$sysdrive;
+ 784   4             call set$user(0);        /* try user 0 */
+ 785   4                 oret = open$file (.fcb); /* on system drive */
+ 786   4               end;
+ 787   3             if oret <> 0FFH then
+ 788   3             do;
+ 789   4               call init;
+ 790   4               if (not list$mode) then
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  20
+
+
+ 791   4                 call print$console$buf(.clear$screen);
+ 792   4               if cnt = 0 then
+ 793   4               do;
+ 794   5                  level = 0;
+ 795   5                  call print$console$buf(.(cr,lf,'HELP UTILITY V1.1',cr,lf,lf,
+                                                         'At "HELP>" enter ',
+                                                         'topic {,subtopic}...',cr,lf,lf,
+                                                         'EXAMPLE:  HELP> DIR EXAMPLES',
+                                                          cr,lf,'$'));
+ 796   5                  tcnt = 2;
+ 797   5                  call display$ind;
+ 798   5                  cnt = prompt;     /* Prompt for user input */
+ 799   5               end;
+ 800   4               do while cnt <> 0;   /* If user didn't hit a return do */
+ 801   5                level = 0;
+ 802   5                if compare(.com(0).name,.('?           ')) = 0 then
+ 803   5                do;
+ 804   6                  ; /* NULL COMMAND */
+ 805   6                end;
+                        else
+ 806   5                if search$file <> 0FFH then
+ 807   5                do;
+ 808   6                   call print;
+ 809   6                   if compare(.com(0).name,.('HELP        ')) = 0 then
+ 810   6                   do;
+ 811   7                      level = 0;
+ 812   7                   end;
+ 813   6                end;
+                        else
+ 814   5                do;
+ 815   6                   eod = page$check(.tcnt);
+ 816   6                   call write$console(cr);
+ 817   6                   if (not eod) then
+ 818   6                   do;
+ 819   7                      eod = page$check(.tcnt);
+ 820   7                      if (not eod) then
+ 821   7                      do;
+ 822   8                         call print$console$buf(.('Topic:$'));
+ 823   8                         eod = page$check(.tcnt);
+ 824   8                         call write$console(cr);
+ 825   8                         call display$tokens(cnt);
+ 826   8                         eod = page$check(.tcnt);
+ 827   8                         call write$console(cr);
+ 828   8                         eod = page$check(.tcnt);
+ 829   8                         call write$console(cr);
+ 830   8                         call print$console$buf(.('Not found$'));
+ 831   8                         eod = page$check(.tcnt);
+ 832   8                         call write$console(cr);
+ 833   8                      end;
+ 834   7                   end;
+ 835   6                   level = 0;
+ 836   6                end;
+ 837   5                if (not eod) then call display$ind;
+ 839   5                cnt = prompt;   /* Prompt for user input */
+ 840   5             end;
+ 841   4            offset = close$file(.fcb);
+ 842   4         end;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  21
+
+
+                 else
+ 843   3         do;
+ 844   4            call error(false,.('No HELP.HLP file on the default drive.$'));
+ 845   4         end;
+ 846   3       end;
+ 847   2       end;
+ 848   1       call terminate;
+ 849   1      end help;
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  22
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    238  0130H     1  BEGIN. . . . . . .    BYTE       254  257  258  261 
+    238  0134H     1  BRACKET. . . . . .    BYTE       263  280  291 
+     51  0004H     2  BUFFADR. . . . . .    WORD PARAMETER AUTOMATIC        52   53 
+     47  0004H     2  BUFFADR. . . . . .    WORD PARAMETER AUTOMATIC        48   49 
+    209  0004H     2  BUFSIZE. . . . . .    WORD       211  212 
+    700  017AH     1  CHAR . . . . . . .    BYTE       718  731  736 
+     43  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        44   45 
+     39  0111H    26  CLEARSCREEN. . . .    BYTE ARRAY(26) INITIAL         759  791 
+     73  023EH    16  CLOSEFILE. . . . .    PROCEDURE BYTE STACK=000AH          187  219  233  403  425  427  439
+                                             441  443  468  470  475  477  480  499  531  533  538  542  710  841
+    108  0000H     1  CMDRV. . . . . . .    BYTE EXTERNAL(7)          112 
+    621  0172H     1  CNT. . . . . . . .    BYTE       629  630 
+    342  0135H     1  CNT. . . . . . . .    BYTE       368  371  373  377  378  381  384  387  403  425  427  431
+                                             439  441  443  448  477 
+     29  004FH     1  CNT. . . . . . . .    BYTE       769  792  798  800  825  839 
+    238  0131H     1  CNT. . . . . . . .    BYTE       262  264  265  268  269  271  274  276  284  289  295 
+     31  005DH   165  COM. . . . . . . .    STRUCTURE ARRAY(11)       259  271  274  286  288  304  306  311  316
+                                             321  327  629  632  639  694  802  809 
+    132  032BH    93  COMPARE. . . . . .    PROCEDURE BYTE STACK=0008H          629  802  809 
+     22               CONTROLZ . . . . .    LITERALLY       361  718 
+    551  0020H     2  COUNT. . . . . . .    WORD       564  593  604 
+    343  000CH     2  COUNT. . . . . . .    WORD       406  407  432  433  435  436  451  454  461  464 
+    488  0014H     2  COUNT. . . . . . .    WORD       514  517  524  527 
+    488  0016H     2  COUNT2 . . . . . .    WORD       527  528 
+    343  000EH     2  COUNT2 . . . . . .    WORD       464  465 
+     23               CR . . . . . . . .    LITERALLY        39  120  122  179  184  191  259  345  378  484  489
+                                             547  585  588  591  596  616  702  753  795  816  824  827  829  832
+    341  079DH  1183  CREATEINDEX. . . .    PROCEDURE STACK=0016H          772 
+     15  0026H     1  CREATEMODE . . . .    BYTE       299  308  770 
+     62  0215H    16  DELETEFILE . . . .    PROCEDURE STACK=000AH          422  426  440  442  469  496  532  544
+    126  0004H     2  DESTADDR . . . . .    WORD PARAMETER AUTOMATIC       127  129 
+     55  01F3H    19  DIRECTCONIO. . . .    PROCEDURE BYTE STACK=000AH          182 
+    549  0DE8H   359  DISPLAYIND . . . .    PROCEDURE STACK=0014H          797  838 
+    684  10BCH   104  DISPLAYTOKENS. . .    PROCEDURE STACK=0016H          703  825 
+    550  015EH     1  DISPLEVEL. . . . .    BYTE       554  555  577  583  607 
+     96  0004H     2  DMAADDRESS . . . .    WORD PARAMETER AUTOMATIC        97   98 
+    487  015CH     1  ENDINDEX . . . . .    BYTE       503  504  506 
+    210  012EH     1  ENDINDEX . . . . .    BYTE       213  215  223  224  231 
+     16  002AH     1  EOD. . . . . . . .    BYTE       164  357  358  360  363  369  373  378  389  401  449  450
+                                             453  457  508  510  513  516  520  687  688  689  704  705  706  715
+                                             719  721  729  733  747  765  815  817  819  820  823  826  828  831
+                                             837 
+    550  0160H     1  EOD. . . . . . . .    BYTE       553  567  571  574  608 
+    621  0170H     1  EOD. . . . . . . .    BYTE       623  624  642 
+    700  017BH     1  EOD2 . . . . . . .    BYTE       714  715  717  721  727  729 
+    117  0004H     2  ERRMSGADR. . . . .    WORD PARAMETER AUTOMATIC       119  121 
+    621  0171H     1  ERROR. . . . . . .    BYTE       623  624  661  670  682 
+    117  02EFH    37  ERROR. . . . . . .    PROCEDURE STACK=0012H          220  234  355  404  428  444  471  478
+                                             482  493  500  534  540  545  711  844 
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  23
+
+
+    486  0C3CH   428  EXTRACTFILE. . . .    PROCEDURE STACK=0016H          776 
+     15  0027H     1  EXTRACTMODE. . . .    BYTE       299  313  774 
+     28               FALSE. . . . . . .    LITERALLY       299  482  540  844 
+     17  0000H    13  FCB. . . . . . . .    BYTE ARRAY(13) EXTERNAL(3)          159  187  217  219  233  352  353
+                                             358  391  392  393  403  427  443  447  448  455  470  475  490  491
+                                             499  504  518  533  538  676  677  678  708  710  715  779  780  783
+                                             785  841 
+     68  0000H     1  FCB. . . . . . . .    BYTE BASED(FCBADDRESS) ARRAY(1)           69   70 
+     87  0000H     1  FCB. . . . . . . .    BYTE BASED(FCBADDRESS) ARRAY(1)           88   89 
+     20  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(5)
+     18  002BH    36  FCB2 . . . . . . .    BYTE ARRAY(36)       425  426  430  431  441  442  495  496  497  511
+                                             529  531  532  542  544 
+    344  0138H    36  FCB3 . . . . . . .    BYTE ARRAY(36)       421  422  423  437  439  440  466  468  469  477
+                                             480 
+     77  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        78   79 
+     73  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        74   75 
+     66  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        67   68   69   70   71 
+     62  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        63   64 
+     85  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        86   87   88   89   90 
+    100  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC       101  102 
+     92  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        93   94 
+     81  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        82   83 
+    621  0173H     1  FOUND. . . . . . .    BYTE       623  641  646  673 
+     55  0004H     1  FUNC . . . . . . .    BYTE PARAMETER AUTOMATIC        56   57 
+     11  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        12 
+      7  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         8 
+      3  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         4 
+    109  02CAH    23  GETSYSDRIVE. . . .    PROCEDURE BYTE STACK=000CH          783 
+     59  0206H    15  GETVERSION . . . .    PROCEDURE WORD STACK=0008H          110  766 
+     35  0000H     2  GINDEX . . . . . .    WORD       562  675 
+      1  0002H   431  HELP . . . . . . .    PROCEDURE STACK=001CH
+                      HIGH . . . . . . .    BUILTIN         110 
+    700  0178H     1  I. . . . . . . . .    BYTE       716  717  718  721  723  724 
+    136  012CH     1  I. . . . . . . . .    BYTE       137  138  139  141  148  150 
+    550  015FH     1  I. . . . . . . . .    BYTE       582  590  595  598  599  615 
+    342  0136H     1  I. . . . . . . . .    BYTE       346  347  359  360  361  366  369  370  375  376  378  379
+                                             381  384  386  395  414  468  470 
+    238  0132H     1  I. . . . . . . . .    BYTE       267  268  271  274  277  302  303  304  306  311  316  321
+                                             327  334  336 
+    487  015DH     1  I. . . . . . . . .    BYTE       499  504  509  511  531  533 
+    700  0179H     1  II . . . . . . . .    BYTE       720  721  722  724  726  728  738  740 
+    154  0388H    42  INC. . . . . . . .    PROCEDURE BYTE STACK=0010H          370  376  386  414  723 
+    154  0004H     1  INCI . . . . . . .    BYTE PARAMETER AUTOMATIC       155  156  157  161  165  168 
+    622  0022H     2  INDEX. . . . . . .    WORD       623  625  627  629  632  645  650  656  658  665  675  676
+                                             677  679  680 
+    551  001EH     2  INDEX. . . . . . .    WORD       569  572  577  602  607  610 
+     29  0050H     1  INDEX. . . . . . .    BYTE
+    343  000AH     2  INDEX. . . . . . .    WORD       349  375  381  384  392  393  394  395  396  397  406  432
+    238  012FH     1  INDEX. . . . . . .    BYTE       239  242  243  244  245  246  248  249  250  252  255  258
+                                             259  261  268  271  274  279  280  286  287  288  290  300  309  314
+                                             319  325  329  332  339 
+     11  0000H     2  INFO . . . . . . .    WORD PARAMETER        13 
+      7  0000H     2  INFO . . . . . . .    WORD PARAMETER         9 
+      3  0000H     2  INFO . . . . . . .    WORD PARAMETER         5 
+    208  0440H   194  INIT . . . . . . .    PROCEDURE STACK=0016H          789 
+    209  0008H     2  INITI. . . . . . .    WORD       214  216  219  222  227  233 
+    763  0181H     1  LASTDSEGBYTE . . .    BYTE INITIAL
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  24
+
+
+     34  010EH     1  LEVEL. . . . . . .    BYTE       254  554  557  627  629  632  633  636  639  680  703  794
+                                             801  811  835 
+     32  000FH     1  LEVEL. . . . . . .    BYTE MEMBER(SYSBUFF)      375  577  607  627  656  680 
+     24               LF . . . . . . . .    LITERALLY        39  120  122  179  199  204  345  484  489  547  616
+                                             731  795 
+    172  0000H     1  LINECNT. . . . . .    BYTE BASED(LINECNTADDR)        177  180  181  182  185  187  191  195
+                                             203 
+    170  0004H     2  LINECNTADDR. . . .    WORD PARAMETER AUTOMATIC       171  172  177  180  181  182  185  187
+                                             191  195  203 
+     15  0024H     1  LISTMODE . . . . .    BYTE       299  323  758  790 
+     85  026EH    25  MAKEFILE . . . . .    PROCEDURE BYTE STACK=000AH          423  497 
+     19  0000H     2  MAXB . . . . . . .    WORD EXTERNAL(4)          211  350  512 
+    488  0018H     2  MAXBUF . . . . . .    WORD       515  516  523 
+    343  0010H     2  MAXBUF . . . . . .    WORD       351  400  401  452  453  460 
+    209  0006H     2  MAXBUF . . . . . .    WORD       212  215  226  231 
+         0000H        MEMORY . . . . . .    BYTE ARRAY(0)         32  211  350  436  454  465  512  517  528 
+      3  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H         45   49   53   64   98  102
+                                             106  115 
+      7  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H         41   57   71   75   79
+                                              83   90   94 
+     11  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(2) STACK=0000H         60 
+                      MOVE . . . . . . .    BUILTIN         129 
+    126  0314H    23  MOVEF. . . . . . .    PROCEDURE STACK=000AH          259  347  352  392  393  407  421  430
+                                             447  490  495  602  632  676  677  751  779 
+    126  0008H     1  MVCNT. . . . . . .    BYTE PARAMETER AUTOMATIC       128  129 
+     33  0102H    12  NAME . . . . . . .    BYTE ARRAY(12)
+    552  0162H    14  NAME . . . . . . .    BYTE ARRAY(14)       599  601  602  603 
+     31  0000H    15  NAME . . . . . . .    BYTE ARRAY(15) MEMBER(COM)          259  271  274  286  288  304  306
+                                             311  316  321  327  629  632  639  694  802  809 
+     15  0025H     1  NOPAGEMODE . . . .    BYTE       175  299  318  324  731 
+    684  0004H     1  NOTOKENS . . . . .    BYTE PARAMETER AUTOMATIC       685  687 
+    551  001CH     2  OFFSET . . . . . .    WORD       553  559  562  569  570 
+     16  0029H     1  OFFSET . . . . . .    BYTE       679  710  716  743  841 
+     66  0225H    25  OPENFILE . . . . .    PROCEDURE BYTE STACK=000AH          353  491  780  785 
+    762  0180H     1  ORET . . . . . . .    BYTE       780  781  785  787 
+    170  03B2H   142  PAGECHECK. . . . .    PROCEDURE BYTE STACK=0010H          582  590  595  615  688  705  733
+                                             752  815  819  823  826  828  831 
+     38  0110H     1  PAGELEN. . . . . .    BYTE       177  767 
+     15  0028H     1  PAGEMODE . . . . .    BYTE       175  768 
+    237  0502H   667  PARSE. . . . . . .    PROCEDURE BYTE STACK=000EH          757  769 
+      2  0010H        PLMSTART . . . . .    LABEL PUBLIC         764 
+    699  1124H   382  PRINT. . . . . . .    PROCEDURE STACK=001AH          808 
+     47  01D3H    16  PRINTCONSOLEBUF. .    PROCEDURE STACK=000AH          120  121  122  179  184  345  484  489
+                                             547  585  588  591  603  616  692  694  739  753  759  791  795  822
+                                             830 
+    749  12A2H    93  PROMPT . . . . . .    PROCEDURE BYTE STACK=0014H          798  839 
+    173  012DH     1  QUIT . . . . . . .    BYTE       174  193  206 
+     40  01B1H    15  READCONSOLE. . . .    PROCEDURE BYTE STACK=0008H
+     51  01E3H    16  READCONSOLEBUFF. .    PROCEDURE STACK=000AH          754 
+     92  0287H    16  READRAND . . . . .    PROCEDURE BYTE STACK=000AH          431  448  708 
+     77  024EH    16  READRECORD . . . .    PROCEDURE BYTE STACK=000AH          159  217  358  455  504  518  715
+    342  0137H     1  RECCNT . . . . . .    BYTE       349  399  420  433  435 
+     32  000EH     1  RECOFFSET. . . . .    BYTE MEMBER(SYSBUFF)      395  679 
+     32  000CH     2  RECORD . . . . . .    WORD MEMBER(SYSBUFF)      392  393  394  433  676  677 
+    136  012BH     1  RESULT . . . . . .    BYTE       137  143  146  152 
+    621  0174H     1  SAVED. . . . . . .    BYTE       623  634  637  654 
+    621  0175H     1  SAVELEVEL. . . . .    BYTE       636  656 
+PL/M-86 COMPILER    HELP UTILITY VERSION 1.1                                                                    PAGE  25
+
+
+    488  001AH     2  SAVESIZE . . . . .    WORD       512  515 
+    343  0012H     2  SAVESIZE . . . . .    WORD       350  351  452 
+    620  0F4FH   365  SEARCHFILE . . . .    PROCEDURE BYTE STACK=000EH          806 
+     96  0297H    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          216  230  419  436  454  465  502  517
+                                             528  618 
+    100  02A7H    16  SETRANDREC . . . .    PROCEDURE STACK=000AH          391 
+    104  02B7H    19  SETUSER. . . . . .    PROCEDURE STACK=000AH          784 
+                      SHL. . . . . . . .    BUILTIN         436  454  465  517  528 
+     26               SLASH. . . . . . .    LITERALLY       366  369  721 
+    126  0006H     2  SOURCEADDR . . . .    WORD PARAMETER AUTOMATIC       127  129 
+    238  0133H     1  STOP . . . . . . .    BYTE       263  264  282 
+    132  0006H     2  STR1ADDR . . . . .    WORD PARAMETER AUTOMATIC       133  134  138  139  141 
+    132  0004H     2  STR2ADDR . . . . .    WORD PARAMETER AUTOMATIC       133  135  139  141 
+    134  0000H    12  STRING1. . . . . .    BYTE BASED(STR1ADDR) ARRAY(12)      138  139  141 
+    135  0000H    12  STRING2. . . . . .    BYTE BASED(STR2ADDR) ARRAY(12)      139  141 
+     30  0051H    12  SUB. . . . . . . .    BYTE ARRAY(12)
+     32  0000H    12  SUBJECT. . . . . .    BYTE ARRAY(12) MEMBER(SYSBUFF)      216  222  347  381  384  407  505
+                                             572  602  625  629  632 
+     32  0000H   128  SYSBUFF. . . . . .    STRUCTURE ARRAY(8) AT          216  222  347  375  381  384  392  393
+                                             394  395  407  419  433  502  505  572  577  602  607  625  627  629
+                                             632  656  676  677  679  680 
+     25               TAB. . . . . . . .    LITERALLY       243 
+     21  0000H   128  TBUFF. . . . . . .    BYTE ARRAY(128) EXTERNAL(6)         230  240  242  243  244  245  246
+                                             249  252  255  264  265  268  269  271  274  284  361  366  369  375
+                                             378  379  381  384  618  718  721  724  751  754  755 
+     36  010FH     1  TCNT . . . . . . .    BYTE       582  590  595  615  688  705  733  752  756  765  796  815
+                                             819  823  826  828  831 
+    750  017FH     1  TEMP . . . . . . .    BYTE       752  757  758  760 
+    701  017CH     3  TEMP . . . . . . .    BYTE ARRAY(3)        724  728  739 
+    117  0006H     1  TERMCODE . . . . .    BYTE PARAMETER AUTOMATIC       118  123 
+    114  02E1H    14  TERMINATE. . . . .    PROCEDURE STACK=0008H          124  188  848 
+    685  0176H     1  TOKENCNT1. . . . .    BYTE       686  687  691  694  695 
+    685  0177H     1  TOKENCNT2. . . . .    BYTE       691 
+     27               TRUE . . . . . . .    LITERALLY       164  193  220  223  234  282  291  308  313  318  323
+                                             324  355  363  404  428  444  457  471  478  482  493  500  506  510
+                                             520  534  545  567  574  581  608  637  641  642  661  670  711  719
+                                             727  768 
+    104  0004H     1  USERNUM. . . . . .    BYTE PARAMETER AUTOMATIC       105  106 
+     37  0002H     2  VERSION. . . . . .    WORD       766 
+     43  01C0H    19  WRITECONSOLE . . .    PROCEDURE STACK=000AH          199  204  596  702  736  816  824  827
+                                             829  832 
+     81  025EH    16  WRITERECORD. . . .    PROCEDURE BYTE STACK=000AH          437  466  511  529 
+    550  0161H     1  WRITTEN. . . . . .    BYTE       553  579  581  613 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 12FFH   4863D
+     CONSTANT AREA SIZE = 03C3H    963D
+     VARIABLE AREA SIZE = 0182H    386D
+     MAXIMUM STACK SIZE = 001CH     28D
+     1142 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

@@ -1,0 +1,17 @@
+$ xer CANON.LIS
+$ xer CODEGEN.LIS
+$ xer CSKELS.LIS
+$ xer INIT.LIS
+$ xer INTERF.LIS
+$ xer MAIN.LIS
+$ xer OPTAB.LIS
+$ xer PUTEXPR.LIS
+$ xer SMATCH.LIS
+$ xer SUCOMP.LIS
+$ xer TABL.LIS
+$ xer UTIL.LIS
+$ xer VERSION.LIS
+$ xer CGEN.LST
+$ xer CSKEL.LST
+$ xer ICODE.LST
+$ xer MACHINE.LST

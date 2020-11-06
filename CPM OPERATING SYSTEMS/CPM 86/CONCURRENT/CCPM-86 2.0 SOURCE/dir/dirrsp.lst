@@ -1,0 +1,1042 @@
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE DIR
+OBJECT MODULE PLACED IN DIRRSP.OBJ
+COMPILER INVOKED BY:  :F0: DIRRSP.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+              $TITLE('CONCURRENT CP/M 86 --- DIR 1.0 ')
+              $compact
+
+
+              /* Conditional compile: 
+                  rsp=0ffh        produce a DIR.RSP type of file
+                  rsp=0           produce a DIR.CMD file
+               */
+              $set(rsp=0ffh)
+
+              $include(dirm.plm)
+          =   /* dirm: 
+          =       This is the module included by DIRRSP or DIRCMD.
+          =
+          =     Revised:
+          =       Jan  80  by Thomas Rolander
+          =       July 81  by Doug Huskey
+          =       June 82  by Bill Fitler
+          =       July 82  by Danny Horovitz (made an RSP)
+          =       Dec  82  by Fran Borda     (conditional comp)
+          =       Mar  83  by Bill Fitler    (   "         "  )
+          =       Mar  83  by Danny Horovitz (control C fixes)
+          =
+          =     Conditional compile: 
+          =       rsp=0ffh        produce a DIR.RSP type of file
+          =       rsp=0           produce a DIR.CMD file
+          =    */
+          =
+          =   /**** Vax commands to compile DIR.RSP and DIR.CMD:
+          =
+          =       $ ccpmsetup
+          =       $ plm86 dircmd.plm 'p1' 'p2' 'p3' 'p4' optimize(3) debug
+          =       $ link86 f1:scd.obj, dircmd.obj  to dircmd.lnk
+          =       $ loc86 dircmd.lnk od(sm(code,dats,data,stack,const))-
+          =             ad(sm(code(0), dats(10000h)))  ss(stack(+32)) to dircmd.
+          =       $ h86 dircmd
+          =       $ ! DIR.RSP
+          =       $ ! Note: separate code and data
+          =       $ asm86 rhdir.a86       !Rsp Header DIR
+          =       $ plm86 dirrsp.plm 'p1' 'p2' 'p3' 'p4' optimize(3) debug
+          =       $ link86 rhdir.obj, dirrsp.obj  to dirrsp.lnk
+          =       $ loc86 dirrsp.lnk od(sm(code,dats,data,stack,const))-
+          =             ad(sm(code(0), dats(10000h)))  ss(stack(0)) to dirrsp.
+          =       $ h86 dirrsp
+          =
+          =   **** Then, on a micro:
+          =       A>vax dircmd.h86 $fans
+          =       A>vax dirrsp.h86 $fans
+          =       A>gencmd dircmd data[b1000]
+          =       A>ren dir.cmd=dircmd.cmd
+          =       A>gencmd dirrsp data[b1000]
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   2
+
+
+          =       A>ren dir.rsp=dirrsp.cmd
+          =
+          =   **** Notes: Both DIRCMD.PLM and DIRRSP.PLM include DIRM.PLM, after setting
+          =           RSP flag appropriately.
+          =
+          =   ****/
+          =
+          =
+   1      =   dir:
+          =   do;
+          =
+          =   $include (:f1:copyrt.lit)
+          =1
+          =1  /*
+          =1    Copyright (C) 1983
+          =1    Digital Research
+          =1    P.O. Box 579
+          =1    Pacific Grove, CA 93950
+          =1  */
+          =1
+          =
+          =   $include (:f1:comlit.lit)
+          =1
+   2   1  =1  declare
+          =1          lit                literally          'literally',
+          =1          dcl                lit                'declare',
+          =1          true               lit                '0ffh',
+          =1          false              lit                '0',
+          =1          no                 lit                'not',    
+          =1          boolean            lit                'byte',
+          =1          forever            lit                'while true',
+          =1          cr                 lit                '13',
+          =1          lf                 lit                '10',
+          =1          tab                lit                '9',
+          =1          ctrlc              lit                '3',
+          =1          ff                 lit                '12',
+          =1          page$len$offset    lit                '1ch',
+          =1          nopage$mode$offset lit                '2Ch',
+          =1          sectorlen          lit                '128';
+          =
+          =   $include (:f1:mfunc.lit)
+          =1
+          =1  /* Concurrent CP/M function numbers */
+          =1
+   3   1  =1  dcl           m$prtbuf              lit       '9',
+          =1                m$select              lit       '14',
+          =1                m$openf               lit       '15',
+          =1                m$closef              lit       '16',
+          =1                m$deletef             lit       '19',
+          =1                m$readf               lit       '20',
+          =1                m$writef              lit       '21',
+          =1                m$makef               lit       '22',
+          =1                m$getlogin            lit       '24',
+          =1                m$curdsk              lit       '25',
+          =1                m$setdma              lit       '26',
+          =1                m$setatt              lit       '30',
+          =1                m$setusr              lit       '32',
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   3
+
+
+          =1                m$readrf              lit       '33',
+          =1                m$writerf             lit       '34',
+          =1                m$resetdrv            lit       '37',
+          =1                m$errmode             lit       '45',
+          =1                m$dirbios             lit       '50',
+          =1                m$makeq               lit       '134',
+          =1                m$openq               lit       '135',
+          =1                m$deleteq             lit       '136',
+          =1                m$readq               lit       '137',
+          =1                m$creadq              lit       '138',
+          =1                m$writeq              lit       '139',
+          =1                m$cwriteq             lit       '140',
+          =1                m$delay               lit       '141',
+          =1                m$dispatch            lit       '142',
+          =1                m$setprior            lit       '145',
+          =1                m$attach              lit       '146',
+          =1                m$detach              lit       '147',
+          =1                m$setcns              lit       '148',
+          =1                m$parse               lit       '152',
+          =1                m$getcns              lit       '153',
+          =1                m$sysdat              lit       '154',
+          =1                m$getpd               lit       '156',
+          =1                m$abort               lit       '157';
+          =1
+          =1  /* Internal calls */
+          =1
+   4   1  =1  dcl           mi$sleep              lit       '0212H',
+          =1                mi$wakeup             lit       '0213H';
+          =1                
+          =
+          =   $include (:f1:proces.lit)
+          =1
+          =1  /*
+          =1      Proces Literals MP/M-8086 II
+          =1  */
+          =1
+   5   1  =1  declare pnamsiz literally '8';
+          =1
+   6   1  =1  declare pd$hdr literally 'structure
+          =1    (link word,thread word,stat byte,prior byte,flag word,
+          =1    name (8) byte,uda word,dsk byte,user byte,ldsk byte,luser byte,
+          =1    mem word';
+          =1
+   7   1  =1  declare pd$structure literally 'pd$hdr,
+          =1    dvract word,wait word,org byte,net byte,parent word,
+          =1    cns byte,abort byte,conmode word,lst byte,sf3 byte,sf4 byte,sf5 byte,
+          =1    reservd (4) byte,pret word,scratch word)';
+          =1
+   8   1  =1    declare psrun                 lit '00',
+          =1            pspoll                lit '01',
+          =1            psdelay               lit '02',
+          =1            psswap                lit '03',
+          =1            psterm                lit '04',
+          =1            pssleep               lit '05',
+          =1            psdq                  lit '06',
+          =1            psnq                  lit '07',
+          =1            psflagwait            lit '08',
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   4
+
+
+          =1            psciowait             lit '09';
+          =1
+   9   1  =1    declare pf$sys                lit '00001h',
+          =1            pf$keep               lit '00002h',
+          =1            pf$kernal             lit '00004h',
+          =1            pf$pure               lit '00008h',
+          =1            pf$table              lit '00010h',
+          =1            pf$resource           lit '00020h',
+          =1            pf$raw                lit '00040h',
+          =1            pf$ctlc               lit '00080h',
+          =1            pf$active             lit '00100h',
+          =1            pf$tempkeep           lit '00200h',
+          =1            pf$ctld               lit '00400h',
+          =1            pf$childabort         lit '00800h',
+          =1            pf$noctls             lit '01000h';
+          =1
+  10   1  =1    declare pcm$11                lit '00001h',
+          =1            pcm$ctls              lit '00002h',
+          =1            pcm$rout              lit '00004h',
+          =1            pcm$ctlc              lit '00008h',
+          =1            pcm$ctlo              lit '00080h',
+          =1            pcm$rsx               lit '00300h';
+          =
+          =   $include (:f1:qd.lit)
+          =1
+          =1  /* Queue Descriptor */
+          =1
+  11   1  =1  dcl qnamsiz lit '8';
+          =1
+  12   1  =1  dcl qd$structure lit 'structure(
+          =1    link  word,
+          =1    net byte,
+          =1    org byte,
+          =1    flags word,
+          =1    name(qnamsiz) byte,
+          =1    msglen word,
+          =1    nmsgs word,
+          =1    dq word,
+          =1    nq word,
+          =1    msgcnt word,
+          =1    msgout word,
+          =1    buffer word)';
+          =1
+          =1  /* queue flag values */
+          =1
+  13   1  =1  dcl qf$mx       lit '001h'; /* Mutual Exclusion */
+  14   1  =1  dcl qf$keep     lit '002h'; /* NO DELETE        */
+  15   1  =1  dcl qf$hide     lit '004h'; /* Not User writable    */
+  16   1  =1  dcl qf$rsp      lit '008h'; /* rsp queue        */
+  17   1  =1  dcl qf$table    lit '010h'; /* from qd table    */
+  18   1  =1  dcl qf$rpl      lit '020h'; /* rpl queue        */
+  19   1  =1  dcl qf$dev      lit '040h'; /* device queue     */
+          =1
+          =1  /* Queue Parameter Block */
+          =1
+  20   1  =1  dcl qpb$structure lit 'structure(
+          =1    flgs    byte,
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   5
+
+
+          =1    net     byte,
+          =1    qaddr   word,
+          =1    nmsgs   word,
+          =1    buffptr word,
+          =1    name (qnamsiz) byte )';
+          =1
+          =
+          =     /**************************************
+          =      *                                    *
+          =      *       B D O S   INTERFACE          *
+          =      *                                    *
+          =      **************************************/
+          =
+          =
+  21   1  =     mon1:
+          =       procedure (func,info) external;
+  22   2  =         declare func byte;
+  23   2  =         declare info address;
+  24   2  =       end mon1;
+          =
+  25   1  =     mon2:
+          =       procedure (func,info) byte external;
+  26   2  =         declare func byte;
+  27   2  =         declare info address;
+  28   2  =       end mon2;
+          =
+  29   1  =     mon3:
+          =       procedure (func,info) address external;
+  30   2  =         declare func byte;
+  31   2  =         declare info address;
+  32   2  =       end mon3;
+          =
+  33   1  =     mon4:
+          =       procedure (func,info) pointer external;
+  34   2  =         declare func byte;
+  35   2  =         declare info address;
+  36   2  =       end mon4;
+          =
+          =
+          =
+  37   1  =   patch: procedure public;    /* dummy area for patching code segments */
+  38   2  =     declare i address;
+          =     /* first statement = 9 bytes, rest are 5 bytes */
+  39   2  =       i=i+5;  i=i+5;  i=i+5;  i=i+5;  i=i+5;
+  44   2  =       i=i+5;  i=i+5;  i=i+5;  i=i+5;  i=i+5;
+  49   2  =       i=i+5;  i=i+5;  i=i+5;  i=i+5;  i=i+5;    /* about 79 bytes */
+  54   2  =     end patch;
+          =
+          =
+          =   $if rsp
+  55   1  =     declare fcb (36) byte;                  /* 1st default fcb    */
+  56   1  =     declare fcb16 (1) byte at (@fcb(16));   /* 2nd default fcb    */
+          =   $else
+          =     declare fcb (1)   byte    external;     /* 1st default fcb    */
+          =     declare fcb16 (1) byte    external;     /* 2nd default fcb    */
+          =   $endif
+          =
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   6
+
+
+  57   1  =     write$console:
+          =       procedure (char);
+  58   2  =         declare char byte;
+  59   2  =         call mon1 (2,char);
+  60   2  =       end write$console;
+          =
+  61   1  =     print$buf:
+          =       procedure (buffer$address);
+  62   2  =         declare buffer$address address;
+  63   2  =         call mon1 (9,buffer$address);
+  64   2  =       end print$buf;
+          =
+  65   1  =     check$ctrl$c:
+          =       procedure byte;
+          =   $if rsp
+  66   2  =         if (dir$pd.flag and pf$ctlC) <> 0 then
+  67   2  =         do;
+  68   3  =            dir$pd.flag = dir$pd.flag and not double(pf$ctlC);
+  69   3  =            return(true);
+  70   3  =         end;
+          =   $endif
+  71   2  =         return (false);
+  72   2  =       end check$ctrl$c;
+          =
+  73   1  =     search$first:
+          =       procedure (fcb$address) byte;
+  74   2  =         declare fcb$address address;
+  75   2  =         return mon2 (17,fcb$address);
+  76   2  =       end search$first;
+          =
+  77   1  =     search$next:
+          =       procedure (fcb$address) byte;
+  78   2  =         declare fcb$address address;
+  79   2  =         return mon2 (18,fcb$address);
+  80   2  =       end search$next;
+          =
+  81   1  =     setdma: procedure(dma);
+  82   2  =       declare dma address;
+  83   2  =       call mon1(26,dma);
+  84   2  =       end setdma;
+          =
+          =    
+  85   1  =     get$user$code:
+          =       procedure byte;
+  86   2  =         return mon2 (32,0ffh);
+  87   2  =       end get$user$code;
+          =     
+  88   1  =      set$user$code:
+          =       procedure(user);
+  89   2  =         declare user byte;
+  90   2  =         call mon1 (32,user);
+  91   2  =       end set$user$code;
+          =     
+  92   1  =   terminate:
+          =       procedure;
+  93   2  =         call mon1 (0,0);
+  94   2  =       end terminate;
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   7
+
+
+          =
+  95   1  =   declare
+          =       parse$fn structure (
+          =         buff$adr  address,
+          =         fcb$adr   address),
+          =       delimiter based parse$fn.buff$adr byte;
+  96   1  =     declare tail$len address;
+          =
+  97   1  =     parse: procedure address;
+  98   2  =       return mon3(152,.parse$fn);
+  99   2  =       end parse;
+          =
+          =
+ 100   1  =       crlf:
+          =       procedure;
+ 101   2  =         call write$console (0dh);
+ 102   2  =         call write$console (0ah);
+ 103   2  =       end crlf;
+          =
+          =
+          =   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+          =
+          =
+          =                   * * *  GLOBAL VARIABLES  * * *
+          =
+          =
+          =    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+          =
+          =
+          =
+ 104   1  =   declare dir$title (*) byte initial
+          =     ('Directory for User  x:','$');
+          =
+ 105   1  =   declare (sys,temp,dcnt,cnt,user) byte;
+ 106   1  =   declare 
+          =      i          byte,
+          =      new$user   byte,
+          =      sys$exists byte,
+          =      incl$sys   byte,
+          =      option     byte;
+          =
+ 107   1  =   declare 
+          =      dirbuf (128) byte;
+          =
+          =
+          =   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+          =
+          =
+          =                   * * *  DIRECTORY DISPLAY  * * *
+          =
+          =
+          =    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+          =
+          =
+          =                     /* display directory heading */
+ 108   1  =   heading: procedure;
+          =
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   8
+
+
+ 109   2  =       if user > 9 then
+ 110   2  =       do;
+ 111   3  =         dir$title(19) = '1';
+ 112   3  =         dir$title(20) = user - 10 + '0';
+ 113   3  =       end;
+          =       else
+ 114   2  =       do;
+ 115   3  =         dir$title(19) = ' ';
+ 116   3  =         dir$title(20) = user + '0';
+ 117   3  =       end;
+ 118   2  =       call print$buf (.dir$title);
+ 119   2  =       end heading;
+          =
+          =   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+          =
+          =   /*
+          =   help: procedure;
+          =       call mon1(m$prt$buf, .(cr, lf, tab, tab, tab ,'DIR EXAMPLES$'));
+          =       call mon1(m$prt$buf, .(cr, lf, lf, 'dir', tab, tab,
+          =         '(show all directory files on current drive and user)
+          =       call mon1(m$prt$buf, .(cr, lf, 'dir [g3]', tab, tab, tab, tab,
+          =         '(show non system files under user 3)$'));
+          =       call mon1(m$prt$buf, .(cr, lf, 'dir a: b: [s]', tab, tab, tab,
+          =         tab, '(show all files under current user on a: and b:)$'));
+          =       call terminate;
+          =   end help;
+          =   */
+          =
+          =   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+          =
+          =                     /* do next directory display */
+ 120   1  =   directory: procedure boolean;
+          =
+ 121   2  =       shown$nothing = false;
+ 122   2  =       if new$user then do;
+ 124   3  =           call heading;
+ 125   3  =           new$user = false;
+ 126   3  =           end;
+ 127   2  =       sys$exists = false;
+ 128   2  =       cnt = -1;
+          =       /* if drive is 0 (default) 
+          =          then set to current disk */
+ 129   2  =       if fcb(0) = 0
+          =         then fcb(0) = mon2 (m$curdsk,0) + 1;
+ 131   2  =       if fcb(1) = ' ' then
+          =       /* check for blank filename => wildcard */
+ 132   2  =       do i = 1 to 11;
+ 133   3  =         fcb(i) = '?';
+ 134   3  =       end;
+          =       /* get first file */
+ 135   2  =       if (dcnt := search$first (.fcb)) <> 0ffh then
+ 136   2  =       do while dcnt <> 0ffh;
+ 137   3  =         temp = shl(dcnt,5);
+ 138   3  =         sys = ((dirbuf(temp+10) and 80h) = 80h);
+ 139   3  =         if (dirbuf(temp) = user) and
+          =            (incl$sys or not sys) then
+ 140   3  =         do;
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE   9
+
+
+ 141   4  =           if ((cnt:=cnt+1) mod 4) = 0 then
+ 142   4  =           do;
+ 143   5  =             call crlf;
+ 144   5  =             call write$console ('A'+fcb(0)-1);
+ 145   5  =           end;
+          =           else
+ 146   4  =           do;
+ 147   5  =             call write$console (' ');
+ 148   5  =           end;
+ 149   4  =           call write$console (':');
+ 150   4  =           call write$console (' ');
+ 151   4  =           do i = 1 to 11;
+ 152   5  =             if i = 9 then call write$console (' ');
+ 154   5  =             call write$console
+          =               (dirbuf(temp+i) and 7fh);
+ 155   5  =             if check$ctrl$c then
+ 156   5  =               return(false);
+ 157   5  =           end;
+ 158   4  =         end;
+ 159   3  =         else if sys then
+ 160   3  =           sys$exists = true;
+          =         dcnt = search$next (.fcb);
+ 162   3  =       end;
+ 163   2  =       if cnt = -1 then
+ 164   2  =       do;
+ 165   3  =         call print$buf (.(0dh,0ah,
+          =           'File not found.','$'));
+ 166   3  =       end;
+ 167   2  =       if sys$exists then 
+ 168   2  =         call print$buf (.(0dh,0ah,
+          =           'System Files Exist','$'));
+ 169   2  =       return(true);
+ 170   2  =       end directory;
+          =
+          =   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+          =
+          =
+          =                       * * *  PARSING  * * *
+          =
+          =
+          =    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+          =
+          =
+          =         /* parse one file name, return true if got one */
+ 171   1  =   parse$file: procedure boolean;
+ 172   2  =     dcl i address;
+ 173   2  =     dcl buf based parse$fn.buff$adr (1) byte;
+ 174   2  =     dcl parse$ret address;
+          =
+ 175   2  =     if (parse$ret := parse$fn.buff$adr) = 0 then
+ 176   2  =       return(false);
+ 177   2  =     fcb(0), i = 0;
+ 178   2  =     parse$ret = parse;                        /* kludge around        */ 
+ 179   2  =     do while parse$ret = 0 and buf(i) = '[';  /* parse file name bugs */
+ 180   3  =       if (i := findb(@buf(i), ']', tail$len - i)) <> 0ffffh then
+ 181   3  =       do;
+ 182   4  =         parse$fn.buff$adr = .buf(i) + 1;        /* skip right bracket */
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  10
+
+
+ 183   4  =         i = 0;
+ 184   4  =         parse$ret = parse;
+ 185   4  =       end;
+          =       else
+ 186   3  =         buf(i) = 0;
+ 187   3  =     end;
+ 188   2  =     parse$fn.buff$adr = parse$ret;
+          =
+          =
+ 189   2  =     if parse$fn.buff$adr <> 0ffffh then
+ 190   2  =     do;
+ 191   3  =       if fcb(1) <> ' ' then
+ 192   3  =       do;
+ 193   4  =         if parse$fn.buff$adr <> 0 and delimiter <> '[' and delimiter <> 0 then
+ 194   4  =           parse$fn.buff$adr = parse$fn.buff$adr + 1;
+ 195   4  =         return(true);             /* parse$fn.buff$adr could = 0 */
+ 196   4  =       end;
+ 197   3  =       else if fcb(0) <> 0 and fcb(1) = ' ' then  /* drive spec */
+ 198   3  =       do;
+ 199   4  =         call setb('?', @fcb(1), 11);
+ 200   4  =         return(true);
+ 201   4  =       end;
+          =     end;
+          =     else /* if parse$fn.buff$adr = 0ffffh then */
+ 203   2  =     do;
+ 204   3  =       call print$buf(.(cr, lf, 'Invalid filespec.$'));
+ 205   3  =       shown$nothing = false;         /* don't show directory */
+ 206   3  =       return(false);    /* also if parse$fn.buf$adr = 0 and fcb(0) = ' ' */
+ 207   3  =     end;
+ 208   2  =   end parse$file;
+          =
+          =
+          =   /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+          =
+          =
+          =               /* parse & interpret all options - assume global */
+ 209   1  =   parse$options: procedure boolean;
+ 210   2  =     dcl (n,i) word;
+ 211   2  =     dcl (options, in$brackets, error) boolean;
+ 212   2  =     i = 0;          /* parse file name doesn't work with delimiters */
+ 213   2  =     parse$fn.fcb$adr = .dirbuf;
+ 214   2  =     error = false;
+ 215   2  =     options = true;
+ 216   2  =     do while options and not error;
+ 217   3  =       if (n := findb(@tbuff(i), '[', tail$len - i)) = 0ffffh then
+ 218   3  =         options = false;
+          =       else
+ 219   3  =       do;
+ 220   4  =         i = i + n + 1;
+ 221   4  =         parse$fn.buff$adr = .tbuff(i);
+ 222   4  =         in$brackets = true;
+ 223   4  =         do while in$brackets and not error;
+ 224   5  =           if (parse$fn.buff$adr := parse) <> 0ffffh then
+ 225   5  =           do;
+ 226   6  =             if dirbuf(1) = 'S' then
+ 227   6  =               incl$sys = true;
+ 228   6  =             else if dirbuf(1) = 'G' then
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  11
+
+
+ 229   6  =             do;
+ 230   7  =               if dirbuf(3) <> ' ' then
+ 231   7  =                 temp = dirbuf(3) - '0' + 10;
+ 232   7  =               else if dirbuf(2) <> ' ' then
+ 233   7  =                 temp = dirbuf(2) - '0';
+          =               if temp < 16 then
+ 235   7  =               do;
+ 236   8  =                 call mon1(m$setusr, (user:=temp));
+ 237   8  =                 new$user = true;
+ 238   8  =               end;
+ 239   7  =             end;
+          =             else
+ 240   6  =               error = true;
+ 241   6  =           end;  /* if parse */
+ 242   5  =           if delimiter = ']' or parse$fn.buff$adr = 0 or
+          =             parse$fn.buff$adr = 0ffffh then
+ 243   5  =             in$brackets = false;
+ 244   5  =         end;  /* while in$brackets */
+ 245   4  =       end;  /* else               */
+ 246   3  =     end;  /* while options       */
+          =
+ 247   2  =     if error then
+ 248   2  =     do;
+ 249   3  =       call print$buf(.(cr, lf, 'Invalid Command Option$'));
+ 250   3  =       return(false);
+          =       /* call help; */
+ 251   3  =     end;
+ 252   2  =     return(true);
+ 253   2  =   end parse$options;
+          =
+          =
+          =
+          =   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+          =
+          =
+          =                * * *  M A I N   P R O G R A M  * * *
+          =
+          =
+          =    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+          =
+          =   $if rsp
+ 254   1  =    declare cpd$pointer pointer;             /* Calling PD pointer stuff */
+ 255   1  =    declare cpd$ptr structure (
+          =       offset address, segment address) at (@cpd$pointer);
+ 256   1  =    declare calling$pd based cpd$pointer pd$structure;
+ 257   1  =    declare dpd$pointer pointer;            /* DIR RSP PD pointer stuff */
+ 258   1  =    declare dpd$ptr structure (
+          =       offset address, segment address) at (@dpd$pointer);
+ 259   1  =    declare dir$pd based dpd$pointer pd$structure;
+ 260   1  =    declare qdbuf (131) byte;
+ 261   1  =    declare dirqd qd$structure initial
+          =      (0, 0, 0, qf$keep + qf$rsp, 'DIR     ', 131, 1, 0, 0, 0, 0, .qdbuf);
+ 262   1  =    declare qpbbuf (131) byte;
+ 263   1  =    declare cpd$offset address at (@qpbbuf(0));
+ 264   1  =    declare tbuff (128) byte at (@qpbbuf(2));
+ 265   1  =    declare dirqpb qpb$structure initial
+          =      (0, 0, 0, 0, .qpbbuf, 'DIR     ');
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  12
+
+
+          =   $else
+          =    declare tbuff (128) byte external;
+          =   $endif
+          =
+ 266   1  =   declare shown$nothing boolean;
+          =
+ 267   1  =   plmstart: procedure public;
+          =
+          =     /* initialization */
+          =
+          =   $if rsp
+ 268   2  =     call mon1(m$make$q, .dirqd);      
+ 269   2  =     call mon1(m$open$q, .dirqpb);
+ 270   2  =     call mon1(m$set$prior, 200);      /* Set priority same as other transients*/
+          =   $else  
+          =     user = get$user$code;         /* ?????   whf */
+          =     incl$sys = (fcb(1) = 'S');        /* ?????  why exclude if rsp?  whf */
+          =   $endif
+          =
+ 271   2  =     call setdma(.dirbuf);                        
+          =   $if rsp
+ 272   2  =     cpd$pointer,dpd$pointer = mon4(m$sysdat, 0);
+ 273   2  =     dpd$ptr.offset = mon3(m$getpd,0);
+          =     /* Don't allow control S, turn on tempkeep for control C checking */
+ 274   2  =     dir$pd.flag = dir$pd.flag or pf$noctls or pf$tempkeep;
+          =     /* Read RSP Queue forever */
+ 275   2  =     do forever;
+ 276   3  =        call mon1(m$readq, .dirqpb);
+ 277   3  =        dir$pd.flag = dir$pd.flag and not double(pf$ctlC);
+          =        /* Could be on from last DIR */
+          =        /* set defaults same as calling process's, have both PDs so will poke */
+          =        /* and not call O.S. */         
+ 278   3  =        cpd$ptr.offset = cpd$offset;
+ 279   3  =        call mon1(m$setcns, calling$pd.cns);
+ 280   3  =        call mon1(m$setusr, (user := calling$pd.user));
+ 281   3  =        call mon1(m$select, calling$pd.dsk);
+          =   $endif
+ 282   3  =        new$user = true;
+ 283   3  =        sys$exists, incl$sys = false;
+ 284   3  =        tail$len = findb(@tbuff, 0, 128);
+          =
+          =        /* scan for options - all are global */
+          =
+ 285   3  =        if not parse$options then
+ 286   3  =          goto done;                  /* option error */
+          =
+          =        /* do command line */
+          =
+ 287   3  =        shown$nothing = true;
+          =   $if rsp 
+ 288   3  =        parse$fn.buff$adr = .tbuff;
+          =   $else
+          =        parse$fn.buff$adr = (.tbuff) + 1;/* Skip # of bytes in buffer */
+          =   $endif 
+ 289   3  =        parse$fn.fcb$adr = .fcb;
+ 290   3  =        do while parse$file;           /* false when no more files, sets */
+ 291   4  =          if not directory then        /* shown$nothing=false if parsing error */
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  13
+
+
+ 292   4  =            goto done;                 /* directory = false if console inpute */
+ 293   4  =        end;
+          =
+ 294   3  =        if shown$nothing then          /* no files specified on command line */
+ 295   3  =        do;
+ 296   4  =          call setb('?', @fcb(1), 11);
+ 297   4  =          if not directory then
+ 298   4  =            goto done;                 /* false on console input */
+ 299   4  =        end;
+ 300   3  =   done:
+          =   $if rsp
+          =       call mon1(m$detach, 0);
+ 301   3  =       end; /* do forever */
+          =   $else   
+          =       call terminate;
+          =   $endif
+          =     
+ 302   2  =   end plmstart;
+          =
+ 303   1  =   end dir;
+
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  14
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    259  0021H     1  ABORT. . . . . . .    BYTE MEMBER(DIRPD)
+    256  0021H     1  ABORT. . . . . . .    BYTE MEMBER(CALLINGPD)
+      2               BOOLEAN. . . . . .    LITERALLY       120  171  209  211  266 
+    173  0000H     1  BUF. . . . . . . .    BYTE BASED(PARSEFN.BUFFADR) ARRAY(1)          179  180  182  186 
+     95  0000H     2  BUFFADR. . . . . .    WORD MEMBER(PARSEFN)       95  173  175  179  180  182  186  188  189
+                                             193  194  221  224  242  288 
+    261  001AH     2  BUFFER . . . . . .    WORD MEMBER(DIRQD)
+     61  0004H     2  BUFFERADDRESS. . .    WORD PARAMETER AUTOMATIC        62   63 
+    265  0006H     2  BUFFPTR. . . . . .    WORD MEMBER(DIRQPB)
+    256  0000H    48  CALLINGPD. . . . .    STRUCTURE BASED(CPDPOINTER)         279  280  281 
+     57  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        58   59 
+     65  007AH    29  CHECKCTRLC . . . .    PROCEDURE BYTE STACK=0002H          155 
+    259  0020H     1  CNS. . . . . . . .    BYTE MEMBER(DIRPD)
+    256  0020H     1  CNS. . . . . . . .    BYTE MEMBER(CALLINGPD)         279 
+    105  0082H     1  CNT. . . . . . . .    BYTE       128  141  163 
+    259  0022H     2  CONMODE. . . . . .    WORD MEMBER(DIRPD)
+    256  0022H     2  CONMODE. . . . . .    WORD MEMBER(CALLINGPD)
+    263  018FH     2  CPDOFFSET. . . . .    WORD AT         278 
+    254  0010H     4  CPDPOINTER . . . .    POINTER         255  256  272  279  280  281 
+    255  0010H     4  CPDPTR . . . . . .    STRUCTURE AT         278 
+      2               CR . . . . . . . .    LITERALLY       204  249 
+    100  0106H    17  CRLF . . . . . . .    PROCEDURE STACK=000EH          143 
+      2               CTRLC. . . . . . .    LITERALLY
+      2               DCL. . . . . . . .    LITERALLY
+    105  0081H     1  DCNT . . . . . . .    BYTE       135  136  137  161 
+     95  0000H     1  DELIMITER. . . . .    BYTE BASED(PARSEFN.BUFFADR)         193  242 
+      1  0002H        DIR. . . . . . . .    PROCEDURE STACK=0000H
+    107  0089H   128  DIRBUF . . . . . .    BYTE ARRAY(128)      138  139  154  213  226  228  230  231  232  233
+                                             271 
+    120  0143H   339  DIRECTORY. . . . .    PROCEDURE BYTE STACK=0012H          291  297 
+    259  0000H    48  DIRPD. . . . . . .    STRUCTURE BASED(DPDPOINTER)          66   68  274  277 
+    261  0018H    28  DIRQD. . . . . . .    STRUCTURE INITIAL         268 
+    265  0034H    16  DIRQPB . . . . . .    STRUCTURE INITIAL         269  276 
+    104  0068H    23  DIRTITLE . . . . .    BYTE ARRAY(23) INITIAL         111  112  115  116  118 
+     81  0004H     2  DMA. . . . . . . .    WORD PARAMETER AUTOMATIC        82   83 
+    300  0593H        DONE . . . . . . .    LABEL      286  292  298 
+                      DOUBLE . . . . . .    BUILTIN          68  277 
+    257  0014H     4  DPDPOINTER . . . .    POINTER          66   68  258  259  272  274  277 
+    258  0014H     4  DPDPTR . . . . . .    STRUCTURE AT         273 
+    261  0012H     2  DQ . . . . . . . .    WORD MEMBER(DIRQD)
+    256  0012H     1  DSK. . . . . . . .    BYTE MEMBER(CALLINGPD)         281 
+    259  0012H     1  DSK. . . . . . . .    BYTE MEMBER(DIRPD)
+    256  0018H     2  DVRACT . . . . . .    WORD MEMBER(CALLINGPD)
+    259  0018H     2  DVRACT . . . . . .    WORD MEMBER(DIRPD)
+    211  010BH     1  ERROR. . . . . . .    BYTE       214  216  223  240  247 
+      2               FALSE. . . . . . .    LITERALLY        71  121  125  127  156  176  205  206  214  218  243
+                                             250  283 
+     55  0044H    36  FCB. . . . . . . .    BYTE ARRAY(36)        56  129  130  131  133  135  144  161  177  191
+                                             197  199  289  296 
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  15
+
+
+     56  0054H     1  FCB16. . . . . . .    BYTE ARRAY(1) AT
+     77  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        78   79 
+     73  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        74   75 
+     95  0002H     2  FCBADR . . . . . .    WORD MEMBER(PARSEFN)      213  289 
+      2               FF . . . . . . . .    LITERALLY
+                      FINDB. . . . . . .    BUILTIN         180  217  284 
+    256  0006H     2  FLAG . . . . . . .    WORD MEMBER(CALLINGPD)
+    259  0006H     2  FLAG . . . . . . .    WORD MEMBER(DIRPD)         66   68  274  277 
+    261  0004H     2  FLAGS. . . . . . .    WORD MEMBER(DIRQD)
+    265  0000H     1  FLGS . . . . . . .    BYTE MEMBER(DIRQPB)
+      2               FOREVER. . . . . .    LITERALLY       275 
+     33  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        34 
+     21  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        22 
+     25  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        26 
+     29  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        30 
+     85  00C7H    15  GETUSERCODE. . . .    PROCEDURE BYTE STACK=0008H
+    108  0117H    44  HEADING. . . . . .    PROCEDURE STACK=000EH          124 
+    106  0084H     1  I. . . . . . . . .    BYTE       132  133  151  152  154 
+    210  000EH     2  I. . . . . . . . .    WORD       212  217  220  221 
+    172  0008H     2  I. . . . . . . . .    WORD       177  179  180  182  183  186 
+     38  0000H     2  I. . . . . . . . .    WORD        39   40   41   42   43   44   45   46   47   48   49   50
+                                              51   52   53 
+    211  010AH     1  INBRACKETS . . . .    BYTE       222  223  243 
+    106  0087H     1  INCLSYS. . . . . .    BYTE       139  227  283 
+     25  0000H     2  INFO . . . . . . .    WORD PARAMETER        27 
+     29  0000H     2  INFO . . . . . . .    WORD PARAMETER        31 
+     21  0000H     2  INFO . . . . . . .    WORD PARAMETER        23 
+     33  0000H     2  INFO . . . . . . .    WORD PARAMETER        35 
+    259  0014H     1  LDSK . . . . . . .    BYTE MEMBER(DIRPD)
+    256  0014H     1  LDSK . . . . . . .    BYTE MEMBER(CALLINGPD)
+      2               LF . . . . . . . .    LITERALLY       204  249 
+    256  0000H     2  LINK . . . . . . .    WORD MEMBER(CALLINGPD)
+    261  0000H     2  LINK . . . . . . .    WORD MEMBER(DIRQD)
+    259  0000H     2  LINK . . . . . . .    WORD MEMBER(DIRPD)
+      2               LIT. . . . . . . .    LITERALLY         2    3    4    8    9   10   11   12   13   14   15
+                                              16   17   18   19   20 
+    256  0024H     1  LST. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0024H     1  LST. . . . . . . .    BYTE MEMBER(DIRPD)
+    259  0015H     1  LUSER. . . . . . .    BYTE MEMBER(DIRPD)
+    256  0015H     1  LUSER. . . . . . .    BYTE MEMBER(CALLINGPD)
+      3               MABORT . . . . . .    LITERALLY
+      3               MATTACH. . . . . .    LITERALLY
+      3               MCLOSEF. . . . . .    LITERALLY
+      3               MCREADQ. . . . . .    LITERALLY
+      3               MCURDSK. . . . . .    LITERALLY       130 
+      3               MCWRITEQ . . . . .    LITERALLY
+      3               MDELAY . . . . . .    LITERALLY
+      3               MDELETEF . . . . .    LITERALLY
+      3               MDELETEQ . . . . .    LITERALLY
+      3               MDETACH. . . . . .    LITERALLY       300 
+      3               MDIRBIOS . . . . .    LITERALLY
+      3               MDISPATCH. . . . .    LITERALLY
+    256  0016H     2  MEM. . . . . . . .    WORD MEMBER(CALLINGPD)
+    259  0016H     2  MEM. . . . . . . .    WORD MEMBER(DIRPD)
+      3               MERRMODE . . . . .    LITERALLY
+      3               MGETCNS. . . . . .    LITERALLY
+      3               MGETLOGIN. . . . .    LITERALLY
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  16
+
+
+      3               MGETPD . . . . . .    LITERALLY       273 
+      4               MISLEEP. . . . . .    LITERALLY
+      4               MIWAKEUP . . . . .    LITERALLY
+      3               MMAKEF . . . . . .    LITERALLY
+      3               MMAKEQ . . . . . .    LITERALLY       268 
+     21  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H         59   63   83   90   93  236
+                                             268  269  270  276  279  280  281  300 
+     25  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H         75   79   86  130 
+     29  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(2) STACK=0000H         98  273 
+     33  0000H        MON4 . . . . . . .    PROCEDURE POINTER EXTERNAL(3) STACK=0000H          272 
+      3               MOPENF . . . . . .    LITERALLY
+      3               MOPENQ . . . . . .    LITERALLY       269 
+      3               MPARSE . . . . . .    LITERALLY
+      3               MPRTBUF. . . . . .    LITERALLY
+      3               MREADF . . . . . .    LITERALLY
+      3               MREADQ . . . . . .    LITERALLY       276 
+      3               MREADRF. . . . . .    LITERALLY
+      3               MRESETDRV. . . . .    LITERALLY
+      3               MSELECT. . . . . .    LITERALLY       281 
+      3               MSETATT. . . . . .    LITERALLY
+      3               MSETCNS. . . . . .    LITERALLY       279 
+      3               MSETDMA. . . . . .    LITERALLY
+      3               MSETPRIOR. . . . .    LITERALLY       270 
+      3               MSETUSR. . . . . .    LITERALLY       236  280 
+    261  0016H     2  MSGCNT . . . . . .    WORD MEMBER(DIRQD)
+    261  000EH     2  MSGLEN . . . . . .    WORD MEMBER(DIRQD)
+    261  0018H     2  MSGOUT . . . . . .    WORD MEMBER(DIRQD)
+      3               MSYSDAT. . . . . .    LITERALLY       272 
+      3               MWRITEF. . . . . .    LITERALLY
+      3               MWRITEQ. . . . . .    LITERALLY
+      3               MWRITERF . . . . .    LITERALLY
+    210  000CH     2  N. . . . . . . . .    WORD       217  220 
+    256  0008H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(CALLINGPD)
+    265  0008H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(DIRQPB)
+    261  0006H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(DIRQD)
+    259  0008H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(DIRPD)
+    256  001DH     1  NET. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    265  0001H     1  NET. . . . . . . .    BYTE MEMBER(DIRQPB)
+    261  0002H     1  NET. . . . . . . .    BYTE MEMBER(DIRQD)
+    259  001DH     1  NET. . . . . . . .    BYTE MEMBER(DIRPD)
+    106  0085H     1  NEWUSER. . . . . .    BYTE       122  125  237  282 
+    261  0010H     2  NMSGS. . . . . . .    WORD MEMBER(DIRQD)
+    265  0004H     2  NMSGS. . . . . . .    WORD MEMBER(DIRQPB)
+      2               NO . . . . . . . .    LITERALLY
+      2               NOPAGEMODEOFFSET .    LITERALLY
+    261  0014H     2  NQ . . . . . . . .    WORD MEMBER(DIRQD)
+    258  0000H     2  OFFSET . . . . . .    WORD MEMBER(DPDPTR)       273 
+    255  0000H     2  OFFSET . . . . . .    WORD MEMBER(CPDPTR)       278 
+    106  0088H     1  OPTION . . . . . .    BYTE
+    211  0109H     1  OPTIONS. . . . . .    BYTE       215  216  218 
+    259  001CH     1  ORG. . . . . . . .    BYTE MEMBER(DIRPD)
+    256  001CH     1  ORG. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    261  0003H     1  ORG. . . . . . . .    BYTE MEMBER(DIRQD)
+      2               PAGELENOFFSET. . .    LITERALLY
+    256  001EH     2  PARENT . . . . . .    WORD MEMBER(CALLINGPD)
+    259  001EH     2  PARENT . . . . . .    WORD MEMBER(DIRPD)
+     97  00F7H    15  PARSE. . . . . . .    PROCEDURE WORD STACK=0008H          178  184  224 
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  17
+
+
+    171  0296H   213  PARSEFILE. . . . .    PROCEDURE BYTE STACK=000EH          290 
+     95  0002H     4  PARSEFN. . . . . .    STRUCTURE        95   98  173  175  179  180  182  186  188  189  193
+                                             194  213  221  224  242  288  289 
+    209  036BH   269  PARSEOPTIONS . . .    PROCEDURE BYTE STACK=000EH          285 
+    174  000AH     2  PARSERET . . . . .    WORD       175  178  179  184  188 
+     37  0002H    85  PATCH. . . . . . .    PROCEDURE PUBLIC STACK=0002H
+     10               PCM11. . . . . . .    LITERALLY
+     10               PCMCTLC. . . . . .    LITERALLY
+     10               PCMCTLO. . . . . .    LITERALLY
+     10               PCMCTLS. . . . . .    LITERALLY
+     10               PCMROUT. . . . . .    LITERALLY
+     10               PCMRSX . . . . . .    LITERALLY
+      6               PDHDR. . . . . . .    LITERALLY       256  259 
+      7               PDSTRUCTURE. . . .    LITERALLY       256  259 
+      9               PFACTIVE . . . . .    LITERALLY
+      9               PFCHILDABORT . . .    LITERALLY
+      9               PFCTLC . . . . . .    LITERALLY        66   68  277 
+      9               PFCTLD . . . . . .    LITERALLY
+      9               PFKEEP . . . . . .    LITERALLY
+      9               PFKERNAL . . . . .    LITERALLY
+      9               PFNOCTLS . . . . .    LITERALLY       274 
+      9               PFPURE . . . . . .    LITERALLY
+      9               PFRAW. . . . . . .    LITERALLY
+      9               PFRESOURCE . . . .    LITERALLY
+      9               PFSYS. . . . . . .    LITERALLY
+      9               PFTABLE. . . . . .    LITERALLY
+      9               PFTEMPKEEP . . . .    LITERALLY       274 
+    267  0478H   298  PLMSTART . . . . .    PROCEDURE PUBLIC STACK=0016H
+      5               PNAMSIZ. . . . . .    LITERALLY
+    256  002CH     2  PRET . . . . . . .    WORD MEMBER(CALLINGPD)
+    259  002CH     2  PRET . . . . . . .    WORD MEMBER(DIRPD)
+     61  006AH    16  PRINTBUF . . . . .    PROCEDURE STACK=000AH          118  165  168  204  249 
+    256  0005H     1  PRIOR. . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0005H     1  PRIOR. . . . . . .    BYTE MEMBER(DIRPD)
+      8               PSCIOWAIT. . . . .    LITERALLY
+      8               PSDELAY. . . . . .    LITERALLY
+      8               PSDQ . . . . . . .    LITERALLY
+      8               PSFLAGWAIT . . . .    LITERALLY
+      8               PSNQ . . . . . . .    LITERALLY
+      8               PSPOLL . . . . . .    LITERALLY
+      8               PSRUN. . . . . . .    LITERALLY
+      8               PSSLEEP. . . . . .    LITERALLY
+      8               PSSWAP . . . . . .    LITERALLY
+      8               PSTERM . . . . . .    LITERALLY
+    265  0002H     2  QADDR. . . . . . .    WORD MEMBER(DIRQPB)
+    260  010CH   131  QDBUF. . . . . . .    BYTE ARRAY(131)      261 
+     12               QDSTRUCTURE. . . .    LITERALLY       261 
+     19               QFDEV. . . . . . .    LITERALLY
+     15               QFHIDE . . . . . .    LITERALLY
+     14               QFKEEP . . . . . .    LITERALLY       261 
+     13               QFMX . . . . . . .    LITERALLY
+     18               QFRPL. . . . . . .    LITERALLY
+     16               QFRSP. . . . . . .    LITERALLY       261 
+     17               QFTABLE. . . . . .    LITERALLY
+     11               QNAMSIZ. . . . . .    LITERALLY       261  265 
+    262  018FH   131  QPBBUF . . . . . .    BYTE ARRAY(131)      263  264  265 
+     20               QPBSTRUCTURE . . .    LITERALLY       265 
+PL/M-86 COMPILER    CONCURRENT CP/M 86 --- DIR 1.0                                                              PAGE  18
+
+
+    256  0028H     4  RESERVD. . . . . .    BYTE ARRAY(4) MEMBER(CALLINGPD)
+    259  0028H     4  RESERVD. . . . . .    BYTE ARRAY(4) MEMBER(DIRPD)
+    256  002EH     2  SCRATCH. . . . . .    WORD MEMBER(CALLINGPD)
+    259  002EH     2  SCRATCH. . . . . .    WORD MEMBER(DIRPD)
+     73  0097H    16  SEARCHFIRST. . . .    PROCEDURE BYTE STACK=000AH          135 
+     77  00A7H    16  SEARCHNEXT . . . .    PROCEDURE BYTE STACK=000AH          161 
+      2               SECTORLEN. . . . .    LITERALLY
+    258  0002H     2  SEGMENT. . . . . .    WORD MEMBER(DPDPTR)
+    255  0002H     2  SEGMENT. . . . . .    WORD MEMBER(CPDPTR)
+                      SETB . . . . . . .    BUILTIN         199  296 
+     81  00B7H    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          271 
+     88  00D6H    19  SETUSERCODE. . . .    PROCEDURE STACK=000AH
+    256  0025H     1  SF3. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0025H     1  SF3. . . . . . . .    BYTE MEMBER(DIRPD)
+    256  0026H     1  SF4. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0026H     1  SF4. . . . . . . .    BYTE MEMBER(DIRPD)
+    256  0027H     1  SF5. . . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0027H     1  SF5. . . . . . . .    BYTE MEMBER(DIRPD)
+                      SHL. . . . . . . .    BUILTIN         137 
+    266  0212H     1  SHOWNNOTHING . . .    BYTE       121  205  287  294 
+    256  0004H     1  STAT . . . . . . .    BYTE MEMBER(CALLINGPD)
+    259  0004H     1  STAT . . . . . . .    BYTE MEMBER(DIRPD)
+    105  007FH     1  SYS. . . . . . . .    BYTE       138  139  159 
+    106  0086H     1  SYSEXISTS. . . . .    BYTE       127  160  167  283 
+      2               TAB. . . . . . . .    LITERALLY
+     96  0006H     2  TAILLEN. . . . . .    WORD       180  217  284 
+    264  0191H   128  TBUFF. . . . . . .    BYTE ARRAY(128) AT        217  221  284  288 
+    105  0080H     1  TEMP . . . . . . .    BYTE       137  138  139  154  231  233  234  236 
+     92  00E9H    14  TERMINATE. . . . .    PROCEDURE STACK=0008H
+    256  0002H     2  THREAD . . . . . .    WORD MEMBER(CALLINGPD)
+    259  0002H     2  THREAD . . . . . .    WORD MEMBER(DIRPD)
+      2               TRUE . . . . . . .    LITERALLY        69  160  169  195  200  215  222  227  237  240  252
+                                             275  282  287 
+    256  0010H     2  UDA. . . . . . . .    WORD MEMBER(CALLINGPD)
+    259  0010H     2  UDA. . . . . . . .    WORD MEMBER(DIRPD)
+    256  0013H     1  USER . . . . . . .    BYTE MEMBER(CALLINGPD)         280 
+    105  0083H     1  USER . . . . . . .    BYTE       109  112  116  139  236  280 
+     88  0004H     1  USER . . . . . . .    BYTE PARAMETER AUTOMATIC        89   90 
+    259  0013H     1  USER . . . . . . .    BYTE MEMBER(DIRPD)
+    256  001AH     2  WAIT . . . . . . .    WORD MEMBER(CALLINGPD)
+    259  001AH     2  WAIT . . . . . . .    WORD MEMBER(DIRPD)
+     57  0057H    19  WRITECONSOLE . . .    PROCEDURE STACK=000AH          101  102  144  147  149  150  153  154
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 05A2H   1442D
+     CONSTANT AREA SIZE = 0054H     84D
+     VARIABLE AREA SIZE = 0213H    531D
+     MAXIMUM STACK SIZE = 0016H     22D
+     699 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

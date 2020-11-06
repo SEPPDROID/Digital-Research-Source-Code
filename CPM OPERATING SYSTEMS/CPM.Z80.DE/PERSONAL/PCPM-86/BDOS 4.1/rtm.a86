@@ -1,0 +1,934 @@
+
+include equates.a86
+include system.a86
+
+
+		dseg
+		extrn	rlr:word
+		extrn	drl:word
+		extrn	bdos_conowner:word
+		extrn	lp_sysflag_chg:dword
+		extrn	time_slice:byte
+		extrn	pq_disk:word
+		extrn	lst_owner:byte
+		extrn	aux_owner:byte
+		extrn	bdos_8087_inuse:byte
+		extrn	proc_count:byte
+		extrn	bdos_sysflags:word
+
+		cseg
+		extrn	bdos_dseg:word
+		extrn	bdos_callback:near
+		extrn	far_ret_1:near
+
+		public	rtm_main
+		public	rtm_init
+		public	rtm_timeslice
+		public	rtm_sysflag
+
+rtm_init:				; DATA XREF: dseg:0006o
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+rtm_main:				; DATA XREF: dseg:0004o
+		call	cs:rtm_functions[si]; 0208, get new process
+		jb	proc_ok
+		mov	bx, 0FFFFh
+
+proc_ok:				; CODE XREF: bdos:0EDFj
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+rtm_functions	dw offset P_TERMCPM	; DATA XREF: bdos:0EDAo
+		dw offset P_WAITFLAG
+		dw offset P_DELAY
+		dw offset P_DISPATCH
+		dw offset P_0204	; Enter	a process-queue	controlled area
+		dw offset P_0205	; Leave	a process-queue	controlled area
+		dw offset P_0206
+		dw offset P_0207	; Check	runnable processes
+		dw offset get_new_process; 0208, get new process
+		dw offset P_0209	; Wake a process (DX = process segment)
+		dw offset P_020A	; Terminate foreground process
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+P_WAITFLAG:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EE7o
+		cli	
+		call	lookup_flag
+		jnb	pwf_badflag
+		cmp	ax, 0FFFEh
+		jz	pwf_minus2
+		ja	pwf_block
+		mov	cx, 6
+		clc	
+		jmps	pwf_badflag
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+pwf_block:				; CODE XREF: P_WAITFLAG+Bj
+		mov	[bx], es	; Process waiting on flag
+		mov	es:proc_status,	3; Make	process	wait
+		mov	es:proc_countdown, dx
+		call	delay_dispatch
+		jmps	pwf_done
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+pwf_minus2:				; CODE XREF: P_WAITFLAG+9j
+		mov	word ptr [bx], 0FFFFh
+
+pwf_done:				; CODE XREF: P_WAITFLAG+23j
+		stc	
+
+pwf_badflag:				; CODE XREF: P_WAITFLAG+4j
+					; P_WAITFLAG+11j
+		sti	
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+rtm_sysflag:		; CODE XREF: xios_int09+EDu
+					; DATA XREF: dseg:0038o
+		cmp	dl, 1
+		jnz	bsf_not1
+		mov	xios_bh_delay, 0
+		mov	ax, bdos_conowner
+		push	es
+
+bsf_checktimer:				; CODE XREF: rtm_sysflag+34j
+		mov	es, ax
+		cmp	es:proc_status,	1; Waiting on timer
+		jnz	bsf_nexttimer
+		mov	xios_bh_delay, 0FFh
+		call	is_proc_busy
+		jb	bsf_wakeproc
+		dec	es:proc_countdown
+		jnz	bsf_nexttimer
+
+bsf_wakeproc:				; CODE XREF: rtm_sysflag+20j
+		mov	dx, es
+		call	P_0209		; Wake a process (DX = process segment)
+
+bsf_nexttimer:				; CODE XREF: rtm_sysflag+16j
+					; rtm_sysflag+27j
+		mov	ax, es:proc_nextseg
+		test	ax, ax
+		jnz	bsf_checktimer
+		xor	ax, ax
+		pop	es
+		jmps	bsf_done
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+bsf_not1:				; CODE XREF: rtm_sysflag+3j
+		pushf	
+		cli	
+		call	lookup_flag
+		jnb	bsf_badflag
+		cmp	ax, 0FFFEh
+		jz	bsf_overrun
+		ja	bsf_nowake
+		mov	word ptr [bx], 0FFFFh
+		mov	dx, ax
+		call	P_0209		; Wake a process (DX = process segment)
+		jmps	bsf_woken
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+bsf_nowake:				; CODE XREF: rtm_sysflag+47j
+		mov	word ptr [bx], 0FFFEh
+
+bsf_woken:				; CODE XREF: rtm_sysflag+52j
+		xor	ax, ax
+		jmps	bsf_popret
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+bsf_overrun:				; CODE XREF: rtm_sysflag+45j
+		mov	cx, 5
+
+bsf_badflag:				; CODE XREF: rtm_sysflag+40j
+		mov	ax, 0FFFFh
+
+bsf_popret:				; CODE XREF: rtm_sysflag+5Aj
+		popf	
+
+bsf_done:				; CODE XREF: rtm_sysflag+39j
+		mov	bx, ax
+		retf	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+lookup_flag:		; CODE XREF: P_WAITFLAG+1p
+					; rtm_sysflag+3Dp
+		mov	cx, 4
+		cmp	dl, xios_bh_lastflg
+		ja	luf_badflag
+		xor	dh, dh
+		mov	bx, bdos_sysflags
+		add	bx, dx
+		add	bx, dx
+		mov	ax, [bx]
+		stc	
+
+luf_badflag:				; CODE XREF: lookup_flag+7j
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; 0208,	get new	process
+
+get_new_process:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EF5o
+		push	ds
+		mov	bx, bdos_conowner
+		mov	cx, 4
+
+gnp_loop:				; CODE XREF: get_new_process+14j
+		mov	ds, bx
+
+		cmp	proc_status, 2	; 0 => Runnable
+					; 1 => waiting on timer
+					; 2 => terminated
+					; 3 => waiting on flag
+		jz	gnp_found
+		add	bx, 16h
+		loop	gnp_loop
+		pop	ds
+
+		clc	
+		mov	cx, 0Ch
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+gnp_found:				; CODE XREF: get_new_process+Fj
+		pop	ds
+		inc	proc_count
+		xor	cx, cx
+		stc	
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+P_DELAY:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EE9o
+		cmp	xios_bh_ticks, 0
+		jnz	delay_haveclock
+		mov	cx, 45		; No tick
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+delay_haveclock:			; CODE XREF: P_DELAY+5j
+		mov	tick_wait_proc,	es
+		cli	
+		mov	xios_bh_delay, 0FFh; Ask for ticks, because
+		mov	es:proc_status,	1; there's now a process waiting
+		mov	es:proc_countdown, dx
+		jmp	delay_dispatch
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Terminate foreground process
+
+P_020A:		; CODE XREF: bdos:0EDAu P_TERMCPM+4Cp
+					; DATA XREF: ...
+		xor	bp, bp
+		jmps	proc_doterm
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+proc_term_bg:		; CODE XREF: P_TERMCPM+5Bp
+		mov	bp, 1
+
+proc_doterm:				; CODE XREF: P_020A+2j
+		push	ds
+		push	es
+		mov	di, offset proc_passwd+6; BDOS pointer - 4
+		lds	si, es:4[di]
+
+proc_unhook_rsx:			; CODE XREF: proc_term_bg+29j
+					; proc_term_bg+58j
+		mov	ax, 4[si]
+		or	ax, 6[si]
+		jz	proc_unhooked
+		mov	byte ptr 18[si], 0FFh
+		test	bp, bp
+		jnz	proc_free_rsx
+		cmp	byte ptr 3[si], 0
+		jnz	proc_free_rsx
+		push	si
+		pop	di
+		push	ds
+		pop	es
+
+		lds	si, 4[si]
+		jmps	proc_unhook_rsx
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+proc_free_rsx:				; CODE XREF: proc_term_bg+1Aj
+					; proc_term_bg+20j
+		mov	ax, 20[si]
+		lds	si, 4[si]
+		mov	es:4[di], si
+		mov	es:6[di], ds
+		push	si
+		push	ds
+		push	di
+		push	es
+		push	bp
+		mov	ds, cs:bdos_dseg
+		mov	es, rlr
+
+		mov	mcb_to_free, ax
+		mov	dx, offset mcb_to_free
+		mov	cx, 39h		; MC_FREE
+		call	bdos_callback
+		pop	bp
+		pop	es
+		pop	di
+		pop	ds
+		pop	si
+		jmps	proc_unhook_rsx
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+proc_unhooked:				; CODE XREF: proc_term_bg+12j
+		pop	es
+		pop	ds
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+P_TERMCPM:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EE5o
+		cli	
+		mov	es:word ptr proc_onblock, offset far_ret_1
+		mov	es:word ptr proc_onblock+2, cs
+		sti	
+
+;
+; This is a patch in PCP/M 2.04e. It makes a certain amount of sense, 
+; because what is the reference to CS:42h below supposed to mean?
+;
+		if	PCPM204E
+
+		jmp	ptc_termproper
+		db 18h
+		dw 0
+
+		else
+
+		cmp	es:byte ptr proc_background, 0	
+
+		endif
+		jnz	ptc_termproper
+		cmp	cs:word ptr .42h, 0
+		jz	ptc_termproper
+		mov	ah, 51h
+		int	21h		; DOS -	2+ internal - GET PSP SEGMENT
+					; Return: BX = current PSP segment (see	AH=26h for format)
+		test	bx, bx
+		jz	ptc_termproper
+		mov	ax, 4C00h
+		int	21h		; DOS -	2+ - QUIT WITH EXIT CODE (EXIT)
+					; AL = exit code
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ptc_hang:				; CODE XREF: P_TERMCPM+2Bj
+		jmps	ptc_hang
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ptc_termproper:				; CODE XREF: P_TERMCPM+Ej P_TERMCPM+14j
+					; ...
+		push	dx
+		call	release_queues	; Release all process queues owned by a	process
+		mov	cx, 723h
+		call	bdos_callback
+		pop	dx
+		mov	cx, 307h
+		call	bdos_callback
+		mov	cx, 418h
+		call	bdos_callback
+		cmp	es:proc_background, 0
+		jnz	ptc_background
+		call	P_020A		; Kill foreground process
+		mov	cx, 103h	; Bring	CCP to foreground
+		jmp	bdos_callback
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ptc_background:				; CODE XREF: P_TERMCPM+4Aj
+		mov	cx, 611h
+		call	bdos_callback	; Free CWD structures
+		call	proc_term_bg	; Terminate background process
+		dec	proc_count
+		test	es:proc_flags, 2; Was using 8087?
+		jz	ptc_not8087
+		and	es:proc_flags, 0FFFDh
+		mov	bdos_8087_inuse, 0
+
+ptc_not8087:				; CODE XREF: P_TERMCPM+69j
+		mov	tick_wait_proc,	es
+		mov	es:proc_status,	2; 0 =>	Runnable
+					; 1 => waiting on timer
+					; 2 => terminated
+					; 3 => waiting on flag
+		jmp	delay_dispatch
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+kill_process:		; CODE XREF: delay_dispatch+6Aj
+					; delay_dispatch+128j
+		mov	ax, es
+		cli	
+		mov	ss, ax
+		mov	sp, 100h
+		sti	
+		mov	al, es:proc_pid
+		cmp	aux_owner, al
+		jnz	dont_free_aux
+		mov	aux_owner, 0FFh
+
+dont_free_aux:				; CODE XREF: kill_process+11j
+		cmp	lst_owner, al
+		jnz	dont_free_lst
+		mov	lst_owner, 0FFh
+
+dont_free_lst:				; CODE XREF: kill_process+1Cj
+		and	es:proc_flags, 0FFFEh
+		mov	es:proc_errcode, 0FFFEh
+		cmp	es:proc_fx, 0Ah	; If broken into line input
+		mov	es:proc_fx, 0
+		jnz	dont_reset_disk
+		mov	cx, 0Dh		; Then reset disks
+		call	bdos_callback	; presumably so	^C at command prompt
+					; does what the	user expects.
+
+dont_reset_disk:			; CODE XREF: kill_process+3Dj
+		call	release_queues	; Release all process queues owned by a	process
+
+call_termcpm:				; CODE XREF: P_0206+1Bj
+		xor	cx, cx
+		mov	dx, cx
+		jmp	bdos_callback
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+P_0206:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EF1o
+		mov	tick_wait_proc,	es
+		dec	es:proc_indisk
+		jnz	P_0207		; Check	runnable processes
+		test	es:proc_flags, 1
+		jz	P_0207		; Check	runnable processes
+		and	es:proc_flags, 0FFFEh
+		jmps	call_termcpm
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Check	runnable processes
+
+P_0207:		; CODE XREF: bdos:0EDAu P_0206+9j
+					; ...
+		xor	ax, ax
+		mov	tick_wait_proc,	ax
+		cmp	drl, ax		; Anything waiting to run?
+		jnz	P_DISPATCH	; If so, give it a go
+		stc	
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Release all process queues owned by a	process
+
+release_queues:		; CODE XREF: P_TERMCPM+2Ep
+					; kill_process+45p
+		mov	bx, offset pq_disk
+
+release_loop:				; CODE XREF: release_queues+Cj
+		push	bx
+		call	P_0205		; Leave	a process-queue	controlled area
+		pop	bx
+		mov	bx, [bx]
+		test	bx, bx
+		jnz	release_loop
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Enter	a process-queue	controlled area
+
+P_0204:		; CODE XREF: bdos:0EDAu
+					; DATA XREF: bdos:0EEDo
+		mov	ax, es
+		mov	tick_wait_proc,	ax
+		xchg	ax, 2[bx]	; Is there already a process waiting?
+		test	ax, ax
+		jz	P_0207		; Check	runnable processes
+		mov	2[bx],	ax	; Yes. Add us to the chain.
+		lea	bx, 4[bx]
+		call	add_to_chain
+		jmps	delay_dispatch
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Leave	a process-queue	controlled area
+
+P_0205:		; CODE XREF: bdos:0EDAu release_queues+4p
+					; DATA XREF: ...
+		mov	ax, es
+		cmp	2[bx],	ax
+		jz	pq_leave_1
+		clc			; Queue	isn't owned by this process
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+pq_leave_1:				; CODE XREF: P_0205+5j
+		mov	tick_wait_proc,	es
+		push	es
+		push	bx
+		lea	bx, 4[bx]
+		call	next_runnable
+		pop	bx
+		mov	2[bx],	es
+		mov	dx, es
+		pop	es
+		call	P_0209		; Wake a process (DX = process segment)
+		jmp	P_0207		; Check	runnable processes
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+; Wake a process (DX = process segment)
+
+P_0209:		; CODE XREF: bdos:0EDAu rtm_sysflag+2Bp
+					; ...
+		test	dx, dx
+		jz	wake_none
+		push	es
+		mov	es, dx
+		mov	bx, offset drl
+		pushf	
+		cli	
+		mov	es:proc_status,	0; 0 =>	Runnable
+					; 1 => waiting on timer
+					; 2 => terminated
+					; 3 => waiting on flag
+		call	add_to_chain
+		popf	
+		pop	es
+		stc	
+
+wake_none:				; CODE XREF: P_0209+2j
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+delay_dispatch:		; CODE XREF: P_WAITFLAG+20p
+					; P_DELAY+20j ...
+		mov	bx, offset delay_cbk
+		jmps	disp_general
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+P_DISPATCH:				; CODE XREF: bdos:0EDAu P_0207+9j
+					; DATA XREF: ...
+		mov	bx, offset dispatch_cbk
+
+disp_general:				; CODE XREF: delay_dispatch+3j
+		mov	tick_wait_proc,	es
+		mov	cbk_function, bx
+		pushf	
+		push	cs
+		mov	ax, offset dispret
+		push	ax
+		push	ds
+		jmps	dsptch
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+dispret:				; DATA XREF: delay_dispatch+12o
+		xor	bx, bx
+		stc	
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+rtm_timeslice:				; CODE XREF: xios_int09+EDu
+					; DATA XREF: dseg:0034o
+		cli	
+		cmp	tick_wait_proc,	0
+		jz	twp_is_0
+		pop	ds
+		iret	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+twp_is_0:				; CODE XREF: delay_dispatch+23j
+		mov	tick_wait_proc,	0FFFFh
+		sti	
+		mov	cbk_function, offset dispatch_cbk
+
+dsptch:					; CODE XREF: delay_dispatch+17j
+					; delay_dispatch+1A1j
+		sti	
+		mov	dsptch_es, es
+		mov	es, rlr
+		mov	es:proc_ax, ax
+		mov	ax, dsptch_es
+		mov	es:proc_es, ax
+		mov	es:proc_ss, ss
+		mov	es:proc_sp, sp
+		mov	ax, ds
+		cli	
+		mov	ss, ax
+
+		mov	sp, offset dsptch_stack
+		sti	
+		call	check_timeslice
+		cld	
+		call	is_proc_busy
+		jnb	dont_kill
+		mov	tick_wait_proc,	0
+		jmp	kill_process
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+dont_kill:				; CODE XREF: delay_dispatch+62j
+		cmp	cbk_function, offset dispatch_cbk
+		jnz	disp_switchproc
+		xor	ax, ax
+		cmp	drl, ax
+		jnz	disp_switchproc
+		cmp	es:proc_nextready, ax
+		jz	j_leave_disp
+		cmp	es:proc_background, 0
+		jz	proc_can_run
+		cmp	es:proc_background, 0FFh
+		jnz	disp_switchproc
+
+proc_can_run:				; CODE XREF: delay_dispatch+8Aj
+		cmp	time_to_switch,	0
+		jz	slice_expired
+		dec	time_to_switch
+
+j_leave_disp:				; CODE XREF: delay_dispatch+82j
+		jmp	leave_disp
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+slice_expired:				; CODE XREF: delay_dispatch+99j
+		mov	al, time_slice
+		mov	time_to_switch,	al
+
+disp_switchproc:			; CODE XREF: delay_dispatch+73j
+					; delay_dispatch+7Bj
+					; ...
+		mov	es:proc_bx, bx
+		mov	es:proc_cx, cx
+		mov	es:proc_dx, dx
+		mov	es:proc_bp, bp
+		mov	es:proc_di, di
+		mov	es:proc_si, si
+		xor	ax, ax
+		mov	ds, ax
+
+		mov	si, ax
+		mov	di, offset proc_int0
+		mov	dx, 4
+		mov	cx, dx
+		rep movsw
+		mov	cx, dx
+		add	si, dx
+		rep movsw
+		mov	si, offset INT_E0
+		mov	cx, dx
+		rep movsw
+		xor	ax, ax
+		callf	es:dword ptr proc_onblock
+		mov	ds, cs:bdos_dseg
+
+		mov	bx, offset rlr
+		call	next_runnable
+		jmp	cbk_function
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+delay_cbk:				; DATA XREF: delay_dispatcho
+		jmps	check_ready
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+dispatch_cbk:				; DATA XREF: delay_dispatch+5o
+					; delay_dispatch+2Eo
+					; ...
+		call	add_to_chain
+
+check_ready:				; CODE XREF: delay_dispatch+F9j
+					; delay_dispatch+10Ej
+					; ...
+		mov	bx, offset drl
+		cli	
+		call	next_runnable
+		sti	
+		jnb	check_ready1
+		mov	bx, offset rlr
+		call	proc_makeready
+		jmps	check_ready
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+check_ready1:				; CODE XREF: delay_dispatch+106j
+		call	check_timeslice
+		mov	ax, rlr
+		test	ax, ax
+		jz	check_ready
+		mov	es, ax
+		call	is_proc_busy
+		jnb	proc_switchin
+		cli	
+		mov	tick_wait_proc,	0
+		jmp	kill_process
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+proc_switchin:				; CODE XREF: delay_dispatch+11Fj
+		mov	ax, 1
+		callf	es:dword ptr proc_onblock
+		mov	ds, cs:bdos_dseg
+		mov	ds, rlr
+		mov	si, offset proc_int0
+		xor	ax, ax
+		mov	es, ax
+
+		mov	di, ax
+		mov	dx, 4
+		mov	cx, dx
+		rep movsw
+		mov	cx, dx
+		add	di, dx
+		rep movsw
+		mov	di, offset INT_E0
+		mov	cx, dx
+		rep movsw
+		push	ds
+		pop	es
+
+		mov	ds, cs:bdos_dseg
+		mov	bx, es:proc_bx
+		mov	cx, es:proc_cx
+		mov	dx, es:proc_dx
+		mov	bp, es:proc_bp
+		mov	di, es:proc_di
+		mov	si, es:proc_si
+
+leave_disp:				; CODE XREF: delay_dispatch+9Fj
+		cli	
+		mov	ss, es:proc_ss
+
+		mov	sp, es:proc_sp
+		sti	
+		mov	ax, es:proc_ax
+		mov	es, es:proc_es
+		cli	
+		cmp	drl, 0
+		jz	drl_is_empty
+		mov	cbk_function, offset dispatch_cbk
+		jmp	dsptch
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+drl_is_empty:				; CODE XREF: delay_dispatch+199j
+		mov	tick_wait_proc,	0
+		pop	ds
+		iret	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+proc_makeready:		; CODE XREF: delay_dispatch+10Bp
+		mov	ax, [bx]
+		mov	[bx], es
+		test	ax, ax
+		jz	pmr_1
+		mov	es:proc_nextready, ax
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+pmr_1:					; CODE XREF: proc_makeready+6j
+		mov	2[bx],	es
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+add_to_chain:		; CODE XREF: P_0204+12p P_0209+12p
+					; ...
+		mov	ax, 2[bx]
+		mov	2[bx],	es
+		test	ax, ax
+		jz	added_to_chain
+		push	ds
+		mov	ds, ax
+
+		mov	proc_nextready,	es
+		pop	ds
+
+		retn	
+;ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+added_to_chain:				; CODE XREF: add_to_chain+8j
+		mov	[bx], es
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+next_runnable:		; CODE XREF: P_0205+12p delay_dispatch+F2p
+					; ...
+		mov	ax, [bx]
+		test	ax, ax
+		mov	es, ax
+		jz	nxtrun_2
+		mov	ax, es:proc_nextready
+		mov	es:proc_nextready, 0
+		mov	[bx], ax
+		test	ax, ax
+		jnz	nxtrun_1
+		mov	2[bx],	ax
+
+nxtrun_1:				; CODE XREF: next_runnable+17j
+		stc	
+
+nxtrun_2:				; CODE XREF: next_runnable+6j
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+is_proc_busy:		; CODE XREF: rtm_sysflag+1Dp
+					; delay_dispatch+5Fp
+					; ...
+		test	es:proc_flags, 1
+		jz	proc_notbusy
+		cmp	es:proc_indisk,	1
+
+proc_notbusy:				; CODE XREF: is_proc_busy+7j
+		retn	
+
+
+
+;ÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛÛ
+
+;		S u b r	o u t i	n e
+
+check_timeslice:		; CODE XREF: delay_dispatch+5Bp
+					; delay_dispatch+110p
+		dec	timeslice
+		jnz	not_expired
+		push	bx
+		push	cx
+		push	dx
+		mov	es, bdos_conowner
+
+cts_process:				; CODE XREF: check_timeslice+39j
+		test	es:proc_flags, 1
+		jz	cts_nextproc
+		cmp	es:proc_indisk,	0
+		jnz	cts_nextproc
+		cli	
+		cmp	es:proc_status,	3; 0 =>	Runnable
+					; 1 => waiting on timer
+					; 2 => terminated
+					; 3 => waiting on flag
+		jnz	cts_nextproc
+		mov	dx, es:proc_countdown
+		callf	dword ptr lp_sysflag_chg
+		sti	
+
+cts_nextproc:				; CODE XREF: check_timeslice+14j
+					; check_timeslice+1Cj
+					; ...
+		mov	ax, es:proc_nextseg
+		test	ax, ax
+		mov	es, ax
+		jnz	cts_process
+		pop	dx
+		pop	cx
+		pop	bx
+		mov	es, rlr
+		mov	timeslice, 1Eh
+
+not_expired:				; CODE XREF: check_timeslice+4j
+		retn	
+
+
+		dseg
+mcb_to_free	dw	0
+		dw	0
+		db	0
+
+time_to_switch	db 10h			; DATA XREF: delay_dispatch+94r
+					; delay_dispatch+9Bw
+					; ...
+timeslice	db 1Eh			; DATA XREF: check_timeslicew
+					; check_timeslice+42w
+tick_wait_proc	dw 0			; DATA XREF: P_DELAY+Bw P_TERMCPM+77w
+					; ...
+cbk_function	dw 0			; DATA XREF: delay_dispatch+Cw
+					; delay_dispatch+2Ew
+					; ...
+dsptch_es	dw 0			; DATA XREF: delay_dispatch+35w
+					; delay_dispatch+41r
+		rw 20h
+dsptch_stack	db 0			; DATA XREF: delay_dispatch+57o
+

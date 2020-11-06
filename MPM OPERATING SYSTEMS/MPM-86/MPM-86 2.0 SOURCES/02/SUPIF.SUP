@@ -1,0 +1,154 @@
+
+;*****************************************************
+;*
+;*	SUPERVISOR INTERFACE ROUTINES
+;*
+;*****************************************************
+
+;=========
+user_entry:
+;=========
+;	User Entry Point - enter here from a INT 224
+;
+;		REGISTER USAGE
+;	INPUT			OUTPUT
+;	-----			------
+;  CL - Function Code	  AX - Copy of BX
+;  DL - Byte Param	  BX - Return
+;  DX - Word Param	  CX - Error Code	
+;			  ES - Segment Return
+;
+;		SETUP FOR ENTRY POINTS
+;		----------------------
+;	contents of users stack
+;		Flags
+;		CS
+;		IP		<- u_stack_ss,_sp
+;	in u_stack of uda:
+;		DS 
+;		user_ret	<- SS,SP
+;	DS =  Sysdat Segment
+;	ES -> user_data_area
+;	BX -> pd address
+;	DX -> function parameter
+;	u_wrkseg == user's DS
+;	u_retseg == user's ES
+
+		;initialize critical areas
+	cld ! mov di,ds			;DI=user's DSEG
+	mov ds,sysdat ! mov bx,rlr	;BX=pd address
+	mov ax,es ! mov es,p_uda[bx]	;ES=uda
+	cmp u_insys,0 ! jne noswt
+	    mov u_stack_ss,ss		;switch stacks
+	    mov u_stack_sp,sp
+	    mov bp,es ! mov ss,bp
+	    mov sp,ulen
+	    jmps uecont
+noswt:	push u_wrkseg
+uecont:	inc u_insys
+		;enable interrupts if intflag
+	cmp intflag,0 ! je noints
+	    sti
+noints:		;initialized non-critical areas
+	mov u_retseg,ax
+	mov u_wrkseg,di
+	mov ch,0 ! call func	; execute function
+	mov ax,bx		; for INTEL's PL/M
+	mov ds,u_wrkseg ! cli
+	dec u_insys
+	cmp u_insys,0 ! jne nstk
+	    mov ss,u_stack_ss	; restore user's stack
+	    mov sp,u_stack_sp
+	    jmps ueout
+nstk:	pop u_wrkseg
+ueout:	mov es,u_retseg
+	iret  			; back to user
+
+func:		; call system function
+;----		-----------------------
+;	input:	CH = module (for explicit module function)
+;			bypassing network check...
+;		     0 if User function.
+;			network check is done
+;		CL = function #
+;		DX = arg
+
+	mov u_func,cl
+func1:	cmp ch,0 ! je userf
+	    mov al,ch ! mov ch,0
+	    jmps inmod
+userf:	mov si,cx ! shl si,1 ! add si,cx
+	add si,offset sysent
+	test ent_flag[si],ef_network ! jz nonet
+	    test module_map,netmod_bit ! jz nonet
+	    push si ! callf dword ptr .netmod ! pop si
+	    cmp al,true ! jne nonet
+		mov si,0 ! mov ax,bx ! ret
+nonet:	mov cl,ent_func[si] ! mov ch,0
+	mov al,ent_mod[si]
+		;AL=mod,CL=func,CH=0
+inmod:	cmp al,sup ! jne gofar
+	    shl cx,1 ! mov si,cx
+	    jmp cs:supfunc[si]
+gofar:	push cx ! mov cx,ax ! dec cl
+	mov al,module_map ! shr al,cl
+	and al,1 ! jnz goodmod
+	    pop cx ! mov cx,e_not_implemented
+	    mov bx,0ffffh ! mov ax,bx ! ret
+goodmod:mov ch,0 ! mov si,cx
+	mov cl,3 ! shl si,cl ! pop cx
+	callf dword ptr module_table[si]
+	ret
+
+;=====
+entry:
+;=====
+; Supervisor module entry point
+
+	cmp cl,f_flagset ! jne entry_notfs
+	    mov cx,f_inflagset
+	    call func1 ! mov ax,bx ! retf
+entry_notfs:
+	call mpmif ! retf	
+
+;=====
+mpmif:
+;=====
+	push u_wrkseg
+	mov al,u_func ! push ax
+	mov u_wrkseg,ds
+	mov ds,sysdat
+	call func
+	mov ds,u_wrkseg
+	pop ax ! mov u_func,al
+	pop u_wrkseg
+	mov ax,bx
+	ret
+
+;======
+xiosif:
+;======
+	callf dword ptr .xiosmod ! ret
+
+;*****************************************************
+;*
+;*	Supervisor function table
+;*
+;*****************************************************
+
+supfunc	dw	not_implemented	; 0-not implemented
+	dw	bad_entry	; 1-bad function number
+	dw	version_entry	; 2-(12)get version
+	dw	callbios_entry	; 3-(50)call bios
+	dw	load_entry	; 4-(59)user load function
+	dw	clicmd_entry	; 5-(150)CLI
+	dw	rpl_entry	; 6-(151)Call RPL
+	dw	parse_entry	; 7-(152)parse filename
+	dw	sysdat_entry	; 8-(154)get sysdat addr
+	dw	tod_entry	; 9-(155)get tod addr
+	dw	load		; 10-load function
+	dw	mpmversion_entry; 11-MP/M version number
+	dw	chain_entry	; 12-(47)Program Chain
+	dw	serial_entry	; 13-(107)return serial
+	dw	cload_entry	; 14-chain load function
+

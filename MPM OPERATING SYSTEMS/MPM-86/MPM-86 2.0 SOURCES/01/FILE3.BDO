@@ -1,0 +1,1493 @@
+;******************** bdos file system part 3 ****************
+;
+;
+sqread:
+        ;sequential disk read operation
+        mov     seqio,1
+                                        ;drop through to diskread
+;
+diskread:                               ;(may enter from seqdiskread)
+	CALL	TST_INV_FCB		;VERIFY FCB HAS NOT BEEN FLAGGED
+					;AS INVALID
+        mov     rmf,true                ;read mode flag =
+                                        ;true (open$reel)
+                                        ;read the next record from
+                                        ;the current fcb
+
+if	MPM
+
+	MOV	DONT_CLOSE,TRUE
+
+endif
+
+        call    getfcb                  ;sets parameters for the read
+DISK_READ0:
+        mov     al,vrecord
+        cmp     al,rcount               ;vrecord-rcount
+                                        ;skip if rcount > vrecord
+        jb      recordok
+
+if	MPM
+
+	;IF FCB WAS OPENED IN UNLOCKED MODE, CHECK THE DIRECTORY FCB
+	;TO MAKE SURE ANOTHER PROCESS HAS NOT ALLOCATED A BLOCK TO
+	;THE FCB SINCE THIS PROCESS OPENED THE FCB
+
+	CALL	TEST_DISK_FCB		;JUMP BACK TO DISKREAD0 IF DONT_CLOSE
+	JNZ	DISKREAD0		;TRUE, FILE OPENED IN UNLOCKED MODE,
+					;AND ACCESS OF DIR FCB SUCCESSFUL
+					;DONT_CLOSE SET TO FALSE
+	MOV	AL,VRECORD
+
+endif
+                                        ;not enough records in extent
+                                        ;record count must be 128
+                                        ;to continue
+        cmp     al,128                  ;vrecord = 128?
+        jnz     diskeof                 ;skip if vrecord<>128
+        call    openreel                ;go to next extent if so
+;       mov     vrecord,0               ;vrecord=00
+                                        ;now check for open ok
+        cmp     lret,0                  ;stop at eof
+        jnz     diskeof
+recordok:
+        ;arrive with fcb addressing a record to read
+        call    index
+                                        ;error 2 if reading
+                                        ;unwritten data
+                                        ;(returns 1 to be compatible
+                                        ;with 1.4)
+        call    alloct                  ;arecord=0000?
+
+if	MPM
+
+	JNZ	RECORDOK1
+	CALL	TEST_DISK_FCB		;JUMP BACK TO DISKREAD0 IF DONT_CLOSE
+	JNZ	DISKREAD0		;TRUE, FILE OPENED IN UNLOCKED MODE,
+					;AND ACCESS OF DIR FCB SUCCESSFUL
+endif
+        jz      diskeof
+
+RECORDOK1:
+                                        ;record has been allocated,
+                                        ;read it
+        call    atran                   ;arecord now a disk address
+        call    seek                    ;to proper track,sector
+        call    rdbuff                  ;to dma address
+        jmp     setfcb                  ;replace parameter      
+;       ret
+diskeof:
+        jmp     setlret1                ;lret = 1
+                                        ;ret
+
+if	MPM
+
+TEST_DISK_FCB:
+
+	TEST	HIGH_EXT,80H		;WAS FILE OPENED IN UNLOCKED MODE
+	JZ	RET14			;NO
+	TEST	DONT_CLOSE,0FFH		;RETURN IF DONT_CLOSE FALSE
+	JZ	RET14
+	CALL	CLOSE1			;FCB IN MEMORY
+TEST_DISK_FCB1:
+	POP	SI
+	MOV	BX,OFFSET LRET
+	CMP	B[BX],0FFH
+	MOV	AL,11
+	JNE	$+5
+	JMP	STA_RET			;ERROR - CLOSE OPERATION UNSUCCESSFUL
+	MOV	B[BX],0			;LRET = 0
+	PUSH	SI
+	CALL	GET_RCNTA
+	MOV	AL,[BX]
+	MOV	RCOUNT,AL
+	XOR	AL,AL
+	MOV	DONT_CLOSE,AL		;DONT_CLOSE = FALSE
+	INC	AL			;SUCCESSFUL OPERATION, RESET ZERO FLAG
+      	RET
+
+endif
+
+;
+
+RESET_FWF:
+	call	getmodnum		;bx=.fcb(modnum)
+					;al=fcb(modnum)
+					;reset the fcb write flag to
+					;mark as written fcb
+	and	al,not fwfmsk		;high order bit of modnum fld reset
+	mov	[bx],al			;fcb(modnum) = fcb(modnum) & 7fh
+RET14:	RET
+
+
+sqwrite:
+        ;sequential disk write
+        mov     seqio,1
+                                        ;drop through to diskwrite
+;
+diskwite:                               ;(may enter here from
+                                        ;seqdiskwrite above)
+        mov     rmf,false               ;read mode flag
+                                        ;write record to currently
+                                        ;selected file
+        call    checkwrite              ;in case write protected
+
+	TEST	XFCB_READ_ONLY,TRUE	;READ/ONLY ERROR IF XFCB_READ_ONLY TRUE
+	MOV	AL,3			;XFCB_READ_ONLY TRUE IF FILE IS 
+	JZ	$+5			;PASSWORD PROTECTED IN WRITE MODE
+					;AND PASSWORD WAS NOT SUPPLIED
+					;WHEN THE FILE WAS OPENED.
+JMP_SET_ARET:
+	JMP	SET_ARET
+	TEST	HIGH_EXT,40H		;READ/ONLY ERROR IF FCB OPENED
+	JNZ	JMP_SET_ARET		;IN READ/ONLY MODE
+
+        mov     bx,info                 ;bx = .fcb(0)
+        call    ckrofile                ;may be a read-only file
+
+	CALL	TST_INV_FCB		;TTEST FOR VALID FCB
+
+        call    getfcb                  ;to set local parameters
+        mov     al,vrecord
+        cmp     al,lstrec+1             ;vrecord-128
+                                        ;skip if vrecord > lstrec
+                                        ;vrecord = 128, cannot open
+                                        ;next extent
+        jb      dskwr0
+	CALL	OPEN_REEL		;TRY TO OPEN NEXT EXTENT
+	TEST	LRET,TRUE
+	JNZ	RET14
+dskwr0:
+;
+if	MPM
+
+	MOV	DONT_CLOSE,TRUE
+DISK_WRITE1:
+
+endif
+
+        call    index
+        call    alloct
+
+if	MPM
+
+	JZ	DISKWRITE2
+
+	;IF FILE IS UNLOCKED, VERIFY RECORD IS NOT LOCKED
+	;RECORD HAS TO BE ALLOCATED TO BE LOCKED
+
+	TEST	HIGH_EXT,80H		;WAS FILE OPENED IN UNLOCKED MODE?
+	JZ	NOT_UNLOCKED		;NO
+	CALL	ATRAN
+	MOV	CH,MULT_CNT		;TEST_LOCK EXPECTS MULT_CNT
+	PUSH	CX			;PUSHED ON STACK
+	CALL	TEST_LOCK		;VERIFY RECORD IS NOT LOCKED BY
+					;ANOTHER PROCESS
+	POP	CX
+	MOV	WFLAG,0	
+	JMPS	DISKWR10
+NOT_UNLOCKED:
+	OR	AL,TRUE			;RESET Z FLAG FOR FOLLOWING JNZ
+
+endif
+
+	mov	cl,0                    ;marked as normal write
+                                        ;operation for wrbuff
+        jnz     dskwr1
+
+if	MPM
+
+DISK_WRITE2:
+	CALL	TEST_DISK_FCB		;JUMP BACK TO DISK_WRITE1 IF
+					;DONT_CLOSE IS TRUE, FILE WAS OPENED
+					;IN UNLOCKED MODE, AND ACCESS OF
+					;DIR FCB WAS SUCCESSFUL
+
+	JNZ	DISK_WRITE1
+
+endif
+
+        ;not allocated:
+        ;the argument to getblock is the starting
+        ;position for the disk search, and should be
+        ;the last allocated block for this file, or
+        ;the value 0 if no space has been allocated
+;
+        call    dmposition
+        mov     dminx,al                ;save for later
+	xor	cx,cx			;may use block zero
+        or      al,al
+        jz      nopblock                ;skip if no previous block
+                                        ;previous block exists at a
+        mov     cl,al
+        dec     cx
+        call    getdm                   ;previous block # to bx
+        mov     cx,bx                   ;cx=prev block#
+nopblock:
+                                        ;cx = 0, or previous block #
+        call    getblock                ;block # to bx
+                                        ;arrive with block# or zero
+        or      bx,bx
+        jnz     blockok
+                                        ;cannot find block to allocate
+        mov     al,2
+        jmp     staret                  ;lret=2 
+blockok:
+	MOV	COMP_FCB_CKS,TRUE	;MUST RECOMPUTE FCB CHECKSUM
+                                        ;bx contains allocated block #
+        mov     arecord,bx
+        xchg    bx,dx                   ;block number to dx
+        mov     bx,info
+        add     bx,dskmap               ;bx=.fcb(diskmap)
+        cmp     single,0                ;set flags for single byte dm
+        mov     al,dminx                ;recall dm index
+	mov	ah,0
+        jz      allocwd                 ;skip if allocating word
+                                        ;allocating a byte value
+	add	bx,ax
+        mov     [bx],dl                 ;single byte alloc
+        jmps    dskwru                  ;to continue
+allocwd:
+                                        ;allocate a word value
+        add     bx,ax
+        add     bx,ax                   ;bx=.fcb(dminx*2)
+        mov     [bx],dx                 ;double wd
+        inc     bx
+dskwru:
+        ;disk write to previously unallocated block
+        mov     cl,2                    ;marked as unallocated write
+dskwr1:
+        ;continue the write operation of no allocation error
+        ;c = 0 if normal write, 2 if to prev unalloc block
+;
+;       cmp     lret,0
+;       jz      dskwr10
+;       ret
+;dskwr10:                                   ;stop if non zero value
+	mov	wflag,cl		;save the write flag
+        call    atran                   ;arecord set
+DISKWR10:
+	cmp	seqio,2			;check random with 0 fill
+	jnz	dskw11
+;
+;               this is random write with zero fill
+;
+	cmp	wflag,2			;check for new allocation
+        jnz     dskw11                  ;old allocation  
+;
+;        new alloction for random with zero fill
+;
+        mov     di,buffa
+	xor	ax,ax			;zero and fill
+	mov	cx,64			;zero 64 words in dirbuf
+rep	stos	ax
+        call    setdir
+	PUSH	ARECORD			;SAVE ARECORD
+        mov     bx,ablock
+fill1:  mov     arecord,bx
+        call    seek
+					;reg cl used for deblocking
+        call    wrbufflg                ;write fill record
+        mov     bx,arecord              ;restore last record     
+        mov 	wflag,0                    ;change  allocate flag   
+	mov	al,bl			;arecord in bx
+	mov	dh,blkmsk
+	and	al,dh
+	inc	bx
+	cmp	al,dh
+        jnz     fill1                   ;cont until cluster is zeroed
+	POP	ARECORD			;RESTORE ARECORD
+	MOV	WFLAG,2			;RESTORE WFLAG
+        call    setdata
+dskw11:
+        call    seek                    ;to proper file position
+                                        ;(cl=2 if new block,0 if not)
+
+					;SET WFLAG TO ZERO IF VRECORD
+	MOV	AL,VRECORD		;DOES NOT SPECIFY 1ST RECORD OF
+	MOV	AH,BLKMSK		;NEW BLOCK
+	AND	AH,AL
+	JZ	WRITE
+	MOV	WFLAG,0
+WRITE:
+        CALL	WRBUFFLG                ;written to disk
+                                        ;increment record count
+                                        ;if rcount <= vrecord
+        mov     al,vrecord
+        mov     bx,offset rcount
+        cmp     al,[bx]                 ;vrecord-rcount
+        jb      dskwr2
+                                        ;rcount <= vrecord
+        mov     [bx],al
+        inc     b[bx]                   ;rcount = vrecord+1
+
+if	MPM
+
+	TEST	HIGH_EXT,80H
+	JZ	WRITE1
+	
+	;FOR UNLOCKED FILE
+	;  RCOUNT = VRECORD & (~ BLKMSK) + BLKMSK + 1
+
+	MOV	CH,BLKMSK
+	MOV	CL,CH
+	NOT	CL
+	INC	CH
+	AND	AL,CL
+	ADD	AL,CH
+	MOV	[BX],AL
+WRITE1:
+
+endif
+
+        MOV	WFLAG,2                 ;mark as record count
+                                        ;incremented
+dskwr2:
+	CMP	WFLAG,2			;WFLAG=2 IF NEW BLOCK OR NEW RECORD #
+	JNZ	NOUPDATE
+
+if	MPM
+
+	TEST	HIGH_EXT,80H		;IS FILE OPEN MODE UNLOCKED?
+	JZ	DSKWR2A
+	MOV	AL,[BX]
+	CALL	GET_RCNTA		;RESTORE FCB(RCOUNT)
+	MOV	[BX],AL
+	CALL	CLOSE
+	CALL	TEST_DISK_FCB1
+DSKWR2A:
+
+endif
+
+	CALL	RESET_FWF
+
+noupdate:
+	CALL	GETMODNUM		;SET FILE WRITE FLAG IF RESET
+	AND	AL,40H
+	JNZ	DSKWR3
+	OR	B[BX],40H
+	CALL	RESET_FWF		;RESET FCB WRITE FLAG TO ENSURE
+					;T3' GETS RESET BY THE CLOSE FUNCTION
+dskwr3:
+        jmp     setfcb                  ;replace parameters
+                                        ;ret
+;
+rseek:
+        ;random access seek operation, c=0ffh if read mode
+        ;fcb is assumed to address an active fcb
+        ;(modnum has been set to 1100$0000b if previous bad seek)
+;
+        mov     seqio,0                 ;marked as random access op.
+rseek1:
+        push    cx                      ;save r/w flag
+        mov     dx,info
+                                        ;dx will hold base of fcb
+        mov     bx,ranrec
+        add     bx,dx                   ;bx=.fcb(ranrec)
+        mov     al,[bx]
+        and     al,7fh
+        push    ax                      ;record number
+        mov     al,[bx]
+        rcl     al,1                    ;cy=lsb of extent#
+        inc     bx
+        MOV	CH,[BX]
+        RCL     CH,1
+        AND	CH,11111B               ;CH=EXT#
+                 	                ;CH holds extent number,
+                                        ;record stacked
+	MOV	AL,[BX]
+	AND	AL,11110000B
+	INC	BX
+	OR	AL,[BX]
+	MOV	CL,4
+	ROL	AL,CL
+	MOV	CL,AL
+	XCHG	CH,CL			;CH=MOD#, CL=EXT#
+
+        pop     ax                      ;recall sought record #
+
+	MOV	AH,[BX]			;HIGH BYTE OF RR FIELD MUST
+	AND	AH,11111100B		;BE <= 3
+	
+        mov     bl,6                    ;zero flag, l=6
+                                        ;produce error 6,
+                                        ;seek past physical eod
+	JZ	$+5
+	JMP	SEEKERR
+                                        ;otherwise, high byte = 0
+        mov     bx,nxtrec
+        add     bx,dx                   ;bx=.fcb(nxtrec)
+        mov     [bx],al                 ;sought rec# stored away
+;
+        ;arrive here with ch=mod#, cl=ext#, dx=.fcb, rec stored
+        ;the r/w flag is still stacked.  compare fcb values
+;
+	PUSH	DX
+	CALL	CHK_INV_FCB
+	POP	DX
+	JZ	RANCLOSE
+
+        mov     bx,modnum		;CHECK MODULE # FIRST
+        add     bx,dx
+        mov     al,ch                   ;b=seek mod#
+                                        ;could be overflow at eof,
+                                        ;producing module# of 90h
+                                        ;or 10h, so compare all
+                                        ;but fwf
+        sub     al,[bx]
+        AND	AL,3FH
+        JNZ     RANCLOSE                ;same?
+
+        mov     bx,extnum
+        add     bx,dx
+	MOV	AL,[BX]
+	CMP	AL,CL
+	JZ	SEEKOK1			;EXTENTS EQUAL
+	CALL	COMPEXT
+	JNZ	RANCLOSE
+	MOV	[BX],CL			;EXTENTS IN SAME DIR FCB
+					;FCB(EXT) = CL
+	CALL	GET_DIR_EXT
+	MOV	CL,AL
+	CALL	RESTORE_RC
+	CALL	SET_RC
+	JMPS	SEEKOK1
+
+ranclose:
+        push    cx
+        push    dx                      ;save seek mod#,ext#, .fcb
+        call    close                   ;current extent closed
+        pop     dx
+        pop     cx                      ;recall parameters and fill
+        mov     bl,3                    ;cannot close error #3
+        mov     al,lret
+        inc     al
+        jz      badseek
+	MOV	XDCNT,0FFFFH		;RESET XDCNT FOR MAKE
+
+if	MPM
+
+	MOV	BYTE PTR SDCNT+1,0FFH
+
+endif
+
+        mov     bx,extnum
+        add     bx,dx
+        mov     [bx],cl                 ;fcb(extnum)=ext#
+	INC	BX
+	INC 	BX
+	MOV	AL,[BX]			;FCB(MODNUM)=MOD#
+	AND	AL,40H			;COPY FILE WRITE FLAG
+	OR	AL,CH
+	MOV	[BX],AL
+        call    open                    ;is the file present?
+        mov     al,lret
+        inc     al
+        jnz     seekok                  ;open successful?
+                                        ;cannot open file, read mode?
+        pop     cx                      ;r/w flag to c (=0ffh if read)
+        push    cx                      ;everyone expects this
+                                        ;item stacked
+        mov     bl,4                    ;seek to unwritten extent #4
+        inc     cl                      ;becomes 00 if read operation
+        jz      badseek                 ;error if read operation
+                                        ;write, make new extent
+        call    make
+        mov     bl,5                    ;cannot create new extent #5
+        mov     al,lret
+        inc     al
+        jz      badseek         ;no dir space
+                                        ;file make successful
+
+if	MPM
+
+	CALL	FIX_OLIST_ITEM
+
+endif
+
+seekok:
+	MOV	COMP_FCB_CKS,TRUE
+SEEKOK1:
+        pop     cx                      ;discard r/w flag
+        xor     al,al
+        jmp     staret                  ;with zero set  
+badseek:
+;
+        ;fcb no longer contains a valid fcb, mark
+        ;with 1100$000b in modnum field so that it
+        ;appears as overflow with file write flag set
+;
+        push    bx                      ;save error flag
+	MOV 	COMP_FCB_CKS,TRUE
+	CALL	MAKE_FCB_INV
+        pop     bx                      ;and drop through
+seekerr:
+        pop     cx                      ;discard r/w flag
+        MOV     LRET,BL                 ;lret=#, nonzero
+
+        RET
+                                        ;close ok
+                                        ;ret
+;
+rdread:
+;
+        ;random disk read operation
+;
+        mov     cl,true                 ;marked as read operation
+        call    rseek
+        JNZ	RET19
+        JMP	DISKREAD		;if seek successful
+;
+rdwrite:
+                                        ;random disk write operation
+        mov     cl,false                ;marked as write operation
+        call    rseek
+        JNZ     RET19
+        JMP     DISKWITE		;if seek successful
+;
+cmperr:
+        ;compute random record position for getfilesize/setrandom
+        xchg    bx,dx
+        add     bx,dx
+                                        ;dx=.buf(dptr) or .fcb(0),
+                                        ;bx=.f(nxtrec/reccnt)
+        mov     cl,[bx]                 ;pick up record no.
+        mov     ch,0                    ;cx = 0000 0000 ?rrr rrrr
+        mov     bx,extnum
+        add     bx,dx
+        mov     ah,[bx]
+        mov     al,0
+        shr     ax,1
+        and     ah,0fh
+        add     cx,ax
+                                        ;cx = 000? eeee errrr rrrr
+        mov     bx,modnum
+        add     bx,dx
+        mov     al,[bx]                 ;AL = XXMM MMMM
+        AND	AL,3FH
+	mov     ah,16
+        mul     ah			;AX = 0000 00MM MMMM 0000
+        add     ch,al
+                                        ;cx = mmmm eeee errr rrrr
+	MOV	AL,0
+	ADC	AL,AH			;AL = 0000 0?MM
+RET19:  ret
+;
+getfilesize:
+        ;compute logical file size for current fcb
+	CALL	GET_RRA			;ZERO RECEIVING RANREC FIELD
+	PUSH	BX
+	XOR	AL,AL
+	MOV	[BX],AL
+	INC	BX
+	MOV	[BX],AL
+	INC	BX
+	MOV	[BX],AL
+
+        mov     cl,extnum
+        call    srch
+getsize:
+        jz      setsize
+                                        ;current fcb addressed by dptr
+        call    getdptra
+        mov     dx,reccnt               ;ready for compute size
+        call    cmperr
+                                        ;al=0000 000?,
+                                        ;cx = mmmm eeee errr rrrr
+                                        ;compare with memory, larger?
+        pop     bx
+        push    bx                      ;recall, replace .fcb(ranrec)
+        mov     dl,al                   ;save cy
+        mov     ax,cx
+        sub     ax,[bx]
+        mov     al,dl
+        sbb     al,2[bx]                ;carry if .fcb(ranrec) >
+                                        ;directory
+        jb      getnextsize             ;for another try
+                                        ;fcb is less or equal,
+                                        ;fill from directory
+        mov     2[bx],dl
+        mov     [bx],cx
+getnextsize:
+        call    srchn
+	MOV	LRET,0
+        jmps    getsize
+setsize:
+        pop     bx                      ;discard .fcb(ranrec)
+        ret
+;
+setrandom:
+        ;set random record from the current fcb
+        MOV	BX,DX
+        mov     dx,nxtrec               ;ready params for computesize
+        call    cmperr                  ;dx=info, al=cy,
+                                        ;cx=mmmm eeee errr rrrr
+        mov     bx,ranrec
+        add     bx,dx                   ;bx=.fcb(ranrec)
+        mov     [bx],cx
+        mov     2[bx],al                ;to ranrec
+        ret
+;
+TMP_SELECT:				;DL=DRIVE TO SELECT (0-F)
+	MOV	BX,OFFSET SELDSK
+	MOV	AL,[BX]
+	PUSH	AX
+	MOV	[BX],DL
+	CALL	CUR_SELECT
+	POP	AX
+	MOV	SELDSK,AL
+	RET
+;
+XCURSELECT:
+	MOV	RETURN_FFFF,TRUE
+	CALL	CURSELECT
+	MOV	RETURN_FFFF,FALSE
+RET20A:	RET
+;
+CURSELECT:
+	MOV	AL,SELDSK
+	CMP	AL,CURDSK
+	JE	TEST_FF_DISK		;DON'T SELECT IF SELDSK = CURDSK
+;
+SELECT:
+        ;select disk word ptr info for subsequent input or output ops
+        MOV     DX,DLOG
+	CALL	TEST_VECTOR
+	PUSH	DX			;DL = 1 IF DRIVE LOGGED IN
+                                        ;save it for test below,
+                                        ;send to seldsk
+        call    selectdisk
+        pop     bx                      ;recall dlog vector
+        JNZ     $+5
+        call    selerror
+                                        ;returns true if select ok
+                                        ;is the disk logged in?
+        rcr     bl,1
+
+if	MPM
+
+	JNB	SELECT1
+	MOV	DX,RLOG
+	CALL	TEST_VECTOR
+	MOV	REM_DRV,DL
+	RET
+SELECT1:
+
+endif
+if	CPM
+
+        JB      RET20A                  ;rc
+
+endif
+                                        ;return if bit is set
+                                        ;disk not logged in,
+                                        ;set bit and initialize
+        mov     cx,dlog
+        call    setcdisk
+        mov     dlog,bx                 ;dlog=set$cdisk(dlog)
+
+if	MPM
+
+	MOV	AL,BYTE PTR CHKSIZ+1	;IF HIGH ORDER BIT OF CHKSUM
+	RCL	AL,1			;VECTOR IS ZERO, THEN DRIVE
+	MOV	AL,0
+	JB	SELECT2			;IS REMOVEABLE
+	MOV	CX,RLOG
+	CALL	SETCDISK
+	MOV	RLOG,BX			;RLOG=SET_CDISK(RLOG)
+	MOV	AL,1
+SELECT2:
+	MOV	REM_DRV,AL
+
+endif
+
+       jmp     initialize		;ret
+
+;
+TEST_FF_DISK:
+	INC	AL
+	JNZ	RET20A
+	JMP	SEL_ERROR
+
+;
+SET_SELDSK:
+	MOV	AL,LINFO
+	MOV	SELDSK,AL
+	RET
+
+;
+RESELECTX:
+	MOV	HIGH_EXT,0
+	JMP	RESELECT1
+;
+reselect:
+	MOV	CX,807FH		;CH = 80H, CL = 7FH
+	MOV	BX,INFO
+	ADD	BX,7
+	MOV	AL,[BX]			;IF FCB(7) & 80H 
+	AND	AL,CH			;THEN XFCB_READ_ONLY = 80H
+	MOV	XFCB_READ_ONLY,AL	;ELSE XFCB_READ_ONLY = 00H
+	AND	[BX],CL			;FCB(7) = FCB(7) & 7FH
+	INC	BX
+	MOV	AL,[BX]
+	AND	AL,CL			;FCB(8) = FCB(8) & 7FH
+	CMP	AL,[BX]
+	MOV	[BX],AL			;IF FCB(8) & 80H
+	MOV	AL,60H			;THEN HIGH_EXT = 60H
+	JNZ	RESELECT0
+	ADD	BX,4			;ELSE HIGH_EXT = FCB(12) & E0H
+	MOV	AL,0E0H
+	AND	AL,[BX]
+RESELECT0:
+	MOV	HIGH_EXT,AL
+	CALL	CLR_EXT
+	CALL	GETRCNTA
+	MOV	AL,[BX]			;IF FCB(RCOUNT) & 80H
+	AND	AL,CH			;THEN ACTUAL_RC = FCB(RCOUNT) & 7FH
+	JZ	RESELECT1		;     FCB(RCOUNT) = 80H
+	MOV	AL,[BX]			;ELSE ACTUAL_RC = 0
+	AND	AL,CL
+	MOV	[BX],CH
+RESELECT1:
+	MOV	ACTUAL_RC,AL
+;check current fcb to see if reselection necessary
+        mov     resel,true              ;mark possible reselect
+        mov     bx,info
+        mov     al,[bx]                 ;drive select code
+        and     al,00011111b            ;non zero is auto drive select
+        dec     al                      ;drive code normalized to 
+                                        ;0...30, or 255
+        mov     linfo,al                ;save drive code
+        cmp     al,0FFH
+        JZ	NOSELECT
+                                        ;auto select function,
+                                        ;save curdsk
+        MOV     AL,SELDSK
+        mov     olddsk,al               ;olddsk=curdsk
+        mov     al,[bx]
+        mov     fcbdsk,al               ;save drive code
+        and     al,11100000b
+        mov     [bx],al                 ;preserve hi bits
+        CALL    SET_SELDSK
+noselect:
+	CALL	CURSELECT
+                                        ;set user code
+        mov     al,usrcode              ;0...31
+        mov     bx,info
+        or      al,[bx]
+        mov     [bx],al
+ret20:  ret
+;
+;
+parsave33r:
+	call	parsave33
+	jmp	reselect
+;
+parsave36r:
+        call    parsave36
+        jmp    reselect
+;
+COPY_DMA_IN:				;COPY (CL) BYTES FROM USER'S
+	MOV	SI,DMAAD		;DMA TO COMMON_DMA
+	MOV	DI,OFFSET COMMON_DMA
+	PUSH	DS
+	MOV	DS,DMABASE
+	XOR	CH,CH
+REP	MOVS	AL,AL
+	POP	DS
+	RET
+;
+COPY_DMA_OUT:				;COPY (CL) BYTES FROM COMMON_DMA
+	MOV	DI,DMAAD		;TO USER'S DMA
+	MOV	SI,OFFSET COMMON_DMA
+	PUSH	ES
+	MOV	ES,DMABASE
+	XOR	CH,CH
+REP	MOVS	AL,AL
+	POP	ES
+	RET
+;
+CHK_PASSWORD:
+	CALL	GET_DIR_MODE		;AL = DIR LBL DATA BYTE
+	AND	AL,80H
+	JNZ	CHK_PW			;BIT 0 ON => PASSWORDS ACTIVE
+	RET
+;
+GET_DIR_MODE:
+	MOV	BX,DRVLBLA		;RETURN DIR LBL DATA BYTE IN AL
+	MOV	AL,[BX]
+	RET
+;
+CHK_PW:
+	CALL	GET_XFCB		;AL = XFCB PASSWORD MODE | 01H
+	JZ	RET20			;ZERO SET IF NO XFCB FOUND
+	DEC	AL			;REMOVE LOW ORDER BIT
+	JZ	RET20			;ZERO SET IF PASSWORD MODE = 0
+	CALL	CMP_PW			;COMPARE PASSWORDS
+	JZ	RET20			;ZERO SET IF PASSWORD OK
+CHK_PW1:				;PASSWORD ERROR
+	MOV	AL,7
+	JMP	SET_ARET
+;
+CMP_PW:					;COMPARE PASSWORDS
+					;BX = .XFCB(12)
+	INC	BX
+	MOV	CH,[BX]			;FCB(13) = XFCB CHECKSUM
+	OR 	CH,CH
+	JNZ	CMP_PW2			;JUMP IF XFCB(13) ~= 0
+	MOV	DX,BX			;SAVE BX
+	INC	BX			;BECAUSE XFCB CHECKSUM IS ZERO
+	INC 	BX			;TEST FOR NULL PASSWORD
+	MOV	CL,9			;NULL PASSWORDS ARE ALL BLANKS AND/OR
+CMP_PW1:				;ZEROS THAT SUM TO ZERO
+	INC	BX			;ANY PASSWORD MATCHES A NULL PASSWORD
+	MOV	AL,[BX]
+	DEC	CL
+	JZ	RET20			;PASSWORD IS ALL BLANKS AND/OR ZEROS
+	OR	AL,AL
+	JZ	CMP_PW1
+	CMP	AL,20H
+	JZ	CMP_PW1
+	MOV	BX,DX			;PASSWORD CONTAINS A VALUE OTHER
+					;THAN BLANK OR ZERO
+
+CMP_PW2:				;BX = .XFCB(13)
+	LEA	SI,10[BX]
+	LEA	DX,3[BX]		;DX = .XFCB(16)
+	MOV	BX,XDMAAD
+	MOV	CL,8
+CMP_PW3:
+	STD				;LODS DECREMENTS SI
+	LODS	AL
+	XOR	AL,CH			;EXCLUSIVE OR PASSWORD BYTE WITH CKS
+	CMP	AL,[BX]
+	JNZ	CMP_PW4			;PASSWORD MISMATCH
+	INC	BX
+	DEC	CL
+	JNZ	CMP_PW3
+	CLD
+	RET				;PASSWORD MATCHES
+;
+CMP_PW4:
+	CLD
+	MOV	BX,OFFSET DF_PASSWORD	;COMPARE XFCB PASSWORD TO DEFAULT PW
+	MOV	CL,8			;BX = .DEFAULT PW, DX = .XFCB PASSWORD
+	JMP	COMPARE
+;
+SET_PW:					;SET PASSWORD IN XFCB
+	PUSH	BX			;SAVE .XFCB(12)
+	MOV	CX,8			;CH = 0, CL = 8
+	LEA	SI,11[BX]		;SI = .XFCB(23)
+	MOV	BX,XDMAAD
+SET_PW0:
+	SUB	AH,AH			;ZERO NULL PASSWORD FLAG
+SET_PW1:
+	MOV	AL,[BX]
+	MOV	[SI],AL			;COPY PASSWORD CHAR TO XFCB
+	OR	AL,AL			;IS PASSWORD CHAR ZERO?
+	JZ	SET_PW2			;YES
+	CMP	AL,20H			;IS PASSWORD CHAR BLANK?
+	JZ	SET_PW2			;YES
+	INC	AH			;PASSWORD IS NOT NULL
+SET_PW2:
+	ADD	CH,AL			;ADD PASSWORD CHAR TO XFCB CHKSUM
+	INC	BX
+	DEC	SI
+	DEC	CL
+	JNZ	SET_PW1
+	OR	AH,CH			;IF (AH | CH) = 0 THEN PASSWORD IS NULL
+	POP	BX
+	JNZ	SET_PW3
+	MOV	[BX],AH			;XFCB(EX) = 0, ZERO PASSWORD MODE
+SET_PW3:
+	INC	SI
+	MOV	CL,8
+SET_PW4:
+	MOV	AL,[SI]
+	XOR	AL,CH			;ENCRYPT PASSWORD CHARS IN XFCB
+	MOV	[SI],AL
+	INC	SI
+	DEC	CL
+	JNZ	SET_PW4
+	INC	BX			;BX = .XFCB(13)
+	RET				;CH = XFCB PASWORD CHECKSUM
+;
+GET_XFCB:				;GET XFCB (SEARCH MODE)
+	SUB	CH,CH
+GET_XFCB0:				;GET NEXT XFCB (SEARCHN MODE)
+	MOV	BX,INFO
+	MOV	AL,[BX]
+	PUSH	AX
+	OR	B[BX],10H		;FCB(0) = FCB(0) | 10H
+	MOV	CL,EXTNUM
+	CMP	CH,0			;TEST FOR MODE
+	JNZ	GET_XFCB00
+	CALL	SEARCH			;RETURNS WITH ZERO FLAG SET IF
+	JMPS	GET_XFCB01		;XFCB NOT FOUND
+GET_XFCB00:
+	CALL	SEARCHN			;RETURNS WITH ZERO FLAG SET IF
+GET_XFCB01:				;XFCB NOT FOUND
+	MOV	AL,0
+	MOV	LRET,AL			;ZERO LRET
+	MOV	BX,INFO
+	POP	CX
+	MOV	[BX],CL			;RESTORE FCB(0)
+	JNZ	GET_XFCB1
+	RET				;XFCB NOT FOUND - AL = 0, ZFLAG SET
+GET_XFCB1:
+	CALL	GET_DPTRA
+	MOV	DX,BX
+	ADD	BX,EXTNUM
+	MOV	AL,[BX]
+	AND	AL,0E0H
+	OR	AL,1			;AL = XFCB(EXTNUM) & 0E0H + 1
+	RET				;XFCB FOUND, ZERO FLAG RESET
+;
+INIT_XFCB:
+	CALL	SETCDR			;MAY HAVE EXTENDED THE DIRECTORY
+	MOV	CX,1014H		;CH = 16, CL = 20
+INIT_XFCB0:				;CH = FCB(0) LOGICAL OR MASK
+					;CL = ZERO COUNT
+	PUSH	CX
+	CALL	GETDPTRA		;DOES NOT USE CX
+	MOV	SI,INFO			;XFCB(0) = FCB(0) | CH
+	MOV	AL,[SI]
+	OR	AL,CH
+	MOV	[BX],AL
+	INC	SI
+	INC	BX
+	MOV	CL,11
+	MOV	DX,SI
+	CALL	MOVE			;XFCB(1..11) = FCB(1..11)
+	MOV	DX,SI			;DX = .FCB(12)
+	MOV	BX,DI			;BX = .XFCB(12)
+	POP	CX			;CL CONTAINS # OF REMAINING BYTES
+	SUB	CH,CH			;OF XFCB TO ZERO
+	XOR	AL,AL			;MOVE SETS DI TO ADDR OF NEXT CHAR
+REP	STOS	AL
+RET21:	RET
+;
+CHK_XFCB_PASSWORD:
+	CALL	GET_XFCB1		;ACCESS XFCB IN DIRECTORY BUFFER
+					;BX = .XFCB(EX)
+					;AL = (XFCB(EXT) & E0H) | 1
+	DEC	AL
+CHK_XFCB_PASSWORD1:
+	JZ	RET21
+	PUSH	BX
+	CALL	CMP_PW			;CHECK PASSWORD
+	POP	BX
+	JZ	RET21			;RETURN WITH BX = .XFCB(EX)
+	JMP	CHK_PW1
+;
+CHK_PWS:
+	CALL	GET_DIR_MODE		;GET DIR LBL DATA BYTE
+	AND	AL,80H
+	JZ	RET21			;RETURN IF PASSWORDS NOT ACTIVE
+	CALL	GET_XFCB		;GET 1ST XFCB
+CHK_PWS1:
+	JZ	RET21			;ZERO SET IF XFCB NOT FOUND
+	DEC	AL
+	JZ	$+7
+	CALL	CMP_PW			;CHK PWS FOR XFCBS WITH NON-ZERO
+					;PASSWORD MODE
+	JNZ	RET21			;ZERO FLAG RESET => PASSWORD ERROR
+	MOV	CH,1
+	CALL	GET_XFCB0		;GET NEXT XFCB
+	JMPS	CHK_PWS1
+;
+STAMP1:
+	MOV	CX,24
+	JMPS	STAMP3
+STAMP2:
+	MOV	CX,28
+STAMP3:
+
+if	MPM
+
+	MOV	DX,OFFSET TOD
+
+endif
+if	CPM
+
+	MOV	DX,OFFSET STAMP
+
+endif
+
+	CALL	GETDPTRA
+	ADD	BX,CX
+	MOV	CL,4
+	JMP	MOVE
+;
+COMPARE:
+	MOV	CH,0
+	MOV	SI,BX
+	MOV	DI,DX
+REP	CMPS	AL,AL
+	RET
+
+
+if	MPM
+
+PACK_SDCNT:
+	;
+	;Packed_dcnt = dblk(low 15 bits) || dcnt (low 9 bits)
+	;
+	;	if sdblk = 0 then dblk = shr(sdcnt,blkshf+2)
+	;	             else dblk = sdblk
+	;	dcnt = sdcnt & (blkmsk || '11'b)
+	;
+	;	packed_dcnt format (24 bits)
+	;
+	;	12345678 12345678 12345678
+	;	23456789 .......1 ........ sdcnt (low 9 bits)
+	;       ........ 9abcdef. 12345678 sdblk (low 15 bits)
+	;
+	MOV	BX,SDBLK
+	CMP	BX,0			;DOES SDBLK = 0?
+	JNE	PACK_SDCNT1		;NO
+	MOV	BX,SDCNT
+	MOV	CL,BLKSHF
+	ADD	CL,2
+	SHR	BX,CL
+PACK_SDCNT1:
+	SHL	BX,1			;SHIFT DBLK LEFT 1
+	MOV	DX,SDCNT
+	XOR	AH,AH
+	MOV 	AL,BLKMSK
+	SHL	AX,1
+	SHL	AX,1
+	OR	AL,11B			
+	AND	AX,DX			;DCNT = SDCNT & (BLKMSK || '11'B)
+	OR	BL,AH
+	MOV	PACKED_DCNT,AL
+	MOV	WORD PTR PACKED_DCNT+1,BX
+	RET
+;
+;
+;olist element = link(2) || atts(1) || dcnt (3) ||
+;		 pdaddr(2) || opncnt(2)
+;
+;	link = 0 -> end of list
+;
+;	atts - 80 - open in locked mode
+;	       40 - open in unlocked mode
+;              20 - open in read/only mode
+;              10 - deleted item
+;              0n - drive code (0-f)
+;
+;	dcnt = packed sdcnt+sdblk
+;	pdaddr = process descriptor addr
+;	opncnt = # of open calls - # of close calls
+;		 olist item freed by close when opncnt = 0
+;
+;llist element = link(2) || drive(1) || arecord(3) 
+;		 pdaddr(2) || .olist_item(2)
+;
+;	link = 0 -> end of list
+;
+;	drive - 0n - drive code (0-f)
+;
+;	arecord = record number of locked record
+;	pdaddr = process descriptor addr
+;	.olist_item = address of file's olist item
+;
+SEARCH_OLIST:
+	mov bx,offset open_root! jmps search_listo
+SEARCH_LLIST:
+	mov bx,offset lock_root! jmps search_listo
+SEARCHN_LIST:
+	mov bx,cur_pos
+search_listo:
+	mov prv_pos,bx
+;
+;search_olist, search_llist, searchn_list conventions
+;
+;	CH = 0 -> return next item
+;	CH = 1 -> search for matching drive
+;	CH = 2 -> search for matching DCNT
+;	CH = 5 -> search for matching dcnt + pdaddr
+;
+;	if found then z flag is set
+;		      prv_pos -> previous list element
+;		      cur_pos -> found list element
+;	else prv_pos -> list element to insert after
+;
+;	olist and llist are maintained in drive order
+;
+srch_list1:
+	mov bx,[bx]! or bx,bx! jz srch_list3
+	or ch,ch! je srch_list6
+	inc bx! inc bx! mov cl,[bx]! and cl,0fh
+	mov dx,offset curdsk! mov si,dx
+	lods al! cmp al,cl! jne srch_list4
+	cmp ch,1! je srch_list5
+	mov cl,ch! push cx! push bx
+	inc dx! inc bx! call compare! pop bx
+	pop cx! jz srch_list5
+srch_list2:
+	dec bx! dec bx
+	mov prv_pos,bx! jmp srch_list1
+srch_list3:
+	or al,1! ret
+srch_list4:
+	jae srch_list2
+srch_list5:
+	pushf! dec bx! dec bx! popf
+srch_list6:
+	mov cur_pos,bx! ret
+
+DELETE_ITEM:	;BX -> item to be deleted
+
+	pushf! cli
+	mov si,[bx]! mov di,prv_pos! mov cur_pos,di
+	;prv_pos.link = delete_item.link
+	mov [di],si
+	;
+	mov si,free_root! mov free_root,bx
+	;delete_item.link = previous free_root
+	mov [bx],si! popf! ret
+
+CREATE_ITEM:	;BX -> new item if successful
+		;Z flag set if no free items
+	
+	mov bx,free_root! cmp bx,0! jnz $+3! ret
+	mov cur_pos,bx
+	;free_root = free_root.link
+	mov si,[bx]! mov free_root,si
+	;
+	mov si,prv_pos! mov di,[si]
+	;create_item.link = prv_pos.link
+	mov [bx],di
+	;prv_pos.link = .create_item
+	mov [si],bx! ret
+
+SET_OLIST_ITEM:	;AL = attributes
+		;BX = olist entry address
+	
+	inc bx! inc bx
+	mov si,offset curdsk! mov ah,[si]! or al,ah
+	lea dx,1[si]! mov [bx],al! inc bx
+	mov cl,5! call move
+	mov w[di],0
+retl1:
+	ret
+
+TST_OLIST:	
+
+	mov chk_olist_flag,false! jmp chk_olist0
+
+CHK_OLIST:
+
+	mov chk_olist_flag,true
+chk_olist0:
+	mov dx,offset dcnt! mov bx,offset sdcnt
+	mov cl,4! call move
+	call pack_sdcnt! mov ch,3! call search_olist! jnz retl1
+	pop dx! test byte ptr 2[bx],80h! jz chk_olist05
+	push dx! push bx! call compare_pds! pop bx! pop dx! jz $+5
+chk_olist05:
+	jmp openx06
+	push dx
+	test chk_olist_flag,true
+	jz retl1
+	call delete_item
+inc_pdcnt:
+	mov al,pdcnt
+chk_olist1:
+	add al,16! jz chk_olist1
+	mov pdcnt,al
+	ret
+
+PR_TERM:
+
+	mov dx,pdaddr
+	mov bx,offset open_root! mov cur_pos,bx
+pr_term1:
+	mov ch,0! push dx! call search_nlist! pop dx! jnz pr_term2
+	mov cx,6! push bx! call tst_tbl_lmt! pop bx! jnz pr_term1
+	call remove_locks! call delete_item
+	jmp pr_term1
+pr_term2:
+	call func48
+retl2:
+	ret
+
+FLUSH_FILES:
+
+	test flushed,true! jnz retl2
+	mov flushed,true
+
+FLUSH_FILE0:
+
+	mov bx,offset open_root! mov cur_pos,bx
+flush_file1:
+	push ds! pop es
+	mov ch,1! call search_nlist! jnz retl2
+	push bx! call remove_locks! call delete_item! pop bx
+	mov bx,6[bx]! mov es,p_uda[bx]
+	test u_pd_cnt,1! jnz flush_file1
+	or u_pd_cnt,1! push ds! pop es
+	cmp bx,pdaddr! jnz flush_file1
+	call inc_pdcnt! jmps flush_file1
+
+FREE_FILES:
+	;free_mode = 1 - remove curdsk files for process
+	;            0 - remove all files for process
+	mov dx,pdaddr! mov bx,offset open_root! mov cur_pos,bx
+free_files1:
+	mov ch,free_mode
+	push dx! call search_nlist! pop dx! jnz retl25
+	mov cx,6! push bx! call tst_tbl_lmt! pop bx! jnz free_files1
+	cmp word ptr 3[bx],0ffffh! jnz free_files2
+	cmp byte ptr 5[bx],0ffh! jz free_files3
+free_files2:
+	mov incr_pdcnt,true
+free_files3:
+	call remove_locks! call delete_item
+	jmp free_files1
+
+REMOVE_LOCKS:	;BX -> .olist_item
+
+	test byte ptr 2[bx],40h! jz retl25
+	push dx! push prv_pos
+	mov dx,bx! mov bx,offset lock_root! mov cur_pos,bx
+remove_lock1:
+	mov ch,0! push dx! call searchn_list! pop dx
+	jnz remove_lock2
+	mov cx,8! push bx! call tst_tbl_lmt! pop bx! jnz remove_lock1
+	call delete_item
+	jmp remove_lock1
+remove_lock2:
+	pop prv_pos! mov bx,dx! pop dx
+retl25:
+	ret
+
+TST_TBL_LMT:
+
+	add bx,cx
+	lea si,[bx]! cmp [si],dx! ret
+
+CREATE_OLIST_ITEM:
+
+	mov ch,1! call search_olist
+	call create_item! mov al,attributes! call set_olist_item
+	ret
+
+COUNT_OPENS:
+
+	mov open_cnt,0
+	mov dx,pdaddr! mov bx,offset open_root! mov cur_pos,bx
+count_open1:
+	mov ch,0! push dx! call searchn_list! pop dx! jnz count_open2
+	mov cx,6! call tst_tbl_lmt! jnz count_open1
+	inc open_cnt! jmp count_open1
+count_open2:
+	mov al,open_cnt! sub al,open_max
+retl3:
+	ret
+		
+COUNT_LOCKS:
+
+	mov lock_cnt,0
+	mov dx,bx! mov bx,offset lock_root! mov cur_pos,bx
+count_lock1:
+	mov ch,0! push dx! call searchn_list! pop dx! jnz retl3
+	mov cx,8! call tst_tbl_lmt! jnz count_lock1
+	inc lock_cnt! jmp count_lock1
+
+CHECK_FREE:
+	mov dl,mult_cnt
+CHECK_FREE0:
+	mov dh,0
+	mov bx,offset free_root! mov cur_pos,bx
+check_free1:
+	mov ch,0! push dx! call searchn_list! pop dx! jnz check_free2
+	inc dh! cmp dh,dl! jb check_free1
+retl4:
+	ret
+check_free2:
+	pop bx! mov al,14! jmp sta_ret
+
+LOCK:
+	mov cl,2! call copy_dma_in
+	call parsave36r! call check_fcb
+	test high_ext,80h! jz retl4
+	mov bx,xdmaad! mov bx,[bx]
+	mov al,curdsk! sub al,2[bx]! and al,0fh! jnz lock8
+	mov file_id,bx
+	test lock_unlock,true! jz lock1 ; jump if unlock
+	call count_locks
+	mov al,lock_cnt! add al,mult_cnt! jb lock0
+	cmp lock_max,al! jae lock05
+lock0:
+	mov al,12! jmp sta_ret ; too many locks
+lock05:
+	call check_free
+lock1:
+	call save_rr! mov bx,offset lock9! push bx! mov ah,mult_cnt
+lock2:
+	push ax! call get_lock_add
+	test lock_unlock,true! jz lock3 ; jump if unlock
+	call test_lock
+lock3:
+	pop ax! dec ah! jz lock4
+	call incr_rr! jmps lock2
+lock4:
+	call reset_rr! mov ah,mult_cnt
+lock5:
+	push ax! call get_lock_add
+	test lock_unlock,true! jz lock6 ; jump if unlock
+	call set_lock! jmp lock7
+lock6:
+	call free_lock
+lock7:
+	pop ax! dec ah! jz retl5
+	call incr_rr! jmps lock5
+lock8:
+	mov al,13! jmp sta_ret
+lock9:
+	call reset_rr
+retl5:
+	ret
+
+GET_LOCKADD:
+
+	mov lock_sp,sp! mov lock_shell,true
+	call rseek
+	mov lock_shell,false
+	call getfcb
+	cmp aret,0! jnz lock_err
+	call index! call alloct
+	mov bx,1! jz lock_err
+	call atran
+	ret
+
+LOCK_PERR:
+
+	mov lock_shell,false! mov sp,lock_sp
+
+LOCK_ERR:
+
+	pop dx ; discard return address
+	pop cx ; CH = mult_cnt - # recs processed
+	mov al,mult_cnt! sub al,ch
+	mov cl,4! shl al,cl! or bh,al! mov aret,bx
+retl6:
+	ret
+
+TEST_LOCK:
+
+	call move_arecord
+	mov ch,3! call search_llist! jnz retl6
+	call compare_pds! jz retl6
+	mov bx,8! jmp lock_err
+
+SET_LOCK:
+
+	call move_arecord
+	mov ch,1! call search_llist
+	pushf! cli
+	call create_item
+	xor al,al! call set_olist_item
+	mov dx,file_id! mov [di],dx
+	popf
+retl7:
+	ret
+
+FREE_LOCK:
+
+	call move_arecord
+	mov ch,5! call search_llist! jnz retl7
+free_lock0:
+	call delete_item
+	mov ch,5! call searchn_list! jnz retl7
+	jmp free_lock0
+
+COMPARE_PDS:
+
+	add bx,6! mov dx,offset pdaddr
+	mov cl,2! jmp compare
+
+MOVE_ARECORD:
+
+	mov dx,offset arecord! mov bx,offset packed_dcnt
+	mov cl,3! jmp move
+
+FIX_OLIST_ITEM:
+
+	mov si,offset xdcnt! mov di,offset sdcnt
+	mov cx,2
+	rep cmps ax,ax ; is xdcnt < sdcnt?
+	jae retl7 ; no
+	;yes - update olist entries
+	call swap! call sdcnt_eq_xdcnt
+	mov bx,offset open_root! mov cur_pos,bx
+	;find file's olist entries & change dcnt values
+fix_ol1:
+	call swap! call pack_sdcnt! call swap
+	mov ch,3! call searchn_list! jnz retl8
+	;update olist entry with new dcnt value
+	push bx! call pack_sdcnt! pop bx
+	add bx,3! mov dx,offset packed_dcnt
+	mov cl,3! call move! jmp fix_ol1
+
+REMOVE_DRIVE:
+
+	mov cl,curdsk! mov dx,1! shl dx,cl
+	not dx! and bx,dx
+retl8:
+	ret
+
+DISKRESET:
+
+	mov ntlog,0! mov set_ro_flag,0
+	mov bx,info
+intrnl_disk_reset:
+	cmp open_root,0! jz retl8
+	mov al,curdsk! push ax! mov ch,0
+dskrst1:
+	shr bx,1! jb dskrst3
+dskrst2:
+	inc ch! cmp bx,0! jnz dskrst1
+	pop ax! mov curdsk,al
+	mov bx,ntlog! or tlog,bx
+	inc al! ret
+dskrst3:
+	push cx! push bx! mov curdsk,ch! mov cl,ch
+	mov dx,tlog! call test_vector1! push dx
+	mov dx,rlog! call test_vector1! push dx
+	mov dx,rodsk! call test_vector1! pop bx
+	or bl,set_ro_flag! or bl,dl! pop dx! or bl,dl! mov check_disk,bl
+	mov bx,offset open_root! mov cur_pos,bx
+dskrst4:
+	mov ch,1! call search_nlist! jnz dskrst6
+	test check_disk,true! jz dskrst5
+	push bx! call compare_pds! jz dskrst45
+	pop dx! xor al,al! jmp dskrst6
+dskrst45:
+	mov cx,ntlog! mov al,curdsk! call set_cdisk1
+	mov ntlog,bx! pop bx! jmp dskrst4
+dskrst5:
+	mov bx,info! call remove_drive! mov info,bx
+	or al,1
+dskrst6:
+	pop bx! pop cx! jz $+5! jmp dskrst2
+
+	;error - olist item exists for another process
+	;	 on a removeable or read/only drive to be reset
+	;        or any kind of drive if function is write protect disk
+
+	pop ax! mov curdsk,al
+	cmp error_mode,0ffh! je dskrst7
+	add ch,41h! mov denieddrv,ch
+	mov bx,dx! mov bx,6[bx]! mov al,p_cns[bx]! add al,30h
+	mov deniedcns,al
+	lea dx,p_name[bx]! mov bx,offset deniedprc
+	mov cl,8! call move
+	mov cx,offset deniedmsg
+	call xprint
+dskrst7:
+	pop bx! mov aret,0ffffh! ret
+
+endif

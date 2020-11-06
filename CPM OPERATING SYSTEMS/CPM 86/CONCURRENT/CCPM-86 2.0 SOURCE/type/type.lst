@@ -1,0 +1,575 @@
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE TYPE
+OBJECT MODULE PLACED IN TYPE.OBJ
+COMPILER INVOKED BY:  :F0: TYPE.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+              $title ('TYPE utility: Types file to Console')
+   1          type:
+              do;
+
+              $include (:f2:copyrt.lit)
+          =
+          =   /*
+          =     Copyright (C) 1983
+          =     Digital Research
+          =     P.O. Box 579
+          =     Pacific Grove, CA 93950
+          =   */
+          =
+
+              $include(:f2:vaxcmd.lit)
+          =
+          =   /**** VAX commands for generation - read the name of this program 
+          =           for PROGNAME below.
+          =
+          =       $ util := PROGNAME
+          =       $ ccpmsetup             ! set up environment
+          =       $ assign 'f$directory()' f1:        ! use local dir for temp files
+          =       $ plm86 'util'.plm xref 'p1' optimize(3) debug
+          =       $ link86 f2:scd.obj, 'util'.obj  to 'util'.lnk
+          =       $ loc86 'util'.lnk od(sm(code,dats,data,stack,const)) -
+          =             ad(sm(code(0),dats(10000h))) ss(stack(+32)) to 'util'.
+          =       $ h86 'util'
+          =
+          =   ***** Then, on a micro:
+          =       A>vax progname.h86 $fans
+          =       A>gencmd progname data[b1000]
+          =
+          =   ***** Notes: Stack is increased for interrupts.  Const(ants) are last
+          =           to force hex generation.
+          =   ****/
+
+              /*
+                Revised:
+                  19 Jan  80  by Thomas Rolander (mp/m 1.1)
+                  21 July 81  by Doug Huskey (mp/m 2.0)
+                   6 Aug  81  by Danny Horovitz (mp/m-86 2.0)
+                  23 Jun  82  by Bill Fitler (ccp/m-86)
+                  25 Jan  83  by Fran Borda & Bill Fitler (ccp/m-86 2.0)
+              */
+
+              /* MODIFICATION LOG:
+               *  July 82 whf: abort if wildcard char in filename.
+                  Jan 83 fmb : check for openfile error codes in AH reg.
+               */
+
+              $include (:f2:vermpm.lit)
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   2
+
+
+          =
+          =   /*   This utility requires MP/M or Concurrent function calls */
+          =
+          =   /****** commented out for CCP/M-86 :
+          =   declare Ver$OS literally '11h',
+          =       Ver$Needs$OS literally '''Requires MP/M-86''';
+          =    ******/
+          =
+   2   1  =   declare Ver$OS literally '14h',
+          =       Ver$Needs$OS literally '''Requires Concurrent CP/M-86''';
+          =
+          =
+   3   1  =   declare Ver$Mask literally '0fdh';  /* mask out Is_network bit */
+          =
+   4   1  =   declare Ver$BDOS literally '30h';   /* minimal BDOS version rqd */
+          =
+
+   5   1      declare
+                  true    literally '0FFh',
+                  false   literally '0',
+                  forever literally 'while true',
+                  lit     literally 'literally',
+                  proc    literally 'procedure',
+                  dcl     literally 'declare',
+                  addr    literally 'address',
+                  cr      literally '13',
+                  lf      literally '10',
+                  ctrlc   literally '3',
+                  ctrlx   literally '18h',
+                  bksp    literally '8';
+                 
+
+                /**************************************
+                 *                                    *
+                 *       B D O S   INTERFACE          *
+                 *                                    *
+                 **************************************/
+
+
+   6   1        mon1:
+                  procedure (func,info) external;
+   7   2            declare func byte;
+   8   2            declare info address;
+   9   2          end mon1;
+
+  10   1        mon2:
+                  procedure (func,info) byte external;
+  11   2            declare func byte;
+  12   2            declare info address;
+  13   2          end mon2;
+
+  14   1        mon3:
+                  procedure (func,info) address external;
+  15   2            declare func byte;
+  16   2            declare info address;
+  17   2          end mon3;
+
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   3
+
+
+  18   1        mon4: procedure(f,a) pointer external;
+  19   2            declare f byte, a address;
+  20   2            end mon4;
+
+
+
+
+  21   1      declare cmdrv     byte    external; /* command drive      */
+  22   1        declare fcb (1)   byte    external;   /* 1st default fcb    */
+  23   1        declare fcb16 (1) byte    external;   /* 2nd default fcb    */
+  24   1        declare pass0     address external;   /* 1st password ptr   */
+  25   1        declare len0      byte    external;   /* 1st passwd length  */
+  26   1        declare pass1     address external;   /* 2nd password ptr   */
+  27   1        declare len1      byte    external;   /* 2nd passwd length  */
+  28   1        declare tbuff (1) byte    external;   /* default dma buffer */
+
+
+                /**************************************
+                 *                                    *
+                 *       B D O S   Externals          *
+                 *                                    *
+                 **************************************/
+
+  29   1        read$console:
+                  procedure byte;
+  30   2            return mon2 (1,0);
+  31   2          end read$console;
+
+  32   1        printchar:
+                  procedure (char);
+  33   2            declare char byte;
+  34   2            call mon1 (2,char);
+  35   2          end printchar;
+
+  36   1        conin: 
+                  procedure byte;
+  37   2          return mon2(6,0fdh);
+  38   2          end conin;
+
+  39   1        print$buf:
+                  procedure (buff$adr);
+  40   2            declare buff$adr address;
+  41   2            call mon1 (9,buff$adr);
+  42   2          end print$buf;
+
+  43   1        check$con$stat:
+                  procedure byte;
+  44   2            return mon2(11,0);
+  45   2          end check$con$stat;
+
+  46   1        version: procedure address;
+                  /* returns current cp/m version # */
+  47   2          return mon3(12,0);
+  48   2          end version;
+
+  49   1        con$status:
+                  procedure byte;
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   4
+
+
+  50   2            return mon2 (11,0);
+  51   2          end con$status;
+
+  52   1        open$file:
+                  procedure (fcb$address) address;
+  53   2            declare fcb$address address;
+  54   2          return mon3 (15,fcb$address);
+  55   2          end open$file;
+
+  56   1        close$file:
+                  procedure (fcb$address) byte;
+  57   2            declare fcb$address address;
+  58   2            return mon2 (16,fcb$address);
+  59   2          end close$file;
+
+  60   1        read$record:
+                  procedure (fcb$address) byte;
+  61   2            declare fcb$address address;
+  62   2            return mon2 (20,fcb$address);
+  63   2          end read$record;
+
+  64   1        setdma: procedure(dma);
+  65   2          declare dma address;
+  66   2          call mon1(26,dma);
+  67   2          end setdma;
+
+                /* 0ff => return BDOS errors */
+  68   1        return$errors:
+                  procedure(mode);
+  69   2          declare mode byte;
+  70   2            call mon1 (45,mode);  
+  71   2          end return$errors;
+
+  72   1        terminate:
+                  procedure;
+  73   2            call mon1 (143,0);
+  74   2          end terminate;
+
+  75   1        declare 
+                  parse$fn  structure (                      /* The input to parsefilename */
+                            buff$adr  address,
+                            fcb$adr   address);
+  76   1        declare (saveax,savecx) word external;  /* reg return vals, set in mon1 */
+
+  77   1        parse: procedure;
+  78   2          declare (retcode,errcode) word;
+
+  79   2          call mon1(152,.parse$fn);
+  80   2          retcode = saveax;
+  81   2          errcode = savecx;
+  82   2          if retcode = 0ffffh then       /* parse returned an error */
+  83   2             do;
+  84   3               call print$buf(.('Invalid Filespec$'));
+  85   3               if errcode = 23 then call print$buf(.(' (drive)$'));
+  87   3               else if errcode = 24 then call print$buf(.(' (filename)$'));
+  89   3               else if errcode = 25 then call print$buf(.(' (filetype)$'));
+  91   3               else if errcode = 38 then call print$buf(.(' (password)$'));
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   5
+
+
+                       call print$buf(.('.',13,10,'$')); call terminate;
+  95   3             end;
+  96   2          end parse;
+
+
+                
+                /**************************************
+                 *                                    *
+                 *       S U B R O U T I N E S        *
+                 *                                    *
+                 **************************************/
+
+
+
+                                /* upper case character from console */
+  97   1      crlf:   proc;
+  98   2          call printchar(cr);
+  99   2          call printchar(lf);
+ 100   2          end crlf;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* fill string @ s for c bytes with f */
+ 101   1      fill:   proc(s,f,c);
+ 102   2          dcl s addr,
+                      (f,c) byte,
+                      a based s byte;
+
+ 103   2              do while (c:=c-1)<>255;
+ 104   3              a = f;
+ 105   3              s = s+1;
+ 106   3              end;
+ 107   2          end fill;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* upper case character from console */
+ 108   1      ucase:   proc byte;
+ 109   2          dcl c byte;
+
+ 110   2          if (c:=conin) >= 'a' then
+ 111   2             if c < '{' then
+ 112   2                return(c-20h);
+ 113   2          return c;
+ 114   2          end ucase;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* get password and place at fcb + 16 */
+ 115   1      getpasswd:   proc;
+ 116   2          dcl (i,c) byte;
+
+ 117   2          call crlf;
+ 118   2          call crlf;
+ 119   2          call print$buf(.('Password ? ','$'));
+ 120   2      retry:
+                  call fill(.fcb16,' ',8);
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   6
+
+
+ 121   2              do i = 0 to 7;
+ 122   3      nxtchr:
+                      if (c:=ucase) >= ' ' then 
+ 123   3                  fcb16(i)=c;
+ 124   3              if c = cr then
+ 125   3                  goto exit;
+ 126   3              if c = ctrlx then
+ 127   3                  goto retry;
+ 128   3              if c = bksp then do;
+ 130   4                  if i<1 then
+ 131   4                      goto retry;
+ 132   4                  else do;
+ 133   5                      fcb16(i:=i-1)=' ';
+ 134   5                      goto nxtchr;
+ 135   5                      end;
+ 136   4                  end;
+ 137   3              if c = 3 then
+ 138   3                  call terminate;
+ 139   3              end;
+ 140   2      exit:
+                  c = check$con$stat;
+ 141   2          end getpasswd;
+
+                /**************************************
+                 *                                    *
+                 *       M A I N  P R O G R A M       *
+                 *                                    *
+                 **************************************/
+
+
+ 142   1        declare (eod,i,char) byte;
+ 143   1        declare control$z literally '1AH';
+
+                /*
+                  Main Program
+                */
+
+ 144   1      declare (cnt,tcnt) byte;
+ 145   1      declare (ver, error$code)  address;
+
+ 146   1      declare last$dseg$byte byte
+                initial (0);
+
+ 147   1      plm$start: procedure public;
+ 148   2          ver = version;
+ 149   2          if low(ver) < Ver$BDOS  or  (high(ver) and Ver$Mask) = 0 then do;
+ 151   3            call print$buf (.(Ver$Needs$OS,'$'));
+ 152   3            call mon1(0,0);
+ 153   3            end;
+
+ 154   2          tcnt,
+                  cnt = 0;
+ 155   2          if fcb16(1) = 'P' then
+ 156   2            do;
+ 157   3            if fcb16(2) = ' ' or fcb16(2) = 'A' then   
+ 158   3              cnt = 24;
+                    else
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   7
+
+
+ 159   3              cnt = (fcb16(2)-'0')*10
+                         +(fcb16(3)-'0');
+ 160   3            end;
+
+ 161   2          parse$fn.buff$adr = .tbuff(1);
+ 162   2          parse$fn.fcb$adr = .fcb;
+ 163   2          call parse;
+
+ 164   2          do i = 1 to 11;                     /* check for wildcards */
+ 165   3            if fcb(i) = '?' then do;
+ 167   4              call print$buf(.('No wildcards allowed.','$'));
+ 168   4              call crlf;
+ 169   4              call terminate;
+ 170   4              end;
+ 171   3            end;
+                  
+ 172   2          call return$errors(0FEh);           /* return after error message */
+ 173   2          call setdma(.fcb16);                /* set dma to password */
+ 174   2          fcb(6) = fcb(6) or 80h;             /* open in RO mode     */
+ 175   2          error$code = open$file (.fcb);
+ 176   2          if low(error$code) = 0FFh then
+ 177   2             do;
+ 178   3             if high(error$code) = 0 then 
+ 179   3               do;
+ 180   4               call print$buf (.('File not found.','$'));
+ 181   4               call terminate;
+ 182   4               end;
+ 183   3             else if high(error$code) = 7 then      /* User left out password*/
+ 184   3               do;
+ 185   4               call getpasswd;
+ 186   4               call crlf;
+ 187   4               call setdma(.fcb16);                /* set dma to password */
+ 188   4               fcb(6) = fcb(6) or 80h;             /* open in RO mode     */
+ 189   4               error$code = open$file(.fcb);
+ 190   4               end;
+ 191   3             else if high(error$code) = 4 then
+ 192   3               do;
+ 193   4               call crlf;
+ 194   4               call print$buf(.('Invalid Filespec.','$'));
+ 195   4               end;
+                    end;                                   /* Error Checks */
+ 197   2          if low(error$code) <> 0FFH then
+ 198   2          do;
+ 199   3            call return$errors(0);        /* reset error mode */
+ 200   3            call setdma(.tbuff);
+ 201   3            fcb(32) = 0;
+ 202   3            eod = 0;
+ 203   3            do while (not eod) and (read$record (.fcb) = 0);
+ 204   4              do i = 0 to 127;
+ 205   5                if (char := tbuff(i)) = control$z
+                          then eod = true;
+ 207   5                if not eod then
+ 208   5                do;
+              /****                   allow type-ahead    whf 
+                          if con$status then
+                          do;
+                            i = read$console;
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   8
+
+
+                            call terminate;
+                          end;
+              ****/
+ 209   6                  if cnt <> 0 then
+ 210   6                  do;
+ 211   7                    if char = 0ah then
+ 212   7                    do;
+ 213   8                      if (tcnt:=tcnt+1) = cnt then
+ 214   8                      do;
+ 215   9                        tcnt = read$console;
+ 216   9                        tcnt = 0;
+ 217   9                      end;
+ 218   8                    end;
+ 219   7                  end;
+ 220   6                  call printchar (char);
+ 221   6                end;
+ 222   5              end;
+ 223   4            end;
+                  /*
+                    call close (.fcb);
+                    *** Warning ***
+                    If this call is left in, the file can be destroyed.
+                  */
+ 224   3          end;
+ 225   2          call terminate;
+ 226   2      end plm$start;
+
+ 227   1      end type;
+
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE   9
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    102  0000H     1  A. . . . . . . . .    BYTE BASED(S)        104 
+     18  0000H     2  A. . . . . . . . .    WORD PARAMETER        19 
+      5               ADDR . . . . . . .    LITERALLY       102 
+      5               BKSP . . . . . . .    LITERALLY       128 
+     75  0000H     2  BUFFADR. . . . . .    WORD MEMBER(PARSEFN)      161 
+     39  0004H     2  BUFFADR. . . . . .    WORD PARAMETER AUTOMATIC        40   41 
+    109  000CH     1  C. . . . . . . . .    BYTE       110  111  112  113 
+    101  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC       102  103 
+    116  000EH     1  C. . . . . . . . .    BYTE       122  123  124  126  128  137  140 
+    142  0011H     1  CHAR . . . . . . .    BYTE       205  211  220 
+     32  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        33   34 
+     43  0041H    15  CHECKCONSTAT . . .    PROCEDURE BYTE STACK=0008H          140 
+     56  007EH    16  CLOSEFILE. . . . .    PROCEDURE BYTE STACK=000AH
+     21  0000H     1  CMDRV. . . . . . .    BYTE EXTERNAL(4)
+    144  0012H     1  CNT. . . . . . . .    BYTE       154  158  159  209  213 
+     36  0022H    15  CONIN. . . . . . .    PROCEDURE BYTE STACK=0008H          110 
+     49  005FH    15  CONSTATUS. . . . .    PROCEDURE BYTE STACK=0008H
+    143               CONTROLZ . . . . .    LITERALLY       205 
+      5               CR . . . . . . . .    LITERALLY        98  124 
+     97  0135H    17  CRLF . . . . . . .    PROCEDURE STACK=000EH          117  118  168  186  193 
+      5               CTRLC. . . . . . .    LITERALLY
+      5               CTRLX. . . . . . .    LITERALLY       126 
+      5               DCL. . . . . . . .    LITERALLY
+     64  0004H     2  DMA. . . . . . . .    WORD PARAMETER AUTOMATIC        65   66 
+    142  000FH     1  EOD. . . . . . . .    BYTE       202  203  206  207 
+     78  0006H     2  ERRCODE. . . . . .    WORD        81   85   87   89   91 
+    145  000AH     2  ERRORCODE. . . . .    WORD       175  176  178  183  189  191  197 
+    140  0205H        EXIT . . . . . . .    LABEL      125 
+     18  0000H     1  F. . . . . . . . .    BYTE PARAMETER        19 
+    101  0006H     1  F. . . . . . . . .    BYTE PARAMETER AUTOMATIC       102  104 
+      5               FALSE. . . . . . .    LITERALLY
+     22  0000H     1  FCB. . . . . . . .    BYTE ARRAY(1) EXTERNAL(5)      162  165  174  175  188  189  201  203
+     23  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(6)      120  123  133  155  157  159  173  187
+     52  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        53   54 
+     60  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        61   62 
+     56  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        57   58 
+     75  0002H     2  FCBADR . . . . . .    WORD MEMBER(PARSEFN)      162 
+    101  0146H    32  FILL . . . . . . .    PROCEDURE STACK=0008H          120 
+      5               FOREVER. . . . . .    LITERALLY
+      6  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         7 
+     14  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        15 
+     10  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        11 
+    115  0186H   135  GETPASSWD. . . . .    PROCEDURE STACK=0012H          185 
+                      HIGH . . . . . . .    BUILTIN         149  178  183  191 
+    142  0010H     1  I. . . . . . . . .    BYTE       164  165  204  205 
+    116  000DH     1  I. . . . . . . . .    BYTE       121  123  130  133 
+     14  0000H     2  INFO . . . . . . .    WORD PARAMETER        16 
+     10  0000H     2  INFO . . . . . . .    WORD PARAMETER        12 
+      6  0000H     2  INFO . . . . . . .    WORD PARAMETER         8 
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE  10
+
+
+    146  0014H     1  LASTDSEGBYTE . . .    BYTE INITIAL
+     25  0000H     1  LEN0 . . . . . . .    BYTE EXTERNAL(8)
+     27  0000H     1  LEN1 . . . . . . .    BYTE EXTERNAL(10)
+      5               LF . . . . . . . .    LITERALLY        99 
+      5               LIT. . . . . . . .    LITERALLY
+                      LOW. . . . . . . .    BUILTIN         149  176  197 
+     68  0004H     1  MODE . . . . . . .    BYTE PARAMETER AUTOMATIC        69   70 
+      6  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H         34   41   66   70   73   79
+                                             152 
+     10  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H         30   37   44   50   58
+                                              62 
+     14  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(2) STACK=0000H         47   54 
+     18  0000H        MON4 . . . . . . .    PROCEDURE POINTER EXTERNAL(3) STACK=0000H
+    122  01AFH        NXTCHR . . . . . .    LABEL      134 
+     52  006EH    16  OPENFILE . . . . .    PROCEDURE WORD STACK=000AH          175  189 
+     77  00D0H   101  PARSE. . . . . . .    PROCEDURE STACK=000EH          163 
+     75  0000H     4  PARSEFN. . . . . .    STRUCTURE        79  161  162 
+     24  0000H     2  PASS0. . . . . . .    WORD EXTERNAL(7)
+     26  0000H     2  PASS1. . . . . . .    WORD EXTERNAL(9)
+    147  020DH   438  PLMSTART . . . . .    PROCEDURE PUBLIC STACK=0016H
+     39  0031H    16  PRINTBUF . . . . .    PROCEDURE STACK=000AH           84   86   88   90   92   93  119  151
+                                             167  180  194 
+     32  000FH    19  PRINTCHAR. . . . .    PROCEDURE STACK=000AH           98   99  220 
+      5               PROC . . . . . . .    LITERALLY        97  101  108  115 
+     29  0000H    15  READCONSOLE. . . .    PROCEDURE BYTE STACK=0008H          215 
+     60  008EH    16  READRECORD . . . .    PROCEDURE BYTE STACK=000AH          203 
+     78  0004H     2  RETCODE. . . . . .    WORD        80   82 
+    120  0196H        RETRY. . . . . . .    LABEL      127  131 
+     68  00AEH    19  RETURNERRORS . . .    PROCEDURE STACK=000AH          172  199 
+    101  0008H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       102  104  105 
+     76  0000H     2  SAVEAX . . . . . .    WORD EXTERNAL(12)          80 
+     76  0000H     2  SAVECX . . . . . .    WORD EXTERNAL(13)          81 
+     64  009EH    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          173  187  200 
+     28  0000H     1  TBUFF. . . . . . .    BYTE ARRAY(1) EXTERNAL(11)          161  200  205 
+    144  0013H     1  TCNT . . . . . . .    BYTE       154  213  215  216 
+     72  00C1H    15  TERMINATE. . . . .    PROCEDURE STACK=0008H           94  138  169  181  225 
+      5               TRUE . . . . . . .    LITERALLY       206 
+      1  0000H        TYPE . . . . . . .    PROCEDURE STACK=0000H
+    108  0166H    32  UCASE. . . . . . .    PROCEDURE BYTE STACK=000CH          122 
+    145  0008H     2  VER. . . . . . . .    WORD       148  149 
+      4               VERBDOS. . . . . .    LITERALLY       149 
+      3               VERMASK. . . . . .    LITERALLY       149 
+      2               VERNEEDSOS . . . .    LITERALLY       151 
+      2               VEROS. . . . . . .    LITERALLY
+     46  0050H    15  VERSION. . . . . .    PROCEDURE WORD STACK=0008H          148 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 03C3H    963D
+     CONSTANT AREA SIZE = 00A2H    162D
+     VARIABLE AREA SIZE = 0015H     21D
+     MAXIMUM STACK SIZE = 0016H     22D
+     422 LINES READ
+     0 PROGRAM ERROR(S)
+PL/M-86 COMPILER    TYPE UTILITY: TYPES FILE TO CONSOLE                                                         PAGE  11
+
+
+END OF PL/M-86 COMPILATION

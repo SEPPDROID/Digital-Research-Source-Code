@@ -1,0 +1,125 @@
+;////////////////////////////////////////////////////////////////////////
+;									/
+;	Interface between the disk formatter program and the disk	/
+;	driver.  The formatter is running in user non-seg mode, and	/
+;	the disk driver must run supervisor segmented.  Thus this	/
+;	routine must bridge the gap both ways.				/
+;									/
+;									/
+;	Written by F Zlotnick (Zilog) 29 Oct 82				/
+;									/
+;////////////////////////////////////////////////////////////////////////
+
+	.global	_writ_im
+	.global	_bdos
+
+
+ARG1	.equ	2
+ARG2	.equ	4
+ARG3	.equ	6
+ARG4	.equ	8
+
+SUPV	.equ	62		; Supervisor State BDOS call
+BDOS_SC	.equ	2		; System call number
+
+;
+;	Space to save registers
+;
+regsave:
+	.block	14
+;
+;	Following macro stolen from Steve Savitzky
+;
+
+scall	.MACRO			; segmented address argument
+
+	.word	05F00h		; 5F00 = segmented call
+	.long	?1
+
+	.ENDM
+
+
+.code	.sect
+;
+;	Start by saving registers 8 - 14. C expects this.
+;
+
+_writ_im:
+	sub	r15,#14			; Make space on the stack...
+	ldm	@r15,r8,#7		; ...and copy r8-r14 there.
+;
+;	Put arguments where the driver expects them:
+;		rr10 = segmented address of the buffer
+;		r9 = logical block number (see description below)
+;		r8 = number of blocks to transfer = 1
+;		rh7 = drive number (0, or 1, or 10 for a hard disk)
+;		rl7 = Command = 2 for format (Write Track Cmd)
+;
+	ldl	rr10,ARG4+14(r15)	; Segmented buffer address
+	ld	r9,#0			; Block #
+	ld	r8,#1			; # Blocks
+	ldb	rh7,ARG1+15(r15)	; Drive
+	ldb	rl7,#2			; Command
+;
+;	Must set up r9 to contain the track and side number in a strange
+;	way.  The track number goes in shifted left logical, 5 bits, and
+;	then bit 4 is set if it's side 1, or don't set it if it's side zero.
+;	Weird.  We use r1 as a scratch register.
+;
+	ld	r1,ARG2+14(r15)		; Track
+	sll	r1,#5			; That's what the driver expects
+	test	ARG3+14(r15)		; Side
+	jr	z,side0
+	set	r1,#4			; Side flag in logical block #
+side0:
+	ld	r9,r1			; Where driver expects it.
+;	Before calling the BDOS, save regs 7-13.
+;
+	ldm	regsave,r7,#7
+;
+;	Now we must call the BDOS to get into segmented supervisor
+;	mode.  Dangerous!
+;
+	ldl	rr6,#0			; Must be long
+	ld	r5,#SUPV		; BDOS function
+	sc	#BDOS_SC
+;
+;	Restore registers 7-13
+;
+	.word	05C01h
+	.word	0706h
+	.word	8A00h
+	.word	regsave
+;
+;	Watch it!  Now in system mode, and the stack pointer isn't yours!
+;
+	scall	84000068h
+;
+;	That's all in segmented mode;  Now lets get back to
+;	user nonseg as fast as possible.
+;
+	ldctl	r1,FCW			; Get FCW in r1
+	and	r1,#03FFFh		; Mask seg and sysmode
+;
+;//////////////////////////////////////////////////////////////////
+;                                                                 /
+;       The following sequence has been restored from diskio.z8k, /
+;       because the original file was corrupt. I'm not sure if    /
+;       it works, so please let me know the results if you have   /
+;       the possibility to try. Thanks, Gaby Chaudry              /
+;                                                                 /
+;//////////////////////////////////////////////////////////////////
+;
+	ldctl	FCW,r1			; BOOM!
+			;r8  = block count not transferred
+			;rh7 = #retries
+			;rl7 = final error code (RETURNED)
+			;rh6 = error retried
+
+	and	r7,#0FFh	;value returned in r7
+
+	ldm	r8,@r15,#7	;restore regs
+	inc	r15,#14
+	ret
+
+

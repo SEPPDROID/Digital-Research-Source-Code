@@ -1,0 +1,746 @@
+;
+;	histogram utility
+;	1/14/83
+;
+
+cr	equ	0dh
+lf	equ	0ah
+
+	cseg
+
+	public	conout
+	public	systemreset
+	public	printm
+	public	crlf
+	public	blank
+	public	collecthist
+
+	public	histds
+
+	extrn	parse:near
+	extrn	parse2:near
+	extrn	conin:near
+	extrn	inittimer:near
+	extrn	starttimer:near
+	extrn	stoptimer:near
+	extrn	printdword:near
+	extrn	printword:near
+
+hist:
+	mov	ax,ds
+	mov	ss,ax		;set up histogram stack
+	mov	sp,offset stacktop
+
+	mov	dx,offset signon
+	call	printm		;print signon message
+
+	call	getcommandline
+	call	loadcmdfile
+	call	setupcommandtail
+	call	setuprange
+	call	gettimerstartaddr
+	call	setupbdosint
+	call	executeuserprogram
+	call	printhistogram
+	call	systemreset
+
+;
+;	get command line into buffer at 80h (unless it's already there)
+;	and put a 0 at the end of it
+;
+getcommandline:
+	cmp	byte ptr .5dh,' '
+	jnz	putzero		;already entered command line in 'hist' command
+	mov	dx,offset comlinemessage
+	call	printm
+	mov	byte ptr .7fh, 7eh	;store max count
+	mov	dx,7fh		;start of buffer for rdconbuff
+	call	rdconbuff
+	call	crlf
+putzero:
+	sub	bh,bh
+	mov	bl,byte ptr .80h	;get actual count
+	mov	byte ptr 81h[bx],0	;store 0 at end of command line
+	ret
+
+;
+;	load cmd file parsed from command line
+;	set up dma address to default to users default buffer at 80h
+;	set user cs, ds and es registers from base page of loaded program
+;
+loadcmdfile:
+	mov	di,5ch
+	call	parse
+	mov	bx,65h
+	cmp	byte ptr [bx],' '
+	jnz	load1
+	mov	byte ptr [bx],'C'
+	mov	byte ptr 1[bx],'M'
+	mov	byte ptr 2[bx],'D'
+load1:
+	mov	dx,5ch
+	call	openfile
+	inc	al
+	jz	nofile
+	mov	dx,5ch
+	call	loadfile
+	mov	userds,bx
+	mov	dx,5ch
+	call	closefile
+	inc	al
+	jz	closeerr
+	mov	dx,userds
+	call	setdmabase		;set up dma address for loaded program
+	mov	dx,80h
+	call	setdma
+	mov	ax,userds
+	mov	usercs,ax
+	mov	useres,ax
+	mov	es,ax			;point to user's base page
+	test	es: byte ptr .5,1		;check for 8080 model
+	jnz	is8080			;if so - cs, es = ds
+	mov	ax,es:.3		;get code base
+	mov	usercs,ax
+	mov	ax,es:.15		;get extra base
+	or	ax,ax		;see if there is an extra segment
+	jz	is8080
+	mov	useres,ax
+is8080:
+	ret
+;
+nofile:
+	mov	dx,offset nofilemessage
+	call	printm
+	call	systemreset
+closeerr:
+	mov	dx,offset closemessage
+	call	printm
+	call	systemreset
+
+;
+;	copy command tail to buffer at 80h in user's base page
+;	parse 2 file names into 5ch and 6ch
+;
+setupcommandtail:
+	dec	conptr		;point to delimiter
+	push	conptr		;save conptr for parsing later
+	mov	al,byte ptr .80h	;get count of command line
+	sub	al,byte ptr conptr	;subtract chars already parsed
+	mov	es,userds
+	mov	di,80h		;point to user's default buffer
+	stos	al		;store count
+	inc	al		;to include delimiter
+	mov	cl,al
+	sub	ch,ch		;count in cx
+s1:
+	call	conin
+	stos	al
+	dec	cx
+	jnz	s1
+	pop	conptr		;restore conptr
+	mov	di,5ch
+	call	parse		;parse first filename
+	cmp	al,0		;check for end of command tail
+	jnz	s2
+	dec	conptr		;to rescan eol when parsing second filename
+s2:
+	mov	di,6ch
+	call	parse2		;parse second filename
+	mov	cx,36		;36 bytes to move in fcb
+	mov	si,5ch
+	mov	di,si
+	mov	es,userds
+rep	movsb			;move fcb into user's base page
+	ret
+
+;
+;	set up default range (code segment of loaded program)
+;	see if user wants to change to another range
+;
+
+setuprange:
+
+	mov	es,userds
+	sub	si,si		;point to base page
+	lods	es:ax		;get low 16 bits of code segment length
+	mov	maxoffset,ax	;store it
+	lods	es:al		;get high 4 bits of code segment length
+	mov	cl,12
+	sub	ah,ah
+	shl	ax,cl		;convert to pp's
+	mov	maxbase,ax	;store it
+	lods	es:ax		;get base of code segment
+	mov	minbase,ax	;store it
+	add	maxbase,ax	;to form total maxbase
+
+	call	getrange
+
+	mov	ax,minoffset
+	and	ax,0fff0h	;mask to even paragraph
+	mov	minoffset,ax
+	mov	cl,4
+	shr	ax,cl		;convert to pp's
+	add	ax,minbase
+	mov	minpara,ax	;store low end of range
+
+	mov	ax,maxoffset
+	add	ax,0fh		;round up
+	jnc	sr1
+	add	maxbase,1000h	;if wraparound occurred
+sr1:
+	mov	cl,4
+	shr	ax,cl		;convert to pp's
+	add	ax,maxbase
+	mov	maxpara,ax	;store high end of range
+
+	sub	ax,minpara	;range = max - min
+	mov	bl,nbucket
+	dec	bl
+	sub	bh,bh
+	add	ax,bx		;to cause round up if not even division
+	jnc	sr15
+	mov	ax,0ffffh	;if add caused wrap, use max range value
+sr15:
+	sub	dx,dx		;for division
+	mov	cx,dx
+	mov	cl,nbucket
+	div	cx
+	or	ax,ax
+	jnz	sr2
+	inc	ax		;make sure npara > 0
+sr2:
+	mov	npara,ax	;# paragraphs per bucket
+;	see if user wants to change range
+	ret
+
+getrange:
+	mov	dx,offset lowmessage
+	mov	si,offset minbase
+	call	getrangevalue
+	mov	dx,offset highmessage
+	mov	si,offset maxbase
+	call	getrangevalue
+	ret
+
+getrangevalue:
+	push	si
+	call	printm
+	pop	si
+	push	si
+	mov	es,[si]
+	mov	di,2[si]
+	call	printdword
+	mov	al,')'	!	call	conout
+	mov	al,':'	!	call	conout
+	call	blank
+	mov	dx,offset consolebuff
+	call	rdconbuff
+	mov	conbuffptr,0
+	mov	bl,conbufflen
+	sub	bh,bh
+	mov	conbuff[bx],0		;insert 0 terminator
+	call	getnum
+	pop	si
+	or	ah,ah
+	jz	noinput
+	cmp	al,':'		;base value entered?
+	jnz	newoffset
+	push	si
+	mov	[si],bx
+	call	getnum
+	pop	si
+newoffset:
+	cmp	al,0
+	jnz	badinput
+	mov	2[si],bx
+noinput:
+	call	crlf
+	ret
+
+badinput:
+	mov	dx,offset badinputmessage
+	call	printm
+	call	systemreset
+
+gettimerstartaddr:
+
+	mov	ax,usercs
+	mov	startbase,ax
+	mov	dx,offset timeronmessage
+	mov	si,offset startbase
+	call	getrangevalue
+	test	startoffset,0ffffh
+	jz	nostart
+	mov	startflag,1
+	mov	es,startbase
+	mov	di,startoffset
+	mov	ax,es:[di]		;get instruction at start address
+	mov	startinstr,ax		;save it
+;	mov	es: byte ptr [di],0cch		;interrupt 3 instruction
+	mov	es: word ptr [di],04cdh		;interrupt 4 instruction
+nostart:
+	ret
+
+
+;
+;	save current break interrupt and replace it
+;	with pointer to local break interrupt handler
+;
+setupbreakint:
+
+	sub	ax,ax
+	mov	es,ax
+	mov	si,010h
+	mov	di,offset break_ip
+
+	mov	ax,es:[si]	;get real break ip
+	mov	[di],ax	;save it
+	mov	ax,offset break_int_handler
+	mov	es:[si],ax	;store break ip in interrupt vector
+
+	mov	ax,es:2[si]	;get real break cs
+	mov	2[di],ax	;save it
+	mov	ax,cs
+	mov	es:2[si],ax	;store hist cs in interrupt vector
+	ret
+
+
+break_int_handler:
+
+	push	ds
+	mov	ds,histds
+	mov	sssave,ss
+	mov	spsave,sp
+	mov	ss,histss
+	mov	sp,offset break_tos
+	push ax ! push bx ! push cx ! push dx
+	push bp ! push si ! push di ! push es
+	mov	es,sssave
+	mov	si,spsave		;point to user's stack
+	sub	es:word ptr 2[si],2	;dec user ip to account for INT 4
+;	dec	es:word ptr 2[si]	;dec user ip to account for INT 3
+	or	es:word ptr 6[si],200h	;make sure IF is on
+	test	startflag,1
+	jz	notstart		;jump if there was no start timer addr
+	mov	di,es:2[si]		;get user ip
+	cmp	di,startoffset		;see if we are at the start timer addr
+	jnz	notstart
+	mov	ax,es:4[si]		;get user cs
+	cmp	ax,startbase
+	jnz	notstart
+	mov	es,ax
+	mov	ax,startinstr		;get instr replaced by INT 3
+	mov	es:[di],ax		;restore it
+	call	starttimer
+notstart:
+	pop es ! pop di ! pop si ! pop bp ! pop dx ! pop cx ! pop bx ! pop ax
+	mov	ss,sssave
+	mov	sp,spsave
+	pop	ds
+	iret
+
+;
+;	save current bdos interrupt and replace it
+;	with pointer to local bdos interrupt handler
+;
+setupbdosint:
+
+	sub	ax,ax
+	mov	es,ax
+	mov	si,380h
+	mov	di,offset bdos_ip
+
+	mov	ax,es:[si]	;get real bdos ip
+	mov	cs:[di],ax	;save it
+	mov	ax,offset bdos_int_handler
+	mov	es:[si],ax	;store hist ip in interrupt vector
+
+	mov	ax,es:2[si]	;get real bdos cs
+	mov	cs:2[di],ax	;save it
+	mov	ax,cs
+	mov	es:2[si],ax	;store hist cs in interrupt vector
+	ret
+
+
+bdos_int_handler:
+
+	cmp	cl,0
+	jz	userdone	;done on function 0 call
+	jmpf	dword ptr bdos_ip	;transfer control to the bdos
+
+
+executeuserprogram:
+
+	call	inittimer
+	mov	histss,ss
+	mov	histsp,sp
+	mov	histds,ds
+	call	setupbreakint
+	test	startflag,1
+	jnz	ex0
+	call	starttimer
+ex0:
+	mov	es,useres
+	mov	ds,userds
+	callf	dword ptr userip
+
+;
+;	arrive here upon completion of user program
+;	(function 0 bdos call intercepted - later add user supplied
+;	terminate address or timeout)
+;
+
+userdone:
+
+	call	stoptimer
+	sub	ax,ax
+	mov	es,ax
+	mov	di,380h
+	mov	si,offset bdos_ip
+	movs	ax,cs:ax
+	movs	ax,cs:ax		;restore bdos interrupt
+
+	mov	ax,histds
+	mov	ds,ax		;restore histogram ds
+	mov	ax,histss
+	mov	ss,ax
+	mov	sp,histsp	;restore histogram ss, sp
+
+	mov	dx,offset donemessage
+	call	printm
+	ret			;to main histogram program
+
+bdos_ip		rw	1
+bdos_cs		rw	1
+
+;
+;	collect histogram data
+;	called with user ip in ax; user cs in bx
+;
+
+collecthist:
+
+	add	ax,0fh		;round up to next paragraph
+	jnc	col1		;check for wraparound
+	add	bx,1000h	;allow for wraparound
+col1:
+	mov	cl,4
+	shr	ax,cl		;change ip to paragraph number
+	add	ax,bx		;ax now has actual paragraph # of interrupt
+	cmp	ax,minpara	;check against low end of range
+	jc	outofrange
+	cmp	maxpara,ax	;check against high end of range
+	jc	outofrange
+	sub	ax,minpara	;normalize within range
+	sub	dx,dx		;for division
+	div	npara		;divide by pp's per bucket to get bucket #
+	add	ax,ax		;to index into word array
+	mov	bx,ax
+	inc	bucket [bx]	;increment appropriate count
+outofrange:
+	ret
+
+
+printhistogram:
+
+	call	printcommandline
+	call	findmax
+	mov	cl,nbucket
+	mov	bptr,0
+phloop:
+	push	cx		;save loop count
+	call	printaddress
+	mov	bx,bptr
+	add	bx,bx		;index into word array
+	mov	ax,bucket[bx]
+	or	ax,ax
+	jz	empty
+	call	printbar
+empty:
+	call	crlf
+	pop	cx		;restore loop count
+	dec	cl
+	jz	phdone
+	inc	bptr
+	jmps	phloop
+phdone:
+	call	printmax
+	ret
+
+
+printbar:	;called with value in ax
+	mov	bx,maxdots
+	dec	bx
+	mul	bx
+	div	maxvalue
+	inc	ax		;so anything above 0 gets at least one dot
+	mov	cx,ax		;number of dots in cx
+pb0:
+	mov	al,'*'
+	push	cx		;save count
+	call	conout
+	pop	cx
+	dec	cx
+	jnz	pb0
+	ret
+
+printcommandline:
+
+	mov	dx,offset histmessage
+	call	printm
+	mov	bx,81h
+pcl0:
+	mov	al,[bx]
+	or	al,al
+	jz	pcl1
+	push	bx
+	call	conout
+	pop	bx
+	inc	bx
+	jmps	pcl0
+pcl1:
+	call	crlf
+	call	crlf
+	ret
+
+printaddress:
+	mov	ax,bptr
+	mul	npara		;get # paragraphs to add to min
+	mov	bx,minoffset
+	mov	cl,4
+	shr	bx,cl		;convert min offset to paragraphs
+	add	ax,bx		;actual address of this bucket
+	mov	di,ax
+	and	ax,0f000h	;mask off 64K overflow
+	add	ax,minbase
+	mov	es,ax
+	shl	di,cl		;make offset bytes from paragraphs
+	call	printdword
+	call	blank
+	ret
+
+
+findmax:
+	mov	dx,0		;max in dx
+	mov	bx,0		;index into bucket array
+	mov	cl,nbucket	;count in cl
+maxloop:
+	cmp	dx,bucket[bx]
+	jnc	max1
+	mov	dx,bucket[bx]
+max1:
+	inc	bx
+	inc	bx
+	dec	cl		;decrement count
+	jnz	maxloop
+	mov	maxvalue,dx
+	ret
+
+printmax:
+	mov	dx,offset maxmessage
+	call	printm
+	mov	ax,maxvalue
+	call	printword
+	call	crlf
+	call	crlf
+	ret
+
+
+;
+;	return 16-bit value in bx
+;	delimiter in al;  ah = 0 if no input
+;
+
+getnum:
+	sub	bx,bx
+	mov	ah,bh
+get0:
+	call	getchar
+	call	delim
+	jz	getret
+	mov	cl,4
+	shl	bx,cl
+	call	hexcon
+	jc	geterr
+	add	bl,al
+	mov	ah,1
+	jmps	get0
+getret:
+	ret
+
+geterr:
+	mov	dx,offset baddigitmessage
+	call	printm
+	call	systemreset
+
+hexcon:
+	sub	al,'0'
+	cmp	al,10
+	jb	hexret
+	add	al,('0' - 'A' + 10) and 0ffh
+	cmp	al,16
+	jnb	hexerr
+	cmp	al,10
+	jc	hexerr
+hexret:
+	clc
+	ret
+hexerr:
+	stc
+	ret
+
+delim:
+	cmp	al,':'
+	jz	d0
+	or	al,al
+d0:
+	ret
+
+getchar:		;return next char from consolebuff
+	mov	di,conbuffptr
+	mov	al,conbuff[di]
+	inc	conbuffptr
+upper:
+	cmp	al,'a'
+	jb	upret
+	cmp	al,'z'
+	ja	upret
+	and	al,5fh
+upret:
+	ret
+
+crlf:
+	mov	al,cr
+	call	conout
+	mov	al,lf
+	call	conout
+	ret
+
+blank:
+	mov	al,' '
+	call	conout
+	ret
+
+;
+;	OS interface routines
+;
+
+bdos:	int	224
+	ret
+
+systemreset:
+	mov	cl,0
+	mov	dl,0
+	jmps	bdos
+
+conout:
+	mov	dl,al
+	mov	cl,2
+	jmps	bdos
+
+printm:
+	mov	cl,9
+	jmps	bdos
+
+rdconbuff:
+	mov	cl,10
+	jmps	bdos
+
+openfile:
+	mov	cl,15
+	jmps	bdos
+
+closefile:
+	mov	cl,16
+	jmps	bdos
+
+setdma:
+	mov	cl,26
+	jmps	bdos
+
+setdmabase:
+	mov	cl,51
+	jmps	bdos
+
+loadfile:
+	mov	cl,59
+	jmps	bdos
+
+
+;
+;	histogram data area
+;
+
+	cseg
+
+histds	rw	1
+userip	dw	0
+usercs	rw	1
+
+	dseg
+
+	public	userds
+
+	extrn	conptr:word
+
+signon		db	'Histogram Utility  Version 0.2  1/14/83',cr,lf,cr,lf,'$'
+comlinemessage	db	'Enter command line: $'
+nofilemessage	db	'No file$'
+closemessage	db	'Cannot close$'
+histmessage	db	'Histogram for: $'
+donemessage	db	cr,lf,'User program complete',cr,lf,cr,lf,'$'
+maxmessage	db	cr,lf,'Maximum = $'
+lowmessage	db	'Low address of range (default = $'
+highmessage	db	'High address of range (default = $'
+badinputmessage	db	cr,lf,'Bad input$'
+baddigitmessage	db	cr,lf,'Bad hex digit$'
+timeronmessage	db	'Start timer address (default = $'
+
+bufflen		equ	80
+consolebuff	db	bufflen		;max length
+conbufflen	rb	1		;actual length
+conbuff		rb	bufflen		;buffer
+conbuffptr	rw	1		;console buffer pointer
+
+stack		rw	128
+stacktop	rw	0
+
+userds		rw	1
+useres		rw	1
+
+histss		rw	1
+histsp		rw	1
+
+maxnbucket	equ	255		;seems like this should be enough
+bucket		rw	maxnbucket
+nbucket		db	50		;default (for now)
+npara		rw	1		;# paragraphs per bucket
+
+minbase		rw	1
+minoffset	rw	1
+minpara		rw	1		;low end of range (pp #)
+
+maxbase		rw	1
+maxoffset	rw	1
+maxpara		rw	1		;high end of range (pp #)
+
+maxvalue	rw	1		;highest value in buckets
+maxdots		dw	64		;# dots in largest bucket
+
+bptr		rw	1
+
+break_ip	rw	1		;save what was there
+break_cs	rw	1
+
+;	for now, reserve word for INT 4
+startinstr	rw	1		;instruction overwritten by INT 3
+startflag	db	0		;set when user enters start timer addr
+startbase	dw	0
+startoffset	dw	0
+spsave		rw	1
+sssave		rw	1
+		rw	128		;break int local stack
+break_tos	rw	0
+
+	end
+

@@ -1,0 +1,426 @@
+1File: INIT.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8    
+     9   char null[]=0;
+    10   #define	SSIZE		8				/* chars per symbol */
+    11    
+    12   	/*operator tree node for unary and binary operators*/
+    13   struct tnode {
+    14   	int t_op;						/*operator*/
+    15   	int t_type;						/*data type of result*/
+    16   	int t_su;						/*Sethy-Ullman number*/
+    17   	int t_ssp;
+    18   	struct tnode *t_left;			/*left sub-tree*/
+    19   	struct tnode *t_right;			/*right sub-tree (undefined if unary)*/
+    20   };
+    21    
+    22   	/*constant terminal node*/
+    23   struct conode {
+    24   	int t_op;						/*operator*/
+    25   	int t_type;						/*type*/
+    26   	int t_su;						/*Sethy-Ullman number*/
+    27   	int t_ssp;
+    28   	int t_value;					/*value or label number*/
+    29   };
+    30    
+    31   struct lconode {
+    32   	int t_op;						/*operator*/
+    33   	int t_type;						/*type*/
+    34   	int t_su;						/*Sethy-Ullman number*/
+    35   	int t_ssp;
+    36   	long t_lvalue;					/*value or label number*/
+    37   };
+    38    
+    39   	/*local symbol terminal node*/
+    40   struct symnode {
+    41   	int t_op;						/*operator*/
+    42   	int t_type;						/*symbol data type*/
+    43   	int t_su;						/*Sethy-Ullman number*/
+    44   	int t_ssp;
+    45   	int t_sc;						/*storage class*/
+    46   	int t_offset;					/*register offset*/
+    47   	int t_reg;						/*register number*/
+    48   	int t_label;					/*label number if static*/
+    49   };
+    50    
+    51   	/*external symbol reference node*/
+    52   struct extnode {
+    53   	int t_op;						/*operator*/
+    54   	int t_type;						/*symbol data type*/
+    55   	int t_su;						/*Sethy-Ullman number*/
+    56   	int t_ssp;
+    57   	int t_sc;						/*storage class*/
+    58   	int t_offset;					/*register offset*/
+    59   	int t_reg;						/*register number*/
+1File: INIT.C                                                              Page       2
+    60   	char t_symbol[SSIZE];			/*symbol name*/
+    61   };
+    62    
+    63   	/*68000 special - indexed symbol node*/
+    64   	/*this is used to generate a An(off,Xn.type) address*/
+    65   struct indexnode {
+    66   	int t_op;
+    67   	int t_type;
+    68   	int t_su;
+    69   	int t_ssp;
+    70   	int t_sc;
+    71   	int t_offset;
+    72   	int t_reg;
+    73   	int t_xreg;
+    74   	int t_xtype;
+    75   };
+    76    
+    77   int lflag=0;
+    78   int dflag=0;
+    79   int mflag=0;
+    80   int cflag=0;
+    81   int eflag=0;
+    82   int fflag=0;
+    83   int oflag=0;
+    84   int lineno=0;
+    85   int naregs=0;
+    86   int ndregs=0;
+    87   int errcnt=0;
+    88   int stacksize=0;
+    89    
+    90   char *tnalloc();
+    91   char *snalloc();
+    92   char *cenalloc();
+    93   char *xnalloc();
+    94   char *talloc();
+    95   char *cnalloc();
+    96   char *lcnalloc();
+    97   char *fpcnalloc();
+    98   char *canon();
+    99   char *commute();
+   100   char *constant();
+   101   char *match();
+   102   char *addptree();
+   103   char *fixbfield();
+   104   char *coffset();
+   105   char *tcopy();
+   106    
+   107   #define	wallign(add)	((add+1)&(~1))
+   108   #define	array(type)		((type&SUPTYP)==ARRAY)
+   109   #define	function(type)	((type&SUPTYP)==FUNCTION)
+   110   #define	pointer(type)	((type&SUPTYP)==POINTER)
+   111   #define	notarray(type)		((type&SUPTYP)!=ARRAY)
+   112   #define	notfunction(type)	((type&SUPTYP)!=FUNCTION)
+   113   #define	notpointer(type)	((type&SUPTYP)!=POINTER)
+   114   #define isfloat(type)	(type==FLOAT)
+   115   #define	btype(type)		(type&TYPE)
+   116   #define	suptype(type)	(type&SUPTYP)
+   117   #define	alltype(type)	(type&(SUPTYP|TYPE))
+   118   #define	asgop(op)		((opinfo[op]&OPASSIGN)!=0)
+1File: INIT.C                                                              Page       3
+   119   #define	relop(op)		((opinfo[op]&OPREL)!=0)
+   120   #define	lintegral(op)	((opinfo[op]&OPLWORD)!=0)
+   121   #define	rintegral(op)	((opinfo[op]&OPRWORD)!=0)
+   122   #define	rasop(op)		((opinfo[op]&OPRAS)!=0)
+   123   #define	binop(op)		((opinfo[op]&OPBIN)!=0)
+   124   #define	unaryop(op)		((opinfo[op]&(OPBIN|OPTERM))==0)
+   125   #define	leafop(op)		((opinfo[op]&OPTERM)!=0)
+   126   #define	notleafop(op)	((opinfo[op]&OPTERM)==0)
+   127   #define	lvalop(op)		((opinfo[op]&OPLVAL)!=0)
+   128   #define	oppriority(op)	(opinfo[op]&OPPRI)
+   129   #define	commop(op)		((opinfo[op]&OPCOM)!=0)
+   130   #define	convop(op)		((opinfo[op]&OPCONVS)!=0)
+   131   #define	notconvop(op)	((opinfo[op]&OPCONVS)==0)
+   132   #define	max(a,b)		(a>b?a:b)
+   133   #define min(a,b)		(a<b?a:b)
+   134    
+   135   #define	QUICKVAL		8
+   136   #define	LEP				14
+   137   #define	FORCC			1
+   138   #define	FOREFF			2
+   139   #define	FORSTACK		3
+   140   #define	FORCREG			4
+   141   #define	FORSP			5
+   142   #define	FORREG			4
+   143   #define	HICREG			2
+   144   #define	NCREGS			3
+   145   #define	AREGLO			8
+   146   #define	IMMED			1
+   147   #define	NOTIMMED		0
+   148   #define	NOTLOFFSET		0
+   149    
+   150   /* one line routines turned into defines [vlh] for speed */
+   151    
+   152   /*outgoto - output "bra L[labno]"*/
+   153   #define outgoto(lab)	if (lab>0) printf("bra L%d\n",lab)
+   154   /*outlab - output "L[labno]:"*/
+   155   #define outlab(lab)		if (lab>0) printf("L%d:",lab)
+   156    
+   157   /*outext - output register sign extension*/
+   158   #define outext(reg)		printf("ext.l R%d\n",reg)
+   159   /*outuext - output unsigned to long register extension*/
+   160   #define outuext(reg)	printf("swap R%d\nclr R%d\nswap R%d\n",reg,reg,reg)
+   161   /*outswap - output swap register instruction*/
+   162   #define outswap(reg)	printf("swap R%d\n",reg)
+   163   /*outaddr - output "add [type] R1 R2" instruction*/
+   164   #define outaddr(r1,r2,tp)	outrr("add",r1,r2,(tp))
+   165   /*outccsave - ouput instruction to move cc's to register*/
+   166   #define outccsave(reg)	printf("move sr,R%d\n",reg)
+   167   /*outccrestore - output instruction to restore cc's from register*/
+   168   #define outccrestore(reg)	printf("move R%d,ccr\n",reg)
+   169   /*basetype - get the btype info sans unsigned*/
+   170   #define basetype(type)	((type==UNSIGNED) ? INT : type)
+   171   #define unsign(type)	((type) == UNSIGNED)
+   172   #define longorptr(type)	(type==LONG || (type&SUPTYP))
+   173   #define unorptr(type)	(type==UNSIGNED || (type&SUPTYP))
+   174   #define dreg(reg)		((reg) & (~AREGLO))
+   175   #define areg(reg)		((reg) | AREGLO)
+   176   #define isareg(reg)		((reg) >= AREGLO)
+   177   #define isdreg(reg)		((reg) < AREGLO)
+1File: INIT.C                                                              Page       4
+   178   #define isreg(tp)		((tp)->t_op == SYMBOL && (tp)->t_sc == REGISTER)
+   179    
+   180   	/*
+   181   	 * intermediate code operators
+   182   	 * 0=>EOF, special operator
+   183   	 */
+   184   #define	EOF		0
+   185    
+   186   	/*1-59=>operators that generate code (entries in code gen optab)*/
+   187   #define	ADD		1
+   188   #define	SUB		2
+   189   #define	MULT	3
+   190   #define	DIV		4
+   191   #define	MOD		5
+   192   #define	RSH		6
+   193   #define	LSH		7
+   194   #define	AND		8
+   195   #define	OR		9
+   196   #define	XOR		10
+   197   #define	NOT		11
+   198   #define	UMINUS	12
+   199   #define	COMPL	13
+   200   #define	PREDEC	14
+   201   #define	PREINC	15
+   202   #define	POSTDEC	16
+   203   #define	POSTINC	17
+   204   #define	ASSIGN	18
+   205   #define	EQADD	19
+   206   #define	EQSUB	20
+   207   #define	EQMULT	21
+   208   #define	EQDIV	22
+   209   #define	EQMOD	23
+   210   #define	EQRSH	24
+   211   #define	EQLSH	25
+   212   #define	EQAND	26
+   213   #define	EQOR	27
+   214   #define	EQXOR	28
+   215   #define	FJSR	29
+   216   #define	EQUALS	30
+   217   #define	NEQUALS	31
+   218   #define	GREAT	32
+   219   #define	GREATEQ	33
+   220   #define	LESS	34
+   221   #define	LESSEQ	35
+   222   #define	INT2L	36
+   223   #define	LONG2I	37
+   224    
+   225   	/*machine dependent operators that generate code*/
+   226   #define	BTST	38
+   227   #define	LOAD	39
+   228   #define	LMULT	40
+   229   #define	LDIV	41
+   230   #define	LMOD	42
+   231   #define	LEQMULT	43
+   232   #define	LEQDIV	44
+   233   #define	LEQMOD	45
+   234   #define EQADDR	46
+   235   #define	EQNOT	47
+   236   #define	EQNEG	48
+1File: INIT.C                                                              Page       5
+   237   #define	DOCAST	49
+   238    
+   239   #define STASSIGN	50	/*[vlh]*/
+   240   #define LONG2F	51		/*[vlh] 3.4*/
+   241   #define FLOAT2L	52		/*[vlh] 3.4*/
+   242   #define INT2F	53		/*[vlh] 3.4*/
+   243   #define FLOAT2I	54		/*[vlh] 3.4*/
+   244   #define	LCGENOP	55		/*change if adding more operators...*/
+   245    
+   246   	/*intermediate code operators that do not generate code*/
+   247   #define	ADDR	60
+   248   #define	INDR	61
+   249   #define	LAND	62
+   250   #define	LOR		63
+   251   #define	QMARK	64
+   252   #define	COLON	65
+   253   #define	COMMA	66
+   254   #define	CINT	67
+   255   #define CLONG	68
+   256   #define	SYMBOL	69
+   257   #define	AUTOINC	70
+   258   #define	AUTODEC	71
+   259   #define	CALL	72
+   260   #define	NACALL	73
+   261   #define BFIELD	74
+   262   #define IFGOTO	75
+   263   #define	INIT	76
+   264   #define	CFORREG	77
+   265   #define	DCLONG	78
+   266   #define CFLOAT	79	/*[vlh] 3.4*/
+   267    
+   268   	/*operators local to parser*/
+   269   #define CAST	80
+   270   #define	SEMI	81
+   271   #define	LCURBR	82
+   272   #define	RCURBR	83
+   273   #define	LBRACK	84
+   274   #define	RBRACK	85
+   275   #define	LPAREN	86
+   276   #define	RPAREN	87
+   277   #define	STRING	88
+   278   #define	RESWORD	89
+   279   #define	APTR	90
+   280   #define	PERIOD	91
+   281   #define SIZEOF	92
+   282   #define	MPARENS	93
+   283   #define	FRETURN	94
+   284   #define	STACKEND	100
+   285    
+   286   	/*data types*/
+   287   #define	TYPELESS	0
+   288   #define	CHAR		1
+   289   #define	SHORT		2
+   290   #define	INT			3
+   291   #define	LONG		4
+   292   #define	UCHAR		5
+   293   #define	USHORT		6
+   294   #define UNSIGNED 	7
+   295   #define	ULONG		8
+1File: INIT.C                                                              Page       6
+   296   #define	FLOAT		9
+   297   #define	DOUBLE		10
+   298    
+   299   	/*data types local to parser*/
+   300   #define	STRUCT		11
+   301   #define	FRSTRUCT	12
+   302   #define	LLABEL		13
+   303    
+   304   	/*type flags and definitions*/
+   305   #define	TYPE		017
+   306   #define	SUPTYP		060
+   307   #define	ALLTYPE		077
+   308   #define	POINTER		020
+   309   #define	FUNCTION	040
+   310   #define	ARRAY		060
+   311   #define	SUTYPLEN	2
+   312    
+   313   	/*data registers*/
+   314   #define	DREG0	0
+   315   #define	DREG2	2
+   316   #define	DREG3	3
+   317   #define	DREG4	4
+   318   #define	DREG5	5
+   319   #define	DREG6	6
+   320   #define	DREG7	7
+   321   #define	AREG3	11
+   322   #define	AREG4	12
+   323   #define	AREG5	13
+   324    
+   325   	/*storage classes*/
+   326   #define	AUTO		1
+   327   #define	REGISTER	2
+   328   #define	EXTERNAL	3
+   329   #define	STATIC		4
+   330   #define	REGOFF		5
+   331   #define	EXTOFF		6
+   332   #define	STATOFF		7
+   333   #define	INDEXED		8
+   334    
+   335   	/*exclusively code generator storage classes*/
+   336   #define	CINDR		9
+   337   #define	CLINDR		10
+   338   #define CFINDR		11	/* [vlh] 3.4 */
+   339    
+   340   	/*exclusively parser storage classes*/
+   341   #define	STRPROTO	9
+   342   #define PDECLIST	10
+   343   #define	PARMLIST	11
+   344   #define	BFIELDCL	12
+   345   #define UNELCL		13
+   346   #define	STELCL		14
+   347    
+   348    
+   349   	/*opinfo table bits*/
+   350   #define	OPPRI		077
+   351   #define	OPBIN		0100
+   352   #define	OPLVAL		0200
+   353   #define	OPREL		0400
+   354   #define	OPASSIGN	01000
+1File: INIT.C                                                              Page       7
+   355   #define	OPLWORD		02000
+   356   #define	OPRWORD		04000
+   357   #define	OPCOM		010000
+   358   #define	OPRAS		020000
+   359   #define	OPTERM		040000
+   360   #define	OPCONVS		0100000
+   361    
+   362   	/*68000 definitions*/
+   363   #define	PTRSIZE		4
+   364   #define	INTSIZE		2
+   365   #define	LONGSIZE	4
+   366   #define	TRUE		1
+   367   #define	FALSE		0
+   368   #define TABC		'\t'			/* tab character */
+   369   #define EOLC		'\n'			/* end of line character */
+   370   #define	BITSPBYTE	8
+   371    
+   372   	/*operator class priorities*/
+   373   #define	TRMPRI		0				/* terminal nodes */
+   374   #define	RPNPRI		1				/* ) and ] */
+   375   #define	CALPRI		2				/* in-stack call, ( or [ */
+   376   #define	COLPRI		3				/* init or case priority for : or , */
+   377   #define	STKPRI		4				/* priority of end of stack */
+   378   #define	COMPRI		5				/* normal priority for , */
+   379   #define	ASGPRI		6				/* =, +=, -=, *=, /=, %=, ... */
+   380   #define	QMKPRI		7				/* ?: */
+   381   #define	LORPRI		8				/* || */
+   382   #define	LNDPRI		9				/* && */
+   383   #define	ORPRI		10				/* |, ! */
+   384   #define	ANDPRI		11				/* & */
+   385   #define	EQLPRI		12				/* ==, != */
+   386   #define	RELPRI		13				/* >, <, >=, <= */
+   387   #define	SHFPRI		14				/* <<, >> */
+   388   #define	ADDPRI		15				/* +, - */
+   389   #define	MULPRI		16				/* *, /, % */
+   390   #define	UNOPRI		17				/* ++, --, &, *, -, ~, sizeof */
+   391   #define	LPNPRI		18				/* ., ->, [, (, function call */
+   392   #define	PSTPRI		19				/* in-stack post--, post++ */
+   393    
+   394   struct io_buf {
+   395   	int io_fd;
+   396   	int io_nc;
+   397   	char *io_p;
+   398   	char io_b[512];
+   399   };
+   400   struct { int hiword; int loword; };
+   401   #define	EXPSIZE		1024
+   402   int exprarea[EXPSIZE]=0;
+   403    
+   404   /* v6io buffer declaration */
+   405   #define BLEN	512
+   406    
+   407   struct iobuf {
+   408   	int fildes;
+   409   	int nunused;
+   410   	char *xfree;
+   411   	char buff[BLEN];
+   412   };
+   413   struct io_buf ibuf={0}, obuf={0};
+1File: INIT.C                                                              Page       8
+   414   int bol=0;
+   415   int errflg=0;
+   416   int level=0;
+   417   int onepass=0;
+   418   char *opap=0;

@@ -1,0 +1,190 @@
+8086/8087/8088 MACRO ASSEMBLER    RVOUT                                                     18:10:17  04/22/83  PAGE    1
+
+
+VAX/VMS 8086/8087/8088 MACRO ASSEMBLER V1.0 ASSEMBLY OF MODULE RVOUT
+OBJECT MODULE PLACED IN RHVOUT.OBJ
+NO INVOCATION LINE CONTROLS
+
+
+LOC  OBJ                  LINE     SOURCE
+
+                             1     ;       Code and Data Interface for VOUT RSP
+                             2     ;       (for virtual console support)
+                             3     ;       March 30, 1983
+                             4     
+                             5     name    rvout
+                             6     
+                             7     cgroup  group   code
+                             8     dgroup  group   dats
+                             9     
+                            10     assume   cs:cgroup,ds:dgroup
+                            11     
+                            12             public  xdos,mon1,mon2,mon3,mon4,intsys
+                            13             public rsplink,pd,udaseg,u_retseg,u_wrkseg
+                            14             public u_insys, ncopies
+                            15             extrn  plmstart:near
+                            16     
+                            17     
+----                        18     dats    segment public  'DATA'
+0000                        19     org     0
+                            20     
+  0010                      21     rsphdr_len      equ     16
+  0030                      22     pd_len          equ     30H
+  0100                      23     uda_len         equ     100H
+  0060                      24     insysoff        equ     60H
+  0000                      25     rsp_top         equ     0
+  0010                      26     rsp_pd          equ     rsp_top + rsphdr_len
+  0040                      27     rsp_uda         equ     rsp_pd + pd_len
+  0140                      28     rsp_bottom      equ     rsp_uda + uda_len
+0000                        29             org     rsp_top
+                            30                                     ;RSP header
+0000 0000                   31     rsplink dw      0               ;becomes system data page paragraph
+0002 4700                   32     sdatvar dw      nvcns           ;gensys makes a copy per virtual cons
+0004 00                     33     ncopies db      0
+0005 0000                   34             dw      0,0,0,0, 0
+0007 0000
+0009 0000
+000B 0000
+000D 0000
+000F 00                     35             db      0
+0010                        36             org     rsp_pd
+0010 0000                   37     pd      dw      0,0             ;link fields
+0012 0000
+0014 00                     38             db      0               ;status
+0015 B4                     39             db      180             ;initial priority - better than TMPs and PIN
+0016 0300                   40             dw      3               ;flags - system and keep
+0018 564F5554202020         41             db      'VOUT    '      ;name
+     20
+0020 0400                   42     udaseg  dw      rsp_uda/10h     ;uda paragraph
+0022 00                     43             db      0,0             ;disk,user
+0023 00
+8086/8087/8088 MACRO ASSEMBLER    RVOUT                                                    18:10:17  04/22/83  PAGE    2
+
+
+LOC  OBJ                  LINE     SOURCE
+
+0024 00                     44             db      0,0             ;ldisk,luser
+0025 00
+0026 FF00                   45             dw      0ffh            ;puremem - re-entrant
+                            46                                     ;rest of pd
+                            47     
+0040                        48     org     rsp_uda                 ;start of uda
+0040 0000                   49     uda             dw      0
+0042 0000                   50                     dw      0       ;init DMA, must be set by program
+0044 0000                   51                     dw      0,0,0,0, 0,0,0,0, 0,0,0,0
+0046 0000
+0048 0000
+004A 0000
+004C 0000
+004E 0000
+0050 0000
+0052 0000
+0054 0000
+0056 0000
+0058 0000
+005A 0000
+005C 0000                   52                     dw      0,0,0,0, 0,0,0,0, 0,0,0,0
+005E 0000
+0060 0000
+0062 0000
+0064 0000
+0066 0000
+0068 0000
+006A 0000
+006C 0000
+006E 0000
+0070 0000
+0072 0000
+0074 3A01           R       53                     dw      offset stk_top
+0076 0000                   54                     dw      0,0,0,0, 0,0,0,0
+0078 0000
+007A 0000
+007C 0000
+007E 0000
+0080 0000
+0082 0000
+0084 0000
+0086 0000                   55     u_wrkseg        dw      0
+0088 0000                   56     u_retseg        dw      0
+                            57     
+00A0                        58     org     rsp_uda + insysoff
+00A0 01                     59     u_insys         db      1
+00A1 00                     60                     db      0       ;status save
+00A2 0000                   61                     dw      0       ;ccb
+00A4 0000                   62                     dw      0       ;lcb
+00A6 00                     63                     db      0       ;delimiter for print string
+                            64     
+00A7 (147                   65                     db      93h dup (0cch)  ;fill UDA stack with INT 3s
+     CC
+     )
+                            66     
+8086/8087/8088 MACRO ASSEMBLER    RVOUT                                                    18:10:17  04/22/83  PAGE    3
+
+
+LOC  OBJ                  LINE     SOURCE
+
+013A 0000           E       67     stk_top dw      plmstart
+013C 0000                   68             dw      0,0             ;segment and flags - unknown
+013E 0000
+                            69     
+----                        70     dats ends
+                            71     
+----                        72     code    segment public 'CODE'
+                            73     
+0000 434F5059524947         74             db      'COPYRIGHT (C) 1983,'
+     48542028432920
+     313938332C
+0013 20444947495441         75             db      ' DIGITAL RESEARCH '
+     4C205245534541
+     52434820
+                            76     
+0025                        77     xdos    proc    
+0025 55                     78             push    bp
+0026 8BEC                   79             mov     bp,sp
+0028 8B5604                 80             mov     dx,[bp+4]
+002B 8B4E06                 81             mov     cx,[bp+6]
+002E CDE0                   82             int     224
+0030 5D                     83             pop     bp
+0031 C20400                 84             ret     4
+                            85     xdos    endp
+                            86     
+  0025                      87     mon1    equ     xdos
+  0025                      88     mon2    equ     xdos
+  0025                      89     mon3    equ     xdos
+  0025                      90     mon4    equ     xdos
+                            91     
+  0000                      92     supervisor      equ     0
+  0068                      93     rlr             equ     68h
+  0010                      94     p_uda           equ     10h
+  0047                      95     nvcns           equ     47h
+                            96     
+0034                        97     intsys  proc                            ;call O.S. as if we are
+0034 55                     98             push bp                         ;already in it
+0035 8BEC                   99             mov bp,sp
+                           100     
+0037 8B5E04                101             mov bx, [bp+4]
+003A 8B5606                102             mov dx, [bp+6]
+003D 8B4E08                103             mov cx, [bp+8]
+                           104     
+                           105     
+0040 1E                    106             push ds
+0041 8E1E0000       R      107             mov ds, rsplink                 ;DS = Sysdat Segment
+0045 8B366800              108             mov si, ds:word ptr rlr
+0049 8E4410                109             mov es, [si + p_uda]
+004C FF1E0000              110             call ds:dword ptr [supervisor]
+0050 1F                    111             pop ds
+                           112     
+0051 5D                    113             pop bp
+0052 C20600                114             ret 6
+                           115     intsys  endp
+                           116     
+8086/8087/8088 MACRO ASSEMBLER    RVOUT                                                    18:10:17  04/22/83  PAGE    4
+
+
+LOC  OBJ                  LINE     SOURCE
+
+----                       117     code    ends
+                           118     end
+
+ASSEMBLY COMPLETE, NO ERRORS FOUND
+

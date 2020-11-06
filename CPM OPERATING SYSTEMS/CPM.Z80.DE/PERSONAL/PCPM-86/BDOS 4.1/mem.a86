@@ -1,0 +1,737 @@
+
+include	equates.a86
+	
+		dseg
+		extrn	pq_memmgr:word
+		extrn	ccp_dseg:word
+	
+		cseg
+		extrn	bdos_callback:near
+
+		public	mem_init
+		public	mem_main
+;
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+mem_init:	retn
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+mem_main:	push	dx
+		push	si
+		mov	bx, offset pq_memmgr
+		mov	cx, 204h
+		call	bdos_callback
+		inc	es:proc_indisk
+		pop	si
+		pop	dx
+		call	cs:mem_functions[si]
+		jb	mc_success
+		mov	bx, 0FFFFh
+
+mc_success:				; CODE XREF: funcs_MC+17j
+		push	bx
+		push	cx
+		mov	cx, 206h
+		call	bdos_callback
+		mov	bx, offset pq_memmgr
+		mov	cx, 205h
+		call	bdos_callback
+		pop	cx
+		pop	bx
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+mem_functions	dw offset MC_MAX	; DATA XREF: funcs_MC+12o
+		dw offset MC_ABSMAX
+		dw offset MC_ALLOC
+		dw offset MC_ABSALLOC
+		dw offset MC_FREE
+		dw offset MC_ALLFREE
+		dw offset mc_temp_untemp
+		dw offset mc_cleanprg
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_ABSALLOC:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+36o
+		call	get_mcb_pars
+		jmp	common_alloc
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_ABSMAX:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+32o
+		call	get_mcb_pars
+		mov	mcb_len_min, 1
+		jmp	common_alloc
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_ALLFREE:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+3Ao
+		call	get_mcb_pars
+		cmp	mcb_ext, 2
+		jnb	mcaf_just_anyle
+		mov	dx, 8
+		call	free_allmem
+
+mcaf_just_anyle:			; CODE XREF: MC_ALLFREE+8j
+		jmp	mc_anyleft
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_ALLOC:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+34o
+		call	get_mcb_pars
+		mov	mcb_segment, 0
+		jmp	common_alloc
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_FREE:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+38o
+		call	get_mcb_pars
+		mov	al, mcb_ext
+		cmp	al, 0FFh
+		jnz	free_onemem
+		mov	dx, 8
+		call	free_allmem
+		jmps	free_done
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+free_onemem:				; CODE XREF: MC_FREE+8j
+		cmp	al, 2
+		jnb	free_done
+		call	ml_free
+		jmps	free_done
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+		jmps	free_done
+
+free_done:				; CODE XREF: MC_FREE+10j MC_FREE+14j
+					; ...
+		jmp	mc_anyleft
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+MC_MAX:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+30o
+		call	get_mcb_pars
+		mov	mcb_segment, 0
+		mov	mcb_len_min, 1
+		jmp	common_alloc
+
+
+;
+; Resets the 'temporary' flag on all temporary allocations,
+; making them permanent.
+;
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+mc_temp_untemp:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+3Co
+		mov	bx, ccp_dseg	; Temp blocks exist?
+		test	bx, bx
+		jnz	mctu_temp_found
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mctu_temp_found:			; CODE XREF: mc_temp_untemp+6j
+		push	bx
+		mov	di, offset mem_table-6
+
+mctu_loop:				; CODE XREF: mc_temp_untemp+16j
+		call	ml_next
+		jnb	mctu_done
+		and	byte ptr 5[di], 0FEh
+		jmps	mctu_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mctu_done:				; CODE XREF: mc_temp_untemp+10j
+		pop	bx
+		stc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+mc_cleanprg:		; CODE XREF: funcs_MC+12u
+					; DATA XREF: funcs_MC+3Eo
+		push	dx
+;
+; If bit 2 set in process flags, look for all memory blocks
+; with bit 2 set in their flags	and set	bit 0
+;
+		test	es:proc_flags, 4
+		jz	mccp_endlabel
+		mov	di, offset mem_table-6
+
+mccp_label:				; CODE XREF: mc_cleanprg+16j
+					; mc_cleanprg+1Cj
+		call	ml_next
+		jnb	mccp_endlabel
+		test	byte ptr 5[di], 4
+		jz	mccp_label
+		or	byte ptr 5[di], 1
+		jmps	mccp_label
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mccp_endlabel:				; CODE XREF: mc_cleanprg+8j
+					; mc_cleanprg+10j
+		pop	dx
+		cmp	dl, 1
+		jz	mccp_type1
+		xor	dx, dx
+		call	free_allmem
+		jmps	mccp_end
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mccp_type1:				; CODE XREF: mc_cleanprg+22j
+		mov	di, offset mem_table-6
+
+mccp_type1_loop:			; CODE XREF: mc_cleanprg+3Aj
+					; mc_cleanprg+40j
+		call	ml_next
+		jnb	mccp_end
+		mov	al, es:proc_pid
+		cmp	4[di],	al
+		jnz	mccp_type1_loop
+		mov	byte ptr 4[di], 0FDh
+		jmps	mccp_type1_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mccp_end:				; CODE XREF: mc_cleanprg+29j
+					; mc_cleanprg+31j
+		xor	bx, bx
+		stc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+get_mcb_pars:		; CODE XREF: MC_ABSALLOCp MC_ABSMAXp
+					; ...
+		mov	caller_mcb, dx
+		mov	bx, dx
+		push	es
+		mov	es, es:userDS
+		mov	ax, es:[bx]
+		mov	mcb_segment, ax
+		mov	ax, es:2[bx]
+		mov	mcb_len_min, ax
+		mov	mcb_len_max, ax
+		xor	ax, ax
+		mov	cl, es:4[bx]
+		mov	mcb_ext, cl
+		cmp	cl, 2
+		jnz	mcb_ext_range
+		mov	ax, 2		; Keep memory flag
+
+mcb_ext_range:				; CODE XREF: get_mcb_pars+29j
+		pop	es
+		mov	dx, es:proc_flags
+		and	dx, 0Ch
+		cmp	ccp_dseg, 0	; Do temporary blocks exist?
+		jz	mcb_noccpdseg
+		and	dx, 0FFFBh
+
+mcb_noccpdseg:				; CODE XREF: get_mcb_pars+3Dj
+		or	ax, dx
+		mov	mcb_keep_flag, al
+		mov	cx, 2Bh		; Bad Parameter
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+common_alloc:		; CODE XREF: MC_ABSALLOC+3j
+					; MC_ABSMAX+9j	...
+		cmp	mcb_ext, 2	; Remain after termination?
+		ja	mc_anyleft
+		call	allocate_block
+
+mc_anyleft:				; CODE XREF: MC_ALLFREE+10j
+					; MC_FREE+1Dj ...
+		push	es
+		pushf	
+		mov	es, es:userDS
+		mov	di, offset mem_table-6
+		xor	dl, dl		; Not available
+		call	ml_find_free
+		jnb	mc_noneleft
+		inc	dl		; Available
+
+mc_noneleft:				; CODE XREF: common_alloc+19j
+		mov	bx, caller_mcb
+		mov	es:4[bx], dl
+		mov	ax, mcb_segment
+		mov	es:[bx], ax
+		mov	ax, mcb_len_max
+		mov	es:2[bx], ax
+		xor	bx, bx
+		popf	
+		pop	es
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+allocate_block:		; CODE XREF: common_alloc+7p
+		mov	cx, 43		; Bad parameter
+		mov	ax, mcb_len_min
+		mov	bx, mcb_len_max
+		push	ax
+		or	ax, bx
+		pop	ax
+		jz	mcb_param_err
+		cmp	ax, bx
+		ja	mcb_param_err
+		cmp	mcb_segment, 0
+		jz	mcb_not_abs
+
+mcb_abs_retry:				; CODE XREF: allocate_block+36j
+		mov	dx, mcb_segment	; Find the memory list entry
+					; controlling this segment.
+		call	ml_find_byseg
+		jnb	mcb_param_err	; If failed, segment not in the	memory arena.
+		mov	al, 4[di]	; Get the PID of the memory owner
+		cmp	al, 0FEh	; Does the entry contain free memory?
+		jz	mcb_wasfree	; Yes. Allocate	in it.
+		test	byte ptr 5[di], 1; Is it owned	by a temporary block?
+		jz	mcb_nofree
+		push	ax		; Free all temporary blocks
+		call	free_temp_block
+		pop	ax		; And if that worked, try again
+		jb	mcb_abs_retry
+
+mcb_nofree:				; CODE XREF: allocate_block+2Fj
+		cmp	al, es:proc_pid	; Block	is in use. By the current
+					; process?
+		jnz	mcb_param_err
+		mov	ax, [di]	; Suppose so.
+		cmp	ax, mcb_segment	; Does the passed start	address	match the 
+					; start	of the block?
+		jnz	mcb_param_err
+;
+; In this case,	we're trying to allocate a block
+; which	was allocated already. Update its 
+; flags	and then leave it.
+;
+		mov	al, mcb_keep_flag
+		or	5[di],	al
+		jmps	mcb_allocated
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mcb_wasfree:				; CODE XREF: allocate_block+29j
+		mov	ax, [di]	; Start	of block
+		add	ax, 2[di]	; End of block
+		sub	ax, mcb_segment	; Max size to allocate
+		cmp	ax, mcb_len_min	; Is it	> min size requested?
+		jb	mcb_param_err
+		call	ml_checksplit
+		jnb	mcb_didntsplit
+		mov	byte ptr 4[si], 0FEh; Mark the	new block as free
+		mov	di, si
+
+mcb_didntsplit:				; CODE XREF: allocate_block+61j
+		jmps	mcb_doalloc
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mcb_not_avail:				; CODE XREF: allocate_block+96j
+		mov	cx, 3
+
+mcb_param_err:				; CODE XREF: allocate_block+Ej
+					; allocate_block+12j
+					; ...
+		clc	
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+mcb_not_abs:				; CODE XREF: allocate_block+19j
+					; allocate_block+90j
+		xor	dx, dx
+		mov	di, offset mem_table-6
+
+not_abs_next:				; CODE XREF: allocate_block+89j
+		call	ml_find_free
+		jnb	not_abs_endscan
+		mov	ax, 2[di]	; Length of free block
+		cmp	dx, ax		; Suitable candidate?
+		jnb	not_abs_small
+		mov	dx, ax
+		mov	si, di		; Keep it in mind
+
+not_abs_small:				; CODE XREF: allocate_block+7Fj
+		cmp	ax, mcb_len_max
+		jb	not_abs_next	; Block	isn't ideal
+		jmps	mcb_doalloc; Got an ideal	block. Use it.
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+not_abs_endscan:			; CODE XREF: allocate_block+78j
+		call	free_temp_block	; Free temp blocks and try again
+		jb	mcb_not_abs
+		cmp	dx, mcb_len_min	; Can we at least get the minimum?
+		jb	mcb_not_avail
+		mov	ax, 2[si]	; OK, make do with the best one	we found
+		mov	mcb_len_max, ax
+		mov	di, si
+
+mcb_doalloc:				; CODE XREF: allocate_block+69j
+					; allocate_block+8Bj
+		mov	ax, [di]
+		mov	mcb_segment, ax
+		call	ml_splittail	; If not all the block was taken,
+					; mark the remainder as	free.
+		jnb	mcb_tookall
+		mov	byte ptr 4[si], 0FEh
+
+mcb_tookall:				; CODE XREF: allocate_block+A8j
+		mov	al, mcb_keep_flag
+		mov	5[di],	al
+		mov	al, es:proc_pid
+		test	mcb_keep_flag, 4
+		jz	mcb_gotowner
+		mov	al, 0FCh	; Owner	-4 for blocks that persist
+
+mcb_gotowner:				; CODE XREF: allocate_block+BDj
+		mov	4[di],	al
+
+mcb_allocated:				; CODE XREF: allocate_block+4Dj
+		mov	ax, 2[di]
+		mov	mcb_len_max, ax
+		stc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+free_temp_block:		; CODE XREF: allocate_block+32p
+					; allocate_block+8Dp
+		mov	di, offset mem_table-6
+		clc	
+		pushf	
+
+freetmp_loop:				; CODE XREF: free_temp_block+Ej
+					; free_temp_block+1Ej
+		call	ml_next
+		jnb	freetmp_done
+		test	byte ptr 5[di], 1; Temporary?
+		jz	freetmp_loop
+		popf	
+		stc	
+		pushf	
+		push	di		; If so, free it
+		call	ml_freeblk
+		pop	di
+		mov	ccp_dseg, 0
+		jmps	freetmp_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+freetmp_done:				; CODE XREF: free_temp_block+8j
+		popf	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+free_allmem:		; CODE XREF: MC_ALLFREE+Dp
+					; MC_FREE+Dp ...
+		mov	di, offset mem_table-6
+		push	dx
+
+freeall_loop:				; CODE XREF: free_allmem+10j
+					; free_allmem+19j ...
+		call	ml_next
+		jnb	allmem_freed
+		mov	al, es:proc_pid
+		cmp	4[di],	al	; Owned	by this	process?
+		jnz	freeall_loop
+		pop	dx
+		mov	al, 5[di]	; Flags
+		test	al, dl
+		push	dx
+		jnz	freeall_loop
+		test	al, 2
+		mov	byte ptr 4[di], 0FDh
+		jnz	freeall_loop
+		call	ml_freeblk
+		jmps	freeall_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+allmem_freed:				; CODE XREF: free_allmem+7j
+		pop	dx
+		stc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_free:		; CODE XREF: MC_FREE+16p
+		mov	dx, mcb_segment
+		call	ml_find_byseg	; Find memory list entry for this segment
+		jnb	ml_freefail
+		cmp	byte ptr 4[di], 0FDh
+		jz	ml_canfree	; Owned	by ??? shared ???
+		mov	al, es:proc_pid
+		cmp	4[di],	al	; Owned	by this	process?
+		jz	ml_canfree
+		mov	cx, 20h		; Don't own resource
+		jmps	ml_freefail
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ml_canfree:				; CODE XREF: ml_free+Dj ml_free+16j
+		cmp	dx, [di]	; Block	start matches?
+		jz	ml_freeblk
+		call	ml_splitblk	; No. Split block
+		mov	di, si
+		jb	ml_freeblk
+
+ml_freefail:				; CODE XREF: ml_free+7j ml_free+1Bj
+		clc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_freeblk:		; CODE XREF: free_temp_block+14p
+					; free_allmem+23p ...
+		mov	ax, 0FEh
+		mov	4[di],	al	; Owner	= free
+		mov	byte ptr 5[di], 0; Persist = 0
+		mov	si, di
+		mov	dx, [si]
+		dec	dx		; Who owns the para before the memory
+					; we're freeing?
+		push	ax
+		call	ml_find_byseg
+		pop	ax
+		jnb	no_coalesce	; Not found
+		cmp	4[di],	al
+		jnz	no_coalesce	; Not free
+		mov	cx, 2[si]
+		add	2[di],	cx	; Merge	blocks
+		mov	byte ptr 4[si], 0FFh
+		mov	si, di		; Destroy this block
+
+no_coalesce:				; CODE XREF: ml_freeblk+14j
+					; ml_freeblk+19j
+		mov	di, si
+		mov	dx, [di]
+		add	dx, 2[di]	; Now try the same with	the following
+					; block.
+		push	ax
+		call	ml_find_byseg
+		pop	ax
+		jnb	no_coalesce2
+		cmp	4[di],	al
+		jnz	no_coalesce2
+		mov	cx, 2[di]
+		add	2[si],	cx
+		mov	byte ptr 4[di], 0FFh
+
+no_coalesce2:				; CODE XREF: ml_freeblk+33j
+					; ml_freeblk+38j
+		mov	di, si
+		xor	bx, bx
+		stc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_checksplit:		; CODE XREF: allocate_block+5Ep
+		mov	ax, mcb_segment
+		mov	dx, ax		; DX = first requested para
+		sub	ax, [di]	; AX = paras before allocated area
+		cmp	ax, 1		; If there are some...
+		jnb	ml_splitblk	; Then split the block
+		clc	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_splittail:		; CODE XREF: allocate_block+A5p
+		mov	dx, mcb_len_max
+		mov	ax, 2[di]
+		sub	ax, dx
+		cmp	ax, 1
+		jnb	ml_dospltail
+		clc	
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ml_dospltail:				; CODE XREF: ml_splittail+Cj
+		add	dx, mcb_segment
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_splitblk:		; CODE XREF: ml_free+21p ml_checksplit+Aj
+		mov	cx, 12h
+		push	di
+		mov	di, offset mem_table-6
+
+ml_split1:				; CODE XREF: ml_splitblk+10j
+		call	ml_next
+		jnb	ml_split2
+		cmp	byte ptr 4[di], 0FFh
+		jnz	ml_split1
+		pop	si
+		xchg	si, di
+		mov	[si], dx
+		mov	ax, [di]
+		add	ax, 2[di]
+		sub	ax, dx
+		mov	2[si],	ax
+		sub	dx, [di]
+		mov	2[di],	dx
+		stc	
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ml_split2:				; CODE XREF: ml_splitblk+Aj
+		pop	di
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_find_byseg:		; CODE XREF: allocate_block+1Fp
+					; ml_free+4p ...
+		mov	di, offset mem_table-6
+		mov	cx, 3
+
+mlfbs_loop:				; CODE XREF: ml_find_byseg+Fj
+					; ml_find_byseg+15j ...
+		call	ml_next
+		jnb	mlfbs_end
+		cmp	byte ptr 4[di], 0FFh
+		jz	mlfbs_loop
+		mov	ax, [di]
+		cmp	ax, dx
+		ja	mlfbs_loop
+		add	ax, 2[di]
+		cmp	dx, ax
+		jnb	mlfbs_loop
+
+mlfbs_end:				; CODE XREF: ml_find_byseg+9j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_find_free:		; CODE XREF: common_alloc+16p
+					; allocate_block+75p
+					; ...
+		call	ml_next
+		jnb	no_free_ml
+		cmp	byte ptr 4[di], 0FEh
+		jnz	ml_find_free
+		stc	
+
+no_free_ml:				; CODE XREF: ml_find_free+3j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+ml_next:		; CODE XREF: mc_temp_untemp+Dp
+					; mc_cleanprg+Dp ...
+		add	di, 6
+		mov	ax, offset msg_cannot_load
+		cmp	di, ax
+		retn	
+
+
+		dseg
+
+mcb_len_min	dw 0			; DATA XREF: MC_ABSMAX+3w MC_MAX+9w
+					; ...
+mcb_len_max	dw 0			; DATA XREF: get_mcb_pars+19w
+					; common_alloc+2Br ...
+mcb_segment	dw 0			; DATA XREF: MC_ALLOC+3w MC_MAX+3w
+					; ...
+mcb_keep_flag	db 0			; DATA XREF: get_mcb_pars+45w
+					; allocate_block+47r
+					; ...
+caller_mcb	dw 0			; DATA XREF: get_mcb_parsw
+					; common_alloc+1Dr
+mcb_ext		db 0			; DATA XREF: MC_ALLFREE+3r
+					; MC_FREE+3r ...
+		end
+

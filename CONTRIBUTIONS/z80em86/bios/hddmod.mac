@@ -1,0 +1,90 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                           Hard disk driver                             *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+;
+; v1.00 - 17 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+; Entry point 1  : ihdsk - Initialize
+; Entry point 2  : lhdsk - Login
+; Entry point 3  : whdsk - Write sector
+; Entry point 4  : rhdsk - Read sector
+
+	.z80
+;
+	maclib	TPORTS.LIB
+	maclib	ASMTYPE.LIB
+;
+	public	ihdsk, lhdsk, rhdsk, whdsk
+;
+	extrn	@dtbl, @adrv, @rdrv, @dbnk, @dma, @trk, @sect, @cnt
+	extrn	HDDdsk, dph2
+;
+	dseg			;banked memory
+
+; Entry point 1 - Initialize hard disk
+ihdsk:	ld	hl,0
+	ld	(HDDdsk),hl	;kill the HDD file entry (was for GENCPM)
+	out	(gthard),a	;get the HDD file drive code
+	cp	16		;is drive code in range ?
+	ret	nc
+	inc	a		;HDD file present ?
+	ret	z
+	dec	a		;restore drive code number
+	add	a,a
+	ld	d,0
+	ld	e,a
+	ld	hl,@dtbl	;drive table address
+	add	hl,de		;table offset for DPH entry
+	ld	de,dph2		;DPH address for HDD file
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	ret
+
+; Entry point 2 - Login hard disk drive
+lhdsk:	ret
+
+; Entry point 3 - Write hard disk sector
+whdsk:	or	0ffh		;write operation flag value
+	jp	hdisk
+
+; Entry point 4 - Read hard disk sector
+rhdsk:	xor	a		;read operation flag value
+
+hdisk:	push	af		;save operation flag
+if banked
+	ld	a,(@dbnk)
+	out	(bnkdma),a
+endif
+	ld	a,(@trk)
+	ld	b,a
+	ld	a,(@sect)
+	ld	c,a
+	ld	a,(@adrv)
+	ld	e,a
+	ld	hl,(@dma)
+	pop	af		;restore operation flag
+	ld	a,2		;sector size code (512 bytes)
+	jp	z,readop
+	out	(wrhard),a
+	jp	result
+readop:	out	(rdhard),a
+result:	or	a
+	ret	z
+	ld	a,1
+	ret
+;
+	end

@@ -1,0 +1,114 @@
+ DPB86:
+DO;
+       /* THE PURPOSE OF THIS MODULE IS TO ALLOW INDEPENDENCE */
+       /* OF PROCESSOR, I.E., 8080 OR 8086                    */
+ 
+DECLARE
+ /*SPLH*/  /* LIT LITERALLY 'LITERALLY',
+              DCL LIT 'DECLARE',
+              PROC LIT 'PROCEDURE',
+              ADDR LIT 'ADDRESS',    */
+        TRUE               LIT                '0FFH',
+        FALSE              LIT                '0',
+   /*   BOOLEAN            LIT                'BYTE',  */
+        FOREVER            LIT                'WHILE TRUE',
+        CR                 LIT                '13',
+        LF                 LIT                '10',
+        TAB                LIT                '9',
+        FF                 LIT                '12',
+        SECTORLEN          LIT                '128';
+ 
+/* FUNCTION CALL 32 IN 2.0 OR LATER BDOS, RETURNS THE ADDRESS OF THE DISK
+PARAMETER BLOCK FOR THE CURRENTLY SELECTED DISK, WHICH CONSISTS OF:
+        SPT                   (2 BYTES) NUMBER OF SECTORS PER TRACK
+        BLKSHF                (1 BYTE)  BLOCK SIZE = SHL(DOUBLE(128),BLKSHF)
+        BLKMSK                (1 BYTE)  SECTOR# AND BLKMSK = BLOCK NUMBER
+        EXTMSK                (1 BYTE)  LOGICAL/PHYSICAL EXTENTS
+        BLKMAX                (2 BYTES) MAX ALLOC NUMBER
+        DIRMAX                (2 BYTES) SIZE OF DIRECTORY-1
+        DIRBLK                (2 BYTES) RESERVATION BITS FOR DIRECTORY
+        CHKSIZ                (2 BYTES) SIZE OF CHECKSUM VECTOR
+        OFFSET                (2 BYTES) OFFSET FOR OPERATING SYSTEM
+*/
+ 
+/* INDICES INTO DISK PARAMETER BLOCK, USED AS PARAMETERS TO DPB PROCEDURE */
+ 
+DCL        SPT$W        LIT        '0',
+           BLKSHF$B     LIT        '2',
+           BLKMSK$B     LIT        '3',
+           EXTMSK$B     LIT        '4',   /* 68K*/
+           BLKMAX$W     LIT      /*'5', */ '6',
+           DIRMAX$W     LIT      /*'7', */ '8',
+           DIRBLK$W     LIT      /*'9', */ '10',
+           CHKSIZ$W     LIT      /*'11',*/ '12',
+           OFFSET$W     LIT      /*'13';*/ '14';
+ 
+ 
+DECLARE K$PER$BLOCK BYTE PUBLIC;
+DECLARE DPB$BASE POINTER;/*SPLH*/
+DECLARE DPB$ARRAY (16) BYTE;    /*SPLH */
+ 
+MON4: PROCEDURE (F,A)  EXTERNAL;
+    DCL F BYTE, A ADDRESS;
+END MON4;
+MON5: PROC(F,A) EXT;
+    DCL F BYTE,A POINTER;
+END MON5;
+ 
+DCL GET$DPB LIT '31';
+ 
+/* MERGE SYS:3.CHRSYN.STATSUB1.SA = [SOURCE.CPM86.CPM11.STAT]CON86.PLM*/
+ 
+/*  $COMPACT       */
+/*  $TITLE ('CONSOLE 8086 - GET CONSOLE WIDTH')  */
+/* THE PURPOSE OF THIS MODULE IS TO ALLOW INDEPENDENCE */
+/* OF PROCESSOR, I.E., 8080 OR 8086                    */
+/* IT WILL RETURN A WORD VALUE EQUAL TO THE CONSOLE WIDTH FROM
+   THE SYSTEM DATA PAGE. */
+ 
+ 
+  GET$SYSDAT:
+    PROCEDURE POINTER;
+      RETURN /*  (MON4(49,0)); */ 10; /*SPLH*/
+    END GET$SYSDAT;
+ 
+ 
+  DECLARE CONWIDTH$POINTER POINTER;
+  DECLARE CONWIDTH$PTR STRUCTURE (
+    OFFSET WORD,
+    SEGMENT WORD) AT (@CONWIDTH$POINTER);
+  DECLARE WIDTH BASED CONWIDTH$POINTER BYTE;
+  DECLARE CONWIDTH$OFFSET LIT '0040H';
+  
+ 
+COLUMNS: PROCEDURE BYTE PUBLIC;
+ 
+/*  CONWIDTH$POINTER = GET$SYSDAT;
+    CONWIDTH$PTR.OFFSET = CONWIDTH$PTR.OFFSET + CONWIDTH$OFFSET;
+    IF WIDTH = 0 THEN
+        RETURN 80;
+    RETURN WIDTH;        */ RETURN 80 ;  /*SPLH*/
+END COLUMNS;
+ 
+ 
+ /* MERGE END                     */
+ 
+ 
+ 
+DPB$BYTE: PROCEDURE(PARAM) BYTE PUBLIC;
+    DCL PARAM BYTE;
+    RETURN(DPB$ARRAY(PARAM));                  /* S-PL/H */
+END DPB$BYTE;
+ 
+DPB$WORD: PROCEDURE(PARAM) ADDRESS PUBLIC;     /* S-PL/H */
+    DCL PARAM BYTE;
+    RETURN(DPB$ARRAY(PARAM+1) + SHL(DOUBLE(DPB$ARRAY(PARAM)),8));
+END DPB$WORD;
+ 
+BASE$DPB: PROCEDURE PUBLIC;            /* S-PL/H */
+  /* 68K*/ DPB$BASE=@DPB$ARRAY;
+ /* DPB$BASE = MON4(GET$DPB,0); */     CALL MON5(GET$DPB,DPB$BASE);
+    K$PER$BLOCK = SHR(DPB$BYTE(BLKMSK$B)+1 ,3);
+END BASE$DPB;
+ 
+END DPB86;

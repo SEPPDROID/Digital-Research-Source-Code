@@ -1,0 +1,1508 @@
+1File: CCP.C                                                               Page       1
+     1   /*--------------------------------------------------------------*\
+     2    |	ccp.c	      CONSOLE COMMAND PROCESSOR          v1.1   |
+     3    |		      =========================			|
+     4    |								|
+     5    |      CP/M 68k:  A CP/M derived operating system		|
+     6    |								|
+     7    |     *==================================================*	|
+     8    |     *==================================================*	|
+     9    |     *THIS IS THE DUAL PROCESSOR,ROMABLE CP/M-68K SYSTEM*	|
+    10    |     *==================================================*	|
+    11    |     *==================================================*	|
+    12    |								|
+    13    |      Description:					        |
+    14    |	-----------						|
+    15    |			The Console Command Processor is a      |
+    16    |			distinct program which references       |
+    17    |			the BDOS to provide a human-oriented    |
+    18    |			interface for the console user to the   |
+    19    |			information maintained by the BDOS on   |
+    20    |			disk storage.				|
+    21    |								|
+    22    |	created by :    Tom Saulpaugh	Date created: 7/13/82	|
+    23    |	----------			------------		|
+    24    |      last modified:  03/17/83	St. Patrick's Day!!!	|
+    25    |      -------------			--------------------	|
+    26    |     								|
+    27    |	(c) COPYRIGHT  Digital Research 1983			|
+    28    |	               all rights reserved			|
+    29    |								|
+    30   \*--------------------------------------------------------------*/
+    31    
+1File: CCP.C                                                               Page       2
+    32    
+    33   /*--------------------------------------------------------------*\
+    34    |		     CCP Macro Definitions			|
+    35   \*--------------------------------------------------------------*/
+    36   #include	"ccpdef.h"	  /* include CCP defines	*/
+    37    
+    38   			
+    39   /*--------------------------------------------------------------*\
+    40    |		    CP/M Builtin Command Table			|
+    41   \*--------------------------------------------------------------*/
+    42   struct _cmd_tbl
+    43   {
+    44   	BYTE	*ident;		/* command identifer field	*/
+    45   	UWORD	cmd_code;	/* command code field		*/
+    46   }
+    47   cmd_tbl[8] = 			/* declare CP/M built-in table	*/
+    48   {
+    49   	"DIR",DIRCMD,
+    50          "DIRS",DIRSCMD,
+    51          "TYPE",TYPECMD,
+    52   	"REN",RENCMD,
+    53   	"ERA",ERACMD,
+    54          "USER",UCMD,
+    55        "SUBMIT",SUBCMD,
+    56   	 NULL,-1
+    57   };		
+    58   /*--------------------------------------------------------------*\
+    59    |		CP/M-68K COMMAND FILE LOADER TABLE		|
+    60   \*--------------------------------------------------------------*/
+    61   extern struct _filetyps
+    62   {
+    63   	BYTE *typ;
+    64   	UWORD (*loader) ();
+    65   	BYTE user_c;
+    66   	BYTE user_0;
+    67   }
+    68   load_tbl[];
+    69    
+    70    
+    71    
+    72    
+1File: CCP.C                                                               Page       3
+    73   /*--------------------------------------------------------------*\
+    74    |		 Table of User Prompts and Messages		|
+    75   \*--------------------------------------------------------------*/
+    76   BYTE	msg[]  = "NON-SYSTEM FILE(S) EXIST$";
+    77   BYTE	msg2[] = "Enter Filename: $";
+    78   BYTE	msg3[] = "Enter Old Name: $";
+    79   BYTE	msg4[] = "Enter New Name: $";
+    80   BYTE	msg5[] = "File already exists$";
+    81   BYTE	msg6[] = "No file$";
+    82   BYTE	msg7[] = "No wildcard filenames$";
+    83   BYTE	msg8[] = "Syntax: REN Newfile=Oldfile$";
+    84   BYTE	msg9[] = "Confirm(Y/N)? $";
+    85   BYTE   msg10[] = "Enter User No: $";
+    86   BYTE   msg11[] = ".SUB file not found$";
+    87   BYTE   msg12[] = "User # range is [0-15]$";
+    88   BYTE   msg13[] = "Too many arguments: $";
+    89   BYTE  lderr1[] = "insufficient memory or bad file header$";
+    90   BYTE  lderr2[] = "read error on program load$";
+    91   BYTE  lderr3[] = "bad relocation information bits$";
+    92   BYTE lderror[] = "program load error$";
+    93   /*--------------------------------------------------------------*\
+    94    |		    Global Arrays & Variables			|
+    95   \*--------------------------------------------------------------*/
+    96    
+    97   				/********************************/
+    98   BYTE load_try;			/* flag to mark a load try	*/
+    99   BYTE first_sub;			/* flag to save current cmd ptr */
+   100   BYTE chain_sub;			/* submit chaining flag		*/
+   101   extern BYTE submit;		/* submit file flag		*/
+   102   BYTE end_of_file;		/* submit end of file flag	*/
+   103   BYTE dirflag;			/* used by fill_fcb(? or blanks)*/
+   104   BYTE subprompt;			/* submit file was prompted for */
+   105   extern BYTE morecmds;		/* command after warmboot flag  */
+   106   UWORD sub_index;		/* index for subdma buffer	*/
+   107   UWORD index;			/* index into cmd argument array*/
+   108   UWORD sub_user;			/* submit file user number      */
+   109   UWORD user;			/* current default user number  */
+   110   UWORD cur_disk;			/* current default disk drive   */
+   111   BYTE subcom[CMD_LEN+1];		/* submit command buffer	*/
+   112   BYTE subdma[CMD_LEN];		/* buffer to fill from sub file */
+   113   extern BYTE usercmd[CMD_LEN+2];	/* user command buffer		*/
+   114   BYTE *user_ptr;			/* next user command to execute */
+   115   BYTE *glb_index;		/* points to current command	*/
+   116   BYTE save_sub[CMD_LEN+1];	/* saves cur cmd line for submit*/
+   117   BYTE subfcb[FCB_LEN];		/* global fcb for sub files	*/
+   118   BYTE cmdfcb[FCB_LEN];		/* global fcb for 68k files	*/
+   119   BYTE *tail;			/* pointer to command tail      */
+   120   extern BYTE autost;		/* autostart flag		*/
+   121   BYTE autorom;			/* needed for ROM system autost */
+   122   BYTE dma[DMA_LEN+3];		/* 128 byte dma buffer		*/
+   123   BYTE parm[MAX_ARGS][ARG_LEN];	/* cmd argument array		*/
+   124   BYTE del[] =	 		/* CP/M-68K set of delimeters   */
+   125   {'>','<','.',',','=','[',']',';','|','&','/','(',')','+','-','\\'};
+   126   				/********************************/
+   127    
+   128    
+1File: CCP.C                                                               Page       4
+   129    
+   130   /*--------------------------------------------------------------*\
+   131    |		      Function Definitions			|
+   132   \*--------------------------------------------------------------*/
+   133    
+   134   				/********************************/
+   135   extern UWORD bdos();		/* this returns a word          */
+   136   extern UWORD load68k();		/* this returns a word(1-3)	*/
+   137   BYTE *scan_cmd();		/* this returns a ptr to a byte */
+   138   UWORD strcmp();			/* this returns a word		*/
+   139   UWORD decode();			/* this returns a word		*/
+   140   UWORD delim();			/* this returns a word		*/
+   141   BYTE true_char();		/* this returns a byte		*/
+   142   UWORD fill_fcb();		/* this returns a word		*/
+   143   UWORD too_many();		/* this returns a word		*/	
+   144   UWORD find_colon();		/* this returns a word		*/
+   145   UWORD chk_colon();		/* this returns a word		*/
+   146   UWORD user_cmd();		/* this returns a word		*/
+   147   UWORD cmd_file();		/* this returns a word		*/
+   148   UWORD sub_read();		/* this returns a word		*/
+   149   UWORD dollar();			/* this returns a word		*/
+   150   UWORD comments();		/* this returns a word		*/
+   151   UWORD submit_cmd();		/* this returns a word		*/
+   152   				/********************************/
+   153    
+1File: CCP.C                                                               Page       5
+   154   				/********************************/
+   155   VOID cr_lf()			/*   print a CR and a Linefeed	*/
+   156   				/********************************/
+   157   {
+   158   	bdos(CONSOLE_OUTPUT,CR);
+   159   	bdos(CONSOLE_OUTPUT,LF);
+   160   }
+   161   				/********************************/
+   162   VOID cpy(source,dest)		/*  copy source to destination  */
+   163   				/********************************/
+   164   REG BYTE *source;
+   165   REG BYTE *dest;
+   166   {
+   167   	while(*dest++ = *source++);
+   168   }
+   169    
+   170    
+   171   				/********************************/
+   172   UWORD strcmp(s1,s2)	  	/*    compare 2 char strings	*/
+   173   				/********************************/
+   174   REG BYTE *s1,*s2;
+   175   {		
+   176   	while(*s1)
+   177   	{
+   178   		if(*s1 > *s2)
+   179   			return(1);
+   180   		if(*s1 < *s2)
+   181   			return(-1);
+   182   		s1++; s2++;
+   183   	}
+   184   	return((*s2 == NULL) ? 0 : -1);
+   185   }
+   186   				/********************************/
+   187   VOID copy_cmd(com_index)	/*  Save the command which	*/
+   188   				/*  started a submit file       */
+   189   				/*  Parameter substituion will  */
+   190   				/*  need this command tail.	*/
+   191   				/*  The buffer save_sub is used */
+   192   				/*  to store the command.	*/
+   193   				/********************************/
+   194   REG BYTE *com_index;
+   195   {
+   196   	REG BYTE *t1,*temp;
+   197    
+   198   	temp = save_sub;
+   199   	if(subprompt)
+   200   	{
+   201   		t1 = parm;
+   202   		while(*t1)
+   203   			*temp++ = *t1++;
+   204   		*temp++ = ' ';
+   205   		subprompt = FALSE;
+   206   	}
+   207   	while(*com_index && *com_index != EXLIMPT)
+   208   		*temp++ = *com_index++;
+   209   	*temp = NULL;
+   210   }
+   211    
+   212    
+1File: CCP.C                                                               Page       6
+   213    
+   214   				/********************************/
+   215   VOID prompt()  			/*   print the CCP prompt       */
+   216   				/********************************/
+   217   {
+   218   	REG UWORD cur_drive,cur_user_no;
+   219   	BYTE      buffer[3];
+   220    
+   221   	cur_user_no = bdos(GET_USER_NO,(long)255);
+   222   	cur_drive  = bdos(RET_CUR_DISK,(long)0);		
+   223   	cur_drive += 'A';
+   224   	cr_lf();
+   225   	if(cur_user_no)
+   226   	{
+   227   		if(cur_user_no >= 10)
+   228   		{
+   229   			buffer[0] = '1';
+   230   			buffer[1] = ((cur_user_no-10) + '0');
+   231   			buffer[2] = '$';
+   232   		}
+   233   		else
+   234   		{
+   235   			buffer[0] = (cur_user_no + '0');
+   236   			buffer[1] = '$';
+   237   		}
+   238   		bdos(PRINT_STRING,buffer);
+   239   	}
+   240   	bdos(CONSOLE_OUTPUT,(long)cur_drive);
+   241   	bdos(CONSOLE_OUTPUT,ARROW);
+   242   }
+   243    
+   244    
+   245    
+   246   				/********************************/
+   247   VOID echo_cmd(cmd,mode)		/* echo any multiple commands   */
+   248   				/* or any illegal commands	*/
+   249   				/********************************/
+   250   REG BYTE *cmd;
+   251   REG UWORD mode;
+   252   {
+   253   	if(mode == GOOD && (!(autost && autorom)))
+   254   		prompt();
+   255   	while(*cmd && *cmd != EXLIMPT)
+   256   		bdos(CONSOLE_OUTPUT,(long)*cmd++);
+   257   	if(mode == BAD)
+   258   		bdos(CONSOLE_OUTPUT,(long)'?');
+   259   	else
+   260   		cr_lf();
+   261   }
+   262    
+1File: CCP.C                                                               Page       7
+   263    
+   264   				/********************************/	
+   265   UWORD decode(cmd)		/* Recognize the command as:	*/
+   266   				/* ---------			*/
+   267   				/* 1. Builtin			*/
+   268   				/* 2. File			*/
+   269   				/********************************/
+   270   REG BYTE *cmd;
+   271   {
+   272   	REG UWORD i,n;
+   273    
+   274    
+   275   	/****************************************/
+   276   	/* Check for a CP/M builtin command	*/
+   277   	/****************************************/
+   278   	for(i = 0; i < 7;i++)
+   279   		if (strcmp(cmd,cmd_tbl[i].ident) == MATCH)
+   280   			return(cmd_tbl[i].cmd_code);
+   281   	/********************************************************/
+   282   	/*	Check for a change of disk drive command	*/
+   283   	/********************************************************/
+   284   	i = 0;
+   285   	while(i < (ARG_LEN-1) && parm[0][i] != ':')
+   286   		i++;
+   287   	if(i == 1 && parm[0][2] == NULL && parm[1][0] == NULL)
+   288   		if((parm[0][0] >= 'A') && (parm[0][0] <= 'P'))
+   289   				return(CH_DISK);
+   290   	if(i == 1 && ((parm[0][0] < 'A') || (parm[0][0] > 'P')))
+   291   		return(-1);
+   292   	if(i != 1 && parm[0][i] == ':')
+   293   		return(-1);
+   294   	/*****************************************************/
+   295   	/* Check for Wildcard Filenames			     */
+   296   	/* Check Filename for a Delimeter 		     */
+   297   	/*****************************************************/
+   298   	if(fill_fcb(0,cmdfcb) > 0)
+   299   		return(-1);
+   300   	if(i == 1)
+   301   		i = 2;
+   302   	else
+   303   		i = 0;
+   304   	if(delim(&parm[0][i]))
+   305   		return(-1);
+   306   	for(n = 0;n < ARG_LEN-1 && parm[0][n];n++)
+   307   		if(parm[0][n] < ' ')
+   308   			return(-1);
+   309   	return(FILE);
+   310   }
+   311    
+1File: CCP.C                                                               Page       8
+   312   					/************************/
+   313   VOID check_cmd(tcmd)			/*  Check end of cmd	*/
+   314   					/*  for an '!' which    */
+   315   					/*  starts another cmd  */
+   316   REG BYTE *tcmd;				/************************/
+   317   {
+   318   	while(*tcmd && *tcmd != EXLIMPT)
+   319   		tcmd++;
+   320   	/*----------------------------*/
+   321   	/* check for multiple command */
+   322   	/*   in case of a warmboot    */	
+   323   	/*----------------------------*/
+   324   	if(*tcmd++ == EXLIMPT && *tcmd)
+   325   	{
+   326   		morecmds = TRUE;
+   327   		while(*tcmd == ' ')
+   328   			tcmd++;
+   329   		user_ptr = tcmd;
+   330   	}
+   331   	else
+   332   		if(submit)	/* check original cmd line */
+   333   		{
+   334   			if(!(end_of_file))
+   335   				morecmds = TRUE;
+   336   				/*--------------------------*/
+   337   			else	/* restore cmd to where user*/
+   338   				/* ptr points to. User_ptr  */
+   339   				/* always points to next    */
+   340   				/* console command to exec  */
+   341   			{	/*--------------------------*/
+   342   				submit = FALSE;
+   343   				if(*user_ptr)
+   344   					morecmds = TRUE;
+   345   			}
+   346   		}
+   347   		else
+   348   			morecmds = FALSE;		
+   349   }
+   350    
+1File: CCP.C                                                               Page       9
+   351   					/************************/
+   352   VOID get_cmd(cmd,max_chars)	        /*   Read in a command  */
+   353   					/*Strip off extra blanks*/
+   354   					/************************/
+   355   REG BYTE  *cmd;
+   356   REG long max_chars;
+   357   {
+   358   	REG BYTE *c;
+   359    
+   360   	max_chars += (cmd - 1);
+   361   	dma[0] = CMD_LEN;	  /* set maximum chars to read  */
+   362   	bdos(READ_CONS_BUF,dma);  /* then read console		*/
+   363   	if(dma[1] != 0 && dma[2] != ';')
+   364   		cr_lf();
+   365   	dma[((UWORD)dma[1] & 0xFF)+2] = '\n'; /* tack on end of line char   */
+   366   	if(dma[2] == ';')	  /* ';' denotes a comment	*/	
+   367   		dma[2] = '\n';
+   368   	c = &dma[2];
+   369   	while(*c == ' ' || *c == TAB)
+   370   		c++;
+   371   	while(*c != '\n' && cmd < max_chars)
+   372   	{			
+   373   		*cmd++ = toupper(*c);
+   374   		if(*c == ' ' || *c == TAB)
+   375   			while(*++c == ' ' || *c == TAB);
+   376   		else
+   377   			c++;
+   378   	}
+   379   	*cmd = NULL;	     /* tack a null character on the end*/
+   380   }
+   381   					/************************/
+   382   BYTE *scan_cmd(com_index)		/* move ptr to next cmd */
+   383   					/* in the command line	*/
+   384   					/************************/
+   385   REG BYTE *com_index;
+   386   {
+   387   	while((*com_index != EXLIMPT) &&
+   388   	      (*com_index))
+   389   		 com_index++;
+   390   	while(*com_index == EXLIMPT || *com_index == ' ' ||
+   391   	      *com_index == TAB)
+   392   		com_index++;
+   393   	return(com_index);
+   394   }
+   395    
+1File: CCP.C                                                               Page      10
+   396    
+   397   					/************************/
+   398   VOID get_parms(cmd)			/* extract cmd arguments*/
+   399   					/* from command line	*/
+   400   REG BYTE *cmd;				/************************/
+   401   {
+   402    
+   403    
+   404    
+   405   	/************************************************/
+   406   	/*	This function parses the command line   */
+   407   	/* read in by get_cmd().  The expected command  */
+   408   	/* from that line is put into parm[0].  All     */
+   409   	/* parmeters associated with the command are put*/
+   410   	/* in in sequential order in parm[1],parm[2],   */
+   411   	/* and parm[3]. A command ends at a NULL or   	*/
+   412   	/* an exlimation point.				*/
+   413   	/************************************************/
+   414    
+   415    
+   416   	REG BYTE *line;		/* pointer to parm array   */
+   417   	REG UWORD    i;		/* Row Index   		   */
+   418   	REG UWORD    j;		/* Column Index		   */
+   419    
+   420   	line = parm;
+   421   	for(i = 0; i < (MAX_ARGS * ARG_LEN); i++)
+   422   		*line++ = NULL;
+   423    
+   424   	i = 0;
+   425   	/***************************************************/
+   426   	/*  separate command line at blanks,exlimation pts */
+   427   	/***************************************************/
+   428    
+   429           while(*cmd != NULL    &&
+   430   	      *cmd != EXLIMPT &&
+   431   	      i < MAX_ARGS)
+   432   	{
+   433   		j = 0;
+   434   		while(*cmd != EXLIMPT &&
+   435   		      *cmd != ' '     &&
+   436   		      *cmd != TAB     &&	
+   437   		      *cmd)
+   438   		{
+   439   			if(j < (ARG_LEN-1))
+   440   				parm[i][j++] = *cmd;
+   441   			cmd++;
+   442   		}
+   443   		parm[i++][j] = NULL;
+   444   		if(*cmd == ' ' || *cmd == TAB)
+   445   			cmd++;
+   446   		if(i == 1)
+   447   			tail = cmd; /* mark the beginning of the tail */
+   448   	}
+   449   }
+   450    
+1File: CCP.C                                                               Page      11
+   451    
+   452   					/************************/
+   453   UWORD delim(ch)				/* check ch to see	*/
+   454   					/* if it's a delimeter  */
+   455   					/************************/
+   456   REG BYTE *ch;
+   457   {
+   458   	REG UWORD i;
+   459    
+   460   	if(*ch <= ' ')
+   461   		return(TRUE);
+   462   	for(i = 0;i < sizeof (del);i++)
+   463   		if(*ch == del[i]) return(TRUE);
+   464   	return(FALSE);
+   465   }
+   466    
+   467    
+   468    
+   469   					/************************/
+   470   BYTE true_char(ch)			/* return the desired	*/
+   471   					/* character for fcb	*/
+   472   					/************************/
+   473    
+   474   REG BYTE *ch;
+   475   {
+   476   	if(*ch == '*') return('?');	/* wildcard		*/
+   477    
+   478   	if(!delim(ch)) 			/* ascii character	*/
+   479   	{
+   480   		index++;		/* increment cmd index	*/
+   481   		return(*ch);
+   482   	}
+   483    
+   484   	return(' ');			/* pad field with blank */
+   485   }
+   486    
+1File: CCP.C                                                               Page      12
+   487   					/************************/
+   488   UWORD fill_fcb(which_parm,fcb)		/* fill the fields of	*/
+   489   					/* the file control blk */
+   490   					/************************/
+   491    
+   492   REG UWORD which_parm;
+   493   REG BYTE  *fcb;
+   494   {
+   495   	REG BYTE  *ptr;
+   496   	REG BYTE  fillch;
+   497   	REG UWORD j,k;
+   498    
+   499   	*fcb = 0;
+   500   	for(k = 12;k <= 35; k++)        /* fill fcb with zero	*/
+   501   		fcb[k] = ZERO;
+   502   	for(k = 1;k <= 11;k++)
+   503   		fcb[k] = BLANK;	/* blank filename+type  */
+   504   	
+   505   	/*******************************************/
+   506   	/* extract drivecode,filename and filetype */
+   507   	/*	 from parmeter blk		   */
+   508   	/*******************************************/
+   509    
+   510   	if(dirflag)
+   511   		fillch = '?';
+   512   	else
+   513   		fillch = ' ';
+   514    
+   515   	index = ZERO;
+   516   	ptr = fcb;
+   517   	if(parm[which_parm][index] == NULL) /* no parmemters  */
+   518   	{
+   519   		ptr++;
+   520   		for(j = 1;j <= 11;j++)
+   521   			*ptr++ = fillch;
+   522   		*fcb = (bdos(RET_CUR_DISK,(long)0)+1);
+   523   		if(dirflag)
+   524   			return(11);
+   525   		else
+   526   			return(0);
+   527   	}
+   528   	if(parm[which_parm][index+1] == ':')
+   529   	{
+   530   		*ptr = parm[which_parm][index] - 'A' + 1;
+   531   		index += 2;
+   532   		if(parm[which_parm][index] == NULL)
+   533   		{
+   534   			ptr = &fcb[1];
+   535   			for(j = 1;j <= 11;j++)
+   536   				*ptr++ = fillch;
+   537   			if(dirflag)
+   538   				return(11);
+   539   			else
+   540   				return(0);
+   541   		}
+   542   	}							
+   543   	else	/* fill drivecode with the default disk		*/	
+   544   	             *fcb = (bdos(RET_CUR_DISK,(long)0) + 1);
+   545    
+1File: CCP.C                                                               Page      13
+   546   	ptr = fcb;
+   547   	ptr++;			/* set pointer to fcb filename */
+   548   	for(j = 1;j <= 8;j++)	/* get filename */
+   549   	  *ptr++ = true_char(&parm[which_parm][index]);
+   550   	while((!(delim(&parm[which_parm][index])))) index++;
+   551   	if(parm[which_parm][index] == PERIOD)
+   552   	{
+   553   	  	index++;
+   554          	  	for(j = 1;j <= 3;j++)	/* get extension */
+   555   	  	 	*ptr++ = true_char(&parm[which_parm][index]);
+   556   	}
+   557   	k = 0;
+   558   	for(j = 1;j <= 11;j++)
+   559   		if(fcb[j] == '?') k++;
+   560    
+   561   	return(k);	/* return the number of question marks	*/
+   562   }
+   563   					/************************/
+   564   UWORD too_many()			/* too many args ?      */
+   565   {					/************************/
+   566   	if(parm[2][0])
+   567   	{
+   568   		bdos(PRINT_STRING,msg13);
+   569   		echo_cmd(&parm[2][0],BAD);
+   570   		return(TRUE);
+   571   	}
+   572   	return(FALSE);
+   573   }
+   574   					/************************/
+   575   UWORD find_colon()			/*  search for a colon  */
+   576   {					/************************/
+   577   	REG UWORD i;
+   578    
+   579   	i = 0;
+   580   	while(parm[1][i] && parm[1][i] != ':') i++;
+   581   	return(i);
+   582   }
+   583   					/************************/
+   584   UWORD chk_colon(j)			/* check the position of*/
+   585   UWORD j;				/* the colon and for    */
+   586   {					/* a legal drive letter */
+   587   	if(parm[1][j] == ':')		/************************/
+   588   	{
+   589   		if(j != 1 || parm[1][0] < 'A' || parm[1][0] > 'P')
+   590   		{
+   591   			echo_cmd(&parm[1][0],BAD);
+   592   			return(FALSE);
+   593   		}
+   594   	}
+   595   	return(TRUE);
+   596   }
+   597    
+   598    
+1File: CCP.C                                                               Page      14
+   599    
+   600    
+   601   					/************************/
+   602   VOID dir_cmd(attrib)	       		/*     print out a	*/
+   603   					/*  directory listing   */
+   604   					/*----------------------*/
+   605   					/* attrib->1 (sysfiles) */
+   606   					/* attrib->0 (dirfiles) */
+   607   					/************************/
+   608   REG UWORD attrib;
+   609   {
+   610   	BYTE		needcr_lf;
+   611   	REG UWORD	dir_index,file_cnt;
+   612    	REG UWORD	save,j,k,curdrive,exist;
+   613    
+   614   	exist = FALSE; needcr_lf = FALSE;
+   615   	if(too_many()) return;
+   616   	j = find_colon();
+   617   	if(!chk_colon(j)) return;
+   618   	fill_fcb(1,cmdfcb);
+   619   	curdrive = (cmdfcb[0] + 'A' - 1);
+   620   	dir_index = bdos(SEARCH_FIRST,cmdfcb);
+   621   	if(dir_index == 255)
+   622   		bdos(PRINT_STRING,msg6);
+   623   	save = (32 * dir_index) + 1;
+   624   	file_cnt = 0;		
+   625   	while(dir_index != 255)
+   626   	{
+   627         		if(((attrib) && (dma[save+9] & 0x80)) ||
+   628   		  (!(attrib) && (!(dma[save+9] & 0x80))))
+   629   	      	{
+   630   			if(needcr_lf)
+   631   			{
+   632   				cr_lf();
+   633   				needcr_lf = FALSE;
+   634   			}	
+   635   			if(file_cnt == 0)
+   636   				bdos(CONSOLE_OUTPUT,(long)curdrive);
+   637   	      	}
+   638   		else
+   639   			{
+   640   				exist = TRUE;
+   641   				dir_index = bdos(SEARCH_NEXT);
+   642   				save = (32 * dir_index) + 1;
+   643   				continue;
+   644   			}
+   645   		dir_index = (32 * dir_index) + 1;
+   646   		bdos(CONSOLE_OUTPUT,COLON);
+   647   		bdos(CONSOLE_OUTPUT,BLANKS);
+   648   		j = 1;
+   649   		while(j <= 11)
+   650   		{
+   651   			if(j == 9)
+   652   				bdos(CONSOLE_OUTPUT,BLANKS);
+   653   			bdos(CONSOLE_OUTPUT,(long)(dma[dir_index++] & CMASK));
+   654   			j++;
+   655   		}
+   656   		bdos(CONSOLE_OUTPUT,BLANKS);
+   657   		dir_index = bdos(SEARCH_NEXT);
+1File: CCP.C                                                               Page      15
+   658   		if(dir_index == 255)
+   659   			break;
+   660   		file_cnt++;
+   661   		save = (32 * dir_index) + 1;
+   662   		if(file_cnt == 5)
+   663   		{
+   664   			file_cnt = 0;
+   665   			if((attrib && (dma[save+9] & 0x80)) ||
+   666   			  (!(attrib) && (!(dma[save+9] & 0x80))))
+   667   				cr_lf();
+   668   			else
+   669   				needcr_lf = TRUE;
+   670   		}	
+   671    
+   672   	}		/*----------------------------------------*/
+   673   	if(exist)	/* if files exist that were not displayed */
+   674   			/* print out a message to the console	  */
+   675   	{		/*----------------------------------------*/
+   676   		cr_lf();
+   677   		if(attrib)
+   678   			bdos(PRINT_STRING,msg);
+   679   		else
+   680   			bdos(PRINT_STRING,&msg[4]);
+   681   	}
+   682   }
+   683    
+   684    
+   685    
+   686    
+1File: CCP.C                                                               Page      16
+   687    
+   688   					/************************/
+   689   VOID type_cmd()				/*   type out a file	*/
+   690   					/*   to the console 	*/
+   691   					/************************/
+   692   {
+   693   	REG 	UWORD i;
+   694    
+   695   	if(parm[1][0] == NULL)		/*prompt user for filename*/
+   696   	{
+   697   		bdos(PRINT_STRING,msg2);
+   698   		get_cmd(&parm[1][0],(long)(ARG_LEN-1));
+   699   	}
+   700   	if(too_many())
+   701   		return;
+   702   	i = find_colon();
+   703   	if(!chk_colon(i)) return;
+   704   	i = fill_fcb(1,cmdfcb);		/*fill a file control block*/
+   705   	if(i == 0 && parm[1][0] && (bdos(OPEN_FILE,cmdfcb) <= 3))
+   706   	{
+   707   		while(bdos(READ_SEQ,cmdfcb) == 0)
+   708   		{
+   709   			for(i = 0;i <= 127;i++)
+   710   				if(dma[i] != EOF)
+   711   				    bdos(CONSOLE_OUTPUT,(long)dma[i]);
+   712   				else
+   713   					break;
+   714   		}
+   715   		bdos(RESET_DRIVE,(long)cmdfcb[0]);
+   716   	} else
+   717   		if(parm[1][0])
+   718   		{
+   719   			if(i > 0)
+   720   				bdos(PRINT_STRING,msg7);
+   721   			else
+   722   				bdos(PRINT_STRING,msg6);
+   723   		}
+   724   }
+   725    
+1File: CCP.C                                                               Page      17
+   726    
+   727    
+   728   					/************************/						
+   729   VOID ren_cmd()				/*    rename a file	*/
+   730   					/************************/
+   731    
+   732   {
+   733   	BYTE    	new_fcb[FCB_LEN];
+   734   	REG UWORD	i,j,k,bad_cmd;
+   735    
+   736   	bad_cmd = FALSE;	       /*-------------------------*/	
+   737   	if(parm[1][0] == NULL)	       /*prompt user for filenames*/
+   738   	{			       /*-------------------------*/	
+   739   		bdos(PRINT_STRING,msg3);
+   740   		get_cmd(&parm[3][0],(long)(ARG_LEN-1));
+   741   		if(parm[3][0] == NULL)
+   742   			return;
+   743   		bdos(PRINT_STRING,msg4);
+   744   		get_cmd(&parm[1][0],(long)(ARG_LEN-1));
+   745   		parm[2][0] = '=';
+   746   	}			/*--------------------------------*/
+   747   	 else		        /*check for correct command syntax*/
+   748   	 {			/*--------------------------------*/
+   749   		i = 0;
+   750   		while(parm[1][i] != '=' && parm[1][i]) i++;
+   751   		if(parm[1][i] == '=')
+   752   		{
+   753   			if(!(i > 0 && parm[1][i+1] &&
+   754   			     parm[2][0] == NULL))
+   755   				bad_cmd = TRUE;
+   756   		}
+   757   		else
+   758   			if(!(parm[2][0] == '='  &&
+   759   			     parm[2][1] == NULL &&
+   760   			     parm[3][0]))
+   761   				bad_cmd = TRUE;
+   762   		if(!bad_cmd && parm[1][i] == '=')
+   763   		{
+   764   			parm[1][i] = NULL;
+   765   			i++;
+   766   			j = 0;
+   767   			while((parm[3][j++] = parm[1][i++]) != NULL);
+   768   			parm[2][0] = '=';
+   769   		}
+   770   	}
+   771   	for(j = 1;j < 4;j += 2)
+   772   	{
+   773   		k = 0;
+   774   		while(parm[j][k] != ':' && parm[j][k])
+   775   			k++;
+   776   		if(k > 1 && parm[j][k] == ':')
+   777   			bad_cmd = TRUE;
+   778   		for(i = 0;i < sizeof del;i++)
+   779   			if(parm[j][0] == del[i])
+   780   			{
+   781   				echo_cmd(&parm[j][0],BAD);
+   782   				return;
+   783   			}
+   784   	}
+1File: CCP.C                                                               Page      18
+   785   	if(!bad_cmd && parm[1][0] && parm[3][0])
+   786   	{
+   787   		i = fill_fcb(1,new_fcb);
+   788   		j = fill_fcb(3,cmdfcb);
+   789   		if(i == 0 && j == 0)
+   790   		{
+   791   			if(new_fcb[0] != cmdfcb[0])
+   792   			{
+   793   				if(parm[1][1] == ':' && parm[3][1] != ':')
+   794   					cmdfcb[0] = new_fcb[0];
+   795   				else
+   796   				if(parm[1][1] != ':' && parm[3][1] == ':')
+   797   					new_fcb[0] = cmdfcb[0];
+   798   				else
+   799   				bad_cmd = TRUE;
+   800   			}
+   801   			if(new_fcb[0] < 1 || new_fcb[0] > 16)
+   802   				bad_cmd = TRUE;
+   803   			if(!(bad_cmd) && bdos(SEARCH_FIRST,new_fcb) != 255)
+   804   				bdos(PRINT_STRING,msg5);
+   805   			else{
+   806   				k = 0;
+   807   				for(i = 16;i <= 35;i++)
+   808   					cmdfcb[i] = new_fcb[k++];
+   809   				if(cmdfcb[0] < 0 || cmdfcb[0] > 15)
+   810   					bad_cmd = TRUE;
+   811   				if(!(bad_cmd) &&
+   812   				bdos(RENAME_FILE,cmdfcb) > 0)
+   813   					bdos(PRINT_STRING,msg6);
+   814   			    }
+   815   		}
+   816   		else
+   817   		 bdos(PRINT_STRING,msg7);
+   818   	}
+   819   	if(bad_cmd)
+   820   	         bdos(PRINT_STRING,msg8);
+   821   }
+   822    
+1File: CCP.C                                                               Page      19
+   823    
+   824   					/************************/
+   825   VOID era_cmd()				/*  erase a file from	*/
+   826   					/*  the directory       */
+   827   					/************************/
+   828   {
+   829   	REG 	UWORD i;
+   830   				        /*----------------------*/
+   831   	if(parm[1][0] == NULL)		/* prompt for a file	*/
+   832   	{				/*----------------------*/
+   833   		bdos(PRINT_STRING,msg2);
+   834   		get_cmd(&parm[1][0],(long)(ARG_LEN-1));
+   835   	}
+   836   	if(parm[1][0] == NULL)
+   837   		return;
+   838   	if(too_many())
+   839   		return;
+   840   	i = find_colon();
+   841   	if(!chk_colon(i))
+   842   		return;
+   843   	else
+   844   		if(parm[1][1] == ':' && parm[1][2] == NULL)
+   845   		{
+   846   			echo_cmd(&parm[1][0],BAD);
+   847   			return;
+   848   		}
+   849   	i = fill_fcb(1,cmdfcb);		/* fill an fcb	   */
+   850   	if(i > 0 && !(submit))		/* no confirmation */
+   851   	{				/* if submit file  */
+   852   		bdos(PRINT_STRING,msg9);
+   853   		parm[2][0] = bdos(CONIN,(long)0);
+   854   		parm[2][0] = toupper(parm[2][0]);
+   855   		cr_lf();
+   856   		if(parm[2][0] != 'N' && parm[2][0] != 'Y')
+   857   			return;
+   858   	}
+   859   	if(parm[2][0] != 'N')
+   860   		if(bdos(DELETE_FILE,cmdfcb) > 0)
+   861   			bdos(PRINT_STRING,msg6);
+   862   }
+   863    
+1File: CCP.C                                                               Page      20
+   864   					/************************/
+   865   UWORD user_cmd()			/* change user number	*/
+   866   					/************************/
+   867    
+   868   {
+   869   	REG UWORD i;
+   870    
+   871   	if(parm[1][0] == NULL)		/* prompt for a number	*/
+   872   	{
+   873   		bdos(PRINT_STRING,msg10);
+   874   		get_cmd(&parm[1][0],(long)(ARG_LEN-1));
+   875   	}
+   876   	if(parm[1][0] == NULL)
+   877   		return(TRUE);
+   878   	if(too_many())
+   879   		return(TRUE);
+   880   	if(parm[1][0] < '0' || parm[1][0] > '9')
+   881   		return(FALSE);
+   882   	i = (parm[1][0] - '0');
+   883   	if(i > 9)
+   884   		return(FALSE);
+   885   	if(parm[1][1])
+   886   		i = ((i * 10) + (parm[1][1] - '0'));
+   887   	if(i < 16 && parm[1][2] == NULL)
+   888   		bdos(GET_USER_NO,(long)i);
+   889   	else
+   890   		return(FALSE);
+   891   	return(TRUE);
+   892   }
+   893    
+   894    
+1File: CCP.C                                                               Page      21
+   895   UWORD cmd_file(mode)
+   896   					/************************/
+   897   					/*			*/
+   898   					/*      SEARCH ORDER	*/
+   899   					/*	============	*/
+   900   					/*			*/
+   901   					/* 1. 68K type on the   */
+   902   					/*    current user #	*/
+   903   					/* 2. BLANK type on     */
+   904   					/*    current user #	*/
+   905   					/* 3. SUB type on the   */
+   906   					/*    current user #	*/
+   907   					/* 4. 68K type on	*/
+   908   					/*    user 0		*/
+   909   					/* 5. BLANK type on the */
+   910   					/*    user 0	        */
+   911   					/* 6. SUB type on 	*/
+   912   					/*    user 0		*/
+   913   					/*			*/
+   914   					/*----------------------*/
+   915   					/* 			*/
+   916   					/*   If a filetype is   */
+   917   					/*   specified then I   */
+   918   					/*   search the current */
+   919   					/*   user # then user 0 */
+   920   					/*			*/
+   921   					/************************/
+   922   UWORD mode;
+   923   {
+   924   	BYTE done,open,sub_open;
+   925   	BYTE found;
+   926   	REG UWORD i,n;
+   927   	UWORD (*ldrpgm) ();
+   928   	REG BYTE *top;
+   929   	REG struct _filetyps *p;
+   930    
+   931   	dirflag = FALSE;
+   932   	load_try = TRUE;
+   933   	done = FALSE;
+   934   	found = FALSE;
+   935   	sub_open = FALSE;
+   936   	open = FALSE;
+   937    
+   938   	user = bdos(GET_USER_NO,(long)255);
+   939   	cur_disk = bdos(RET_CUR_DISK,(long)0);
+   940   	if(mode == SEARCH) i = 0; else i = 1;
+   941   	i = fill_fcb(i,cmdfcb);
+   942   	if(i > 0)
+   943   	{
+   944   		bdos(PRINT_STRING,msg7);
+   945   		return(FALSE);
+   946   	}
+   947   	p = &load_tbl;
+   948   	top = p->typ;
+   949   	if(cmdfcb[9] == ' ')
+   950   	{
+   951   	   while(*(p->typ)) /* clear flags in table */
+   952   	   {
+   953   		p->user_c = p->user_0 = FALSE;
+1File: CCP.C                                                               Page      22
+   954   		p++;
+   955   	   }
+   956   	   bdos(SELECT_DISK,(long)(cmdfcb[0]-1));
+   957   	   cmdfcb[0] = '?'; cmdfcb[12] = NULL;
+   958   	   i = bdos(SEARCH_FIRST,cmdfcb);
+   959   	   while(i != 255 && !(done))
+   960   	   {
+   961   	   	i *= 32;
+   962   		if(dma[i] == 0 || dma[i] == user)
+   963   		{
+   964   		   for(n = 9;n <= 11;n++) dma[i+n] &= CMASK;
+   965   		   dma[i+12] = NULL;
+   966   		   p = &load_tbl;
+   967   		   while(*(p->typ))
+   968   		   {
+   969   		      cpy(p->typ,&cmdfcb[9]);
+   970   		      if(strcmp(&cmdfcb[1],&dma[i+1]) == MATCH)
+   971   		      {
+   972   		         found = TRUE;
+   973   			 if(dma[i] == user) p->user_c = TRUE;
+   974   			 else		   p->user_0 = TRUE;
+   975   			 if(mode == SEARCH &&
+   976   			   strcmp(p->typ,top) == MATCH && p->user_c)
+   977   				done = TRUE;
+   978   		      }
+   979   		      p++;
+   980   		   }
+   981   		}
+   982   		i = bdos(SEARCH_NEXT);
+   983   	   }
+   984   	   if(!(found))
+   985   	   {
+   986   		if(mode == SUB_FILE) bdos(PRINT_STRING,msg11);
+   987   		dirflag = TRUE; load_try = FALSE;
+   988   		bdos(SELECT_DISK,(long)cur_disk); return(FALSE);
+   989   	   }
+   990   	   if(mode == SEARCH)
+   991   		fill_fcb(0,cmdfcb);
+   992   	   else
+   993   		fill_fcb(1,cmdfcb);
+   994   	   p = &load_tbl;
+   995   	   while(*(p->typ))
+   996   	   {
+   997   		if(p->user_c || p->user_0)
+   998   		{
+   999   		   if(mode == SEARCH) break;
+  1000   		   if(strcmp(p->typ,"SUB") == MATCH) break;
+  1001   		}
+  1002   		p++;
+  1003   	   }
+  1004   	   if(*(p->typ))
+  1005   	   {
+  1006   	   	if(!(p->user_c)) bdos(GET_USER_NO,(long)0);
+  1007   	   	cpy(p->typ,&cmdfcb[9]);
+  1008   	   }
+  1009   	}
+  1010   	bdos(SELECT_DISK,(long)cur_disk);
+  1011   	while(1)
+  1012   	{
+1File: CCP.C                                                               Page      23
+  1013   	   if(bdos(OPEN_FILE,cmdfcb) <= 3)
+  1014   	   {
+  1015   		for(n = 9;n <= 11;n++) cmdfcb[n] &= CMASK;
+  1016   		if(cmdfcb[9] == 'S' && cmdfcb[10] == 'U' && cmdfcb[11] == 'B')
+  1017   		{
+  1018   		   sub_open = TRUE;
+  1019   		   sub_user = bdos(GET_USER_NO,(long)255);
+  1020   		   if(submit) chain_sub = TRUE;
+  1021   		   else	      first_sub = TRUE;
+  1022   		   for(i = 0;i < FCB_LEN;i++)
+  1023   			subfcb[i] = cmdfcb[i];
+  1024   		   if(mode == SEARCH) subprompt = FALSE;
+  1025   		   submit = TRUE;
+  1026   		   end_of_file = FALSE;
+  1027   		}
+  1028   		else if(mode != SUB_FILE)
+  1029   		   open = TRUE;
+  1030   		break;
+  1031   	   }
+  1032   	   else if(bdos(GET_USER_NO,(long)255) == 0) break;
+  1033   	        else bdos(GET_USER_NO,(long)0);
+  1034   	}
+  1035   	if(open)
+  1036   	{
+  1037   	   check_cmd(glb_index);
+  1038   	   if(!(found))
+  1039   	   {
+  1040   		p = &load_tbl;
+  1041   		while(*(p->typ))
+  1042   		   if(strcmp(p->typ,&cmdfcb[9]) == MATCH) break;
+  1043   		   else p++;
+  1044   	   }
+  1045   	   if(*(p->typ))
+  1046   		ldrpgm = p->loader;
+  1047   	   else
+  1048   		ldrpgm = load68k;  /* default */
+  1049    
+  1050   	   /* ATTEMPT THE PROGRAM LOAD */
+  1051    
+  1052   	   switch( (*ldrpgm) (glb_index) )
+  1053   	   {
+  1054   		case 1:	bdos(PRINT_STRING,lderr1); break;
+  1055   		case 2: bdos(PRINT_STRING,lderr2); break;
+  1056   		case 3: bdos(PRINT_STRING,lderr3); break;
+  1057   	     default  : bdos(PRINT_STRING,lderror);
+  1058   	   }
+  1059   	}
+  1060   	if(!(sub_open) && mode == SUB_FILE)
+  1061   	   bdos(PRINT_STRING,msg11);
+  1062   	bdos(GET_USER_NO,(long)user);
+  1063   	dirflag = TRUE;
+  1064   	load_try = FALSE;
+  1065   	morecmds = FALSE;
+  1066   	return((sub_open || open));
+  1067   }
+  1068    
+1File: CCP.C                                                               Page      24
+  1069   					/************************/
+  1070   UWORD sub_read()			/* Read the submit file */
+  1071   {					/************************/
+  1072   	if(bdos(READ_SEQ,subfcb))
+  1073   	{
+  1074   		end_of_file = TRUE;
+  1075   		return(FALSE);
+  1076   	}
+  1077   	return(TRUE);
+  1078   }
+  1079    
+1File: CCP.C                                                               Page      25
+  1080   					/************************/	
+  1081   UWORD dollar(k,mode,com_index)		/*    Translate $n to   */
+  1082   					/*  nth argument on the */
+  1083   					/*  command line	*/
+  1084   					/************************/
+  1085   REG UWORD k;
+  1086   REG UWORD mode;				
+  1087   REG BYTE *com_index;			
+  1088   {
+  1089   	REG UWORD n,j,p_index;
+  1090   	REG BYTE *p1;
+  1091    
+  1092   	j = sub_index;
+  1093   	if(k >= CMD_LEN)
+  1094   	{
+  1095   		k = 0;
+  1096   		if(!sub_read())
+  1097   			return(k);
+  1098   	}
+  1099   	if((subdma[k] >= '0') && (subdma[k] <= '9'))
+  1100   	{
+  1101   		p_index = (subdma[k] - '0');
+  1102   		p1 = com_index;
+  1103   		if(*p1++ == 'S' &&
+  1104   		   *p1++ == 'U' &&
+  1105   		   *p1++ == 'B' &&
+  1106   		   *p1++ == 'M' &&
+  1107   	  	   *p1++ == 'I' &&
+  1108   		   *p1++ == 'T' &&
+  1109   		   *p1   == ' ')
+  1110   			p_index++;
+  1111   		p1 = com_index;
+  1112   		for(n = 1; n <= p_index; n++)
+  1113   		{
+  1114   			while(*p1 != ' ' && *p1)
+  1115   				p1++;
+  1116   			if(*p1 == ' ')
+  1117   				p1++;
+  1118   		}
+  1119   		while(*p1 != ' ' && *p1 && j < CMD_LEN)
+  1120   			if(mode == FILL)
+  1121   				subcom[j++] = *p1++;
+  1122   			else
+  1123   				bdos(CONSOLE_OUTPUT,(long)*p1++);
+  1124   		k++;
+  1125   	}
+  1126   	else
+  1127   	{
+  1128   		if(mode == FILL)
+  1129   			subcom[j++] = '$';
+  1130   		else
+  1131   			bdos(CONSOLE_OUTPUT,(long)'$');
+  1132   		if(subdma[k] == '$')
+  1133   			k++;
+  1134   	}
+  1135   	sub_index = j;
+  1136   	if(k >= CMD_LEN)
+  1137   	{
+  1138   		k = 0;
+1File: CCP.C                                                               Page      26
+  1139   		sub_read();
+  1140   	}
+  1141   	return(k);
+  1142   }
+  1143   					/************************/
+  1144   UWORD comments(k,com_index)		/* Strip and echo submit*/
+  1145   					/* file comments	*/
+  1146   					/************************/
+  1147   REG UWORD k;
+  1148   REG BYTE *com_index;
+  1149   {
+  1150   	REG UWORD done;
+  1151    
+  1152   	done = FALSE;
+  1153   	prompt();
+  1154   	do
+  1155   	{
+  1156   		while(k < CMD_LEN     &&
+  1157   		     subdma[k] != EOF &&
+  1158   		     subdma[k] != Cr)
+  1159   		{
+  1160   			if(subdma[k] == '$')
+  1161   			{
+  1162   				k++;
+  1163   				k = dollar(k,NOFILL,com_index);
+  1164   			}
+  1165   			else
+  1166   				bdos(CONSOLE_OUTPUT,(long)subdma[k++]);
+  1167   		}
+  1168   		if(k == CMD_LEN && subdma[k] != EOF && subdma[k] != Cr)
+  1169   		{
+  1170   			k = 0;
+  1171   			if(!sub_read()) done = TRUE;
+  1172   		}
+  1173   		else
+  1174   		{
+  1175   			if(subdma[k] == Cr)
+  1176   			{
+  1177   				k += 2;
+  1178   				if(k >= CMD_LEN)
+  1179   				{
+  1180   					k = 0;
+  1181   					sub_read();
+  1182   				}
+  1183   			}
+  1184   			else
+  1185   				end_of_file = TRUE;
+  1186   			done = TRUE;
+  1187   		}
+  1188   	}while(!(done));
+  1189   	return(k);
+  1190   }
+  1191    
+1File: CCP.C                                                               Page      27
+  1192   					/************************/
+  1193   VOID translate(com_index)		/* TRANSLATE the subfile*/
+  1194   					/* and fill sub buffer. */
+  1195   					/************************/
+  1196   REG BYTE *com_index;
+  1197   {
+  1198   	REG BYTE *p1;
+  1199   	REG UWORD j,n,k,p_index;
+  1200    
+  1201   	j = 0;
+  1202   	k = sub_index;
+  1203   	while(!(end_of_file) && j < CMD_LEN
+  1204   		&& subdma[k] != Cr && subdma[k] != EXLIMPT)
+  1205   	{
+  1206   		switch(subdma[k])
+  1207   		{
+  1208   			case ';': k = comments(k,com_index);
+  1209   				  break;
+  1210   			case TAB:
+  1211   			case ' ': if(j > 0)
+  1212   				  	subcom[j++] = subdma[k++];
+  1213   	blankout:		  while(k < CMD_LEN &&
+  1214   				       (subdma[k] == ' ' || subdma[k] == TAB))
+  1215   						k++;
+  1216   				  if(k >= CMD_LEN)
+  1217   				  {
+  1218   					k = 0;
+  1219   					if(!sub_read());
+  1220   					else
+  1221   						goto blankout;		
+  1222   				  }
+  1223   				  break;
+  1224   			case '$': k++;
+  1225   				  sub_index = j;
+  1226   				  k = dollar(k,FILL,com_index);
+  1227   				  j = sub_index;
+  1228   				  break;
+  1229   			case Lf:  k++;
+  1230   				  if(k >= CMD_LEN)
+  1231   				  {
+  1232   					k = 0;
+  1233   					sub_read();
+  1234   			          }			
+  1235   				  break;
+  1236   			case EOF:
+  1237   				  end_of_file = TRUE;
+  1238   				  break;
+  1239                            default: subcom[j++] = subdma[k++];
+  1240   				  if(k >= CMD_LEN)
+  1241   				  {
+  1242   					k = 0;
+  1243   					sub_read();
+  1244   			          }
+  1245   		}
+  1246   	}
+  1247   	/*------------------------------------------------------------------*/
+  1248   	/*	       TRANSLATION OF A COMMAND IS COMPLETE		    */
+  1249   	/*	       -Now move sub_index to next command-          	    */
+  1250           /*------------------------------------------------------------------*/
+1File: CCP.C                                                               Page      28
+  1251    
+  1252   	if(subdma[k] == Cr || subdma[k] == EXLIMPT)
+  1253   	do
+  1254   	{
+  1255   		while(k < CMD_LEN &&
+  1256   		     (subdma[k] == Cr ||
+  1257   		      subdma[k] == Lf ||
+  1258   		      subdma[k] == EXLIMPT))
+  1259   				k++;	
+  1260   		if(k == CMD_LEN)
+  1261   		{
+  1262   			k = 0;
+  1263   			if(!sub_read())
+  1264   				break;
+  1265   		}
+  1266   		else
+  1267   		{
+  1268   			if(subdma[k] == EOF)
+  1269   				end_of_file = TRUE;
+  1270   			break;
+  1271   		}
+  1272   	}while(TRUE);
+  1273   	sub_index = k;
+  1274   }
+  1275    
+1File: CCP.C                                                               Page      29
+  1276   					/************************/
+  1277   UWORD submit_cmd(com_index)		/* fill up the subcom   */
+  1278   					/*      buffer 		*/
+  1279   					/************************/
+  1280   /*--------------------------------------------------------------*\
+  1281    |								|
+  1282    |	Submit_Cmd is a Procedure that returns exactly		|
+  1283    |	one command from the submit file.  Submit_Cmd is	|
+  1284    |	called only when the end of file marker has not 	|
+  1285    |	been read yet.  Upon leaving submit_cmd,the variable    |
+  1286    |	sub_index points to the beginning of the next command   |
+  1287    |	to translate and execute.  The buffer subdma is used    |
+  1288    |      to hold the UN-translated submit file contents.  	|
+  1289    |	The buffer subcom holds a translated command.		|
+  1290    |	Comments are echoed to the screen by the procedure      |
+  1291    |	"comments".  Parameters are substituted in comments     |
+  1292    |      as well as command lines.				|
+  1293    |								|
+  1294   \*--------------------------------------------------------------*/
+  1295    
+  1296   REG BYTE *com_index;
+  1297   {
+  1298   	REG UWORD i,cur_user;
+  1299    
+  1300   	for(i = 0;i <= CMD_LEN;i++)
+  1301   		subcom[i] = NULL;
+  1302   	cur_user = bdos(GET_USER_NO,(long)255);
+  1303   	bdos(GET_USER_NO,(long)sub_user);
+  1304   	bdos(SET_DMA_ADDR,subdma);
+  1305   	if(first_sub || chain_sub)
+  1306   	{
+  1307   		for(i = 0;i < CMD_LEN;i++)
+  1308   			subdma[i] = NULL;
+  1309   		sub_read();
+  1310   		sub_index = 0;
+  1311   	}
+  1312   	if(!(end_of_file))
+  1313   		translate(com_index);
+  1314   	for(i = 0;i < CMD_LEN;i++)
+  1315   		subcom[i] = toupper(subcom[i]);
+  1316   	bdos(SET_DMA_ADDR,dma);
+  1317   	bdos(GET_USER_NO,(long)cur_user);
+  1318   }
+  1319    
+1File: CCP.C                                                               Page      30
+  1320   					/************************/	
+  1321   VOID execute_cmd(cmd)			/*    branch to		*/
+  1322   		 			/* appropriate routine	*/
+  1323   					/************************/
+  1324    
+  1325   REG BYTE *cmd;
+  1326   {
+  1327   	REG UWORD i,flag;
+  1328    
+  1329   	switch( decode(cmd) )
+  1330   	{
+  1331   		case  DIRCMD:	dir_cmd(0);
+  1332   				break;
+  1333   		case DIRSCMD:	dir_cmd(1);
+  1334   				break;
+  1335   		case TYPECMD:	type_cmd();
+  1336   				break;
+  1337   		case  RENCMD:	ren_cmd();
+  1338   				break;
+  1339   		case  ERACMD:	era_cmd();
+  1340   				break;
+  1341   		case    UCMD:	if(!(user_cmd()))
+  1342   					bdos(PRINT_STRING,msg12);
+  1343   				break;
+  1344   		case CH_DISK:   bdos(SELECT_DISK,(long)(parm[0][0]-'A'));
+  1345   				break;
+  1346   		case  SUBCMD:   flag = SUB_FILE;
+  1347   				if(parm[1][0] == NULL)
+  1348   				{
+  1349   					bdos(PRINT_STRING,msg2);
+  1350   					get_cmd(subdma,(long)(CMD_LEN-1));
+  1351   					i = 0;
+  1352   					while(subdma[i] != ' ' &&
+  1353   					      subdma[i] &&
+  1354   					      i < ARG_LEN-1 )
+  1355   						parm[1][i] = subdma[i++];
+  1356   					parm[1][i] = NULL;
+  1357   					if(i != 0) subprompt = TRUE;
+  1358   					else break;
+  1359   				}
+  1360   				else
+  1361   					subprompt = FALSE;
+  1362   				goto gosub;
+  1363   		case    FILE:   flag = SEARCH;
+  1364   gosub:				if(cmd_file(flag))
+  1365   					break;
+  1366   				if(flag == SUB_FILE)
+  1367   					break;
+  1368   		default	    :	echo_cmd(parm,BAD);
+  1369   	}
+  1370   }
+  1371    
+1File: CCP.C                                                               Page      31
+  1372    
+  1373    
+  1374    
+  1375    
+  1376   main()
+  1377   {					 /*---------------------*/
+  1378   	REG BYTE *com_index;		 /* cmd execution ptr   */ 	
+  1379   					 /*---------------------*/
+  1380   	dirflag = TRUE;		         /* init fcb fill flag  */
+  1381   	bdos(SET_DMA_ADDR,dma);          /* set system dma addr */
+  1382   					 /*---------------------*/
+  1383   	if(load_try)
+  1384   	{
+  1385   		bdos(SELECT_DISK,(long)cur_disk);
+  1386   		bdos(GET_USER_NO,(long)user);
+  1387   		load_try = FALSE;
+  1388   	}
+  1389   					 /*---------------------*/
+  1390   	if(morecmds)			 /* if a warmboot 	*/
+  1391   	{				 /* occured & there were*/
+  1392   					 /* more cmds to do	*/
+  1393   		if(submit)		 /*---------------------*/
+  1394   		{
+  1395   			com_index = subcom;
+  1396   			submit_cmd(save_sub);
+  1397   			while(!*com_index)
+  1398   			{
+  1399   				if(end_of_file)
+  1400   				{
+  1401   				   com_index = user_ptr;
+  1402   				   submit = FALSE;
+  1403   				   break;
+  1404   				}
+  1405   				else submit_cmd(save_sub);
+  1406   			}
+  1407   		}
+  1408   		else
+  1409   			com_index = user_ptr;
+  1410   		morecmds = FALSE;
+  1411   		if(*com_index)
+  1412   			echo_cmd(com_index,GOOD);
+  1413   	}
+  1414   	else
+  1415   	{				/*----------------------*/
+  1416                  prompt();		/* prompt for command   */
+  1417   	       com_index = usercmd;	/* set execution pointer*/
+  1418   	       if(autost && autorom)	/* check for COLDBOOT cm*/
+  1419   	       {			/*			*/
+  1420   		echo_cmd(usercmd,GOOD); /* echo the command     */
+  1421   		autorom = FALSE;	/* turn off .bss flag   */
+  1422   	       }			/*			*/
+  1423   	       else			/* otherwise.......	*/
+  1424   		get_cmd(usercmd,(long)(CMD_LEN));/*read a cmd   */
+  1425   	}				/************************/
+  1426    
+  1427   /*--------------------------------------------------------------*\
+  1428    |								|
+  1429    |		       MAIN CCP PARSE LOOP			|
+  1430    |		       ===================			|
+1File: CCP.C                                                               Page      32
+  1431    |								|
+  1432   \*--------------------------------------------------------------*/
+  1433   			
+  1434    
+  1435   	while(*com_index)
+  1436   	{				  /*--------------------*/
+  1437   		glb_index = com_index;	  /* save for use in    */
+  1438   					  /* check_cmd call	*/
+  1439   		get_parms(com_index);	  /* parse command line */
+  1440   		if(parm[0][0] && parm[0][0] != ';')/*-----------*/
+  1441   		execute_cmd(parm); 	  /* execute command    */
+  1442   					  /*--------------------*/
+  1443   		if(!(submit))
+  1444   		com_index = scan_cmd(com_index);/* inc pointer  */
+  1445   		else					
+  1446   		{
+  1447   			com_index = subcom;
+  1448   			if(first_sub || chain_sub)
+  1449   			{
+  1450   				if(subprompt)
+  1451   					copy_cmd(subdma);
+  1452   				else
+  1453   					copy_cmd(glb_index);
+  1454   				if(first_sub)
+  1455   					user_ptr = scan_cmd(glb_index);
+  1456   				submit_cmd(save_sub);
+  1457   				first_sub = chain_sub = FALSE;
+  1458   			}
+  1459   			else
+  1460   				*com_index = NULL;
+  1461   			while(*com_index == NULL)
+  1462   			{
+  1463   				if(end_of_file)
+  1464   				{
+  1465   					com_index = user_ptr;
+  1466   					submit = FALSE;
+  1467   					break;
+  1468   				}
+  1469   				else
+  1470   					submit_cmd(save_sub);
+  1471   			}
+  1472   		}
+  1473   		if(*com_index)		
+  1474   			echo_cmd(com_index,GOOD);
+  1475   	}
+  1476   }

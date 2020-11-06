@@ -1,0 +1,282 @@
+
+;*****************************************************
+;*
+;*	MEM Entry Points
+;*
+;*	Each process descriptor points to a linked
+;*	list of MDs that describe memory segments that  
+;*	it owns.  The MDs note the starting paragraph
+;*	and a MAU that the Memory Segment is in.
+;*
+;*	Format of MDs on p_mem lists:
+;*
+;*	+----+----+----+----+----+----+----+----+
+;*	|  link   |  start  |  flags  |   mau   |
+;*	+----+----+----+----+----+----+----+----+
+;*
+;*	link	link field for p_mem list
+;*	start	starting paragraph of memory segment
+;*	flags	load,code,and share as in MPB
+;*	mau	offset of MAU in SYSDAT that segment is
+;*		allocated from
+;*
+;*****************************************************
+
+;============
+malloc_entry:
+;============
+; Allocate Memory - memory is allocated from MAUs.
+; First we try to allocate memory from MAUs that has
+; memory segments already allocated by this process.
+; If that fails, we try to create a new MAU from the
+; Memory Free List (MFL).  If both fails, an error is
+; is returned to the user.
+;
+; (Future - if MPB flags indicate load shared code,
+; we try to allocate from MAU's used by another process
+; of the same name and from the same load file.)
+;
+;	input:	DX = MPB in u_wrkseg
+;	output:	BX = 0 if successful (unused memory)
+;		   = 1 if successful (shared code)
+;		   = 0ffffh if failure
+;		CX = error code
+;
+; Format of MPB:
+;
+;	+----+----+----+----+----+----+----+----+----+----+
+;	|  start  |   min   |   max   |  pdadr  |  flags  |
+;	+----+----+----+----+----+----+----+----+----+----+
+;
+;	start - if non-zero, an absolute request
+;	min -	minimum length that will satisfy the request
+;	max -	maximum length wanted
+;		We will try to allocate the maximum
+;		but will be satisfied with as little as the
+;		minimum.
+;	pdadr - Process Descriptor to allocate memory to.
+;		Note - PD can not be a current process unless
+;		it is the calling process.
+;		The Calling process must explicitly release
+;		the memory if the PD never becomes a process.
+;		Otherwise, memory is released upon termination.
+;		If pdadr is 0, then calling process allocates
+;		the memory.
+;	flags - 00001h Load	This segment initialized from
+;				a disk file
+;		00002h Shared	This is a sharable segment
+;		00004h Code	This is a Code segment
+
+		; Get a MD for use in the p_mem list
+
+					; DX -> MPB (u_wrkseg)
+	push dx ! call getmd ! pop dx	; BX -> MD
+	jcxz mall_gmd
+	    mov bx,0ffffh ! ret
+mall_gmd:
+		; fill PDADR field in case its zero
+
+	push es ! mov es,u_wrkseg
+	mov di,dx ! mov ax,es:mpb_pdadr[di]
+	cmp ax,0 ! jne mall_gpd
+	    mov ax,rlr
+	    mov es:mpb_pdadr[di],ax
+mall_gpd:
+	pop es
+	cmp ax,rlr ! je mall_pdver
+	    mov si,(offset thrdrt)-p_thread
+mall_pdnxt: mov si,p_thread[si]
+	    cmp si,0 ! je mall_pdver
+		cmp si,ax ! jne mall_pdnxt
+		    cmp si,rlr ! je mall_pdver
+			mov bx,0ffffh
+			mov cx,e_active_pd
+			ret
+mall_pdver:
+		; try to allocate memory
+
+	mov si,ax ! add si,(p_mem - ms_link)
+	mov cx,0				;CX=last MAU we've tried
+  mall_next:
+	mov si,ms_link[si]
+	cmp si,0 ! je mall_ml
+	    cmp cx,ms_mau[si] ! je mall_next
+			; here's a MAU we haven't tried...
+			; CX=last MAU tried
+			; DX=MPB adr in u_wrkseg
+			; BX=New MD
+			; SI=current MD
+		push cx ! push dx ! push bx ! push si
+		mov bx,ms_mau[si]
+		push bx ! call mall_try_mau ! pop di
+		pop si ! pop bx ! pop dx
+			; Plus DI=MAU address
+		cmp cx,0 ! pop cx ! jne mall_next
+			; succesful allocation
+		    jmp mall_linkit
+mall_ml:		; We must create a new MAU from MFL
+	push bx ! push dx
+	mov ds,u_wrkseg
+	mov bx,offset mfl ! mov cx,f_mlalloc
+	call mpmif
+	mov ds,sysdat
+		;BX=MAU, (New MD,MPB on stack)
+	jcxz mall_ml0
+	    pop dx ! pop bx ! jmp mall_err
+mall_ml0:		; We have a new MAU
+		;place MAU on MAL
+	mov si,mal
+	mov m_link[bx],si
+	mov mal,bx
+		;allocate memory
+	pop dx ! push dx
+	push bx ! call mall_try_mau ! pop di
+	pop dx ! pop bx
+		;DI=MAU, BX=New MD, DX=MPB in u_wrkseg
+	cmp cx,0 ! jne mall_err
+			; Successful allocation
+	    mov si,0
+	    jmps mall_linkit
+mall_err:		; No memory available
+	call freemd	; Free the Memory Descriptor
+	mov bx,0ffffh ! ret	; CX=Error Code set previously
+mall_linkit:
+		;SI = MD addr which MAU came from
+		;	if zero, from new MAU
+		;BX -> MD
+		;DX -> MPB in u_wrkseg
+		;DI -> MAU
+	push es ! mov es,u_wrkseg
+	push di ! mov di,dx
+	mov ax,es:mpb_start[di]
+	mov ms_start[bx],ax
+	mov ax,es:mpb_min[di]
+	mov ms_length[bx],ax
+	mov ax,es:mpb_flags[di]
+	mov ms_flags[bx],ax
+	cmp si,0 ! jne mall_l0
+	    mov si,es:mpb_pdadr[di]
+	    add si,(p_mem-ms_link)
+mall_l0:mov ax,ms_link[si] ! mov ms_link[bx],ax
+	mov ms_link[si],bx
+	pop di ! mov ms_mau[bx],di
+	pop es ! sub cx,cx ! mov bx,cx ! ret
+
+mall_try_mau:
+;------------
+;	input:	BX -> MAU
+;		DX -> MPB in u_wrkseg
+;	output:	CX = Error Code
+
+	mov ds,u_wrkseg
+	mov cx,f_maualloc ! call mpmif
+	mov ds,sysdat ! ret
+
+;===========
+mfree_entry:		; 130 - Memory Free
+;===========
+; Free the memory segment with the given segment addr.
+;	input:	DX = MFPB in u_wrkseg
+;	output:	BX = 0 if successful
+;		   = 0ffffh on failure
+;		CX = error code
+;
+; Memory Free Parameter Block (MFPB)
+;
+;	+----+----+----+----+
+;	|  start  |  pdadr  |
+;	+----+----+----+----+
+;
+;	start - starting paragraph of area to be freed.
+;	pdadr - PD to free memory from.  If 0, then calling
+;		process.  If non-zero, the PD must not be
+;		a current process.
+
+	push es ! mov es,u_wrkseg
+	mov si,dx
+	mov bx,es:mfpb_pd[si]
+	mov dx,es:mfpb_start[si]
+	pop es
+			; BX = pdadr
+			; DX = start paragraph
+	cmp bx,0 ! jne mfree_chkpd
+	    mov bx,rlr
+	    jmps mfree_gotpd
+mfree_chkpd:
+	mov si,(offset thrdrt)-p_thread
+mfree_nxtpd:
+	mov si,p_link[si]
+	cmp si,0 ! je mfree_gotpd
+	    cmp si,bx ! jne mfree_nxtpd
+		cmp si,rlr ! je mfree_gotpd
+		    mov bx,0ffffh
+		    mov cx,e_active_pd
+		    ret		
+mfree_gotpd:
+	lea si,p_mem[bx]
+mfree_next:
+	mov bx,si ! mov si,ms_link[bx]
+	cmp si,0 ! je mfree_err
+	    cmp ms_start[si],dx ! je mfree_it
+		ja mfree_next
+		    mov ax,ms_start[si]
+		    add ax,ms_length[si]
+		    cmp ax,dx ! jbe mfree_next
+			push dx ! push si
+			call mfree_it
+			pop si ! pop dx
+			cmp cx,0 ! jne mfree_next
+mfree_exit:
+	sub bx,bx ! mov cx,bx ! ret
+mfree_err:
+	mov bx,0ffffh ! mov cx,e_no_memory
+	ret
+
+mfree_it:
+;--------
+;	input:	BX = root
+;		SI = MD ([bx])
+;		DX = segment to free
+;	output: BX = 0,0ffffh (success,failure)
+;		CX = Error Code
+
+	push bx ! push si ! push dx
+		;push MAF structure
+	push dx ! push ms_start[si]
+	push ms_mau[si]
+	mov dx,sp ! push ss ! pop ds
+	mov cx,f_maufree ! call mpmif
+	mov bp,bx			;if bp=0,MAU not empty
+	mov ds,sysdat
+		;pop MAF structure
+	pop ax ! pop ax ! pop ax
+	pop dx ! pop si ! pop bx	
+		;DX=segment to free
+		;BX=root
+		;SI=MD ( [BX] )
+	cmp cx,0 ! jne mfree_r
+	    cmp dx,ms_start[si] ! je mfree_off
+			;decrease length
+		sub dx,ms_start[si]
+		mov ms_length[si],dx
+mfree_r:	ret
+			;take off p_mem list
+mfree_off:  mov ax,ms_link[si] ! mov ms_link[bx],ax
+			;free MD
+	    push ms_mau[si] ! push bp
+	    mov bx,si ! call freemd
+	    pop bp ! pop dx
+			;free MAU if empty
+	    cmp bp,0 ! je mfree_exit
+				;find it on MAL
+		mov di,(offset mal)-m_link
+mfree_nmal:	mov si,di ! mov di,m_link[si]
+		cmp di,0 ! je mfree_r
+		    cmp di,dx ! jne mfree_nmal
+				;release from MAL
+			mov ax,m_link[di] ! mov m_link[si],ax
+			mov m_link[di],0
+				;release to MFL
+			mov bx,offset mfl ! mov cx,f_mlfree
+			jmp mpmif
+

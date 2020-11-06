@@ -1,0 +1,173 @@
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   1
+Source File: bdosif.s
+
+   1                               
+   2                               *****************************************************************
+   3                               *                                                               *
+   4                               *       CP/M-68K Basic Disk Operating System interface module   *
+   5                               *               For "C" version of CP/M-68K                     *
+   6                               *                                                               *
+   7                               *       Copyright (c) 1982 Digital Research, Inc.               *
+   8                               *                                                               *
+   9                               *       Version 0.2 -- September 22, 1982                       *
+  10                               *                                                               *
+  11                               *****************************************************************
+  12                               
+  13                               *  Declare Public Routines
+  14                               
+  15                                       .globl  _bios1          * 6 BIOS entry points from BDOS
+  16                                       .globl  _bios2
+  17                                       .globl  _bios3
+  18                                       .globl  _bios4
+  19                                       .globl  _bios5
+  20                                       .globl  _bios6
+  21                                       .globl  _traphnd        * trap #2 handler
+  22                                       .globl  _swap           * byte swapper
+  23                                       .globl  _udiv           * unsigned divide routine
+  24                               
+  25                               * Declare external routines
+  26                                       .globl  __bdos          * BDOS entry point in bdosmain
+  27                               
+  28                               * The following external references were put in just to make sure that all
+  29                               *       the BDOS modules were referenced, so we could put them in a library
+  30                                       .globl  _constat        * references conbdos.o
+  31                                       .globl  _dirscan        * references dskutil.o
+  32                                       .globl  _create         * references fileio.o
+  33                                       .globl  _bdosrw         * references bdosrw.o
+  34                               
+  35                                       biosf   = 50
+  36                                       setsupf = 62
+  37                               
+  38                               _traphnd:
+  39                               *
+  40                               *       first save the registers and
+  41                               *       check for functions handled by assembly language routines
+  42                               *
+  43 00000000 0C40003E                     cmpi    #setsupf,d0
+  44 00000004 672C                         beq     setsup
+  45 00000006 48E77FFE                     movem.l d1-d7/a0-a6,-(sp)
+  46 0000000A 0C400032                     cmpi    #biosf,d0
+  47 0000000E 6716                         beq     bioscall
+  48                               *
+  49                               *       function number is passed in D0
+  50                               *       byte and word pararmeters are passed in D1.W
+  51                               *       address parameters are passed in D1.L
+  52                               *
+  53 00000010 2F01                         move.l  d1,-(a7)
+  54 00000012 3F01                         move.w  d1,-(a7)
+  55 00000014 3F00                         move.w  d0,-(a7)
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   2
+Source File: bdosif.s
+
+  56 00000016 4EB900000000                 jsr     __bdos                  * call BDOS
+  57                               *
+  58                               *       now restore the regs
+  59                               *
+  60 0000001C 48C0                         ext.l   d0
+  61 0000001E 504F                         addq    #8,sp                   * fix up the stack
+  62                               bdone:
+  63 00000020 4CDF7FFE                     movem.l (sp)+,a0-a6/d1-d7
+  64 00000024 4E73                         rte                             * return from trap call
+  65                               
+  66                               *
+  67                               * direct BIOS call function
+  68                               *
+  69                               bioscall:
+  70 00000026 2041                         move.l  d1,a0           * get address of CPB
+  71 00000028 3018                         move.w  (a0)+,d0
+  72 0000002A 4CD80006                     movem.l (a0)+,d1-d2
+  73 0000002E 4E43                         trap    #3
+  74 00000030 60EE                         bra     bdone
+  75                               
+  76                               *
+  77                               * Set supervisor mode procedure
+  78                               *
+  79                               setsup:
+  80 00000032 00572000                     ori     #$2000,(sp)     * turn on supervisor bit in SR
+  81 00000036 4E73                         rte
+  82                               
+  83                               *
+  84                               * BIOS Interface Routines
+  85                               *
+  86                               *
+  87                               *  Note - there are 6 BIOS entry points from the BDOS, labelled BIOS1 -
+  88                               *    BIOS6, depending on the parameters passed.
+  89                               
+  90                               _bios5:
+  91                               * For BIOS functions sectran and set exception vector
+  92                               * Has function number and 2 parameters, a word followed by a long word
+  93 00000038 242F0008                     move.l  8(sp),d2        * get 2nd parameter (long word)
+  94 0000003C 600C                         bra     _bios2          * join common routine
+  95                               
+  96                               _bios4:
+  97                               * For BIOS function seldsk
+  98                               * Has function number followed by 2 word parameters
+  99 0000003E 342F0008                     move.w  8(sp),d2        * get 2nd parameter (word)
+ 100 00000042 6006                         bra     _bios2          * join common routine
+ 101                               
+ 102                               _bios3:
+ 103                               * For BIOS function set dma
+ 104                               * Has function number followed by 1 long parameter
+ 105 00000044 222F0006                     move.l  6(sp),d1        * get long word parameter
+ 106 00000048 6004                         bra     _bios1          * join common routine
+ 107                               
+ 108                               _bios2:
+ 109                               * For all BIOS functions with a word parameter
+ 110                               * Word parameter follows function number
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   3
+Source File: bdosif.s
+
+ 111 0000004A 322F0006                     move.w  6(sp),d1        * get 1st parameter (word)
+ 112                               
+ 113                               _bios6:
+ 114                               _bios1:
+ 115                               * For all BIOS functions that have no parameter other than function number
+ 116 0000004E 302F0004                     move.w  4(sp),d0        * get function number
+ 117 00000052 48E71F1E                     movem.l d3-d7/a3-a6,-(sp)
+ 118                               *                               * save C register variables
+ 119 00000056 4E43                         trap    #3              * do BIOS call
+ 120                               *                               * returns value in d0
+ 121 00000058 4CDF78F8                     movem.l (sp)+,d3-d7/a3-a6
+ 122 0000005C 4E75                         rts
+ 123                               
+ 124                               *
+ 125                               *  Utility Subroutines
+ 126                               *
+ 127                               
+ 128                               _swap:
+ 129                               * Swap bytes of a word, return swapped value in d0                      
+ 130 0000005E 102F0005                     move.b  5(sp),d0
+ 131 00000062 E148                         lsl     #8,d0
+ 132 00000064 102F0004                     move.b  4(sp),d0
+ 133 00000068 4E75                         rts
+ 134                               
+ 135                               _udiv:
+ 136                               * Unsigned divide routine
+ 137                               * returns unsigned quotient in D0.W
+ 138                               
+ 139                               *   UWORD udiv( divisor, dividend, remp )
+ 140                               *
+ 141                               *   REG LONG divisor;
+ 142                               *   UWORD    dividend;
+ 143                               *   UWORD    *remp              /* pointer to remainder (returned) */
+ 144                               
+ 145 0000006A 202F0004                     move.l  4(sp), d0       * get dividend
+ 146 0000006E 80EF0008                     divu    8(sp), d0       * do the divide
+ 147 00000072 206F000A                     movea.l 10(sp),a0
+ 148 00000076 4840                         swap    d0
+ 149 00000078 3080                         move.w  d0, (a0)        * store remainder
+ 150 0000007A 4240                         clr.w   d0
+ 151 0000007C 4840                         swap    d0              * word quotient in d0
+ 152 0000007E 4E75                         rts
+ 153                               
+ 154 00000080                              .end
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   4
+Source File: bdosif.s
+
+S y m b o l   T a b l e
+
+__bdos    ******** EXT   _bdosrw   ******** EXT   _bios1    0000004E TEXT  _bios2    0000004A TEXT  
+_bios3    00000044 TEXT  _bios4    0000003E TEXT  _bios5    00000038 TEXT  _bios6    0000004E TEXT  
+_constat  ******** EXT   _create   ******** EXT   _dirscan  ******** EXT   _swap     0000005E TEXT  
+_traphnd  00000000 TEXT  _udiv     0000006A TEXT  bdone     00000020 TEXT  bioscall  00000026 TEXT  
+biosf     00000032 ABS   setsup    00000032 TEXT  setsupf   0000003E ABS   

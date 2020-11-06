@@ -1,0 +1,127 @@
+;********** wboot.s -- Olivetti bootstrap writer*****
+;*
+;* 821013 S. Savitzky (Zilog) -- adapt for nonseg.
+;* 820930 S. Savitzky (Zilog) -- created
+;*
+;****************************************************
+
+__text:	.sect
+
+;****************************************************
+;*
+;* NOTE -- THIS CODE IS HIGHLY SYSTEM-DEPENDENT
+;*
+;*	This module contains both the bootstrap
+;*	writer, and the code that receives control
+;*	after being booted.
+;*
+;*	The main function of the latter is to make
+;*	sure that the system, whose entry point is
+;*	called "bios", is passed a valid stack 
+;*	and PSA pointer.
+;*
+;*	Although this code runs segmented, it must
+;*	be linked with non-segmented code, so it
+;*	looks rather odd.
+;*
+;****************************************************
+
+
+;*	The first sector on track 1 is the PCOS file
+;*	descriptor block; the second is the boot file
+;*	header and the start of the system code.
+;*
+;*	For now, we assume that the system starts at
+;*		<<11>>0000 (hex)
+;*
+;****************************************************
+
+
+;****************************************************
+;*
+;* Globals
+;*
+;****************************************************
+
+	.global	_startld
+
+;****************************************************
+;*
+;* Externals
+;*
+;****************************************************
+
+	.global	bios
+
+;****************************************************
+;*
+;* Constants
+;*
+;****************************************************
+
+
+BOOTSYS	.equ	0A000000h	; system address
+BOOTSTK	.equ	BOOTSYS+0BFFEh	; system stack top
+rtc_ext	.equ	02000022h	; real-time clock
+				;  ext. call addr
+
+BPT	.equ	16		; #blocks in a track
+BPS	.equ	256		; #bytes in a sector
+NBLKS	.equ	9*16		; #blocks in boot 
+HDRSIZE	.equ	24		; #bytes in header
+FILSIZE .equ	256*(NBLKS-1)	; file data size
+SYSSIZE	.equ	FILSIZE-HDRSIZE	; total system size
+S1SIZE	.equ	BPS-HDRSIZE	; data in sector 1
+
+SEG4	.equ	04000000h
+SEG2	.equ	02000000h
+
+SYSPSA	.equ	SEG2+100h	; system PSA
+BOOTPSA	.equ	SEG4+100h	; PSA in PROM for boot
+
+sscall	.macro		;short segmented call
+	.word	05f00h
+	.word	?1
+	.endm
+
+
+
+;****************************************************
+;*
+;* Entry Points and post-boot Initialization
+;*
+;****************************************************
+
+
+;* transfer vector 
+
+;	jr	wboot
+;	jr	wrboot	* Commented out - this has implications for booter
+	jr	entry
+
+;* post-boot init.
+
+entry:				;SEGMENTED
+_startld:
+
+	DI	VI,NVI
+
+	ldl	rr14, #BOOTSTK	; init stack pointer
+
+	ldl	rr2, #SYSPSA	; copy PROM's PSA
+	ldctl	r4, psapseg
+	ldctl	r5, psapoff
+	ld	r0, #570/2
+	ldir	@r2, @r4, r0
+
+	ldl	rr2, #SYSPSA	; shift PSA pointer
+	ldctl	psapseg, r2
+	ldctl	psapoff, r3
+
+	ld	r2,#142h	;CROCK-- turn off
+	ld	r3,#1feh	; usart interrupts
+	out	@r2,r3
+
+	ldar   	r2, $		; go
+	ld	r3,#bios
+	jp	@r2

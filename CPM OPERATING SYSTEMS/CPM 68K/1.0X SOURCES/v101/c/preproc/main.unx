@@ -1,0 +1,488 @@
+#
+/*
+	Copyright 1981
+	Alcyon Corporation
+	8474 Commerce Av.
+	San Diego, Ca.  92121
+*/
+
+#include "preproc.h"
+
+#define	NARGS	64
+#define	ARGSIZE	1024
+#define	ICODE	0
+#define	STRINGS	1
+#define	MTEMP	2
+#define	ASTEMP	3
+#define	NTEMPS	4
+
+
+char *fargs[NARGS+1];
+char **fargp;
+char argbuf[ARGSIZE];
+char *cfiles[NARGS+1];
+char *loadargs[NARGS+1];
+char *fns[NTEMPS];
+char *tfns[NTEMPS];
+char *defs[NARGS];
+int ndefs;
+char *argp	&argbuf[0];
+int cflag;
+int nflag;
+int lflag;
+int oflag;
+int pflag;
+int sflag;
+int xflag;
+int status;
+int oneflag;
+int errno;
+char *parser "/lib/c068";
+char *cgen "/lib/c168";
+char *onepass "/lib/c0168";
+char *pref "/lib/c680.o";
+char *clib6 "/lib/lib6.a";
+char *loader "/bin/lo68";
+char *asm "/bin/as68";
+#ifdef NOMMU
+int nommu	1;
+#else
+int nommu	0;
+#endif
+
+
+// cexit - exit from C compiler driver
+//		This deletes any existing temps and exits with the error status.
+cexit()									// returns - none
+{
+	register int i;
+
+	if( pflag == 0 ) {
+		for( i = 0; i < NTEMPS; i++ )
+			if( fns[i] )
+				unlink(fns[i]);
+	}
+	exit(status);
+}
+
+// main - main routine for C68 Compiler system
+//		Handles the C68 arguments.  For each C file given, the macro
+//		pre-processor is called, then the parser, code generator and
+//		assember are fexec'd.  The loader arguments are collected and
+//		the loader is fexec'd.
+main(argc,argv)
+int argc;
+char **argv;
+{
+	register char *arg, **p, **cfilep, **loadp;
+	register int nloadfiles, c, i;
+
+	cfilep = &cfiles[0];
+	loadp = &loadargs[0];
+	nloadfiles = 0;
+	for( p = argv; --argc > 0; ) {		//process arguments
+		if( *(arg= *++p) == '-' ) {
+			arg++;
+			for( i = 0; c = *arg++; i++ ) {
+				switch( c ) {
+
+				case 'c':
+					cflag++;
+					continue;
+
+				case '1':
+					oneflag++;
+					parser = onepass;
+					continue;
+
+				case 'D':
+					defs[ndefs++] = arg;
+					i++;
+					break;
+
+				case 'N':
+					nflag++;
+					continue;
+
+				case 'f':
+					printf("floating point not yet implemented\n");
+					continue;
+
+				case 'L':
+					lflag++;
+					continue;
+
+				case 'o':
+					if( --argc <= 0 )
+						ferror("bad -o option");
+					*loadp++ = *p++;
+					*loadp++ = *p;
+					continue;
+
+				case 'P':
+					pflag++;
+					cflag++;
+					continue;
+
+				case 'S':
+					sflag++;
+					cflag++;
+					nflag++;
+					continue;
+
+				case 't':
+					if( (c= *arg++) == '0' )
+						parser = "/usr/c68/c068";
+					else if( c == '1' )
+						cgen = "/usr/c68/c168";
+					else if( c == '\0' )
+						arg--;
+					continue;
+
+				default:
+					if( loadp >= &loadargs[NARGS] )
+						ferror("too many loader args");
+					*loadp++ = *p;
+					i++;
+					break;
+				}
+				break;
+			}
+			if( i )
+				continue;
+		}
+		if( strend(arg,".c") || strend(arg,".s") ) {
+
+	//C or Assembler files to process
+
+			if( cfilep >= &cfiles[NARGS] )
+				ferror("too many files");
+			*cfilep++ = arg;
+		}
+		else if( chkdup(arg) == 0 ) {	//check for loader args
+			if( loadp >= &loadargs[NARGS] )
+				ferror("too many loader args");
+			*loadp++ = arg;
+			if( strend(arg,".o") )
+				nloadfiles++;
+		}
+	}
+	if( cfilep != &cfiles[0] ) {		//had a C file?
+		signal(2,&cexit);				//catch rubouts
+		for( i = 0; i < NTEMPS; i++ )	//allocate temps
+			fns[i] = maketemp(i);
+		for( p = &cfiles[0]; arg = *p++; ) {	//handle each C file
+			for( i = 0; i < NTEMPS; i++ )
+				tfns[i] = fns[i];
+			if( cfilep != &cfiles[1] )
+				printf("%s:\n",arg);
+
+	//the following sets things up for the parser, the macro pre-processor
+	//is called (not forked), then the parser is fexec'd.
+
+			asflag = strend(arg,".s");
+			if( pflag || asflag )
+				tfns[MTEMP] = setend(arg,'i');
+			if( domacro(arg,tfns[MTEMP],ndefs,defs) == 0 || pflag ) {
+				cflag++;
+				continue;
+			}
+			if( asflag == 0 ) {
+				tfns[ASTEMP] = setend(arg,'s');
+				initfargs();
+				addfarg(parser);
+				addfarg(tfns[MTEMP]);
+				if( oneflag ) {
+					addfarg(tfns[ASTEMP]);
+					addfarg(tfns[STRINGS]);
+					if( lflag || nommu )
+						addfarg("-L");
+					if( sflag || nflag )
+						addfarg("-D");
+					addfarg("-1");
+				}
+				else {
+					addfarg(tfns[ICODE]);
+					addfarg(tfns[STRINGS]);
+				}
+				endfargs();
+				if( fexec(parser,fargs) ) {
+					status++;
+					cflag++;
+					continue;
+				}
+
+	//this sets things up for the code generator
+
+				if( oneflag == 0 ) {
+					initfargs();
+					addfarg(cgen);
+					addfarg(tfns[ICODE]);
+					addfarg(tfns[ASTEMP]);
+					if( sflag == 0 )
+						fns[ASTEMP] = tfns[ASTEMP];
+					if( lflag || nommu )
+						addfarg("-L");
+					if( nflag || sflag )
+						addfarg("-D");
+					endfargs();
+					if( fexec(cgen,fargs) ) {
+						status++;
+						cflag++;
+						continue;
+					}
+				}
+				if( sflag )
+					continue;
+			}
+			else
+				tfns[ASTEMP] = tfns[MTEMP];
+
+	//this sets things up for the assembler
+
+			initfargs();
+			addfarg(asm);
+			if( asflag == 0 )
+				addfarg("-u");
+			if( lflag || nommu )
+				addfarg("-L");
+			addfarg(tfns[ASTEMP]);
+			endfargs();
+			if( fexec(asm,fargs) ) {
+				cflag++;
+				status++;
+			}
+			unlink(tfns[ASTEMP]);
+		}
+	}
+	if( cflag == 0 && (loadp != &loadargs[0] || cfilep != &cfiles[0] )) {
+
+	//set things up for the loader, this means that we need to add the
+	//C preface at the beginning of the program which has the jsr to
+	//main and then exits after return from main.
+
+		initfargs();
+		addfarg(loader);
+		addfarg("-X");
+		if( nommu )
+			addfarg("-r");
+		for( p = loadargs; (arg = *p) && *arg == '-'; p++ ) {
+			addfarg(arg);
+			if( arg[1] == 'o' )
+				addfarg(*++p);
+		}
+		addfarg(pref);					//C preface to jsr to main
+		for( cfilep = &cfiles[0]; *cfilep; nloadfiles++ ) {
+			arg = setend(*cfilep++,'o');
+			if( chkdup(arg) == 0 )
+				addfarg(arg);
+		}
+		while( *p )
+			addfarg(*p++);
+		addfarg(clib6);
+		endfargs();
+		status =| fexec(loader,fargs);
+
+	//if we were given one C file and there is one ".o" file, we remove
+	//the ".o" file.
+
+		if( cfilep == &cfiles[1] && nloadfiles == 1 )
+			unlink(setend(cfiles[0],'o'));
+	}
+	cexit();
+}
+
+// fexec - fork and exec
+//		This forks a new task, then does an execv to execute the given
+//		program with the given arguements.
+fexec(fname,args)						// returns 1 if error, 0 otherwise
+char *fname;							// file to execute
+char **args;							// arguments to pass
+{
+	register int pid, i;
+	int fstat;
+
+//	if( (pid=fork()) == 0 ) {			//child process
+//		execv(fname,args);
+//		printf("can't execv %s errno=%d\n",fname,errno);
+//		exit(1);
+//	}
+	pid = maketask(fname,0,0,args);	//do fork & exec
+	if( pid < 0 ) {
+		printf("can't fork errno=%d\n",errno);
+		return(1);
+	}
+	while( pid != wait(&fstat) )		//wait for child
+		;
+	if( (i=fstat&0377) != 0 && i != 14 ) {
+		if( i != 2 )
+			printf("%s error terminated\n",fname);
+		status++;
+		cexit();
+	}
+	return( (fstat>>8) & 0377 );
+}
+
+// setend - set the end character of a string
+//		This grabs a copy of the string and sets the last character to
+//		the given character.  This is used to generate ".o", ".i" and
+//		".s" file names.
+char *setend(s,c)						// returns pointer to string
+char *s;								// pointer to old string
+int c;									// character to end string with
+{
+	register char *p;
+
+	p = makecopy(s);
+	p[strlen(p)-1] = c;
+	return(p);
+}
+
+// chkdup - checks for duplicate ".o" files in file list
+//		Goes thru the loader argument list checking for the given
+//		".o" file name.
+chkdup(s)								// returns 1 if found, 0 otherwise
+char *s;								// pointer to argument
+{
+	register char **l;
+
+	if( strend(s,".o") ) {
+		for( l = &loadargs[0]; *l; )
+			if( strcmp(*l++,s) == 0 )
+				return(1);
+	}
+	return(0);
+}
+
+// makecopy - makes a copy of a string
+//		This allows for manipulating the file name, while allowing the
+//		saving of the old file name.
+char *makecopy(s)						// returns pointer to string
+char *s;								// string to copy
+{
+	register char *p;
+
+	for( p = argp; *argp++ = *s++; )
+		;
+	return(p);
+}
+
+// initfargs - initialize fexec arg block
+//		This sets the arg block pointer to the beginning of the block.
+initfargs()								// returns - none
+{
+	fargp = &fargs[0];
+}
+
+// addfarg - add fexec argument
+//		This takes the given arguement and adds it to the argment block
+addfarg(s)
+char *s;
+{
+	if( fargp >= &fargs[NARGS] )
+		ferror("too many args");
+	*fargp++ = s;
+}
+
+// endfargs - end fexec argument block
+//		This ends the argument block with a zero pointer.
+endfargs()								// returns - none
+{
+	*fargp = 0;
+}
+
+// ferror - fatal error
+//		Outputs error message and exits with error status.
+ferror(s,x1,x2,x3,x4,x5,x6)				// returns - none
+char *s;								// printf string
+int x1, x2, x3, x4, x5, x6;				// printf args
+{
+	printf(s,x1,x2,x3,x4,x5,x6);
+	printf("\n");
+	status++;
+	cexit();
+}
+
+// maketemp - make a temporary file name
+//		Generates unique file name with process id
+char *maketemp(arb)						// returns file name
+int arb;								// arbitrary number
+{
+	char *p, tmp[6];
+
+	p = makecopy("/tmp/ct6");
+	argp--;
+	itoa(getpid(),tmp,1);
+	makecopy(tmp);
+	argp--;
+	makecopy(".");
+	argp--;
+	itoa(arb,tmp,1);
+	makecopy(tmp);
+	return(p);
+}
+
+// strcmp - string comparison
+//		Compares two strings for equality, less or greater.
+strcmp(s,t)								// returns 0 for equality,
+										// neg for < and pos for >.
+char *s;								// first string
+char *t;								// second string
+{
+	for( ; *s == *t; s++, t++ )
+		if( *s == '\0' )
+			return(0);
+	return( *s - *t );
+}
+
+// strlen - string length
+//		Computes number of bytes in string.
+strlen(s)								// returns string length
+char *s;								// string to compute length
+{
+	register int n;
+
+	for( n = 0; *s++ != '\0'; )
+		n++;
+	return(n);
+}
+
+// itoa - integer to ASCII conversion
+//		Converts integer to ASCII string, handles '-'.
+itoa(n,s,w)								// returns - none
+int n;									// number to convert
+char *s;								// resulting string
+int w;									// minimum width of string
+{
+	register int sign, i;
+	char temp[6];
+
+	if( (sign=n) < 0 )
+		n = -n;
+	i = 0;
+	do {
+		temp[i++] = n % 10 + '0';
+	} while( (n =/ 10) > 0 );
+	if( sign < 0 )
+		temp[i++] = '-';
+	while( --w >= i )					//pad on left with blanks
+		*s++ = ' ';
+	while( --i >= 0 )					//move chars reversed
+		*s++ = temp[i];
+	*s = '\0';
+}
+
+// strend - set string end
+//		This is used to compare the endings of file names for ".c", etc.
+strend(s,t)								// returns 1 if match, 0 otherwise
+char *s;								// string to compare
+char *t;								// string ending
+{
+	int ls, lt;
+
+	if( (ls=strlen(s)) < (lt=strlen(t)) )
+		return(0);
+	if( strcmp(&s[ls-lt],t) == 0 )
+		return(1);
+	return(0);
+}

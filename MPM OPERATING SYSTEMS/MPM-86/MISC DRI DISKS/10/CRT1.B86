@@ -1,0 +1,153 @@
+
+CODE    CSEG
+
+DGROUP  GROUP   DATA,__pname,__tname,__lname,__xeof,_break
+
+
+
+        PUBLIC  brk
+        PUBLIC  __BDOS
+	PUBLIC	_start
+
+	PUBLIC	_ret
+	PUBLIC	_swpll
+
+        JMP     _start
+        DB      'C runtime library, Copyright 1982 by Digital Research 86V0.8'
+        DB      01AH
+brk:    PUSH    BP
+        MOV     BP,SP
+        PUSH    DI
+        PUSH    SI
+
+        MOV     AX,6[BP]        ;GET PARAMETER
+        MOV     BX,SP           ;GET STACK POINTER
+	SUB	BX,200H		;LEAVE SOME SLOP
+        CMP     BH,AH           ;IN THE SAME GENERAL AREA?
+        JA      BRKOK           ;IS BH <= AH? IF NOT THEN OK, LEAVE IT ALONE
+        MOV     AX,-1
+        JMP     BRKXIT
+
+BRKOK:  MOV     AX,0
+BRKXIT: POP     SI
+        POP     DI
+        POP     BP
+        RETF
+
+ 
+_start: MOV     AX,DS
+	MOV	BX,6
+        MOV     SS,AX
+        MOV     SP,[BX]         ;set up ss:sp
+
+        MOV     AX,WORD PTR ?MEMRY
+        MOV     __break,AX      ;set up __break for brk()
+
+;
+;	NOW ZERO UN-INIT DATA
+;
+	MOV	CX,SP
+	SUB	CX,100H		;LEAVE SOME SLOP
+	MOV	BX,WORD PTR ?MEMRY ;GET STARTING LOCATION
+	SUB	CX,BX		;CALC LENGTH INTO CX
+	INC	CX
+	SHR	CX,1		;MAKE IT A WORD COUNT
+
+	MOV	AX,0		;FILL VALUE
+	MOV	DX,DS
+	MOV	ES,DX		;SET UP DEST SEG
+	MOV	DI,BX		;SET UP DEST OFFSET
+
+	REP STOSW		;AND DOIT
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+        CALLF   _main
+        CALLF   exit
+
+_swpll:
+	POP	RET1
+	POP	RET2
+	POP	AX
+	POP	BX
+	POP	CX
+	POP	DX
+	PUSH	BX
+	PUSH	AX
+	PUSH	DX
+	PUSH	CX
+	PUSH	RET2
+	PUSH	RET1
+	RETF
+
+_ret:	POP	SI
+	POP	SI		;FLUSH RET ADDR
+	LEA	SI,0-4[BP]
+	MOV	SP,SI
+	POP	SI
+	POP	DI
+	POP	BP
+	RETF
+
+__BDOS: ;(func,long)
+        PUSH    BP
+        MOV     BP,SP
+        PUSH    DI
+        PUSH    SI
+	CMP	WORD PTR 6[BP],26	;SET DMA?
+	JNZ	NOTSETDMA		;BR IF NO
+;
+;	OTHERWISE SET SEGMENT BASE EVERY TIME
+;
+	MOV	DX,DS
+	MOV	CX,33H
+	PUSH	BP
+	INT	0E0H
+	POP	BP
+
+NOTSETDMA:
+        MOV     CX,6[BP]
+        MOV     DX,8[BP]
+        PUSH    BP
+        INT     0E0H
+        POP     BP
+        POP     SI
+        POP     DI
+        POP     BP
+	XOR	AH,AH
+        RETF
+
+DATA    DSEG    BYTE
+
+	PUBLIC	?MEMRY
+?MEMRY	RW	2
+RET1	RW	1
+RET2	RW	1
+
+_break	DSEG	BYTE COMMON
+__break RW      1
+
+__pname DSEG    BYTE COMMON
+_pname DB      'Cprogram',0
+
+__tname DSEG    BYTE COMMON
+_tname DB      'CON:',0
+
+__lname DSEG    BYTE COMMON
+_lname DB      'LST:',0
+
+__xeof  DSEG    BYTE COMMON
+_xeof  DB      01AH
+_main.c_CODE CSEG
+	EXTRN	_main:FAR
+exit.c_CODE CSEG
+	EXTRN	exit:FAR
+
+        END
+
+
+

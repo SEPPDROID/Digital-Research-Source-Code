@@ -1,0 +1,1160 @@
+.he
+.bp odd
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.ce 2
+.sh
+.tc 4  BIOS Functions
+Section 4
+.sp
+.sh
+BIOS Functions
+.he CP/M-8000 System Guide                           4  BIOS Functions
+.sp 3
+.he CP/M-8000 System Guide                           4.1  Introduction
+.tc    4.1  Introduction
+.sh
+4.1  Introduction
+.pp 5
+All CP/M-8000 hardware dependencies are concentrated in subroutines that are
+collectively referred to as the Basic I/O System (BIOS).  A CP/M-8000
+system implementor can tailor CP/M-8000 to fit nearly any Z8000 operating
+environment.  This section describes each BIOS function:  its calling 
+conventions, parameters, and the actions it must perform.
+The discussion of Disk Definition Tables is treated separately in  
+Section 5.
+.ix BIOS
+.ix BIOS function, called by BDOS
+.ix SC #3 instruction
+.pp
+When the BDOS calls a BIOS function, it places the function number in 
+register R3, and function parameters in registers RR4 and RR6.  It then 
+executes a SC #3 instruction.  R3 is always needed to specify the function, 
+but each function has its own requirements for other parameters, which are 
+described in the section describing the particular function.  The BIOS 
+returns results, if any, in register RR6.  The size of the result depends on 
+the particular function.  
+.sp
+.sh
+Note:  \c
+.qs
+The system call handler in the BIOS must preserve at least registers
+R8 through R15.  The handlers provided in most BIOSes 
+preserve all registers, except
+for RR6 which is used to return results.
+Of course, if the BIOS uses interrupts to service I/O, the 
+interrupt handlers will need to preserve registers.
+.ix register contents
+.ix BDOS Direct BIOS Function, Call 50
+.ix SC #3 instruction
+.pp
+Usually, user applications do not need to make direct use of BIOS functions.
+However, when access to the BIOS is required by user software, it should
+use the BDOS Direct BIOS Function, Call 50, instead of calling the BIOS with
+a SC #3 instruction.  This rule ensures that applications remain compatible 
+with future systems.
+.ix Exception Handlers
+.ix Exception Vector
+.pp
+The BIOS must also maintain a vector of "Exception Handler" addresses,
+through which all system calls and traps are routed.  The vector
+numbers have been selected to match the exception numbers 
+used in CPM-68K.  These numbers will be found in the Programmer's
+Guide.
+.ix SC #0 instruction
+.ix SC #1 instruction
+.ix Memory Management
+.ix Debugger Breakpoint
+.pp
+In addition to the general entry point via the SC #3 instruction,
+the BIOS has two additional system call entry points.  SC #0 is
+the entry point for the debugger's breakpoint instruction.  The
+BIOS only has to vector this through the exception vector.  The
+BIOS also has an entry point for a general-purpose memory-management
+system call, SC #1, which is used to perform system-dependent
+memory-management operations.  These operations are described
+in section 4.2.
+.ix Disk Parameter Header 
+.ix Disk Parameter Block
+.pp
+The Disk Parameter Header (DPH) and Disk Parameter Block (DPB) formats have
+changed slightly from previous CP/M versions to accommodate the Z8000's 
+32-bit addresses.  The formats are described in Section 5.
+.cp 19
+.bp
+.ix BIOS register usage
+.ce
+.sh
+Table 4-1.  BIOS Register Usage  
+.sp
+.nf
+                        Entry Parameters:
+
+                     R3  = function code
+                     RR4 = first parameter
+                     RR6 = second parameter
+
+                         Return Values:
+
+                RL7 = byte values (8 bits)
+                R7  = word values (16 bits)
+                RR6 = longword values (32 bits)
+.fi
+.sp
+.in 0
+.pp
+The decimal BIOS function numbers and the functions
+they correspond to are listed in Table 4-2.
+.sp 2
+.ce
+.sh
+Table 4-2.   BIOS Functions 
+.ll 60
+.in 5
+.nf
+.sp
+Number		             Function		
+.fi
+.sp
+.in 22
+.ti -14
+0             Initialization (called for cold boot)
+.ti -14
+1             Warm Boot (called for warm start)  
+.ti -14
+2             Console Status (check for console character ready)  
+.ti -14
+3             Read Console Character In 
+.ti -14
+4             Write Console Character Out 
+.ti -14
+5             List (write listing character out) 
+.ti -14
+6             Auxiliary Output (write character to auxiliary output device)  
+.ti -14
+7             Auxiliary Input (read from auxiliary input) 
+.ti -14
+8             Home (move to track 00)  
+.ti -14
+9             Select Disk Drive  
+.ti -15
+10             Set Track Number  
+.ti -15
+11             Set Sector Number  
+.ti -15
+12             Set DMA Address 
+.ti -15
+13             Read Selected Sector 
+.ti -15
+14             Write Selected Sector 
+.ti -15
+15             Return List Status
+.ti -15
+16             Sector Translate  
+.ti -15
+18             Get Memory Region Table Address  
+.ti -15
+19             Get I/O Mapping Byte  
+.ti -15
+20             Set I/O Mapping Byte  
+.ti -15
+21             Flush Buffers  
+.ti -15
+22             Set Exception Handler Address  
+.fi
+.in 0
+.ll 65
+.bp
+.he CP/M-8000 System Guide                 Function 0:  Initialization
+.sp 3
+                   FUNCTION 0:  INITIALIZATION
+
+
+               Entry Parameters:
+                  Register R3:  00H
+
+               Returned   Value:
+                  Register R3: User/Disk Numbers
+		   
+.sp 2
+.ix BIOS Function 0 Initialization
+.ix BIOS Function 0
+.ix _init
+.ix call _init
+.ix ret instruction
+.ix BIOS internal variables
+.ix SC #3 vector
+.pp
+This routine is entered on cold boot and must initialize the BIOS.  
+Function 0 is unique, in that it is not entered with a SC #3 instruction. 
+Instead, the BIOS has a global label, _init, which is the entry to this
+routine.  On cold boot, Function 0 is called by a call _init.  When
+initialization is done, exit is through a ret instruction.  Function 0 
+is responsible for initializing hardware if necessary, initializing 
+BIOS internal variables (such as IOBYTE) as needed, 
+setting up register RR6 as described below, setting the SC #3 vector to 
+point to the main BIOS entry point, and then exiting with a ret.
+
+	=== THIS IS INACCURATE ===
+
+	=== WHAT ACTUALLY HAPPENS IS THAT THE BIOS SETUP IS DONE ===
+	=== BEFORE TRANSFERRING TO THE CCP                       ===
+	===    THE biosboot MODULE SETS UP THE PSA AND STACK PTR ===
+	=== AND JUMPS TO LABEL bios, WHICH CALLS _biosinit AND	 ===
+	=== _trapinit, THEN JUMPS TO ccp  			 ===
+
+	=== THIS SHOULD PROBABLY BE FIXED			 ===
+
+.ix longword value
+.pp
+Function 0 returns a longword value.
+The CCP uses this value to set the initial user number and the initial default
+disk drive.  The least significant byte of RR6 is the disk number 
+(0 for drive A, 1 for drive B, and so on).  The next most significant byte is
+the user number.  The high-order bytes should be zero.
+.pp
+The entry point to this function must be named _init and must be declared
+global.  This function is called only once from the system at
+system initialization.
+
+	=== skeletal code removed, here and elsewhere below ===
+.fi
+.in 0
+.bp
+.he CP/M-8000 System Guide                      Function 1:  Warm Boot
+.nf
+.sp 3
+                     FUNCTION 1:  WARM BOOT
+.sp 2
+                     Entry Parameters:
+                        Register R3:  01H
+.sp
+                     Returned   Value:  None
+.fi
+.sp 2
+.ix BIOS function 1 Warm Boot
+.ix CCP entry point
+.ix _ccp
+.pp
+This function is called whenever a program terminates.  Some reinitialization
+of the hardware or software might occur.  When this function completes, it 
+jumps
+directly to the entry point of the CCP, named _ccp.  Note that _ccp
+must be declared as a global. 
+.fi
+.in 0
+.bp
+.he CP/M-8000 System Guide                 Function 2:  Console Status
+.ix BIOS function 2 Console Status
+.nf
+.sp 3
+                   FUNCTION 2:  CONSOLE STATUS
+.sp 2
+              Entry Parameters:
+                 Register R3: 02H	   
+.sp
+              Returned   Value:
+                 Register R7: 00FFH if ready
+                 Register R7: 0000H if not ready
+.sp 2
+.fi
+.pp
+This function returns the status of the currently assigned console device.
+It returns 00FFH in register R7 when a character is ready to be read, or 
+0000H in register R7 when no console characters are ready.
+.bp
+.he CP/M-8000 System Guide         Function 3:  Read Console Character
+.ix BIOS function 3 Read Console Character
+.nf
+.sp 3
+               FUNCTION 3:  READ CONSOLE CHARACTER
+.sp 2 
+                   Entry Parameters:
+                      Register R3:  03H
+.sp
+                   Returned   Value:
+                      Register R7: Character
+.fi
+.sp 2
+.pp
+This function reads the next console character into register R7.  If no 
+console character is ready, it waits until a character is typed before
+returning.
+.bp
+.he CP/M-8000 System Guide        Function 4:  Write Console Character
+.ix BIOS function 4 Write Console Character
+.nf
+.sp 3
+              FUNCTION 4:  WRITE CONSOLE CHARACTER
+.sp 2 
+                   Entry Parameters:
+                      Register R3: 04H
+                      Register R5: Character
+.sp
+                   Returned   Value: None
+.fi
+.sp 2
+.pp
+This function sends the character from register R5 to the console output 
+device.  The character is in ASCII.  You might want to include a delay or 
+filler 
+characters for a line-feed or carriage return, if your console device 
+requires some time interval at  the end  of the  line  (such as  a TI Silent 
+700 
+Terminal \ \ ).  You can also filter out control characters which have 
+undesirable 
+effects on the console device. 
+.ix line-feed
+.ix carriage return
+.bp
+.he CP/M-8000 System Guide          Function 5:  List Character Output
+.ix BIOS function 5 List Character Output
+.nf
+.sp 3
+               FUNCTION 5:  LIST CHARACTER OUTPUT
+.sp 2  
+                   Entry Parameters:
+                      Register R3: 05H
+                      Register R5: Character
+.sp
+                   Returned   Value: None
+.fi
+.ix ASCII character
+.ix list device
+.ix communication protocol
+.sp 2
+.pp
+This function sends an ASCII character from register R5 to the
+currently assigned listing device.  If your list device requires some
+communication protocol, it must be handled here.
+.bp
+.he CP/M-8000 System Guide               Function 6:  Auxiliary Output
+.ix BIOS function 6 Auxiliary Output
+.nf
+.sp 3
+                  FUNCTION 6:  AUXILIARY OUTPUT
+.sp 2 
+                   Entry Parameters:
+                      Register R3: 06H
+                      Register R5: Character
+.sp
+                   Returned   Value: None
+.fi
+.ix output device, auxiliary
+.sp 2
+.pp
+This function sends an ASCII character from register R5 to the
+currently assigned auxiliary output device.
+.bp
+.he CP/M-8000 System Guide                Function 7:  Auxiliary Input
+.ix BIOS function 7 Auxiliary Input
+.nf
+.sp 3
+                  FUNCTION 7:  AUXILIARY INPUT
+.sp 2 
+                   Entry Parameters:
+                      Register R3: 07H
+.sp
+                   Returned   Value:
+                      Register R7: Character
+.fi
+.sp 2
+.ix end-of-file condition
+.ix ASCII CTRL-Z (1AH)
+.pp
+This function reads the next character from the currently assigned
+auxiliary input device into register R7.  It reports an end-of-file condition 
+by returning an ASCII CTRL-Z (1AH).
+.bp
+.he CP/M-8000 System Guide                           Function 8:  Home
+.ix BIOS function 8 Home
+.nf
+.sp 3
+                        FUNCTION 8:  HOME
+.sp 2 
+                     Entry Parameters:
+                        Register R3: 08H
+.sp
+                     Returned   Value: None
+.fi
+.ix disk head
+.ix track 00 position
+.ix SETTRK function
+.sp 2
+.pp
+This function returns the disk head of the currently selected disk
+
+to the track 00 position.  If your controller does not have a special
+feature for finding track 00, you can translate the call to a SETTRK function
+with a parameter of 0.
+.bp
+.he CP/M-8000 System Guide              Function 9:  Select Disk Drive
+.ix BIOS function 9 Select Disk Drive
+.nf
+.sp 3  
+                 FUNCTION 9:  SELECT DISK DRIVE
+.sp 2 
+              Entry Parameters:
+                 Register R3: 09H
+                 Register R5: Disk Drive
+                 Register R7: Logged in Flag
+.sp
+              Returned   Value:
+                 Register RR6: Address of Selected 
+                                Drive's DPH
+.fi
+.sp 2
+.pp
+This function selects the disk drive specified in register R5 for
+further operations.  Register R5 contains 0 for drive A, 1 for drive B,
+up to 15 for drive P.  
+.ix Disk Parameter Header
+.pp
+On each disk select, this function returns the address of the selected drive's
+Disk Parameter Header in register RR6.  See Section 5 for a discussion of the
+Disk Parameter Header.  
+.ix error indicator
+.ix disk select operation
+.pp
+If there is an attempt to select a nonexistent drive, this function
+returns 00000000H
+in register RR6 as an error indicator.  Although the function must return the
+header address on each call, it may be advisable to postpone the actual
+physical disk select operation until an I/O function (seek, read, or
+write) is performed.  Disk select operations can occur without a
+subsequent disk operation.  Thus, doing a physical select each time this 
+function is called may be wasteful of time.
+.ix Disk Parameter Block
+.pp
+On entry to the Select Disk Drive function,
+if the least significant bit in register R7 is zero,
+the disk is not currently logged in.  If the disk drive is capable of
+handling varying media (such as single- and double-sided disks, single- and 
+double-density, and so on), the BIOS should check the type of
+media currently installed and set up the Disk Parameter Block
+accordingly at this time.
+.bp
+.he CP/M-8000 System Guide              Function 10:  Set Track Number
+.ix BIOS function 10 Set Track Number
+.nf
+.sp 3
+                 FUNCTION 10:  SET TRACK NUMBER
+.sp 2 
+               Entry Parameters:
+                  Register R3: 0AH
+                  Register R5: Disk track number
+.sp
+               Returned   Value: None
+.fi
+.sp 2
+.pp
+This function specifies in register R5 the disk track number for
+use in subsequent disk accesses.  The track number remains valid until
+either another Function 10 or a Function 8 (Home) is performed.
+.ix BIOS function, Home (8)
+.pp
+You can choose to physically seek to the selected track at this time,
+or delay the physical seek until the next read or write actually occurs.
+.ix maximum track number, 65535
+.pp
+The track number can range from 0 to the maximum track number supported
+by the physical drive.  However, the maximum track number is limited
+to 65535 by the fact that it is being passed as a 16-bit quantity.
+Standard floppy disks have tracks numbered from 0 to 76.
+.bp
+.he CP/M-8000 System Guide             Function 11:  Set Sector Number
+.ix BIOS function 11 Set Sector Number
+.nf
+.sp 3
+                 FUNCTION 11:  SET SECTOR NUMBER
+.sp 2 
+                 Entry Parameters:
+                    Register R3: 0BH
+                    Register R5: Sector Number
+.sp
+                 Returned   Value: None
+.fi
+.sp 2
+.ix sector numbers, unskewed
+.pp
+This function specifies in register R5 the sector number for subsequent disk
+accesses.  This number remains in effect until either another Function 11 is 
+performed.
+.pp
+The function selects actual (unskewed) sector numbers.  If skewing is 
+appropriate, it will have previously been done by a call to Function 16.
+You can send this information to the controller at this point or delay sector 
+selection until a read or write operation occurs.
+.bp
+.he CP/M-8000 System Guide               Function 12:  Set DMA Address
+.ix BIOS function 12 Set DMA Address
+.nf
+.sp 3
+                  FUNCTION 12:  SET DMA ADDRESS
+.sp 2
+                  Entry Parameters:
+                     Register R3: 0CH
+                     Register RR4: DMA Address
+.sp
+                  Returned   Value: None
+.fi
+.sp 2
+.ix DMA address
+.pp
+This function contains the DMA (disk memory access) address in register
+RR4 for subsequent read or write operations.  Note that the controller
+need not actually support DMA (direct memory access).  The BIOS will use
+the 128-byte area starting at the selected DMA address
+for the memory buffer during the following read or write operations.
+This function can be called with either
+an even or an odd address for a DMA buffer.
+.bp
+.he CP/M-8000 System Guide                   Function 13:  Read Sector
+.ix BIOS function 13 Read Sector
+.nf
+.sp 3
+                    FUNCTION 13:  READ SECTOR
+.sp 2 
+              Entry Parameters:    
+                 Register R3: 0DH
+.sp
+              Returned   Value:  
+                 Register R7: 0 if no error
+                 Register R7: 1 if physical error
+.fi
+.sp 2
+.pp
+After the drive has been selected, the track has been set, the sector has
+been set, and the DMA address has been specified, the read function uses
+these parameters to read one sector and returns the error code
+in register R7.
+.ix return code value
+.pp
+Currently, CP/M-8000 responds only to a zero or nonzero return code value.
+Thus, if the value in register R7 is zero, CP/M-8000 assumes that the disk
+operation completed properly.  If an error occurs however, the BIOS should
+attempt at least ten retries to see if the error is recoverable.  
+.bp
+.he CP/M-8000 System Guide                  Function 14:  Write Sector
+.ix BIOS function 14 Write Sector
+.nf
+.sp 3
+                   FUNCTION 14:  WRITE SECTOR
+.sp 2 
+          Entry Parameters:    
+             Register R3: 0EH
+             Register R5: 0=normal write
+                          1=write to a directory 
+                              sector
+                          2=write to first sector 
+                              of new block
+.sp
+          Returned   Value:  
+             Register R7: 0=no error
+                          1=physical error
+.fi
+.sp 2
+.ix DMA buffer
+.pp
+This function is used to write 128 bytes of data from the currently
+selected DMA buffer to the currently selected sector, track, and disk.
+The value in register R5 indicates whether the write is an ordinary
+write operation or whether the there are special considerations.
+.pp
+If register R5=0, this is an ordinary write operation.  If
+R5=1, this is a write to a directory sector, and the write should
+be physically completed immediately.  If R5=2, this is a write
+to the first sector of a newly allocated block of the disk.  The
+significance of this value is discussed in Section 5 under Disk Buffering.
+.in 0
+.bp
+.he CP/M-8000 System Guide            Function 15:  Return List Status
+.ix BIOS function 15 Return List Status
+.nf
+.sp 3
+                FUNCTION 15:  RETURN LIST STATUS
+.sp 2 
+            Entry Parameters:  
+               Register R3: 0FH
+.sp
+            Returned   Value:  
+                 Register R7: 00FFH=device ready
+                 Register R7: 0000H=device not ready
+.fi
+
+.sp 2
+.pp
+This function returns the status of the list device.  Register R7
+contains either 0000H when the list device is not ready to accept a character
+or 00FFH when a character can be sent to the list device.
+.bp
+.he CP/M-8000 System Guide              Function 16:  Sector Translate
+.ix BIOS function 16 Sector Translate
+.nf
+.sp 3
+                 FUNCTION 16:  SECTOR TRANSLATE
+.sp 2
+             Entry Parameters:    
+                Register R3: 10H
+                Register R5: Logical Sector Number
+                Register RR6: Address of Translate 
+                               Table
+.sp
+             Returned   Value:  
+                Register R7: Physical Sector Number
+.fi
+.sp 2
+.pp
+This function performs logical-to-physical sector translation, as discussed
+in Section 5.2.2.  
+The Sector Translate function receives a logical sector 
+number from register R5.
+The logical sector number can range from 0 to the number of sectors 
+per track-1.
+Sector Translate also receives the address of 
+the translate table in register RR6.  This address must be in the
+system's address space.
+The logical sector number is used as an index into the translate table.
+The resulting physical sector number is returned in R7.
+.ix translate table
+.ix algorithms
+.ix Disk Parameter Header
+.pp
+If register RR6 = 00000000H, implying that there is no translate table,
+register R5 is copied to register R7 before returning.  Note that
+other algorithms are possible; in particular, is is common to increment 
+the logical sector number in order to convert the logical range of 0 to n-1
+into the physical range of 1 to n.
+Sector Translate is always called by the BDOS, whether
+the translate table address in the Disk Parameter Header is zero or nonzero.
+.bp
+.he CP/M-8000 System Guide            Function 18:  Get Address of MRT
+.ix BIOS function 18 Get Address of MRT
+.nf
+.sp 3
+               FUNCTION 18:  GET ADDRESS OF MEMORY 
+                                 REGION TABLE
+.sp 2 
+                 Entry Parameters:    
+                    Register R3: 12H
+.sp
+                 Returned   Value:  
+                    Register RR6: Memory Region
+                                   Table Address
+.fi
+.sp 2
+.ix Memory Region Table
+.pp
+This function returns the address of the Memory Region Table (MRT) in
+register RR6.  The MRT describes the segments that compose the TPA
+for non-segmented programs.  The format of the MRT is shown below:
+.sp 3
+.nf
+            Entry Count = 4  16 bits
+.sp
+            Base address of first region     32 bits
+.sp
+            Length of first region           32 bits
+.sp
+            Base address of second region    32 bits
+.sp
+            Length of second region          32 bits
+.sp
+            Base address of third region     32 bits
+.sp
+            Length of third region           32 bits
+.sp
+            Base address of fourth region    32 bits
+.sp
+            Length of fourth region          32 bits
+.fi
+.sp 2
+.ce
+.sh
+Figure 4-1.  Memory Region Table Format
+.sp 2
+.in 0
+.ll 65
+.pp
+The regions are:  1) the segment used for programs with merged program
+and data segments;  2) the program segment for programs with split
+program and data segments;  3) the data segment for programs with split
+program and data segments;  4) a data segment that gives access to 
+region 2.  (In other words, the segment number in region 2 is the
+one that goes into the program counter of a program executing in it,
+while the segment number in region 4 is a segment in data space
+that allows loading into the program space.)
+.pp
+The memory region table must begin on an even address, and must be implemented.
+.bp
+.nf
+.he CP/M-8000 System Guide                  Function 19:  Get I/O Byte
+.ix BIOS function 19 Get I/O Byte
+.nf
+.sp 3
+                   FUNCTION 19:  GET I/O BYTE
+.sp 2 
+               Entry Parameters:    
+                  Register R3: 13H
+.sp
+               Returned   Value:  
+                  Register R7: I/O Byte Current 
+                                 Value
+.fi
+.sp 2
+.pp
+This function returns the current value of the logical to physical
+input/output device byte (I/O byte) in register R7.  This 8-bit
+value associates physical devices with CP/M-8000's four logical devices
+as noted below.  Note that even though this is a byte value, we are
+using word references.  The upper byte should be zero.
+.pp
+Peripheral devices other than
+disks are seen by CP/M-8000 as logical devices, and are assigned to
+physical devices within the BIOS.  Device characteristics are defined
+
+in Table 4-3 below.
+.sp 2
+.ce
+.sh
+Table 4-3.  CP/M-8000 Logical Device Characteristics
+.qs
+.nf
+.in 5
+.ix CP/M-8000, logical device characteristics
+.ll 60
+.sp
+  Device Name                 Characteristics
+.fi
+.in 25 
+.ix CONSOLE device
+.sp
+.ti -20
+CONSOLE             The interactive console that you use to communicate with 
+the system is accessed through functions 2, 3 and 4.  Typically, the console 
+is a CRT or other terminal device.
+.sp
+.ix LIST device
+.ti -20
+LIST                The listing device is a hard-copy device, usually a 
+printer.
+.sp
+.ix AUXILIARY OUTPUT device
+.ti -20
+AUXILIARY OUTPUT    An optional serial output device.
+.sp
+.ix AUXILIARY INPUT device
+.ti -20
+AUXILIARY INPUT     An optional serial input device.
+.sp
+.in 0
+.ll 65
+.fi
+.pp
+Note that a single peripheral can be assigned as the LIST, AUXILIARY INPUT, 
+and AUXILIARY OUTPUT device simultaneously.  If no peripheral device is 
+assigned as the LIST, AUXILIARY INPUT, or AUXILIARY OUTPUT device, your BIOS 
+should give an appropriate error message so that the system does not hang if 
+the device is accessed by PIP or some other transient program.  
+Alternatively, the AUXILIARY OUTPUT and LIST functions can simply do nothing
+except return to the caller, and the AUXILIARY INPUT function can return with 
+a 1AH (CTRL-Z) in register R7 to indicate immediate end-of-file.
+.bp
+.ix I/O byte
+.pp
+The I/O byte is split into four 2-bit fields called CONSOLE, AUXILIARY INPUT, 
+AUXILIARY OUTPUT, and LIST, as shown in Figure 4-2.
+.sp 3
+.nf
+        Most Significant		Least Significant
+.sp
+  I/O Byte   LIST   AUXILIARY OUTPUT   AUXILIARY INPUT  CONSOLE
+.sp
+   bits:      7,6           5,4               3,2          1,0
+.fi
+.sp 2
+.ce
+.sh
+Figure 4-2.  I/O Byte Fields
+.sp 2
+.pp
+The value in each field can be in the range 0-3, defining the assigned
+source or destination of each logical device.  The values which can
+be assigned to each field are given in Table 4-4.
+.sp 2
+.ix I/O byte field definitions
+.ce
+.sh
+Table 4-4.  I/O Byte Field Definitions
+.sp
+.ll 65
+.ce
+CONSOLE field (bits 1,0)
+.nf
+.ll 60
+.sp
+.in 5 
+Bit                       Definition
+.fi
+.sp
+.in 10
+.ti -4
+0   console is assigned to the console printer (TTY:)
+.ti -4
+1   console is assigned to the CRT device (CRT:)
+.ti -4
+2   batch mode: use the AUXILIARY INPUT as the CONSOLE input, and the LIST 
+device as the CONSOLE output (BAT:)
+.ti -4
+3   user defined console device (UC1:)
+.fi
+.in 0
+.sp 2
+.ce
+   AUXILIARY INPUT field (bits 3,2)
+.sp
+.nf
+.in 5
+Bit                       Definition
+.sp
+.fi
+.in 10
+.ti -4
+0   AUXILIARY INPUT is the Teletype device (TTY:)
+.ti -4
+1   AUXILIARY INPUT is the high-speed reader device (PTR:)
+.ti -4
+2   user defined reader #1 (UR1:)
+.ti -4
+3   user defined reader #2 (UR2:)
+.fi
+.in 0
+.bp
+.ce
+.sh
+Table 4-4.  (continued)
+.sp
+.ll 65
+.ce
+   AUXILIARY OUTPUT field (bits 5,4)
+.sp
+.nf
+.in 5
+Bit                       Definition
+.sp
+.fi
+.in 10
+.ti -4
+0   AUXILIARY OUTPUT is the Teletype device (TTY:)
+.ti -4
+1   AUXILIARY OUTPUT is the high-speed punch device (PTP:)
+.ti -4
+2   user defined punch #1 (UP1:)
+.ti -4
+3   user defined punch #2 (UP2:)
+.sp 2
+.fi
+.in 0
+.ce
+LIST field (bits 7,6)
+.sp
+.nf
+.in 5
+Bit                       Definition
+.fi
+.in 10
+.sp
+.ti -4
+0   LIST is the Teletype device (TTY:)
+.ti -4
+1   LIST is the CRT device (CRT:)
+.ti -4
+2   LIST is the line printer device (LPT:)
+.ti -4
+3   user defined list device (UL1:)
+.sp
+.ll 65
+.in 0
+.fi
+.pp
+Note that the implementation of the I/O byte is optional, and affects
+only the organization of your BIOS.  No CP/M-8000 utilities use the
+I/O byte except for PIP, which allows access to the physical devices, and
+
+STAT, which allows logical-physical assignments to be made and displayed.
+It is a good idea to first implement and test your BIOS without the IOBYTE
+functions, then add the I/O byte function.  
+.ix PIP
+.ix STAT
+.bp
+.he CP/M-8000 System Guide                  Function 20:  Set I/O Byte
+.ix BIOS function 20 Set I/O Byte
+.nf
+.sp 3
+                   FUNCTION 20:  SET I/O BYTE
+.sp 2 
+                    Entry Parameters:    
+                       Register R3: 14H
+                       Register R5: Desired
+.sp
+                    Returned   Value: None
+.fi
+.sp 2
+.ix word references
+.pp
+This function uses the value in register R5 to set the value of the
+I/O byte that is stored in the BIOS.  See Table 4-4 for the
+I/O byte field definitions.  Note that even though this is a byte
+value, we are using word references.  The upper byte should be zero.
+.bp
+.he CP/M-8000 System Guide                 Function 21:  Flush Buffers
+.ix BIOS function 21 Flush Buffers
+.nf
+.sp 3
+                   FUNCTION 21:  FLUSH BUFFERS
+.sp 2
+           Entry Parameters:    
+              Register R3: 15H
+.sp
+           Returned   Value:  
+              Register R7: 0000H=successful write
+              Register R7: FFFFH=unsuccessful write
+.fi
+.sp 2
+.ix disk buffers, writing
+.ix disk writes
+.pp
+This function forces the contents of any disk buffers that have been
+modified to be written.  That is, after this function has
+been performed, all disk writes have been physically completed.  After the
+buffers are written, this function returns a zero in register R7.
+However, if the buffers cannot be written or an error occurs, the function
+returns a value of FFFFH in register R7.
+.bp
+.he CP/M-8000 System Guide         Function 22:  Set Exception Address
+.ix BIOS function 22 Set Exception Handler Address
+.nf
+.sp 3
+           FUNCTION 22:  SET EXCEPTION HANDLER ADDRESS
+.sp 2
+            Entry Parameters:    
+               Register R3:  16H
+               Register R5:  Exception Vector Number
+               Register RR6: Exception Vector Address
+.sp 
+            Returned   Value:  
+               Register RR6: Previous Vector Contents
+.fi
+.sp 2
+.ix exception vector
+.ix context block
+.ix Transfer Control
+.pp
+This function sets the exception vector indicated in register R5
+to the value specified in register RR6.  The previous vector value
+is returned in register RR6.  Unlike the BDOS Set Exception Vector
+Function (61), this BIOS function sets any exception vector.
+Note that register R5 contains the exception vector number.  Thus,
+to set exception #2, segmentation trap, this register contains a 2.
+.ix BDOS function 61 Set Exception Vector
+.pp
+The exception handler is called as a subroutine, with all of
+its registers saved on the stack, in the form given for
+the context block in the Transfer Control instruction.  
+On a segmented CPU, the
+exception handler is enterred in segmented mode.  It should
+return with a RET instruction.
+.pp
+All of the caller's registers except RR0 are also passed
+intact to the handler.
+
+.he CP/M-8000 System Guide                      4.2  Memory Management
+.tc    4.2  Memory Management
+.sh
+4.1  Memory Management
+.ix Memory Management
+.pp 5
+The system call SC #1 is used for several memory-management
+operations:  mapping addresses from logical to physical, copying
+blocks of (physical) memory, and transferring control from
+one address space to another.  Parameters are specified in
+registers RR2, RR4, and RR6, and a value may be returned in
+RR6.
+.pp
+For this operation it is necessary to distinguish between
+logical and physical addresses.  A logical address refers to
+an address in a program's address space; it is 16 bits long
+for a non-segmented program, and 23 bits long (stored in a
+32-bit word) in a segmented program.  The hardware may perform
+some mapping on a logical address, turning it into a physical
+address.  Also, when a non-segmented program is running on
+a segmented CPU, the non-segmented logical address acquires
+a segment number (taken from the PC), which becomes part of
+the logical address.
+.pp
+For the purposes of CPM-8000, it is necessary that the logical-to-physical
+mapping process not affect the low-order 16 bits (offset part)
+of an address.  Thus, on some systems (for example, those with
+MMU's that permit segments to start on arbitrary boundaries)
+the "physical" addresses used inside of the BIOS might undergo
+further mapping.  It is only necessary that the BIOS's physical
+addresses be able to distinguish between all memory segments
+belonging to the system and to the TPA.
+.pp
+All BIOS operations done through SC #3 expect full 32-bit
+physical addresses.  BIOS operations done through BDOS call 50
+are mapped from the caller's address space into physical addresses.
+.bp
+.he CP/M-8000 System Guide         SC #1:  Memory Copy
+.ix SC #1:  Memory Copy
+.nf
+.sp 3
+           SYSTEM CALL 1:  MEMORY COPY
+.sp 2
+            Entry Parameters:    
+               Register RR2: Length
+               Register RR4: Destination
+               Register RR6: Source
+.sp 
+            Returned   Value:  None
+.fi
+.sp 2
+.ix Memory Copy
+.pp
+This operation copies a block of Length bytes from Source to Destination.
+Length must be greater than zero and less than 65536 (a Length of zero
+is used to distinguish different memory management operations).  The
+Source and Destination are segmented physical addresses, as provided
+by the Map Address operation (below).
+.bp
+.he CP/M-8000 System Guide         SC #1:  Map Address
+.ix SC #1:  Map Address
+.nf
+.sp 3
+           SYSTEM CALL 1:  MAP ADDRESS
+.sp 2
+            Entry Parameters:    
+               Register RR2: 0
+               Register RR4: Space Code
+               Register RR6: Logical Address
+.sp 
+            Returned   Value:  
+               Register RR6: Physical Address
+.fi
+.sp 2
+.ix Map Address
+.pp
+This form of SC #1 is used to convert a logical address to a
+physical address.  Since logical addresses depend on both the
+mode (system or normal) of the program using them, and on the
+space being accessed (program or data), a code is used to
+determine which space to map from.  
+.pp
+If the program in the TPA is running non-segmented, the 
+Set TPA Segment version of SC #1 will have been used to tell
+the mapping routine which segment is being used.  If the TPA
+is running with split program and data, it is also necessary
+to distinguish between the segment number that goes in the
+program counter to access instructions, and the physical segment
+by which the TPA's instruction segment can be accessed as data.
+.pp
+The space codes are as follows:
+.sp 3
+.nf
+	0:	Caller's Data Space
+	1:	Caller's Program Space (as Data)
+	257:	Caller's Program Space (as Instructions)
+	2:	System's Data Space
+	3:	System's Program Space (as Data)
+	259:	System's Program Space (as Instructions)
+	4:	TPA's Data Space
+	5:	TPA's Program Space
+	261:	TPA's Program Space (as Instructions)
+
+.fi
+.bp
+.he CP/M-8000 System Guide         SC #1:  Set TPA Segment
+.ix SC #1:  Set TPA Segment
+.nf
+.sp 3
+           SYSTEM CALL 1:  SET TPA SEGMENT
+.sp 2
+            Entry Parameters:    
+               Register RR2: 0
+               Register RR4: 0000FFFFh
+               Register RR6: TPA Base Address
+.sp 
+            Returned   Value:  None
+.fi
+.sp 2
+.ix Set TPA Segment
+.pp
+This operation sets the base segment for a non-segmented program
+running in the TPA.  This base address is usually obtained from
+entry 1 in the Memory Region Table for programs with programs
+and data in the same segment, and from entry 2 for programs with
+split program and data segments.
+.pp
+If R6 (the high-order word of RR6) is FFFFh, the program running
+in the TPA will be assumed to be running in segmented mode.
+.bp
+.he CP/M-8000 System Guide         SC #1:  Transfer Control
+.ix SC #1:  Transfer Control
+.nf
+.sp 3
+           SYSTEM CALL 1:  TRANSFER CONTROL
+.sp 2
+            Entry Parameters:    
+               Register RR2: 0
+               Register RR4: FFFEh
+               Register RR6: Context Block Address
+.sp 
+            Returned   Value:  none
+.fi
+.sp 2
+.ix Transfer Control
+.ix context block
+.pp
+This operation causes control to be transferred to another address
+space.  It allows all of the registers to be specified (except for
+the system mode stack pointer), and is used by the debugger to
+transfer control to the program being debugged.  RR6 points to
+a context block of the form:
+.nf
+.sp 3
+		word	R0
+		word	R1
+		word	R2
+		word	R3
+		word	R4
+		word	R5
+		word	R6
+		word	R7
+		word	R8
+		word	R9
+		word	R10
+		word	R11
+		word	R12
+		word	R13
+		word	R14 (normal mode R14)
+		word	R15 (normal mode R14)
+		word	ignored
+		word	FCW (Flag/Control Word)
+		word	PC Segment
+		word	PC Offset
+.sp 2
+.fi
+.pp
+Note that the PC segment word is required even if the CPU is
+a non-segmented Z8002, for compatibility reasons.
+
+.ce
+End of Section 4
+.nx five
+ 

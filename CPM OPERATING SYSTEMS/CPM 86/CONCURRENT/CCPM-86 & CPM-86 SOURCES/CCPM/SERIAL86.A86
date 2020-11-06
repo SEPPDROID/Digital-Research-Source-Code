@@ -1,0 +1,1225 @@
+; Use   "gencmd serial86 data[m100]" when producing CMD file
+
+; Revisions: 3/30/83 whf: version check, work on PC, print num serial fields
+
+; print control constants
+
+cr		equ	00Dh	; carriage return
+lf		equ	00Ah	; line feed
+bell		equ	007h	; self-explanatory
+bs		equ	008h	; backspace
+vt		equ	00Bh	; vertical tab
+
+; cpm call function codes
+
+cpm		equ	224	; cpm interrupt
+cpmtype		equ	0h	; version number for CP/M-86
+
+c_read		equ	 1	; request single character from console
+c_write		equ	 2	; send single character to console
+c_writebuf	equ	 9	; print string terminated by '$'
+drv_dpb		equ	31	; get DBP offset and segment base
+drv_resetall	equ	13	; reset disk system
+drv_set		equ	14	; select disk drive reg DL=disk #
+				;  (0=A,1=B,etc.)
+mc_max		equ	53	; find available memory space
+
+s_bdosver	equ	12	; get OS & BDOS version
+
+; bdos function codes for direct BIOS calls
+
+s_bios    	equ	50	; direct BIOS call function code
+read_code  	equ	13	; read a 128 byte sector
+write_code 	equ	14	; write a 128 byte sector
+
+; program constants
+
+blank		equ	0E5h	; data which an empty (blank)
+				;  sector will contain
+false		equ	-1
+true		equ	 0
+
+	cseg
+
+start:
+; init serial_number
+	mov	cx,length ser_def
+	mov	al,'0'
+	mov	bx,offset serial_number
+initlop10:
+	mov	byte ptr[bx],al
+	inc	bx
+	loop	initlop10
+
+; give sign on
+	call	clear			; clear the monitor screen
+	mov     dx,offset msg0 		; print sign on message
+	call    pmsg
+
+; check for CP/M-86
+	mov cl,s_bdosver		; check OS version
+	int cpm
+	cmp ah,cpmtype
+	je okversion
+	mov dx,offset msgver
+	call pmsg
+	jmp abort
+
+okversion:
+
+; prompt operator for source and destination drives
+	mov	dx,offset msg12		; send source message to
+	call	pmsg			;  console
+	call	get_char		; get disk code
+	sub	al,'A'			; correct it
+	mov	dskS,al			; store code for source disk
+	mov	dx,offset msg13		; send destination message
+	call	pmsg			;  to console
+	call	get_char		; get disk code
+	sub	al,'A'			; correct it
+	cmp al,dskS
+	jne okdest
+	mov dx,offset msg_sdequal
+	call pmsg
+	jmp okversion
+okdest:
+	mov	dskD,al			; store code for dest disk
+
+; prompt operator for source disk
+	mov	dx,offset msg14		; send message
+	call	pmsg_wait	
+
+; the reset function clears out any previous information pertaining
+;  to format, sector size, density, etc. and the next time a disk is
+;  selected those values will be reinitialized.
+	mov	cl,drv_resetall		; reset disks
+	int	cpm
+
+; when a disk is selected, CP/M initializes the Disk Parameter Header
+;  and the Disk Parameter Block to conform with the format of the
+;  selected disk.
+	mov	al,dskS			; select source disk
+	mov	disk,al
+	mov	cl,s_bios
+	mov	dx,offset sel_dsk_tab
+	int	cpm
+
+; when the "select disk" function is performed using a direct BIOS call
+;  the offset of the DPH (in system's extra segment) is returned in the
+;  BX register.  the first word of the DPH is the offset of the sector
+;  translation table for the system.
+	mov	xlt_offset,bx		; save offset of system's
+					;  sector translation table
+
+; move DPB into program data area
+	cld
+	mov     cl,drv_dpb       	; get system extra segment
+	int	cpm			;  value and offset of DPB
+	push	es			; save ES value
+	mov	si,bx			; init source pointer
+	mov     es,data_base
+	mov     di,offset DPB
+	pop	ds			; get system extra seg into DS
+	mov     cx,15			; init byte counter
+	rep  movsb
+	push	ds			; save system extra seg value
+	push	es			; restore DS value
+	pop	ds
+
+; get system sector translation table into data segment of program
+	pop	es			; recover extra seg value
+	mov	bx,xlt_offset		; get offset of trans table
+	mov	si,es:word ptr[bx]	;  into SI	
+	test	si,si			; if SI = 0 then system doesn't
+	jnz	has_table		;  have a translation table
+	mov	bx,offset xlt_tab	;  which means that I'll have 
+	mov	cx,spt			;  to init "xlt_tab" myself
+	mov	al,0
+initlop0:
+	mov	byte ptr[bx],al
+	inc	al
+	inc	bx
+	loop	initlop0
+	mov	al,1			; set skew factor = 1
+	jmps	init_addr_tab
+has_table:
+	push	es			; save extra seg again
+	mov	bx,xlt_offset		; get offset of trans table
+	mov	di,offset xlt_tab	; DI = offset of program sector
+					;  translation table
+	mov	cx,spt			; use sectors/track as
+					;  counter value
+	mov	es,data_base		; init ES value
+	pop	ds			; init DS
+	rep  movsb
+	push	es			; restore old DS value
+	pop	ds
+
+; make sure that serial numbers that cross sector boundries will be
+;  found
+init_addr_tab:
+	sub	ax,ax			; init address offset
+	mov	si,offset xlt_tab	; SI -> xlt-tab
+	mov	cx,spt			; init counter
+	sub	dh,dh			; DH = 0
+initlop9:
+	mov	bx,offset addr_tab
+	mov	dl,byte ptr[si]		; get sector number
+	inc	si			; move pointer
+	sub	dl,xlt_tab		; subtract 1st sector number
+	add	dl,dl			; multiply by 2
+	add	bx,dx			; BX -> correct table entry
+	mov	word ptr[bx],ax		; put address into table
+	add	ax,128			; AX = AX+bytes/sectorz
+	loop	initlop9
+
+; depending on the system, each physical sector on a diskette can
+;  be made up of a number of logical sectors (128 bytes long).  the
+;  following code analyses the system sector translate table to 
+;  determine the number of logical sectors in a physical sector.
+	mov	bx,offset xlt_tab	; BX -> xlt_tab
+xltlop0:
+	mov	al,byte ptr[bx]		; AL = table entry
+	inc	bx			; BX -> next byte in table
+	inc	al
+	cmp	al,byte ptr[bx]		; see if the two numbers are in
+	je	xltlop0			;  the right order
+	sub	bx,offset xlt_tab	; if they aren't then calculate
+					;  how long the sequence was
+	mov	spb,bx			;  and save the value
+; calculate skew of system sector translation table
+	mov	al,xlt_tab[bx]		; get byte at xlt_tab+spb
+	sub	al,xlt_tab		;  and subtract byte at xlt_tab
+	mov	bx,spb			;  now divide by sectors/block
+	sub	ah,ah			; prepare of division
+	div	bl
+	mov	skew,al
+; tell operator about skew
+skew_prompt:
+	push	ax			; save system skew
+	call	clear			; clear screen
+	mov	dx,offset msg21		; send message
+	call	pmsg
+	pop	dx			; recover skew
+	push	dx			; remember skew
+	or	dl,030h			; make it ASCII
+	mov	cl,c_write
+	int	cpm
+; check for 0 skew factor
+	pop ax				; get skew
+	or ax,ax
+	je dont_change			; skip question if 0 skew
+; ask operator if he/she would like to change the sector skew
+	mov	dx,offset msg16
+	call	pmsg
+	call	get_char		; get Y/N response
+	cmp	al,'N'			; check for No
+	je	dont_change
+; ask for new skew factor
+	mov	dx,offset msg17
+	call	pmsg
+	call	get_1num
+	mov	skew,al
+; make new sector translation table using skew factor supplied by
+;  operator
+	mov	si,offset xlt_tab	; BX is pointer into xlt_tab
+	mov	bl,byte ptr[si]		; init beginning sector number
+	mov	bh,bl
+	mov	dl,sptbyte		; calculate sectors/track +
+	add	dl,bl			;  first sector number
+	mov	cl,skew			; init loop counter
+	sub	ch,ch
+xltlop1:
+	push	cx			; save loop counter
+xltlop2:
+	mov	cx,spb			; init sectors/block counter
+	push	bx			; save sector # registers
+xltlop3:
+	mov	byte ptr[si],bh		; put sector number into table
+	inc	si			; increment pointer
+	inc	bh			; increment sector number
+	loop	xltlop3
+	mov	ax,spb			; calculate new starting sector
+	mov	cl,skew
+	mul	cl
+	pop	bx			; recover sector # registers
+	add	bh,al			; add skew*spt to starting
+					;  sector number
+	cmp	bh,dl			; compare new starting sector #
+					;  to first sector # + spt
+	jb	xltlop2
+	add	bl,spbbyte		; add sectors/block to 1st
+					;  starting sector number
+	mov	bh,bl			; init starting sector
+					;  number of the next sector
+					;  block
+	pop	cx			; recover loop counter
+	loop	xltlop1
+dont_change:
+; ok, now calculate many how bytes there are on a track.
+;  bytes/track = sectors/track * logical sector size
+	mov     ax,spt	    
+	mov     bx,128
+	mul     bx
+	mov     bpt,ax   		; save value
+
+; calculate last_trk: whf 2/28/83
+	mov bx,1
+	mov cl,bsh
+	rol bx,cl			; bx=sectors per block
+	mov ax,spt			; ax=sectors per track
+	div bx
+	mov bx,ax			; bx=blocks per track
+	mov ax,dsm
+	inc ax				; ax=total blocks
+	div bx				; ax=total data tracks
+	add ax,off			; ax=total tracks
+	dec ax				; ax=last_track (0 relative)
+	mov last_trk,ax			; save it away
+
+	mov     cl,mc_max	    	; find 64k or less of free
+	mov     dx,offset mcb		;  memory
+	int     cpm
+
+; check the disk for blank tracks starting at last track. blank
+;  tracks won't be copied
+	mov	dx,offset msg1		; tell operator about search
+	call	pmsg
+	cld			       	; set direction flag forward
+	mov	dx,offset msg7		; send 'Reading' message
+	call	pmsg
+	mov     cx,last_trk    		; initialize track counter
+scan_loop:
+	push    cx	     		; save track counter
+	mov     track,cl       		; get current track
+	mov	al,cl			; make track number ascii
+	call	make_ascii
+	mov	dx,offset ascii_trk	; print it
+	call	pmsg
+	mov     dma_addr,0   		; initialize dma offset
+	call    seek	   		; seek to track
+	call    read	   		; read a track 
+	mov	al,blank		; init AL with the character
+					;  which is found in blank
+					;  (empty) sectors
+	mov	es,m_base		; init segment reg
+	mov     di,0	   		; offset is set to zero
+	mov     cx,bpt			; how many bytes to scan
+	repe  scasb	    		; scan until ZF=1 or CX=0
+	jne     data_found     		; if ZF=1 then have found data
+	call	erase_trk		; erase old track message
+	pop     cx	     		; otherwise scan another track
+	loop    scan_loop      		;  if CX<>0
+
+; the diskette is blank if program flow reaches this point
+	mov	dx,offset error_msg0
+	call	pmsg			; inform operator that the
+	call	abort			;  source disk is blank and
+					;  abort operation
+
+data_found:
+	pop     cx	     		; if data is found then save
+	mov     last_trk,cx    		;  the number of the non-blank
+					;  track
+; the information on the source disk will more than likely need to be
+;  paged into memory.  the following code calculates how many pages
+;  or blocks will be needed.
+	mov	ax,m_length		; calculate number of bytes
+	mov	bx,16			;  available to be used for
+	mul	bx			;  a buffer area
+	mov	bx,bpt
+	div	bx
+	mov	cx,last_trk		; CX will contain number of
+	sub	cx,off			;  tracks to be copied
+	cmp     ax,cx      		; if block1 track count<lst_trk
+	jl      over0			;  then get block2 track count 
+	mov     B1_trk_cnt,cx		;  last_trk, block_cnt=
+	mov     block_cnt,1 		;  1 and jump to new_disk  
+	jmps    over07
+over0:
+	dec	ax
+	mov     B1_trk_cnt,ax
+	sub	dx,dx  
+	mov	bx,ax			; bx holds divisor
+	mov     ax,cx			;  hold dividend in division
+					;  operation
+	div	bx	 		; do division
+	mov	block_cnt,ax		; move result to memory
+	mov	B2_trk_cnt,dx		; remainder = block2 track
+					;  count
+over07:
+; prompt operator for number of serial fields on source disk
+	call	get_cnt
+	cmp	al,0			; if count = 0 then don't ask
+	jz	over09			;  for a starting serial number
+
+; prompt operator for starting serial number
+	call	get_serial
+over09:
+; ask operator if he/she wants to verify the copy against the source
+;  disk and if so, how often
+	call	clear			; clear monitor screen
+	mov	dx,offset msg18		; ask question
+	call	pmsg
+	mov	ver_freq,0		; init verification frequency
+					;  value
+	call	get_char		; get yes/no answer
+	cmp	al,'N'			; check for no
+	je	over01			; if no then dont verify
+; ask operator for frequency of verification
+	mov	dx,offset msg19		; send message
+	call	pmsg
+	call	get_2num		; get response from operator
+	mov	ver_freq,al		; save value
+over01:
+
+; clear monitor screen
+	call	clear
+
+	mov	dsk_cnt,0		; init diskette counter
+
+; this portion of code does the copying and serializing
+new_disk:
+	cld    				; move current serial number
+	mov     es,data_base		;  into insert serial message
+	mov     cx,length ser_def
+	mov     si,offset serial_number
+	mov     di,offset serial_1
+	rep  movsb
+
+	mov	dx,offset msg3		; prompt operator for
+	call    pmsg_wait		;  destination diskette
+
+; home both disk drives
+	call	selectD
+	call	home
+	call	selectS
+	call	home
+
+	mov     ax,off			; don't copy reserved tracks
+	mov     trackS,al
+	mov     trackD,al
+
+	mov     ax,B1_trk_cnt		; init track counter
+	mov     track_cnt,ax
+
+	mov     tog0,0	    		; decides whether to use
+		       			;  B1_trk_cnt or B2_trk_cnt
+
+	mov     serial_cnt,0		; used to check if all the
+					;  serial fields were found
+
+	mov	dx,offset msg7		; send 'Reading' message
+	call	pmsg
+	call	seekS			; read in a track so that
+	mov	dma_addr,0		;  there is always an extra
+	call	read			;  one in memory
+	call	erase_msg		; erase "Reading" message
+
+	mov	cx,block_cnt		; init block counter
+
+create_dsk:
+	push    cx	     		; save block counter
+	mov	cx,bpt	  		; intialize dma offset
+	mov	dma_addr,cx
+	call	selectS			; select source disk
+	mov	dx,offset msg7		; send 'Reading' message
+	call	pmsg
+	mov	cx,track_cnt	 	; init track counter
+lop0:
+	push    cx	  		; save track counter
+	call    seekS      		; seek track on source drive
+	call    read			; read a track
+	call	erase_trk		; erase old track message
+	pop     cx	  		; recover track counter
+	loop    lop0
+	call	erase_msg		; erase "Reading" message
+
+	call    serialize  		; insert current serial number
+					;  into all serial fields in
+					;  this block
+
+	mov     dma_addr,0   		; same as above but write to
+					;  destination drive
+	call	selectD			; select destination drive
+	mov	dx,offset msg8		; send "Writing" message to
+	call	pmsg			;  console
+	mov     cx,track_cnt
+lop1:
+	push    cx
+	call    seekD
+	call    write
+	call	erase_trk		; erase old track message
+	pop     cx
+	loop    lop1
+	call	erase_msg		; erase "Writing" message
+
+; move extra track (read and searched but not written) from end of
+;  buffer to the beginning of the buffer
+	cld		 		; clear direction flag
+	mov	cx,bpt			; init counter
+	mov	ax,cx			; calculate starting address 
+	mov	bx,B1_trk_cnt		;  of data to be moved
+	mul	bx
+	mov	si,ax
+	mov	di,0			; where block is to be moved
+	mov	ax,m_base		; init segment registers
+	push	ds			; save old values
+	push	es
+	mov	ds,ax			; move in new values
+	mov	es,ax
+	rep  movsb			; do the move
+	pop	es			; recover values of segment
+	pop	ds			;  registers
+
+	pop	cx			; recover block counter
+	loop    create_dsk	 	; do again if not last block
+	cmp	tog0,1			; check if we have reached this
+					;  point before
+	je	done			; if yes then we are done
+	mov	tog0,1			; no, so toggle tog0
+	mov	ax,B2_trk_cnt		; if B2_trk_cnt=0
+	cmp	ax,0			;  then we are done
+	je	 done
+	mov	track_cnt,ax		; else do above again but with
+	mov	cx,1			;  B2_trk_cnt = track count
+	jmp	create_dsk
+done:
+	mov	dx,offset msg8		; send "Writing" message
+	call	pmsg			;  to console
+	call	seekD			; write last track to dest
+	call	write			;  drive
+
+	mov	al,serial_cnt		; check if all serial fields
+	cmp	al,count_num		;  were found
+serial_chk:
+	je	serial_ok		; if not then there is an error
+	mov	dx,offset error_msg3	; inform operator of error
+	call	pmsg
+					; output # serial fields
+	mov dl,' ' ! mov cl,c_write ! int cpm
+	xor ax,ax ! mov al,serial_cnt
+	mov bl,100 ! div bl 
+	push ax ! add al,'0' ! mov dl,al ! mov cl,c_write ! int cpm
+	pop ax ! mov al,ah ! xor ah,ah
+	mov bl,10 ! div bl
+	push ax ! add al,'0' ! mov dl,al ! mov cl,c_write ! int cpm
+	pop ax ! mov al,ah 
+	add al,'0' ! mov dl,al ! mov cl,c_write ! int cpm
+	call	abort			; abort operation
+serial_ok:
+
+	call	erase_msg		; erase "Writing" message
+
+	inc	dsk_cnt			; increment diskette counter
+
+	mov	ax,dsk_cntword		; get number of diskettes done
+	mov	cx,ver_freqword		; get verification frequency
+	jcxz	dont_verify		; don't verify if CX = 0
+	div	cl			; see if it's time to verify
+	test	ah,ah			; if DX = 0 then it's time
+	jnz	dont_verify
+; do the verification
+	mov	dx,offset msg20		; send "Verifying" message
+	call	pmsg
+	mov	cx,last_trk		; calculate number of tracks to
+	mov	ax,off			;  compare
+	sub	cx,ax
+	inc	cx			; correct result
+	mov	trackS,al
+	mov	trackD,al
+verlop0:
+	push	cx			; save track counter
+	call	selectD			; select dest disk
+	call	seekD			; seek to track on dest disk
+	mov	dma_addr,0		; init offset of 1st buffer
+	call	read			; read a track from source disk
+	call	erase_trk		; erase old track message
+	call	selectS			; select source drive
+	call	seekS			; seek to current track
+	mov	cx,bpt			; init 2nd buffer offset
+	push	cx			; temp save
+	mov	dma_addr,cx
+	call	read			; read a track from dest disk
+	call	erase_trk		; erase old track message
+	pop	cx			; recover track data length
+					;  into byte counter
+	sub	si,si			; init 1st pointer
+	mov	di,cx			; init 2nd pointer
+verlop1:
+	push	ds			; save value of data seg reg
+	mov	ax,m_base		; get extra seg reg value
+	mov	es,ax			; init ES
+	mov	ds,ax			; init DS
+	repe  cmpsb			; verify
+	pop	ds			; recover data seg reg value
+	je	verlop2			; if ZF = 0 then verification
+					;  failed.  inform operator
+	dec	di			; correct 2nd buffer pointer
+	push	si			; save pointer to 1st buffer
+	push	cx			; save byte pointer
+	mov	si,offset ser_def	; SI -> to ser_def
+	mov	cx,length ser_def	; init counter
+	repe  cmpsb			; do compare
+	jne	verlop3
+	pop	cx			; recover byte counter
+	sub	cx,length ser_def-1	; correct it
+	pop	si			; recover 1st buffer pointer
+	add	si,length ser_def-1	; correct it
+	jmps	verlop1
+; verification failed so inform operator to try it again
+verlop3:
+	call	clear
+	mov	dx,offset error_msg7
+	call	pmsg
+	jmp	new_disk
+verlop2:
+	pop	cx			; recover track counter
+	loop	verlop0
+
+dont_verify:
+	call	clear			; clear monitor screen
+	cld			 	; insert current serial number
+	mov	cx,length ser_def	;  into remove message
+	mov	es,data_base
+	mov	si,offset serial_number
+	mov	di,offset serial_2
+	rep  movsb
+
+	mov	dx,offset msg4		; prompt operator to remove
+	call	pmsg			;  copy
+
+	call    inc_serial	  	; increment current serial
+					;  number
+
+	jmp	new_disk		; do another disk
+
+
+; read a track from the selected disk
+read:
+	mov	io_tab,read_code
+	jmps    track_io
+
+; write a track to the selected disk drive
+write:
+	mov	io_tab,write_code
+	jmps    track_io
+
+; do track input or output on selected disk drive
+track_io:
+	mov	cx,4			; initialize io retry counter
+io_retry:
+	push    cx		  	; save retry counter
+	call    track_setup	 	; init dma base address
+	mov	sector,0		; start with sector #0
+	mov	cx,spt			; init sector counter
+io_lop:
+	push    cx		  	; save sector counter
+	call    sectran			; perform sector translation
+	mov	dx,offset set_sector	; set sector thru cpm
+	mov	cl,s_bios
+	int	cpm
+
+	mov	dx,offset set_dma_offset ; set dma offset thru cpm
+	mov	cl,s_bios
+	int	cpm
+
+	mov	cl,s_bios	  	; set read/write func thru cpm
+	mov	dx,offset io_tab
+	int	cpm
+	test    al,al		; io error if not zero
+	jnz	io_error		; tell operator about io error
+	inc	sector			; next sector to read
+	pop	cx		  	; recover sector counter
+	loop    io_lop
+
+	pop	cx		  	; clean up stack
+	mov	ax,bpt			; init dma_addr for next
+	add	dma_addr,ax		;  track
+	ret	
+io_error:
+	pop	cx		  	; clean up stack
+	call	home			; home disk
+	pop	cx		  	; recover retry counter
+	loop    io_retry
+	ret
+ 
+track_setup:
+	mov	ax,m_base		; initialize dma base address
+	mov	dma_base,ax
+	mov	cl,s_bios
+	mov	dx,offset set_dma_base
+	int	cpm
+	ret
+
+; do logical to physical sector translation
+sectran:
+	sub	ah,ah
+	mov	al,sector
+	mov	bx,offset xlt_tab
+	xlat	xlt_tab
+	mov	tsector,al
+	sub	ah,ah
+	sub	al,xlt_tab
+	add	al,al
+	mov	bx,offset addr_tab
+	add	bx,ax
+	mov	ax,word ptr[bx]
+	add	ax,dma_addr
+	mov	dma_offset,ax
+	ret
+
+; home the selected drive
+home:
+	mov	track,0
+	jmps	seek
+
+; seek to the selected track on the source drive
+seekS:
+	mov	al,trackS
+	inc	trackS
+	jmps	display_trk
+
+; seek to the selected track on the destination drive
+seekD:
+	mov	al,trackD
+	inc	trackD
+display_trk:
+	mov	track,al
+	call	make_ascii			; make track # ascii
+	mov	dx,offset ascii_trk		; send track number to
+	call	pmsg				;  console
+
+; seek to the selected track on the selected drive
+;  "track" = desired track #
+seek:
+	mov	cl,s_bios
+	mov	dx,offset seek_trk_tab
+	int	cpm
+	ret
+
+; select source disk
+selectS:
+	mov	dl,dskS
+	jmps	select
+
+; select destination disk
+selectD:
+	mov	dl,dskD
+
+; select a disk drive for future operations
+select:
+	mov	cl,drv_set
+	int	cpm
+	ret
+
+; get starting serial number from operator
+get_serial:
+	mov	dx,offset msg2			; send prompt message
+	call	pmsg				;  to console
+
+	mov	dx,offset con_buf0	; point to console input buffer
+	mov	cl,10			; CP/M read console buffer
+	int	cpm
+	cmp	buf0_len,length ser_def ; check for correct number
+						;  of digits
+	jne	bad_serial
+	ret
+
+bad_serial:
+	mov	error_msg2,length ser_def
+	or	error_msg2,030h			; make it ASCII
+	mov	dx,offset error_msg1
+	call	pmsg
+	jmps	get_serial
+
+; get from the operator how many serial fields are on the source
+;  diskette.  this is a safeguard to help prevent the wrong disk
+;  from being used.
+get_cnt:
+	mov	dx,offset msg6			; send prompt message
+	call	pmsg				;  to console
+	call	get_2num			; get a number (0-99)
+						; from operator
+	mov	count_num,al			; save number
+	ret
+
+; input two ASCII numbers into buffer 1 and translate them into a 
+;  binary number which is returned in the AL register
+get_2num:
+	mov	dx,offset con_buf1		; get address of buffer
+	mov	cl,10
+	int	cpm
+	cmp	buf1_len,2			; can't have more than
+	jbe	input_ok0			;  two digits 0-99
+input_err0:
+	mov	dx,offset error_msg6		; tell operator about
+	call	pmsg				;  error and try again
+	jmp	get_2num
+input_ok0:
+	cmp	buf1_len,0			; need at least one
+	je	input_err0			;  digit. tell operator
+						;  if there isn't
+	mov	bx,offset input_num		; bx -> input buffer
+	mov	cl,buf1_len			; (cl) = digit count
+	sub	ch,ch				; zero upper half of cx
+	add	bx,cx				; make bx point to
+	dec	bx				;  units digit of input
+
+	mov	dh,byte ptr[bx]			; get units digit
+	and	dh,00Fh				; mask off upper nybble
+	loop	tens				; if (cx) <> 2 then get
+						;  tens digit
+	jmp	got_it				; only had one digit
+tens:
+	dec	bx				; make bx -> to tens
+						;  digit
+	mov	dl,byte ptr[bx]			; get tens digit
+	and	dl,00Fh				; mask off upper nybble
+	mov	al,10				; load multiplier
+	mul	dl				; do multiply
+	add	dh,al				; add tens to units
+got_it:
+	mov	al,dh				; save number
+	ret
+
+	
+serialize:	; locate all occurrances of serial numbers in buffer
+
+	cld			; set direction forward
+	mov	es,m_base	; point ES: to beginning of buffer
+	mov	di,0
+	mov	ax,bpt
+	mov	bx,track_cnt
+	inc	bx		; remember that an extra track was read
+	mul	bx
+	mov	cx,ax
+next_serial:
+	mov	si,offset ser_def	; point at pattern
+	lodsb			; get first char of pattern into AL
+	repne scasb		; look for next occurance of AL
+	jne	no_match	; if not match, then we are done
+
+	push	di		; save scan pointer
+	push	cx		; save count
+	mov	cx,(length ser_def)-1	; residual length of pattern
+	repe cmpsb
+	pop	cx		; recover scan count
+	pop	di		; recover scan pointer
+	jne	next_serial	; no, rest didn't match
+
+	push    cx		; save scan pointer
+	dec	di		; move di back to start of field
+	mov	si,offset serial_number ; si points to current serial
+					;  number
+	mov	cx,length ser_def ; counter for number of bytes to move
+	rep  movsb
+	pop	cx		; recover scan pointer
+	inc	serial_cnt
+	jmp	next_serial
+
+no_match:
+	ret
+
+; increment the ASCII serial number
+
+inc_serial:
+	mov	cx,length ser_def	; length of serial number
+	mov	bx,offset serial_number ; bx points to start of string
+	add	bx,(length ser_def)-1 ; bx now points to end of string
+addlop:
+	push    cx		  	; save length of pointer
+	mov	al,byte ptr[bx]		; get byte of serial number
+	inc	al		  	; add 1 to it
+	daa			 	; decimal adjust it
+	lahf				; check to see if there was a
+	and	ah,10h		;  carry from the lower half of
+	mov	cl,4			;  the al register
+	shl	ah,cl
+	jc	fix		 	; if yes then increment the next
+					;  byte of the serial number
+	mov	byte ptr[bx],al		; else save byte and stop
+	pop	cx		  	; clean up stack
+	ret
+fix:
+	and	al,0fh			; make high nybble of byte
+	or	al,30h			;  equal to "3" again
+	mov	byte ptr[bx],al		; save byte back in serial
+					;  number
+	dec	bx		  	; point at next higher byte
+	pop	cx		  	; recover length of serial
+					;  number
+	loop    addlop			; do again if CX<>0
+	ret
+
+; translate the 8 bit digit in AL to ASCII into "ascii_trk"
+make_ascii:
+	mov	dx,'  '			; fill "ascii_trk" with blanks
+	mov	ascii_trk,dx
+	mov	ascii_trk+2,dx
+	mov	bx,offset ascii_trk+3	; BX -> "ascii_trk"+3
+	mov	dl,10			; init divisor
+makelop1:
+	sub	ah,ah			; make AH zero	
+	div	dl			; and divide by 10
+	add	ah,'0'			; make remainder ascii
+	mov	byte ptr[bx],ah		; store it in "ascii_trk"
+	dec	bx			; move pointer to next location
+	test	al,al			; see if quotient zero yet
+	jnz	makelop1		; no, got more digits
+	ret
+
+; print the message at [DX] and wait for RETURN key
+pmsg_wait:
+	call	pmsg			; print the message
+wait_1:
+	mov	cl,c_read		; CP/M Console Input
+	int	cpm
+	cmp	al,'C'-'@'		; see if control-C
+	je	abort			; terminate program
+	cmp	al,cr			; see if ASCII carriage return
+	jne	wait_1			; no, try again
+	ret				; back to caller
+
+; abort the program
+abort:
+	mov	dx,offset abort_msg
+	call	pmsg_wait
+	mov	cl,0			; CP/M reboot function
+	int	cpm
+
+; print the string whose offset is in dx and is terminated by '$'
+pmsg:
+	mov	cl,c_writebuf
+	int	cpm
+	ret
+
+; clears the monitor screen
+clear:
+	cmp	clear_on,false		; see if clear screen enable is
+	je	no_clear		;  off
+	mov	dx,offset clear_msg
+	call	pmsg
+no_clear:
+	ret
+
+; get ASCII input from operator and translate to upper case
+get_char:
+	mov	cl,c_read		; request single character
+	int	cpm			;  from console
+	cmp	al,'C'-'@'			; check for control-C
+	je	abort			; abort operation if yes
+	and	al,05Fh			; xlate lower to upper chase
+; echo choice back to operator
+echo_choice:
+	push	ax			; temp save
+	mov	dl,bs			; write over last input
+	mov	cl,c_write
+	int	cpm
+	pop	dx			; get temp save
+	push	dx
+	mov	cl,c_write		; write it out
+	int	cpm
+	pop	ax
+	ret
+
+; get a single ASCII number from operator and check for .
+get_1num:
+	mov	cl,c_read
+	int	cpm
+	cmp	al,'C'-'@'			; check for control-C
+	je	abort
+	and	al,00Fh
+	ret
+
+; this code erases the "Reading" and "Writing" messages from the
+;  monitor screen
+erase_msg:
+	mov	dx,offset msg10
+	call	pmsg
+	ret
+
+; this code erases the old track numbers from the monitor screen
+erase_trk:
+	mov	dx,offset msg11
+	call	pmsg
+	ret
+
+;*************************************************************************
+		dseg
+;*************************************************************************
+		org	0000h
+
+	; Page Zero Definitions
+
+code_length	rw	1	; low 16 bits code segment length
+code_length_h	rb	1	; high 8 bits code segment length
+code_base	rw	1	; base paragraph of code segment
+model_8080	rb	1	; 8080 model byte
+data_length	rw	1	; low 16 bits data segment length
+data_length_h	rb	1	; high 8 bits data segment length
+data_base	rw	1	; base paragraph of data segment
+		rs	1	; << reserved >>
+extra_length	rw	1	; low 16 bits extra segment length
+extra_length_h	rb	1	; high 8 bits extra segment length
+extra_base	rw	1	; base paragraph of extra segment
+
+
+;*************************************************************************
+		org	0100h
+
+seek_trk_tab    db	10	; seek track function table
+track	   	rb	4
+
+sel_dsk_tab	db	9	; select disk drive
+disk		rb	4
+
+set_dma_base    db	17	; set dma base address function table
+dma_base	rw	2
+
+set_dma_offset  db	12	; set dma offset address function table
+dma_offset	rw	2
+
+set_sector	db	11	; set sector function table
+tsector		rb	4	; holds translated sector #
+sector		rb	1	; holds untranslated sector #
+
+io_tab		rb	1	; select read/write function table
+		rw	2
+
+bpt    		rw	1	; how many bytes per track
+
+mcb		rw	0	; memory control block
+m_base	  	rw	1	; base address (segment address)
+m_length	dw	0FFFh 	; desired length of memory area
+m_ext	   	rw	1
+
+ver_freqword	rw	0
+ver_freq	db	0,0	; holds verification frequency value
+dsk_cntword	rw	0
+dsk_cnt		db	0,0	; number of copies made so far
+
+B1_trk_cnt    	rw	1
+B2_trk_cnt    	rw	1
+
+block_cnt	rw	1
+
+track_cnt	rw	1
+
+tog0	    	rb	1
+
+serial_cnt    	rb	1
+
+count_num	rs	1	; holds number of serial fields
+				;  to expect on source disk
+dskS		db	0
+dskD		db	1
+
+skew		rb	1	; reserve storage for skew factor
+spb		rw	0	; sectors/block
+spbbyte		rb	2
+
+DPB		rb	0	; Disk Parameter Block
+spt		rw	0	; sector per track
+sptbyte		rb	2
+bsh		rb	1	; block shift factor
+blm		rb	1	; block mask
+exm		rb	1	; extent mask
+dsm		rw	1	; total storage capacity of drive
+drm		rw	1	; number of directory entries
+al0		rb	1
+al1		rb	1
+cks		rw	1
+off		rw	1	; number of reserved tracks
+
+xlt_offset	rw	1	; offset of system translate table
+
+xlt_tab		rb	128	; will contain sector translation table
+addr_tab	rw	128	; will contain sector address offsets
+				;  from beginning of track address in
+				;  disk data buffer
+dma_addr	rw	1	; will hold dma offset by track
+
+trackS		rb	1
+trackD		rb	1
+
+clear_on	db	true
+
+last_trk	dw	76
+
+ser_def		db	'654321'
+
+msg0		db	cr,lf,lf
+		db	'-------------------------'
+		db	'-------------------------'
+		db	'-'
+		db	cr,lf
+		db	'SERIAL86    V1.2   Serial No. '
+		db	'XXXX-0000-654321'
+		db	cr,lf
+		db	'Copyright (C) 1982'
+		db	cr,lf
+		db	'Digital Research, Inc.          '
+		db	'All Rights Reserved'
+		db	cr,lf
+		db	'-------------------------'
+		db	'-------------------------'
+		db	'-'
+		db	cr,lf,lf
+		db	'Diskette Generation Utility',cr,lf
+		db	'for CP/M-86 based systems'
+		db	'$'
+
+msg2		db	cr,lf,lf
+		db	'Enter starting serial number  '
+		db	'$'
+
+msg6		db	bell,cr,lf,lf
+		db	'Enter number of serial fields on source disk'
+		db	' ? '
+		db	'$'
+
+msg7		db	'Reading Track  '
+		db	'$'
+
+msg8		db	'Writing Track  '
+		db	'$'
+
+msg9		rs	0
+ascii_trk	rw	2
+		db	' '
+		db	'$'
+
+msg10		db	cr,'                             ',cr,'$'
+
+msg11		db	bs,bs,bs,bs,bs
+		db	'$'
+
+error_msg1	db	cr,lf,lf
+		db	'Serial number must be '
+error_msg2	rb	1
+		db	' digits long. Try again !!!  '
+		db	'$'
+
+msg12		db	cr,lf,lf,lf
+		db	'Source Drive is (A,B,etc.) ? '
+		db	'$'
+
+msg13		db	cr,lf,lf
+		db	'Destination Drive is (A,B,etc.) ? '
+		db	'$'
+
+msg_sdequal	db	bell,cr,lf
+		db	'Source and Destination are the same. Please re-enter.'
+		db	'$'
+
+msg14		db	cr,lf,lf
+		db	'Insert Source Disk '
+		db	'and type "Return" to continue '
+		db	cr,lf,lf
+		db	'$'
+
+msg3		db	cr,lf,lf
+		db	'Insert '
+serial_1	rb	length ser_def
+		db	' into destination drive'
+		db	cr,lf
+		db	'then type "Return" to continue'
+		db	cr,lf,lf
+		db	'$'
+
+msg4		db	bell,cr,lf,lf
+		db	'Remove '
+serial_2	rb	length ser_def
+		db	' from destination drive'
+		db	cr,lf,lf
+		db	'$'
+
+abort_msg	db	cr,lf,cr,lf
+		db	cr,lf,'*** Serialization terminated ***'
+		db	cr,lf
+		db	cr,lf,'Replace disk in Drive A:'
+		db	cr,lf,'	 then type ENTER to reboot ','$'
+
+msg16		db	cr,lf,lf
+		db	'Would you like to change the skew factor'
+		db	' (Y/N) ? '
+		db	'$'
+
+msg17		db	cr,lf,lf
+		db	'Enter skew factor (1-9) ? '
+		db	'$'
+
+msg18		db	cr,lf,lf
+		db	'Do you want to perform copy verification'
+		db	' (Y/N) ? '
+		db	'$'
+
+msg19		db	cr,lf,lf,lf
+		db	'1 = every disk is verified'
+		db	cr,lf
+		db	'2 = every 2nd disk is verified'
+		db	cr,lf
+		db	'3 = every 3rd disk is verified'
+		db	cr,lf,'"',cr,lf,'"',cr,lf,'"',cr,lf
+		db	'99 = every 99th disk is verified'
+		db	cr,lf,lf
+		db	'How often do you want the verification to'
+		db	' occur (1-99) ? '
+		db	'$'
+
+msg20		db	'Verifying Track '
+		db	'$'
+
+msg21		db	cr,lf,lf
+		db	'The current sector skew is '
+		db	'$'
+
+error_msg3	db	bell,cr,lf,lf
+		db	'Did not find the correct number of required serial '
+		db	'fields.'
+		db	cr,lf
+		db	'Number found was '
+		db	'$'
+
+error_msg6	db	cr,lf,lf
+		db	'Wrong. Need one or two digits'
+		db	'$'
+
+error_msg7	db	bell,cr,lf,lf
+		db	'**** Verification failed ****'
+		db	cr,lf,lf
+		db	'Try it again.'
+		db	cr,lf
+		db	'$'
+
+error_msg0	db	bell,cr,lf,lf
+		db	' The Source Disk is BLANK '
+		db	cr,lf
+		db	'$'
+
+msg1		db	cr,lf,lf
+		db	'Checking for blank tracks'
+		db	cr,lf,lf
+		db	'$'
+
+clear_msg	db	cr,lf,lf,lf
+		db	'$'
+
+msgver		db	cr,lf,lf
+		db	'This program requires CP/M-86'
+		db	cr,lf,lf
+		db	'$'
+
+con_buf0	db	10			; buffer used to read
+buf0_len	rb	1			;  serial number
+serial_number	rb	length ser_def
+		rb	10-1-length ser_def
+
+con_buf1	db	5		; another console input buffer
+buf1_len	rb	1
+input_num	rb	5
+
+
+		db	0		; force out end of data segment
+

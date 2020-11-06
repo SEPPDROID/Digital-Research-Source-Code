@@ -1,0 +1,97 @@
+
+;*****************************************************
+;*
+;*	Memory Management Module Interface
+;*
+;*****************************************************
+
+	CSEG
+	org	0
+
+	jmp init
+	jmp entry
+
+sysdat		dw	0	;SYSDAT segment
+supervisor	equ	(offset $)
+		rw	2
+
+		db	'COPYRIGHT (C) 1981,'
+		db	' DIGITAL RESEARCH '
+serial		db	'654321'
+
+;====
+init:
+;====
+
+	mov sysdat,ds
+	mov bx,offset supmod ! mov si,supervisor
+	mov ax,[bx]
+	mov cs:[si],ax
+	mov ax,2[bx]
+	mov cs:2[si],ax
+	retf
+
+;*****************************************************
+;*
+;*	MEM function table
+;*
+;*****************************************************
+
+functab	dw	maxmem_entry	; 53 - Get Max Memory
+	dw	absmax_entry	; 54 - Get Abs Max Mem
+	dw	cpmalloc_entry	; 55 - Alloc Mem
+	dw	cpmabsa_entry	; 56 - Alloc Abs Mem
+	dw	cpmfree_entry	; 57 - Free Mem
+	dw	freeall_entry	; 58 - Free All Mem
+	dw	malloc_entry	; 129 - Rel Mem Rqst
+	dw	mfree_entry	; 130 - Memory Free
+	dw	share_entry	; share memory
+	dw	maualloc_entry	; Alloc from MAU
+	dw	maufree_entry	; Free from MAU
+	dw	mlalloc_entry	; Alloc from Mem List
+	dw	mlfree_entry	; Free from Mem List
+
+;=====		=================
+entry:		; MEM entry point
+;=====		=================
+	mov ax,rlr
+	cmp ax,mxmemowner
+	je havemx
+	    push bx ! push cx ! push dx
+	    mov dx,offset mxmemqpb ! mov cx,f_qread
+	    call mpmif ! pop dx ! pop cx ! pop bx
+	    mov si,rlr ! mov mxmemowner,si
+	    mov mxmemcount,0
+	    push p_flag[si]
+	    or p_flag[si],pf_tempkeep
+havemx:	inc mxmemcount
+	mov ch,0 ! shl cx,1
+	mov si,cx
+	call cs:functab[si]
+	dec mxmemcount
+	cmp mxmemcount,0
+	jne entry_out
+	    mov mxmemowner,0
+	    pop ax ! and ax,pf_tempkeep ! jnz tkon
+		mov si,rlr
+		and p_flag[si],not pf_tempkeep
+tkon:	    push cx ! push bx
+	    mov dx,offset mxmemqpb ! mov cx,f_qwrite
+	    call mpmif ! pop bx ! pop cx
+	    mov si,rlr
+	    test p_flag[si],pf_ctlc ! jz entry_out
+		push bx ! push cx
+		sub dx,dx
+		mov cx,f_terminate ! call mpmif
+		pop cx ! pop bx
+entry_out:
+	mov ax,bx ! retf
+;=====		===============
+mpmif:		; MPM interface
+;=====		===============
+	callf cs:dword ptr .supervisor ! ret
+;======		================
+xiosif:		; XIOS interface
+;======		================
+	callf dword ptr .xiosmod ! ret
+

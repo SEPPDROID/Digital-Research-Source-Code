@@ -1,0 +1,414 @@
+#
+# Makefile for CP/M 3.1
+#
+# Please run ENV.BAT before using this makefile.
+#
+OBJS = mcd80a.obj mcd80f.obj parse.obj
+#
+# Because DOS only allows fiddly little command lines, I'm using the
+# "xdel @command" abilities of DRDOS to pass long command lines.
+#
+COMS = \@coms.mak
+HEXS = \@hexs.mak
+BLKS = \@blks.mak
+MAKS = \@maks.mak
+
+MCOMS = copysys.com ccp.com date.com device.com dir.com dump.com ed.com \
+       erase.com get.com gencom.com gencpm.com help.com hexcom.cpm patch.com \
+       pip.com put.com rename.com save.com set.com setdef.com show.com \
+       submit.com type.com
+
+SRCDOCS = assemble.doc making.doc
+BINDOCS = readme.1st help.hlp
+BDOS = resbdos3.spr bdos3.spr bnkbdos3.spr  
+ISIS = d:\tools\plm\utils\isis
+RM   = erase
+RMF  = xdel /n
+MV   = rename
+ZXCC = zxcc
+CC   = gcc
+ZIP  = pkzip
+#
+all:		${MCOMS} ${BDOS} cpmldr.rel help.hlp
+
+clean:	tidy
+	-${RMF} ${COMS} 
+	-${RMF} ${HEXS} 
+	-${RMF} ${OBJS} 
+	-${RMF} ${BDOS} 
+	-${RMF} ${BLKS} 
+	-${RMF} *.lst 
+	-${RMF} *.rel 
+	-${RMF} *.sym
+	-${RMF} *.tra
+	-${RMF} *.rsx
+	-${RMF} *.spr
+
+tidy:
+	-${RMF} ${HEXS} 
+	-${RMF} ${BLKS} 
+	-${RMF} *.lst 
+	-${RMF} *.rel 
+	-${RMF} *.sym
+	-${RMF} *.tra
+	-${RMF} cpmbdos.asm
+	-${RMF} cpmbdosx.asm
+
+############################################################################
+#
+# Build tools
+#
+hexcom:		hexcom.c
+	${CC} -o hexcom hexcom.c
+
+hexpat:		hexpat.c
+	${CC} -o hexpat hexpat.c
+
+#
+# Minhlp is a cut-down version of Help that only does [C]reate and [E]xtract
+# Being cut-down, it runs in ZXCC.
+#
+minhlp.com:	hexcom minhlp.hex
+	hexcom minhlp.com <minhlp.hex
+#
+minhlp.hex:	minhlp.plm minhlp.mak mcd80a.obj
+	${ISIS} <minhlp.mak
+	${RM} minhlp.mod
+#
+##############################################################################
+#
+# Help
+#
+help.hlp:	help.dat minhlp.com
+	${ZXCC} minhlp.com -[CREATE]
+#
+###########################################################################
+#
+# COM files from .HEX files
+#
+copysys.com:	hexcom copysys.hex
+	hexcom copysys.com <copysys.hex
+
+date.com:	hexcom date.hex
+	hexcom date.com <date.hex
+
+device.com:	hexcom device.hex
+	hexcom device.com <device.hex
+
+dir.com:	hexcom dir.hex
+	hexcom dir.com <dir.hex
+
+dump.com:	hexcom dump.hex
+	hexcom dump.com <dump.hex
+
+ed.com:	hexcom ed.hex
+	hexcom ed.com <ed.hex
+
+erase.com:	hexcom erase.hex
+	hexcom erase.com <erase.hex
+
+get.com:	hexcom gencom.com get.hex get.rsx
+	hexcom get.com <get.hex
+	${ZXCC} gencom.com get.com get.rsx
+
+gencom.com:	hexcom gencom.hex
+	hexcom gencom.com <gencom.hex
+
+gencpm.com:	hexcom gencpm.hex
+	hexcom gencpm.com <gencpm.hex
+
+help.com:	hexcom help.hex
+	hexcom help.com <help.hex
+#
+# I can't call it HEXCOM.COM because then DOS will try to use it instead of
+# HEXCOM.EXE
+#
+hexcom.cpm:	hexcom hexcom.hex
+	hexcom hexcom.cpm <hexcom.hex
+
+patch.com:	hexcom patch.hex
+	hexcom patch.com <patch.hex
+
+pip.com:	hexcom pip.hex
+	hexcom pip.com <pip.hex
+
+put.com:	hexcom gencom.com put.hex put.rsx
+	hexcom put.com <put.hex
+	${ZXCC} gencom.com put.com put.rsx
+
+rename.com:	hexcom rename.hex
+	hexcom rename.com <rename.hex
+
+save.com:	gencom.com save.rsx
+	${RM} save.com
+	${ZXCC} gencom.com save +-[NULL]
+
+setdef.com:	hexcom setdef.hex
+	hexcom setdef.com <setdef.hex
+
+set.com:	hexcom gencom.com set.hex dirlbl.rsx
+	hexcom set.com <set.hex
+	${ZXCC} gencom.com set.com dirlbl.rsx
+
+show.com:	hexcom show.hex
+	hexcom show.com <show.hex
+
+sid.com:	hexpat sid.spr prs0mov.hex 
+	hexpat sid.spr sid.com <prs0mov.hex
+
+submit.com:	hexcom gencom.com submit.hex sub.rsx
+	hexcom submit.com <submit.hex
+	${ZXCC} gencom.com submit.com sub.rsx
+
+type.com:	hexcom type.hex
+	hexcom type.com <type.hex
+
+
+#
+##############################
+#
+# .HEX files from PL/M source
+#
+date.hex:	date.plm date.mak mcd80a.obj
+	${ISIS} <date.mak
+	${RM} date.mod
+
+device.hex:	device.plm device.mak mcd80a.obj
+	${ISIS} <device.mak
+	${RM} device.mod
+
+dir.hex:	mcd80a.obj main80.plm scan.plm search.plm sort.plm \
+		disp.plm dpb80.plm util.plm timest.plm
+	${ISIS} <dir.mak
+	${RM} dir.mod
+
+ed.hex:	ed.plm ed.mak mcd80a.obj
+	${ISIS} <ed.mak
+	${RM} ed.mod
+
+erase.hex:	erase.plm erase.mak mcd80a.obj parse.obj
+	${ISIS} <erase.mak
+	${RM} erase.mod
+
+get.hex:	get.plm get.mak getf.asm mcd80a.obj
+	${ISIS} <get.mak
+	${RM} get.mod
+
+gencom.hex:	gencom.plm gencom.mak mcd80a.obj parse.obj
+	${ISIS} <gencom.mak
+	${RM} gencom.mod
+
+gencpm.hex:	gencpm.plm getdef.plm setbuf.plm crdef.plm datmod.asm \
+		ldrlwr.asm gencpm.mak mcd80f.obj
+	${ISIS} <gencpm.mak
+	${RM} gencpm.mod
+
+help.hex:	help.plm help.mak mcd80a.obj
+	${ISIS} <help.mak
+	${RM} help.mod
+
+pip.hex:	pip.plm pip.mak mcd80f.obj inpout.asm
+	${ISIS} <pip.mak
+	${RM} pip.mod
+
+put.hex:	put.plm put.mak putf.asm mcd80a.obj parse.obj
+	${ISIS} <put.mak
+	${RM} put.mod
+
+rename.hex:	rename.plm rename.mak mcd80f.obj inpout.asm parse.obj
+	${ISIS} <rename.mak
+	${RM} rename.mod
+
+set.hex:	set.plm set.mak mcd80a.obj parse.obj sopt.dcl sopt.inc
+	${ISIS} <set.mak
+	${RM} set.mod
+
+setdef.hex:	setdef.plm setdef.mak mcd80a.obj
+	${ISIS} <setdef.mak
+	${RM} setdef.mod
+
+show.hex:	show.plm show.mak mcd80a.obj
+	${ISIS} <show.mak
+	${RM} show.mod
+
+submit.hex:	submit.plm submit.mak getf.asm mcd80a.obj parse.obj
+	${ISIS} <submit.mak
+	${RM} submit.mod
+
+type.hex:	type.plm type.mak mcd80f.obj inpout.asm parse.obj
+	${ISIS} <type.mak
+	${RM} type.mod
+
+##############################
+#
+# .HEX files from ASM source
+#
+
+copysys.hex:	copysys.asm makedate.lib
+	${ZXCC} mac.cpm copysys	
+
+dump.hex:	dump.asm makedate.lib
+	${ZXCC} mac.cpm dump	
+
+hexcom.hex:	hexcom.asm makedate.lib
+	${ZXCC} mac.cpm hexcom	
+
+patch.hex:	patch.asm makedate.lib
+	${ZXCC} mac.cpm patch
+
+##############################
+#
+# .RSX files
+#
+
+dirlbl.rsx:	dirlbl.rel
+	${ZXCC} link.cpm dirlbl +-[OP]
+	${RM} dirlbl.rsx
+	${MV} dirlbl.prl dirlbl.rsx
+
+get.rsx:	getrsx.rel
+	${ZXCC} link.cpm getrsx +-[OP]
+	${RM} get.rsx
+	${MV} getrsx.prl get.rsx
+
+put.rsx:	putrsx.rel
+	${ZXCC} link.cpm putrsx +-[OP]
+	${RM} put.rsx
+	${MV} putrsx.prl put.rsx
+
+save.rsx:	save.rel
+	${ZXCC} link.cpm save +-[OP]
+	${RM} save.rsx
+	${MV} save.prl save.rsx
+
+sub.rsx:	subrsx.rel
+	${ZXCC} link.cpm subrsx +-[OP]
+	${RM} sub.rsx
+	${MV} subrsx.prl sub.rsx
+
+##############################
+#
+# .RSX files - as REL modules
+#
+dirlbl.rel:	dirlbl.asm makedate.lib
+	${ZXCC} rmac.cpm dirlbl
+
+save.rel:	save.asm makedate.lib
+	${ZXCC} rmac.cpm save
+
+getrsx.rel:	getrsx.asm makedate.lib
+	echo submit equ false ;true if submit RSX > getrsx.lib
+	${ZXCC} rmac.cpm getrsx
+
+subrsx.rel:	getrsx.asm makedate.lib
+	copy getrsx.asm subrsx.asm
+	echo submit equ true ;true if submit RSX > getrsx.lib
+	${ZXCC} rmac.cpm subrsx
+
+putrsx.rel:	putrsx.asm makedate.lib
+	${ZXCC} rmac.cpm putrsx
+
+
+#
+##############################
+#
+# SID
+#
+sid.spr:	prs1asm.rel prs2mon.rel
+	${ZXCC} link.cpm sid.spr +-= +prs1asm +-, +prs2mon +-[OS]
+
+prs0mov.hex:	prs0mov.asm makedate.lib
+	${ZXCC} mac.cpm prs0mov
+
+prs1asm.rel:	prs1asm.asm
+	${ZXCC} rmac.cpm prs1asm
+
+prs2mon.rel:	prs2mon.asm
+	${ZXCC} rmac.cpm prs2mon
+#
+##############################
+#
+# CCP
+#
+# The redirection to CCPPHASE.* produces two lists of addresses (one in 
+# CCP3.COM and one in LOADER3.PRL) which should match.
+#
+loader3.rel:	loader3.asm
+	${ZXCC} rmac.cpm loader3 >ccpphase.lst
+
+loader3.prl:	loader3.rel
+	${ZXCC} link.cpm loader3 +-[OP]
+
+ccp3.hex:	ccp3.asm
+	${ZXCC} mac.cpm ccp3 >>ccpphase.lst
+
+ccpdate.hex:	ccpdate.asm makedate.lib
+	${ZXCC} mac.cpm ccpdate
+
+ccp.com:	sid.com ccpdate.hex ccp3.hex loader3.prl
+	${ZXCC} sid.com loader3.prl <ccp.mak
+
+##############################################################################
+#
+# ASM source for PLM bits
+#
+
+mcd80a.obj:	mcd80a.asm mcd80a.mak makedate.lib
+	${ISIS} <mcd80a.mak
+
+mcd80f.obj:	mcd80f.asm mcd80f.mak makedate.lib
+	${ISIS} <mcd80f.mak
+
+parse.obj:	parse.asm parse.mak makedate.lib
+	${ISIS} <parse.mak
+
+
+############################################################################
+#
+# BDOS
+#
+resbdos.rel:	resbdos.asm makedate.lib
+	${ZXCC} rmac.cpm resbdos
+
+cpmbdosx.rel:	cpmbdos1.asm conbdos.asm bdos30.asm makedate.lib
+	copy cpmbdos1.asm+conbdos.asm+bdos30.asm cpmbdosx.asm
+	${ZXCC} rmac.cpm cpmbdosx
+
+cpmbdos.rel:	cpmbdos2.asm conbdos.asm bdos30.asm makedate.lib
+	copy cpmbdos2.asm+conbdos.asm+bdos30.asm cpmbdos.asm
+	${ZXCC} rmac.cpm cpmbdos
+
+resbdos3.spr:	resbdos.rel
+	${ZXCC} link.cpm resbdos3 +-= +resbdos +-[os]
+
+bdos3.spr:	cpmbdosx.rel
+	${ZXCC} link.cpm bdos3 +-= cpmbdosx +-[os]
+
+bnkbdos3.spr:	cpmbdos.rel
+	${ZXCC} link.cpm bnkbdos3 +-= cpmbdos +-[os]
+#
+##############################################################################
+#
+# CPMLDR
+#
+cpmldr.rel:	cpmldr.asm makedate.lib
+	${ZXCC} rmac.cpm cpmldr
+
+#
+##############################################################################
+#
+# The ZIP command is broken into little bits because DOS is broken as
+# regards command lines.
+#
+binzip:	${MCOMS} ${BDOS} ${BINDOCS} cpmldr.rel
+	${ZIP} cpm3bin.zip ${COMS}
+	${ZIP} cpm3bin.zip ${BDOS} 
+	${ZIP} cpm3bin.zip ${BINDOCS} 
+	${ZIP} cpm3bin.zip cpmldr.rel
+
+srczip: 	${SRCDOCS}
+	${ZIP} cpm3src.zip ${MAKS}
+	${ZIP} cpm3src.zip zxcc.exe bios.bin rmac.cpm mac.cpm link.cpm
+	${ZIP} cpm3src.zip *.asm ${SRCDOCS} readme.1st
+	${ZIP} cpm3src.zip *.plm *.lib *.lit Makefile env.bat hexcom.c hexpat.c
+	${ZIP} cpm3src.zip help.dat sopt.dcl sopt.inc

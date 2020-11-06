@@ -1,0 +1,111 @@
+1File: PASS1A.C                                                            Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /* reduce long relative branches to short if possible*/
+     9    
+    10   #include "as68.h"
+    11   int  nitleft;
+    12   char tfilname[];
+    13   int p2gi();
+    14   long lseek();
+    15   pass1a()
+    16   {
+    17   	register long reduced;
+    18   	register int i, wsize;
+    19   	register long oldpos,newpos;	/* Old and new file seek pointers */
+    20   	register j;			/* temp				  */
+    21    
+    22   	pitix = itbuf;
+    23   	nitleft = 0;
+    24   	reduced = 0; itoffset = 0; stbuf[0].itrl = 0;
+    25   	wsize = 3*sizeof stbuf[0];	/* [vlh] don't calculate many times */
+    26   	close(itfn);
+    27   	LASTCHTFN = itfnc;
+    28   	itfn = openfi(tfilname,2,1);	/*open it for update*/
+    29   	while(ristb()) {
+    30   		opcpt = stbuf[2].itop.ptrw2;	/*ptr to opcode entry in main tab*/
+    31   		if(!(opcpt->flags&OPDR)) {	/*not a directive*/
+    32   			format = (opcpt->flags)&OPFF;
+    33   			p1inlen = stbuf[1].itrl;	/*pass 1 instr length guess*/
+    34   			if(((format==6 && p1inlen==4) || opcpt==jsrptr) &&
+    35   			  (rlflg=stbuf[3].itrl)==TEXT) {
+    36   				nite = stbuf[0].itrl & 0377;/* # of it entries */
+    37   				pnite = &stbuf[nite].itty;	/*ptr to end of stmt*/
+    38   				modelen = stbuf[2].itrl;	/*instr mode length*/
+    39   				opdix = ITOP1;				/*first operand*/
+    40   				pitw = &stbuf[ITOP1].itty;	/*ptr to first operand*/
+    41   				loctr = stbuf[3].itop - reduced;
+    42   				expr(&p2gi);
+    43   				ival =- loctr+2L;
+    44   				if(itype==ITCN && !extflg && reloc!=ABS) {
+    45   					if(format==9) {		/*jsr*/
+    46   						i = (ival>= -128 && ival<=127) ? p1inlen-2 :
+    47   							(ival>= -32768 && ival<=32767) ? p1inlen-4 : 0;
+    48   						if (!i)
+    49   							continue;
+    50   						stbuf[2].itop.ptrw2 = bsrptr;	/*chng to bsr*/
+    51   					}
+    52   					else if(ival>= -128 && ival<=127) {
+    53   						i = 2;		/*[vlh]was 4 for ival=2*/
+    54   						if (!ival) stbuf[2].itop.ptrw2 = nopptr;
+    55   					}
+    56   					else
+    57   						continue;
+    58   					fixsyadr(i);
+    59   					reduced =+ i;
+1File: PASS1A.C                                                            Page       2
+    60   					stbuf[1].itrl =- i;		/*reduced somewhat*/
+    61   					if(!stbuf[1].itrl)
+    62   						stbuf[1].itrl = -1;	/*ignore flag*/
+    63   					oldpos=lseek(itfn,0L,1); /* Remember current position */
+    64   					newpos= itoffset -
+    65   						(stbuf[0].itrl*sizeof stbuf[0]);
+    66   					if(lseek(itfn,newpos,0) < 0) {
+    67   						rpterr("seek error on it file\n");
+    68   						abort();
+    69   					}
+    70   					if(write(itfn,&stbuf[0],wsize) != wsize) {
+    71   						rpterr("write error on it file\n");
+    72   						abort();
+    73   					}
+    74   					lseek(itfn,oldpos,0);
+    75   				}
+    76   			}
+    77   		}
+    78   		else if(opcpt == endptr) {
+    79   			savelc[TEXT] =- reduced;
+    80   			return;
+    81   		}
+    82   	}
+    83   }
+    84    
+    85   /* fix all symbol addresses that are text based and greater than loctr*/
+    86   /*   fix means subtract 2 from them*/
+    87   fixsyadr(al)
+    88   {
+    89   	register char **sx1, **sx2;
+    90   	register l;
+    91    
+    92   	l = al;
+    93   /* loop thru symbol initial reference table*/
+    94   	for(sx1= sirt; sx1<&sirt[SZIRT-1]; sx1 =+ 2) {
+    95   		if(*(sx2 = sx1+1)==0)		/* this chain is empty*/
+    96   			continue;
+    97    
+    98   /* symbols on one chain*/
+    99   		sx2 = *sx2;	/*first entry on this chain*/
+   100   		while(1) {
+   101   			if((sx2->flags&SYDF || sx2->flags&SYPC) && sx2->flags&SYRO &&
+   102   			    sx2->vl1 > loctr)		/* [vlh] */
+   103   				sx2->vl1 =- l;
+   104   			if(sx2 == *sx1)	/*end of chain*/
+   105   				break;
+   106   			sx2 = sx2->tlnk;	/*next entry in chain*/
+   107   		}
+   108   	}
+   109   }

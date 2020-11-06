@@ -1,0 +1,216 @@
+
+;****************************************************************
+;*								*
+;*	CP/M-Z8K Basic Disk Operating System interface module	*
+;*		For "C" version of CP/M-Z8K    			*
+;*								*
+;*	Copyright (c) 1982 Digital Research, Inc.		*
+;*								*
+;*	Version 0.2 -- September 22, 1982			*
+;*	Z8000 version -- 821014					*
+;*								*
+;****************************************************************
+
+;  01/10/83	Modified for use with Z8002 (DMH)
+;  01/21/83	Fixed TPA caller Pseudo-segment prooblem
+
+__text:	.sect
+
+	.input "biosdefs2.z8k"
+
+;****************************************************
+;*
+;*  Globals
+;*
+;****************************************************
+
+
+	.global	_bios1		; 6 BIOS entry points from BDOS
+	.global	_bios2
+	.global	_bios3
+	.global	_bios4
+	.global	_bios5
+	.global _bios6
+	.global	_traphnd	; trap #2 handler
+	.global	_swap		; byte swapper
+	.global	_udiv		; unsigned divide routine
+
+;****************************************************
+;*
+;* Externals and Constants
+;*
+;****************************************************
+
+	.global	__bdos		; BDOS entry point in bdosmain
+	.global _usrseg		; This is user pseudo-segment
+	.global _sysseg		; This is system pseudo_segment
+
+;* The following were put in so that all BDOS modules were
+;* referenced, so they could be put in a library
+
+	.global _constat	; references conbdos.o
+	.global _dirscan	; references dskutil.o
+	.global _create		; references fileio.o
+	.global _bdosrw		; references bdosrw.o
+
+biosf	.equ 50
+setsupf	.equ 62
+
+;****************************************************
+;*
+;* Trap Handler
+;*
+;* rcode = bdos(command, (long)parameter)
+;*
+;*	rr6: parameter
+;*	 r5: command
+;*	   returns
+;*	 r7: result
+;*
+;*	called non-SEGMENTED with caller's registers
+;*	saved on stack, and all but rr0 intact in
+;*	registers.
+;*
+;*	Calls __bdos(cmd, (word)param, (addr)param)
+;*
+;****************************************************
+
+_traphnd:
+
+;	check for functions handled by assembly 
+;	language routines
+
+	cp	r5,#setsupf	; set system mode
+	jr eq	setsup
+	cp	r5,#biosf	; call bios direct
+	jr eq	bioscall
+
+;
+;	if caller  was non-segmented (always case for Z8002)
+;	get  (pseudo) segment number from _userseg
+
+	ldl	rr2,rr6
+;	ld	r2,_sysseg	; assume system mode
+;	ld	r0,scfcw+co(r15)
+;	bit	r0,#14		; Was user system?
+;	jr	nz,callC	; Yes.
+;	ld	r2,_usrseg	; user  pseudo segment
+
+;
+;	Call C main routine
+;
+
+callC:
+	pushl	@r15,rr2	; xaddr param.
+	push	@r15,r7		; word  param
+	push	@r15,r5		; command
+	call	__bdos
+	add	r15,#8
+;
+;	Return result in caller's r7.
+;	Restore segmented mode and return
+;
+	ld	cr7+co(r15),r7
+	ret
+
+;
+; direct BIOS call function
+;
+bioscall:
+	ldm	r3,@r7,#5	;get parameters
+	sc	#3		;call BIOS
+	ret			;done
+
+callBios:
+
+;
+; Set supervisor mode procedure -- VERY DANGEROUS
+;
+;	Status is set to SYSTEM, SEGMENTED.
+;	Interrupt status will be that at the time
+;	of the call.
+;
+setsup:
+	ld	r0,scfcw+co(r15)
+	set	r0,#14		;set system 
+	ld	scfcw+co(r15),r0;in user FCW
+	ret			;return
+
+;****************************************************
+;*
+;* BIOS Interface Routines
+;*
+;*  Note - there are 6 BIOS entry points from the BDOS, 
+;*	labelled BIOS1 - BIOS6, depending on the 
+;*	parameters passed.
+;*
+;****************************************************
+
+_bios5:
+; For BIOS functions sectran and set exception vector
+; (funct, word, long) 	offsets 2, 4, 6
+
+	ldl	rr6,6(r15)	; get 2nd param (long)
+	jr	_bios2		; join common routine
+
+_bios4:
+; For BIOS function seldsk
+; (func, word, word) 	offsets 2, 4, 6
+	ld	r7,6(r15)	; get 2nd param (word)
+	clr	r6		; extend to ulong
+	jr	_bios2		; join common routine
+
+_bios3:
+; For BIOS function set dma
+; (func, long)		offsets 2, 4
+	ldl	rr4,4(r15)	; get 1st param (long)
+	subl	rr6,rr6		; clear second
+	jr	_bios1		; join common routine
+
+_bios2:
+; For all BIOS functions with a word parameter
+; (func, word)		offsets 2, 4
+	ld	r5,4(r15)	; get 1st param (word)
+	clr	r4		; extend to ulong
+
+_bios6:
+_bios1:
+; For all BIOS functions that have no parameter 
+; other than function number
+	ld	r3,2(r15)	; get function number
+	sc	#3		; do BIOS call
+	ret			; returns value in rr7
+
+;****************************************************
+;*
+;*  Utility Subroutines
+;*
+;*  swap(word)		swap bytes of a word
+;*
+;*  uword udiv((long)   dividend, 
+;*	       (uword)  divisor, 
+;*	       (uword *)rem    )
+;*
+;****************************************************
+
+_swap:
+	ld	r7,2(r15)
+	exb	rh7,rl7
+	ret
+
+_udiv:
+	ldl	rr2,2(r15)	;long dividend
+	subl	rr0,rr0		;  as unsigned quad
+	ld	r5,6(r15)	;word divisor
+	clr	r4		;  as unsigned long
+	ldl	rr6,8(r15)	;->result
+
+	divl	rq0,rr4
+
+	ld	@r7,r1		; store remainder
+	ld	r7,r3		; return quotient
+	clr	r6
+
+	ret
+
+

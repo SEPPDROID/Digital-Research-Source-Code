@@ -1,0 +1,540 @@
+
+    /* Common Include Module for RSP and Transient MPMSTAT */
+
+
+$include(comlit.lit)
+
+dcl buff(128) byte external;
+
+mon1:
+  procedure (func,info) external;
+    dcl func byte;
+    dcl info address;
+  end mon1;
+
+mon2:
+  procedure (func,info) byte external;
+    dcl func byte;
+    dcl info address;
+  end mon2;
+
+mon3:
+  procedure (func,info) address external;
+    dcl func byte;
+    dcl info address;
+  end mon3;
+
+mon4:
+  procedure (func,info) pointer external;
+    dcl func byte;
+    dcl info address;
+  end mon4;
+
+dcl screenwidth lit '80',
+    lparen byte data ('['),
+    rparen byte data (']'),
+    dummy  lit '0';
+
+$include(mdsat.lit)
+$include(proces.lit)
+$include(sd.lit)
+$include(qd.lit)
+$include(ccb.lit)
+$include(flag.lit)
+
+dcl pd$pointer pointer;  /* double word bases for MP/M-86 data structures */
+dcl pd$ptr structure(
+  offset word,
+  segment word) at (@pd$pointer);
+dcl pd based pd$pointer pd$structure;
+
+dcl qd$pointer pointer;
+dcl qd$ptr structure(
+  offset word,
+  segment word) at (@qd$pointer);
+dcl qd based qd$pointer qd$structure;
+
+dcl md$pointer pointer;
+dcl md$ptr structure(
+  offset word,
+  segment word) at (@md$pointer);
+dcl md based md$pointer md$structure;
+
+dcl ms$pointer pointer;
+dcl ms$ptr structure(
+  offset word,
+  segment word) at (@ms$pointer);
+dcl ms based ms$pointer ms$structure;
+ 
+dcl sat$pointer pointer;
+dcl sat$ptr structure(
+  offset word,
+  segment word) at (@sat$pointer);
+dcl sat based sat$pointer sat$structure;
+
+dcl flag$pointer pointer;
+dcl flag$ptr structure(
+  offset word,
+  segment word) at (@flag$pointer);
+dcl flag based flag$pointer flag$structure;
+
+dcl ccb$pointer pointer;
+dcl ccb$ptr structure (
+  offset word,
+  segment word) at (@ccb$pointer);
+dcl ccb based ccb$pointer ccb$structure;
+
+/*dcl lst$pointer pointer;
+  dcl lst$ptr structure (
+    offset word,
+    segment word) at (@lst$pointer);
+  dcl lst based lst$pointer lst$structure;*/
+
+
+/* BDOS Calls */
+
+  reboot:
+    procedure;
+      call mon1(0,0);
+    end reboot;
+
+  conin:
+    procedure byte;
+      return(mon2(1,0));
+    end conin;
+
+  co:
+    procedure (char);
+      dcl char byte;
+      call mon1 (2,char);
+    end co;
+
+  print$buffer:
+    procedure (bufferadr);
+      dcl bufferadr address;
+      call mon1 (9,bufferadr);
+    end print$buffer;
+
+  read$buffer:
+    procedure (bufferadr);
+      dcl bufferadr address;
+      call mon1 (10,bufferadr);
+    end read$buffer;
+
+  get$version:
+    procedure word;
+      return mon3(12,0);
+    end get$version; 
+
+  terminate:
+    procedure;
+      call mon1(143,0);
+    end terminate;
+
+  get$sysdat:
+    procedure pointer;
+      return mon4(154,0);
+    end get$sysdat;
+
+  /* XDOS Function Definitions */
+
+  dcl	qmake		lit	'134';
+  dcl   qopen           lit     '135';
+  dcl	qread		lit	'137';
+  dcl	dispatch	lit	'142';
+  dcl	setprior	lit	'145';
+  dcl	condetach	lit	'147';
+  dcl	setdefcon	lit	'148';
+
+
+/* utility functions */
+
+  crlf:
+    procedure;
+      call co (0DH);
+      call co (0AH);
+    end crlf;
+
+  dcl hex$digit (*) byte data ('0123456789ABCDEF');
+
+  display$hex$byte:
+    procedure (value);
+      dcl value byte;
+      call co (hex$digit(shr(value,4)));
+      call co (hex$digit(value mod 16));
+    end display$hex$byte;
+ 
+  display$hex$word:
+    procedure (value);
+      dcl value word;
+      call display$hex$byte (high(value));
+      call display$hex$byte (low (value));
+    end display$hex$word;
+
+  display$text:			/* does byte at a time console write */
+    procedure (count,source);	/* from possibly another segment */ 
+      dcl count byte;
+      dcl source pointer;
+      dcl char based source byte;
+      dcl src$ptr structure(
+        offset word,
+	segment word) at (@source);	
+      dcl i byte;
+
+      if count = 0 then
+        do while char <> '$';
+	  call co (char and 7fh);
+          src$ptr.offset = src$ptr.offset + 1;
+        end; 
+      else
+        do i = 1 to count;
+          call co (char and 7fh);
+          src$ptr.offset = src$ptr.offset + 1;
+        end;
+
+    end display$text;
+
+  dcl link$list (64) word; /* used by display$links & display$memory */
+
+  display$links:
+    procedure (title$adr,root$offset,dis$con,init$col);
+      dcl dis$con boolean;	/* Print linked list of PDs starting with */
+      dcl count byte;		/* root$offset.  Print title if not dummy */
+      dcl init$col byte;	/* display console number if dis$con = true */
+      dcl title$adr address;	/* First line starts on column init$col    */
+      dcl root$offset address;
+      dcl char based title$adr byte;
+      dcl col byte;			/* column number relative to 1 */
+
+      dcl (n,k) byte;
+
+      if title$adr <> dummy then
+	do;
+	call crlf;
+        call print$buffer (title$adr);
+	col = screenwidth + 1;			/* start new line */
+	end;
+      else
+	col = init$col;	/* initial column position from calling procedure */
+      n = -1;
+      disable;  /* critical section required to obtain list */
+      pd$ptr.offset = root$offset;
+        do while (pd$ptr.offset <> 0) and (n <> 63);
+          link$list(n := n + 1) = pd$ptr.offset;
+          pd$ptr.offset = pd.link;
+        end;
+      call mon1 (dispatch,0);  /* enable interrupts by dispatching */
+      if n = - 1 then return;
+      do k = 0 to n;
+        pd$ptr.offset = link$list(k);
+        if col > screenwidth - 13 then	/* 13 chars could be used already */
+        do;
+          call crlf;
+          col = 1;
+        end;
+        call co (' ');				/* 13 characters for pd */
+        call display$text (pnamsiz,@pd.name);
+        if pd.mem <> 0ffh and dis$con then	/* display console number ? */
+        do;
+          call co (lparen);
+          call display$hex$byte(pd.cns);	/* prints 2 chars */
+          call co (rparen);
+        end;
+	else
+	  call print$buffer(.('    $'));	/* not printing console # */
+        col = col + 13;				/* but pad to make things */
+      end;					/* line up		  */
+    enable;
+    end display$links;
+
+  display$config:
+    procedure;
+      dcl count byte, qsize word;
+
+      call print$buffer(.('Number of Physical Consoles = $'));
+      call display$hex$byte (sd.ncns);
+      call print$buffer(.(0dh,0ah,'Number of Virtual Consoles = $'));
+      call display$hex$byte (sd.nccb - (sd.nlst + sd.ncns));
+      call print$buffer (.(0dh,0ah,'Number of List Devices = $'));
+      call display$hex$byte (sd.nlst);
+
+      call print$buffer (.(0dh,0ah,'Number of Free Process Descriptors = $'));
+      pd$ptr.offset = sd.pul;
+      count = 0;
+      do while pd$ptr.offset <> 0;
+          count = count + 1; 
+          pd$ptr.offset = pd.link;
+      end;
+      call display$hex$byte(count);
+
+      call print$buffer (.(0dh,0ah,'Number of Free Memory Descriptors = $'));
+      md$ptr.offset = sd.mdul;
+      count = 0;
+      do while md$ptr.offset <> 0;
+          count = count + 1; 
+          md$ptr.offset = md.link;
+      end;
+      call display$hex$byte (count);
+
+      call print$buffer(.(0dh,0ah,'Number of Free Queue Control Blocks = $'));
+      qd$ptr.offset = sd.qul;
+      count = 0;
+      do while qd$ptr.offset <> 0;
+          count = count + 1; 
+          qd$ptr.offset = qd.link;
+      end;
+      call display$hex$byte (count);
+
+      call print$buffer(.(0dh,0ah,'Free Queue Buffer Area = $'));
+      md$ptr.offset = .sd.qmau(0);
+      sat$ptr.segment = md.start;
+      sat$ptr.offset = size(sat); 
+      qsize = 0;
+      do while sat.start <> 0;         /* byte offset for q buffer area */
+           if sat.num$allocs = 0 then
+              qsize = qsize + sat.len;
+          sat$ptr.offset = size(sat) + sat$ptr.offset;
+      end;
+      call display$hex$word (qsize);
+
+      call print$buffer(.(0dh,0ah,'Number of Flags = $'));
+      call display$hex$byte (sd.nflags);
+      call print$buffer(.(0dh,0ah,'Maximum Paragraphs Per Process = $'));
+      call display$hex$word (sd.mmp);
+      call crlf;
+    end display$config;
+
+  display$ready:
+    procedure;
+      call display$links (.('Ready Process(es): $'),sd.rlr,true,1);
+    end display$ready;
+
+  display$DQ:
+    procedure;
+      call crlf;
+      call print$buffer (.('Process(es) DQing: $'));
+      qd$ptr.offset = sd.qlr;
+      do while qd$ptr.offset <> 0;
+        if qd.dq <> 0 then
+        do;
+          call print$buffer (.(0DH,0AH,' $'));
+          call co(lparen);
+          call display$text (8,@qd.name);
+          call co(rparen);
+          call print$buffer(.('  $'));
+          call display$links (dummy,qd.dq,true,14);
+        end;
+        qdptr.offset = qd.link;
+      end;
+    end display$DQ;
+
+  display$NQ:
+    procedure;
+
+      call crlf;
+      call print$buffer (.('Process(es) NQing:','$'));
+      qdptr.offset = sd.qlr;
+      do while qdptr.offset <> 0;
+        if qd.nq <> 0 then
+          do;
+          call print$buffer (.(0DH,0AH,' $'));
+          call co(lparen);
+          call display$text (8,@qd.name);
+          call co(rparen);
+          call print$buffer(.('  $'));
+          call display$links (dummy,qd.nq,true,14);
+          end;
+        qdptr.offset = qd.link;
+      end;
+    end display$NQ;
+
+  display$delay:
+    procedure;
+      call display$links (.('Delayed Process(es):$'),sd.dlr,true,1);
+    end display$delay;
+
+  display$poll:
+    procedure;
+      call display$links (.('Polling Process(es):$'),sd.plr,true,1);
+    end display$poll;
+
+  display$flag$wait:
+    procedure;
+      dcl i integer;
+      call crlf;
+      flag$ptr.offset = sd.flags;
+      call print$buffer(.('Process(es) Flag Waiting:$'));
+      do i = 0 to signed(sd.nflags - 1);
+        if flag.pd < 0FFFEH then
+        do;
+           call crlf;
+           call co (' ');
+           call co (' ');
+           call display$hex$byte (low(unsign(i)));
+           call print$buffer (.(' -       $'));
+           call display$links (dummy,flag.pd,true,14);
+        end;
+        flag$ptr.offset = flag$ptr.offset + size(flag);
+      end;
+    end display$flag$wait;
+
+  display$flag$set:
+    procedure;
+      dcl (j,i) byte;
+      flag$ptr.offset = sd.flags;
+      call crlf;
+      call print$buffer (.('Flag(s) Set:$'));
+      i = 0;
+      j = screenwidth;
+      do while i < sd.nflags; 
+        if flag.pd = 0fffeh then
+          do;
+          if j >= screenwidth then
+            do;
+            call crlf; j = 0;
+            end;
+          call co (' ');
+          call co (' ');
+          call display$hex$byte (i);
+          j = j + 4;
+          end;
+        flag$ptr.offset = flag$ptr.offset + size(flag);
+        i = i + 1;
+      end;
+    end display$flag$set;
+
+  display$queues:
+    procedure;
+      dcl i byte;
+      qd$ptr.offset = sd.qlr;
+      call print$buffer(.(cr,lf,'Queue(s):$'));
+      i = screenwidth;
+      do while qd$ptr.offset <> 0;
+        if i > screenwidth - 19 then
+        do;
+          call crlf; i = 0;
+        end;
+        call co (' ');
+        call display$text (8,@qd.name);
+        if (qd.flags and qf$mx) and (qd.buffer <> 0) then
+          do;
+          pdptr.offset = qd.buffer;	/* addr of of owning process */
+          call co (lparen);
+          call display$text (pnamsiz,@pd.name);
+          call co (rparen);
+          end;
+        else
+          call print$buffer(.('          $'));
+        qd$ptr.offset = qd.link;
+        i = i + 19;
+      end;
+    end display$queues;
+
+  display$ccb:
+    procedure(name,first$ccb,last$ccb);
+      dcl name address,
+          (i,first$ccb, last$ccb) byte,
+          name$offset lit '6';
+
+      if last$ccb - first$ccb = 0 then
+          return; 
+      ccb$ptr.offset = sd.ccb + size(ccb) * first$ccb;
+      call print$buffer (.(0dh,0ah,'Process(es) Attached to $'));
+      call print$buffer (name);
+      do i = 0 to last$ccb - first$ccb - 1;
+        call print$buffer (.(0dh,0ah,' $'));
+        call co(lparen);
+        call display$hex$byte(i);
+        call co(rparen);
+        call print$buffer (.('      - $'));
+        if ccb.attach = 0 then
+          call print$buffer(.('Unattached$'));
+        else if ccb.attach = 0ffffh then
+        do;
+          call print$buffer(.('Control P - Console $'));
+          call co(lparen);
+          call display$hex$byte(ccb.msource);
+          call co(rparen);
+        end;
+        else
+          do;		
+	  pd$ptr.offset = ccb.attach;
+	  call display$text(pnamsiz,@pd.name);
+          end;
+      ccb$ptr.offset = ccb$ptr.offset + size(ccb);
+      end;
+      ccb$ptr.offset = sd.ccb + size(ccb) * first$ccb; 	
+      call print$buffer (.(0dh,0ah,'Process(es) Waiting for $'));
+      call print$buffer (name);
+      do i = 0 to last$ccb - first$ccb - 1;
+        if ccb.queue <> 0 then
+          do;
+          call print$buffer (.(0dh,0ah,' $'));
+          call co(lparen);
+          call display$hex$byte (i); 
+          call co (rparen);
+          call print$buffer(.('      -$'));	/* put out 13 chars to */
+          call display$links (dummy,ccb.queue,false,13);  /* line up   */
+          end;				/* with other PD displays      */
+        ccb$ptr.offset = ccb$ptr.offset + size(ccb);
+      end;
+    end display$ccb;
+
+  display$memory:
+    procedure;
+      dcl (i,n,col) byte;
+      call crlf;
+      call print$buffer(.('Memory Partitions:$'));
+      call crlf;
+      do col = 1 to screen$width / 23;
+        call print$buffer(.('Start Length Process | $'));
+      end;
+      col = screenwidth + 1;	/* force new line */
+
+      n = -1;
+      disable;         /* critical section required to obtain list */
+      pd$ptr.offset = sd.thrdrt;
+        do while (pd$ptr.offset <> 0) and (n <> 63);
+          link$list(n := n + 1) = pd$ptr.offset;
+          pd$ptr.offset = pd.thread;
+        end;
+      call mon1 (dispatch,0);  /* enable interrupts by dispatching */
+      if n = - 1 then return;
+
+      do i = 0 to n;
+        pd$ptr.offset = link$list(i);
+        if col > screenwidth - 23 then
+        do;
+          call crlf; col = 1;
+        end;
+        if pd.mem <> 0 and pd.mem <> 8 then
+          do;
+          ms$ptr.offset = pd.mem;
+          md$ptr.offset = ms.mau;      /* the mau field of a MS descriptor */
+          call display$hex$word(md.start);  /* one or more partitions */
+          call print$buffer(.('   $'));     /* described by the MAU   */
+          call display$hex$word(md.length);
+          call print$buffer(.('  $'));
+          call display$text(pnamsiz,@pd.name);
+          call print$buffer(.('  $'));
+          col = col + 23; 
+          end;
+      end;       
+
+      md$ptr.offset = sd.mfl;
+      do while md$ptr.offset <> 0;		/* don't need critical  */
+        if col > screenwidth - 23 then		/* region for MD list - */
+          do;					/* they aren't deleted  */ 
+          call crlf; col = 0;
+          end;
+        call display$hex$word (md.start);
+        call print$buffer(.('   $'));
+        call display$hex$word (md.length);
+        call print$buffer(.('  * FREE *  $'));
+        md$ptr.offset = md.link;
+        col = col + 23;
+      end;
+    enable;
+    end display$memory;
+
+

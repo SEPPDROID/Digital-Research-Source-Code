@@ -1,0 +1,1679 @@
+/*         TEX
+         COPYRIGHT (C) 1978, 1979
+         DIGITAL RESEARCH
+         BOX 579
+         PACIFIC GROVE, CA 93950
+
+         FT command added, MP/M 1.0 modifications - 7/24/79
+*/
+TEX:
+DO;
+
+    DECLARE
+        TEXJMP BYTE DATA(0C3H),
+        TEXADR ADDRESS DATA(.TEXCOMMAND-3);
+
+    DECLARE COPYRIGHT (*) BYTE DATA
+      (' COPYRIGHT (C) 1978, 1979 DIGITAL RESEARCH ');
+
+    DECLARE VERDATE LITERALLY '''7/24/79''';
+
+
+    DECLARE
+        MAXB    ADDRESS EXTERNAL,
+        FCB (33)   BYTE EXTERNAL,
+        BUFF(128)  BYTE EXTERNAL;
+
+    DECLARE LIT LITERALLY 'LITERALLY',
+        DCL LIT 'DECLARE',
+        ADDR LIT 'ADDRESS',
+        PROC LIT 'PROCEDURE',
+        TRUE LIT '0FFH',
+        FALSE LIT '0',
+        FOREVER LIT 'WHILE TRUE';
+
+    DCL CR LIT '0DH',       /* CARRIAGE RETURN */
+        LF LIT '0AH',       /* LINE FEED */
+        FF LIT '0CH',       /* FORMS FEED */
+        TAB LIT '09H',      /* TAB */
+        QM LIT '3FH',       /* ? */
+        EXCL LIT '21H',     /* ! */
+        ENDFILE LIT '1AH';		/*  CP/M END OF FILE */
+
+             /* DEFAULT VALUES */
+    DCL DEFPL LIT '66',	/* PAGE LENGTH */
+        DEFTL LIT '55',	/* TEXT LENGTH */
+        DEFMT LIT '6',  /* TOP MARGIN */
+        DEFMB LIT '5';	/* BOTTOM MARGIN */
+    DCL DEFLS LIT '1';  /* LINE SPACING */
+    DCL DEFLL LIT '70', /* LINE LENGTH */
+        DEFLM LIT '8',  /* LEFT MARGIN */
+        DEFIM LIT '0',  /* INDENT MARGIN */
+        DEFPP LIT '6',  /* PARAGRAPH INDENT */
+        DEFPW LIT '78'; /* PAGE WIDTH */
+
+    dcl maxcolumn lit '132'; /* max column -1 */
+    DCL MAXLINE LIT '160'; /* MAX LINE LENGTH */
+    DCL TABSIZE LIT '20',  /* SIZE OF TAB ARRAY */
+        TABEND  LIT '19',  /* END OF TAB ARRAY  */
+        TABLAST LIT '18';  /* LAST POSSIBLE TAB */        
+
+    DCL SERIAL (6)  BYTE INITIAL (6,5,4,3,2,1);
+    DCL TABARRAY(TABSIZE) BYTE INITIAL(8,16,24,32,40,48,56,64,72,80,
+                            88,96,104,112,120,128,136,144,152,255);
+    DCL PATCH (128) BYTE;
+    DCL COLUMN BYTE;
+
+    DCL BDOSLOC LIT 'MAXB';             /* BDOS LOCATION */
+    DCL TEX$BUFF LIT 'BUFF'; /* INITIAL INPUT LINE */
+    DCL SFCB LIT 'FCB';
+    DCL DFCB (33) BYTE;
+
+    DCL NBUFF  LIT '32';
+    DCL RECORD LIT '128';
+
+    DCL TLINE BYTE;	/* INTERMEDIATE LINE POINTER */
+    DCL WLINE BYTE;	/* BEGINNING OF PARTIAL WORD */
+    DCL DLINE BYTE;	/* 'FROM' POINTER IN LINE EXPANSION */
+    DCL ELINE BYTE;	/* END OF LAST COMPLETE WORD */
+    DCL FLINE BYTE;	/* FIRST CHAR IN PRINT LINE */
+    DCL NLINE BYTE;	/* NEXT CHAR IN PRINT LINE */
+    DCL LINE(256) BYTE;	/* CIRCULAR BUFFER FOR PRINT LINE */
+
+    DCL SBUFFA ADDR;    /* ADDRESS - SOURCE BUFFER */
+    DCL SBUFFL ADDR;    /* LENGTH  - SOURCE BUFFER */
+    DCL SBUFF BASED SBUFFA(128) BYTE;
+    DCL NSOURCE ADDR;   /* COUNTER FOR SOURCE BUFFER */
+
+    DCL DBUFFA ADDR;    /* ADDRESS - DESTINATION BUFFER */
+    DCL DBUFFL LIT 'SBUFFL'; /* LENGTH - DSTNATN BUFFER */
+    DCL DBUFF BASED DBUFFA(128) BYTE;
+    DCL NDEST ADDR;     /* COUNTER FOR DESTINATION BUFFER */
+ 
+    DCL LINECOUNT ADDRESS;
+    DCL PAGECOUNT ADDRESS;
+
+        		/* HORIZONTAL SPACING PARAMETERS */
+    DCL LINELENGTH BYTE;
+    DCL LEFT$MARGIN BYTE;
+    DCL INDENT$MARGIN BYTE;
+    DCL NINDENT BYTE;     /* PARAGRAPH INDENT VALUE */
+    DCL PAGEWIDTH BYTE;   /* INDENT$MARGIN+LINELENGTH */
+
+        		/* VERTICAL SPACING PARAMETERS */
+    DCL PAGELENGTH BYTE;  /* PAGELENGTH=TOP$MARGIN+TEXTLENGTH+BOT$MARGIN*/
+    DCL TEXTLENGTH BYTE;
+    DCL TOP$MARGIN BYTE;
+    DCL MT1        BYTE;   /* TOP MARGIN ABOVE HEADING */
+    DCL MT2        BYTE;   /* TOP MARGIN BETWEEN HEADING AND TEXT */
+    DCL BOT$MARGIN BYTE;
+    DCL LSPACING   BYTE;
+    DCL TOOLONG LIT 'LINECOUNT>=TEXTLENGTH+TOP$MARGIN';  /*LAST TEXT LINE*/
+
+        /* SWITCHES */
+    DCL LEFT$FLUSH BYTE;
+    DCL RIGHT$FLUSH BYTE;
+    DCL FLUSH LIT 'LEFT$FLUSH OR RIGHT$FLUSH';
+
+    DCL TEMP$INDENT BYTE;  /*SET BY .TI COMMAND*/
+    DCL LINELENGTH$CHG  BYTE,  /*SET BY .LL COMMAND*/
+        LONG$LINELENGTH BYTE;
+    DCL HEADER$SCAN BYTE;  /*SET BY EVERY COMMAND*/
+    DCL LCASE       BYTE;
+    DCL FORMS$FEED  BYTE;  /*SET BY $F PARAMETER*/
+    DCL PAGE$MODE   BYTE;  /*SET BY $P PARAMETER*/
+    DCL LSTERR      BYTE;  /*SET BY $E PARAMETER*/
+    DCL LSTOUT      BYTE;  /*SET BY $L $C PARAMS*/
+    DCL FIRSTPAGE   BYTE,  /*SET BY FIRST TEXT LINE*/
+        SAV$LINELENGTH  BYTE;
+    DCL NUMBER$PAGES BYTE;
+
+    DCL OUT$DEVCE BYTE;
+
+    DCL START$STATE LIT '0',
+        WORDS$STATE LIT '1',
+        BLANKS$STATE LIT '2',
+        ENDSENT$STATE LIT '3',
+        SKIP$STATE LIT '4';
+
+    DCL SCAN$STATE BYTE;
+
+    DCL R$TO$L BYTE;  /* SCAN DIRECTION FOR STUFFING BLANKS */
+    DCL STUFF BYTE;		/* NUMBER OF BYTES TO STUFF */
+
+    dcl footbuf(133) byte;   /* contains foot */
+    DCL HEADBUF(133) BYTE;   /* CONTAINS PAGE HEADING */
+
+    DCL ERRBUF(256) BYTE,    /* CONTAINS LATEST 256 BYTES OF SOURCE */
+        ERRCNT BYTE,
+        ERRPTR BYTE;  /* NEXT TO FILL */
+
+    DCL NSIGN BYTE;  /* COMMAND ARGUMENT MAY BE INCREMENTAL - (255),
+                        ABSOLUTE (0), OR INCREMENTAL + (1)       */
+
+    DCL LOOKED  BYTE,   /* TRUE IF LOOKED AHEAD */
+        LOOKCHR BYTE;   /* LOOKAHEAD CHAR */
+
+                    /* GLOBAL DEFAULTS FOR LOCAL VARIABLES */
+    DCL C BYTE;		/* CHARACTER */
+    DCL I BYTE;		/* INDEX */
+
+/* * * * * * * * * LIBRARY FOR CP/M INTERFACE * * * * * * * * */
+
+
+    DCL DCNT BYTE,
+        MAXLEN BYTE;
+
+
+     MON1: PROCEDURE(F,A) EXTERNAL;
+          DCL F BYTE,
+              A ADDRESS;
+          END MON1;
+
+     MON2: PROCEDURE(F,A) BYTE EXTERNAL;
+          DCL F BYTE,
+              A ADDRESS;
+          END MON2;
+
+     BOOT: PROCEDURE EXTERNAL;
+          END BOOT;
+
+     DECLARE REBOOT LITERALLY 'BOOT';
+
+     READCHAR: PROC BYTE;
+          RETURN MON2(1,0);
+          END READCHAR;
+
+     PRINTCHAR: PROC(CHAR);  /* PRINT TO CON: DEVICE */
+          DCL CHAR BYTE;
+          CALL MON1(2,CHAR);
+          END PRINTCHAR;
+
+     CRLF: PROC;
+          CALL PRINTCHAR(CR);
+          CALL PRINTCHAR(LF);
+          END CRLF;
+
+     WRITELST:  PROC(CHAR);	/* WRITE TO LST: DEVICE */
+         DCL CHAR BYTE;
+         CALL MON1(5,CHAR);
+     END WRITELST;
+
+     PRINT: PROC(A);
+          DCL A ADDR;
+          CALL CRLF;
+          CALL MON1(9,A);
+          END PRINT;
+
+     READ: PROC(A);
+          DCL A ADDR;
+          CALL MON1(10,A);
+          END READ;
+
+     CONSTAT: PROC BYTE;
+          RETURN MON2(11,0);
+          END CONSTAT;
+
+     INITIALIZE: PROC;
+          CALL MON1(13,0);
+          END INITIALIZE;
+
+     OPEN: PROC(FCB);
+          DCL FCB ADDR;
+          DCNT=MON2(15,FCB);
+          END OPEN;
+
+     CLOSE: PROC(FCB);
+          DCL FCB ADDR;
+          DCNT=MON2(16,FCB);
+          END CLOSE;
+
+     SEARCH: PROC(FCB);
+          DCL FCB ADDR;
+          DCNT=MON2(17,FCB);
+          END SEARCH;
+
+     DELETE: PROC(FCB);
+          DCL FCB ADDR;
+          CALL MON1(19,FCB);
+          END DELETE;
+
+     DISKREAD: PROC(FCB) BYTE;
+          DCL FCB ADDR;
+          RETURN MON2(20,FCB);
+          END DISKREAD;
+
+     DISKWRITE: PROC(FCB) BYTE;
+          DCL FCB ADDR;
+          RETURN MON2(21,FCB);
+          END DISKWRITE;
+
+     MAKE: PROC(FCB);
+          DCL FCB ADDR;
+          DCNT=MON2(22,FCB);
+          END MAKE;
+
+    SETDMA: PROC(BUF);
+        DCL BUF ADDR;
+        CALL MON1(26,BUF);
+        END SETDMA;
+
+
+     READCOM: PROC;
+          MAXLEN=128;
+          CALL READ(.MAXLEN);
+          END READCOM;
+
+     BREAK$KEY: PROC BYTE;
+          RETURN MON2(11,0);
+          END BREAK$KEY;
+
+
+/* * * * * * * * * END OF CP/M INTERFACE LIBRARY * * * * * * * * */
+
+CRLF$ERR:  PROC;
+    IF LSTERR  THEN
+        DO;
+        CALL WRITELST(CR);
+        CALL WRITELST(LF);
+        END;
+    ELSE CALL CRLF;
+END CRLF$ERR;
+
+PRINTCHAR$ERR:  PROC (C);
+    DCL C BYTE;
+    IF LSTERR
+        THEN CALL WRITELST(C);
+        ELSE CALL PRINTCHAR(C);
+END PRINTCHAR$ERR;
+
+PRINT$ERR:  PROC(A);
+    DCL A ADDR;
+    DCL (C,I) BYTE;
+    DCL CHAR BASED A (80) BYTE;
+
+    I=255;
+    IF LSTERR  THEN
+        DO;
+        CALL WRITELST(CR);
+        CALL WRITELST(LF);
+            DO WHILE (C:=CHAR(I:=I+1))<>'$';
+            CALL WRITELST(C);
+            END;
+        END;
+    ELSE CALL PRINT(A);
+END PRINT$ERR;
+
+LAST:  PROC;		/* SIGN OFF */
+    IF NOT LSTOUT THEN
+        DO;
+        CALL SETDMA(.BUFF);
+        CALL CLOSE(.DFCB);
+        END;
+    CALL CRLF;
+    CALL PRINT (.('TEX FINISHED$'));
+    CALL CRLF;
+    CALL REBOOT;
+END LAST;
+
+ERROR:  PROC(STRING);
+    DCL I BYTE;
+    DCL STRING ADDRESS;
+  
+    CALL PRINT$ERR (.('ERROR DURING $'));
+    CALL PRINT$ERR (STRING);
+    CALL CRLF$ERR;
+    IF ERRCNT>0  THEN
+        DO;
+        CALL PRINT$ERR (.('INPUT CONTEXT:$'));
+        CALL CRLF$ERR;
+        I = ERRPTR - ERRCNT;
+            DO WHILE (I:=I+1) <> (ERRPTR+1);
+            CALL PRINTCHAR$ERR (ERRBUF(I));
+            END;
+        CALL CRLF$ERR;
+        END;
+END ERROR;
+
+FERROR: PROC(STRING);		/* FATAL ERROR */
+    DCL STRING ADDR;
+  
+    CALL ERROR (STRING);
+    CALL PRINT$ERR (.('THIS ERROR TERMINATES TEX$'));
+    CALL LAST;
+END FERROR;
+
+FILL: PROC(S,F,C);      /* FILL STRING S FOR C BYTES WITH F */
+    DCL S ADDR,
+        (F,C) BYTE,
+        A BASED S BYTE;
+
+    DO WHILE (C:=C-1)<>255;
+    A = F;
+    S = S+1;
+    END;
+END FILL;
+
+COPY: PROC(S,D,C);	/* COPY C BYTES FROM S TO D */
+    DCL (S,D) ADDR, C BYTE;
+    DCL A BASED S BYTE, B BASED D BYTE;
+
+    DO WHILE (C:=C-1)<>255;
+        B=A; S=S+1; D=D+1;
+    END;
+END COPY;
+
+FILLSOURCE: PROC;        /* INPUT IS ON DISK FILE */
+    DCL ERRCODE BYTE;
+    DCL BUFFADD ADDR;
+    DCL BYT BASED BUFFADD BYTE;
+
+        BUFFADD=.SBUFF;
+        DO WHILE BUFFADD<.SBUFF(SBUFFL);
+            CALL SETDMA(BUFFADD);
+            IF (ERRCODE:=DISKREAD(.SFCB)) <> 0 THEN
+                DO;
+                IF ERRCODE>1 THEN CALL FERROR(.('FILE READ$'));
+                ELSE DO;
+                    BYT=ENDFILE;
+                    GO TO XIT;
+                    END;
+                END;
+            ELSE DO;
+                NSOURCE=NSOURCE+RECORD;
+                BUFFADD=BUFFADD+RECORD;
+                END;
+        END;
+   XIT:  NSOURCE=0;
+END FILLSOURCE;
+
+GETSOURCE:  PROC BYTE;    
+    DCL B BYTE;
+    IF LOOKED THEN /* USE LOOKAHEAD CHARACTER */
+        DO; LOOKED = FALSE; RETURN LOOKCHR;
+        END;
+    IF NSOURCE>=SBUFFL THEN CALL FILLSOURCE;
+    B=SBUFF(NSOURCE);
+    NSOURCE=NSOURCE+1;
+    IF ERRCNT < 255 THEN
+        ERRCNT = ERRCNT + 1;
+    ERRBUF(ERRPTR:=ERRPTR+1) = B;
+    RETURN B;
+END GETSOURCE;
+
+LOOKAHEAD: PROCEDURE;
+    /* FILL THE LOOKCHR WITH LOOKAHEAD CHARACTER, IF NOT READY */
+    IF NOT LOOKED THEN
+        DO; LOOKCHR = GETSOURCE; LOOKED = TRUE;
+        END;
+END LOOKAHEAD;
+
+GETMORE: PROC BYTE;	/* GETSOURCE SHOULD NOT RETURN END OF FILE */
+    DCL C BYTE;
+
+    IF (C:=GETSOURCE) = ENDFILE
+        THEN CALL FERROR(.('READING EOF$'));
+    ELSE RETURN C;
+END GETMORE;
+
+WRITEDEST:  PROC;		/* WRITE TO DISK FROM DBUFF THROUGH (NDEST) */
+    DCL BUFFADD ADDR;
+
+    BUFFADD=.DBUFF;
+    DO WHILE BUFFADD<.DBUFF(NDEST);
+        CALL SETDMA(BUFFADD);
+        IF DISKWRITE(.DFCB)<>0 THEN CALL FERROR(.('DISK WRITE$'));
+        ELSE BUFFADD=BUFFADD+RECORD;
+    END;
+    NDEST=0;
+END WRITEDEST;
+
+PUTDEST:  PROC(C);
+    DCL C BYTE;
+    DCL (I,TABCOL) BYTE;
+
+    PUTTHECHAR: PROCEDURE(C);
+        DECLARE C BYTE;
+    COLUMN=COLUMN+1;
+    IF LSTOUT  THEN
+        DO;
+        IF OUT$DEVCE=1            /* LST: */
+            THEN CALL WRITELST(C);
+            ELSE IF OUT$DEVCE=2   /* CON: */
+                THEN CALL PRINTCHAR(C);
+                ELSE;             /* SUPPRESS OUTPUT */
+        IF CONSTAT
+            THEN IF READCHAR=CR
+                THEN CALL REBOOT; /* ABORT LSTOUT WITH CR */
+        END;
+
+    ELSE DO;        /* DISK OUTPUT */
+        DBUFF(NDEST)=C;
+        NDEST=NDEST+1;
+        IF NDEST>=DBUFFL THEN
+            CALL WRITEDEST;
+        END;
+    END PUTTHECHAR;
+  
+    IF C = LF THEN
+        DO;
+             CALL PUTTHECHAR(C);
+             COLUMN=1;
+        END;
+    ELSE
+    IF C = TAB THEN
+        DO;
+        I = 0;
+            DO WHILE (TABCOL:=TABARRAY(I)) <= COLUMN;
+            I = I + 1;
+            END;
+        IF TABCOL=255  THEN RETURN;
+            DO WHILE TABCOL > COLUMN;
+            CALL PUTTHECHAR(' ');
+            END;
+        END;
+    ELSE CALL PUTTHECHAR(C);
+END PUTDEST;
+
+PUT$LEFT$MARGIN: PROCEDURE;
+    DCL I BYTE;
+    I=LEFT$MARGIN;
+        DO WHILE (I:=I-1)<>255;
+        CALL PUTDEST(' ');
+        END;
+    COLUMN=1;
+    END PUT$LEFT$MARGIN;
+
+OUTLINE:  PROC;		/* SEND TO DEST FROM LINE(FLINE) TO LINE(NLINE) */
+    DCL I BYTE;
+
+    /* PUT SPACES FOR LEFT MARGIN (SET BY .PO) */
+    CALL PUT$LEFT$MARGIN;
+    IF NOT TEMP$INDENT THEN     /* SET BY .TI COMMAND */
+       DO;     /* PUT SPACES FOR INDENT MARGIN (SET BY .IN) */
+       I=INDENT$MARGIN;
+           DO WHILE (I:=I-1) <> 255;
+           CALL PUTDEST(' ');
+           END;
+       END;
+
+    I=FLINE;
+       DO WHILE I<>NLINE;
+       CALL PUTDEST(LINE(I));
+       I=I+1;
+       END;
+    CALL PUTDEST(CR);
+    CALL PUTDEST(LF);
+    LINECOUNT=LINECOUNT+1;
+END OUTLINE;
+
+CENTSTUB:  PROC;		/* PREFIX BLANKS TO PRINT FLINE THROUGH */
+    DCL CNTR BYTE;      	/* NLINE CENTERED.  COUNTS AND STUFFS BACK IN LINE */
+                                /* NOT USABLE BY ENDPAGE */
+
+    CNTR=SHR(LINELENGTH-(NLINE-FLINE),1);
+    DO WHILE (CNTR:=CNTR-1)<>255;
+        LINE(FLINE:=FLINE-1)=' ';
+    END;
+    CALL OUTLINE;		/* PRINT IF NONEMPTY */
+    FLINE=NLINE;
+END CENTSTUB;
+
+WRITEBLANK:  PROC;		/* PRINT AND COUNT A BLANK LINE */
+    CALL PUTDEST(CR); CALL PUTDEST(LF);
+    LINECOUNT=LINECOUNT+1;
+END WRITEBLANK;
+
+WRITEHEAD: PROC;        /* WRITE HEADING TITLE IN TOP MARGIN */
+    DCL (I,J) BYTE;
+ 
+    /* WRITE LEFT MARGIN */
+    CALL PUT$LEFT$MARGIN;
+    /* WRITE CONTENTS OF HEADBUF */
+    I=255;
+        DO WHILE (I:=I+1)<SAV$LINELENGTH
+                 AND (J:=HEADBUF(I))<>0;     /*HEADBUF(132)=0*/
+        CALL PUTDEST (J);
+        END;
+    CALL WRITEBLANK;
+END WRITEHEAD;
+
+ENDPAGE:  PROC;		/* SPACE OUT THE CURRENT PAGE INCLUDING TRAILER BOT$MARGIN */
+    /*
+       FOR NOW, NEXT PARTIAL LINE MAY BE FLINE TO NLINE
+       OR WLINE TO TLINE.  STANDARDIZE THAT, AND NEWPAGE
+       CAN THEN USE CENTSTUB FOR FORMATION OF LINE NUMBERS 
+    */
+    DCL TEMP  ADDR;
+    dcl tmp byte at (.temp);
+    DCL NUM BYTE;
+    DCL PFOOT BYTE;
+    DCL FOOT(5) BYTE;
+    DCL (B,I) BYTE;
+
+                    /* SKIP TO BOTTOM OF PAGE */
+    DO WHILE LINECOUNT < TEXTLENGTH+TOP$MARGIN;
+    CALL WRITEBLANK;
+    END;
+                    /* WRITE BOTTOM MARGIN */
+    IF BOT$MARGIN>0 THEN
+        DO;
+        B = SHR(BOT$MARGIN,1);
+        if b > 2 then
+            do;
+                do while b <> 2;
+                b = b - 1;
+                call writeblank;
+                end;
+            call put$left$margin;
+                i = -1;
+                do while (tmp:=footbuf(i:=i+1)) <> 0;
+                   call putdest (tmp);
+                end;
+            end;
+            DO I=1 TO B;
+            CALL WRITEBLANK;
+            END;
+                        /* PRINT PAGE NUMBER */
+        IF NUMBER$PAGES THEN
+            DO;
+            TEMP=PAGECOUNT;
+            PFOOT=255;
+                DO WHILE TEMP<>0;
+                NUM=TEMP-TEMP/10*10;	/* LSD FIRST */
+                FOOT(PFOOT:=PFOOT+1)=NUM+'0';
+                TEMP=TEMP/10;
+                END;
+                        /* CENTER THE NUMBER */
+            B = LEFT$MARGIN+SHR(SAV$LINELENGTH-PFOOT,1);
+                DO I=1 TO B;  
+                CALL PUTDEST(' ');
+                END;
+            PFOOT=PFOOT+1;
+                DO WHILE (PFOOT:=PFOOT-1)<>255;
+                CALL PUTDEST(FOOT(PFOOT));
+                END;
+            CALL WRITEBLANK;
+            END;
+        PAGECOUNT=PAGECOUNT+1;
+            DO WHILE LINECOUNT < PAGELENGTH;
+            CALL WRITEBLANK;
+            END;
+        END;
+
+    LINECOUNT=0;
+                    /* FORMS FEED TO BOTTOM OF PHYSICAL PAGE? */
+    IF FORMS$FEED  THEN CALL PUTDEST (FF);
+                     /* STOP PRINTING TO CHANGE PAPER? */
+    IF PAGE$MODE THEN
+        DO;
+        IF OUT$DEVCE<>2 THEN    /*CON:*/
+            CALL PRINT (.('INSERT NEW PAGE; THEN TYPE RETURN$'));
+        DO WHILE READCHAR<>CR;  END;  /* WAIT FOR CONSOLE CR */
+        END;
+END ENDPAGE;
+
+HEADER:  PROC;
+    DCL I BYTE;
+                       /* TO ASSURE PAGE# POSITION DOES NOT CHANGE
+                          WITH INDENTING, SAVE ORIGINAL LINELENGTH 
+                          AND LEFTMARGIN.
+                          (.PO OR .PN COMMAND CAN RESET VALUES.)  */
+    IF FIRSTPAGE  THEN
+        DO;
+        SAV$LINELENGTH = LINELENGTH;
+        FIRSTPAGE = FALSE;
+        END;
+                       /* PUT TOP MARGIN */
+    IF TOP$MARGIN<>0 THEN
+        DO;
+        IF HEADBUF(0)=0 THEN    /* NO HEADING TITLE */
+            DO I=1 TO TOP$MARGIN;
+            CALL WRITEBLANK;
+            END;
+                       /* PRINT HEADING TITLE WITH MARGIN (MT1) */
+        ELSE DO;       /* ABOVE AND HEADING MARGIN (MT2) BELOW  */
+                DO I =1 TO MT1;
+                CALL WRITEBLANK;
+                END;
+            CALL WRITEHEAD;
+                DO I=1 TO MT2;
+                CALL WRITEBLANK;
+                END;
+            END;
+        END;
+END HEADER;
+
+
+SKIPLINES: PROC(COUNT);	
+    /* SKIP 'COUNT' LINES OF TEXT, NOT TO PASS PAGE BOUNDARY */
+    /* NOTE: THIS PROC CAN INSERT BLANK LINES AT TOP OF PAGE */
+    DCL COUNT BYTE;
+
+    IF LINECOUNT=0  THEN CALL HEADER;
+    IF LINECOUNT+COUNT < TEXTLENGTH+TOP$MARGIN  THEN
+        DO WHILE (COUNT:=COUNT-1) <> 255;
+        CALL WRITEBLANK;             /* INCREMENTS LINECOUNT */
+        END;
+    ELSE CALL ENDPAGE;
+END SKIPLINES;
+
+DUMPLINE: PROC;		/* PRINT FLINE TO NLINE */
+                   /* WLINE TO TLINE MAY BE RECLAIMABLE */
+    DCL I BYTE;
+
+    IF LINECOUNT=0  THEN CALL HEADER;
+    CALL OUTLINE;
+    IF TOOLONG THEN CALL ENDPAGE;
+    I=0;
+        DO WHILE (I:=I+1)<LSPACING AND LINECOUNT>0;
+        CALL WRITEBLANK;
+        IF TOOLONG THEN CALL ENDPAGE;
+        END;
+END DUMPLINE;
+
+FLUSHLINE:  PROC;	/* DELIMIT AND FORCE A SHORT LINE IF NONEMPTY */
+    IF NLINE<>FLINE THEN CALL DUMPLINE;
+    FLINE,ELINE,WLINE=NLINE;
+END FLUSHLINE;
+
+
+SET$LENGTH: PROCEDURE BYTE;
+    DECLARE LL BYTE;
+    LL = LINELENGTH;
+    IF LINELENGTH$CHG THEN
+        LL = LONG$LINELENGTH;
+    IF TEMP$INDENT THEN
+         LL = LL + INDENT$MARGIN;
+    RETURN LL;
+END SET$LENGTH;
+
+
+FORMAT: PROC;
+    DCL C BYTE;
+    DCL NO$BL BYTE;
+    DCL BLCNT1 BYTE,
+        BLCNT2 BYTE,
+        WDCNT  BYTE;
+
+
+    /*  IN LINE, PRINT STRING IS FLINE THROUGH ELINE */
+    /*   ELINE IS START OF LAST BLANKS STRING */
+    /*   WLINE IS START OF LAST WORD   */
+    /*   NLINE IS NEXT POSITION   */
+
+    TLINE=NLINE;
+    IF WLINE=FLINE OR ELINE=FLINE THEN    /* WORD IS TOO BIG */
+        DO;
+        WLINE=NLINE;    /* PRINT PRESENT PARTIAL WORD */
+        CALL ERROR (.('FITTING A WORD$'));
+        RETURN;
+        END;
+    ELSE IF WLINE-ELINE>127 THEN  /* ENDED WITH A BLANK STRING */
+        DO;
+        TLINE,WLINE=NLINE;
+        NLINE=ELINE;
+        RETURN;
+        END;
+    ELSE NLINE=ELINE;    /* PRINT TO END OF LAST COMPLETE WORD */
+
+    /* PRINT IMAGE IS IN FLINE TO NLINE */
+    /* GARBAGE FROM NLINE TO WLINE      */
+    /* OVERFLOW IS IN WLINE TO TLINE    */
+
+    /* MOVE OVERFLOW TO RIGHT, MAKING ROOM TO STUFF BLANKS */
+
+    STUFF = (SET$LENGTH) - (NLINE-FLINE);
+
+    /*  PRESCAN TO LEAVE ANY LEFT-HAND PREFIX OF BLANKS
+       (AS FROM .PP COMMAND) OUTSIDE THE SCOPE OF THE 
+       BLANK-EXPANDING ALGORITHM  */
+
+    BLCNT1,BLCNT2,WDCNT = 0;
+    /* BLCNT1 COUNTS THE PREFIXING BLANKS (NOT PADDED OUT),
+    WDCNT COUNTS THE LENGTH OF THE FIRST WORD WHEN AT BEGINNING
+       OF A PARAGRAPH (OFTEN A SECTION HEADING), AND
+    BLCNT2 COUNTS THE BLANKS FOLLOWING THE FIRST WORD */
+        DO WHILE LINE(FLINE) = ' ';
+        /* COUNT PRECEDING BLANKS ON THE LINE */
+        BLCNT1 = BLCNT1 + 1;
+        IF (FLINE := FLINE + 1) = NLINE THEN RETURN;
+        END;
+
+    IF HEADER$SCAN  THEN
+        DO;  /* SCAN PAST FIRST WORD FOLLOWING A COMMAND */
+        HEADER$SCAN = FALSE;
+            DO WHILE LINE(FLINE) <> ' ';
+            WDCNT = WDCNT + 1;
+            IF (FLINE := FLINE + 1) = NLINE  THEN GO TO SHORTLINE;
+            END;
+        IF LINE(FLINE-1) >= 'A'  THEN GO TO SHORTLINE; /*SPECIAL CHAR?*/
+        /* WDCNT IS THE FIRST WORD LENGTH */
+            DO WHILE LINE(FLINE) = ' ';
+            BLCNT2 = BLCNT2 + 1;
+            IF (FLINE := FLINE + 1) = NLINE THEN GO TO SHORTLINE;
+            END;
+        /* BLCNT2 COUNTS REMAINING BLANKS */
+        END;
+
+    GO TO LONGLINE;
+SHORTLINE:
+    /* IN SCANNING HEADER, LINE WAS TOO SHORT OR NONSPECIAL CHARACTER, SO FORGET IT */
+    FLINE = FLINE-WDCNT-BLCNT2;
+    BLCNT2,WDCNT = 0;
+LONGLINE:
+    ELINE = TLINE - 1;
+        DO WHILE ELINE <> WLINE;
+        LINE(ELINE+STUFF) = LINE(ELINE);
+        ELINE = ELINE - 1;
+        END;
+
+    LINE(ELINE+STUFF)=LINE(ELINE);
+    TLINE=TLINE+STUFF;
+    WLINE=WLINE+STUFF;
+
+    DO FOREVER;
+    NO$BL=TRUE;
+    IF R$TO$L THEN
+        DO;
+        ELINE=NLINE+STUFF;	/* 'TO' POINTER */
+        DLINE=NLINE;		/* 'FROM POINTER */
+        NLINE=ELINE;
+            DO WHILE DLINE<>FLINE;	/* GO TO END OF LINE */
+            C , LINE(ELINE:=ELINE-1) = LINE(DLINE:=DLINE-1);
+            IF C=' ' AND STUFF<>0 THEN
+                DO;
+                NO$BL=FALSE;
+                LINE(ELINE:=ELINE-1)=' ';
+                STUFF=STUFF-1;
+                END;
+            END;
+        R$TO$L=FALSE;
+        FLINE=ELINE;
+        IF STUFF=0 THEN GO TO UNPATCH;;
+        END;	/* OF RIGHT TO LEFT SCAN */
+    ELSE DO;
+        DLINE=FLINE-1;		/* 'FROM' POINTER */
+        FLINE=FLINE-STUFF;
+        ELINE=FLINE-1;		/* 'TO' POINTER */
+            DO WHILE DLINE<>NLINE-1;	/* SCAN THE WHOLE LINE */
+            C , LINE(ELINE:=ELINE+1) = LINE(DLINE:=DLINE+1);
+            IF C=' ' AND STUFF<>0 THEN
+                DO;
+                NO$BL=FALSE;
+                LINE(ELINE:=ELINE+1)=' ';
+                STUFF=STUFF-1;
+                END;
+            END;    /* OF LINE */
+        R$TO$L=TRUE;
+        NLINE=ELINE+1;
+        IF NO$BL OR STUFF=0 THEN GO TO UNPATCH;	/* IF ONE WORD, RETURN LEFT JUSTIFIED */
+        END;
+    END;        /* OF FOREVER */
+
+   UNPATCH:		/* RESTORE ANY PREFIX OF BLANKS & WORDS  
+                           EXCLUDED FROM STUFF ALGORITHM        */
+    FLINE = FLINE - WDCNT - BLCNT2 ;/* RESTORE PREFIX ON LINE */
+    /* RESTORE BLANKS ON LEFT */
+    DO WHILE (BLCNT1:=BLCNT1-1) <> 255;
+        LINE(FLINE:=FLINE-1) = ' ';
+    END;
+END FORMAT;
+
+WRITELINE:  PROC;		/* PRINT FLINE TO WLINE */
+
+    IF RIGHT$FLUSH THEN CALL FORMAT;	/* MARGIN ADJUST, IF YOU MUST */
+    ELSE DO;
+        TLINE=NLINE;
+        NLINE=ELINE;
+    END;
+
+    CALL DUMPLINE;
+    FLINE,ELINE=WLINE;		/* RECOVER WLINE TO NLINE */
+    NLINE=TLINE;
+    END WRITELINE;
+
+PUTCHAR: PROC(C);
+    DCL C BYTE,
+        BLCNT BYTE;
+
+    /* DETERMINE LINELENGTH FOR CURRENT OUTPUT LINE */
+    IF LINELENGTH$CHG THEN
+        IF NLINE = FLINE THEN
+            LINELENGTH$CHG = FALSE;
+ 
+    LINE(NLINE)=C;
+    IF ( (NLINE:=NLINE+1) - FLINE ) > SET$LENGTH THEN
+              DO;
+              CALL WRITELINE;
+              /* RESET FLAGS AFTER WRITING LINE */
+              TEMP$INDENT=FALSE;
+              LINELENGTH$CHG=FALSE;
+              /* ARE THERE LEADING BLANKS IN PRINT LINE? */
+              BLCNT = 0;
+              TLINE = NLINE;
+              DO WHILE LINE(TLINE := TLINE - 1) = ' ' AND TLINE >= FLINE;
+                  BLCNT = BLCNT + 1;
+              END;
+              IF BLCNT = NLINE - FLINE THEN
+                  NLINE = FLINE;         /* RESET NLINE TO BEG. OF PRINT LINE */
+        END;
+END PUTCHAR;
+
+
+PUTLINE:  PROC(CHAR);		/* NO BLANKS IN FRONT OF LINE */
+    DCL CHAR BYTE;
+
+    IF NLINE=FLINE AND LEFT$FLUSH THEN
+        DO;
+        IF CHAR=' ' THEN RETURN;
+        END;
+    CALL PUTCHAR(CHAR);
+END PUTLINE;
+
+CENTER:  PROC(COUNT);	/* PRINT THE FOLLOWING 'COUNT' SOURCE LINES */
+                             /* CENTERED WITHIN LINELENGTH */
+    DCL COUNT BYTE;
+    DCL (CHAR,LS) BYTE;
+
+    DO WHILE (COUNT:=COUNT-1) <> 255;
+    IF TOOLONG THEN CALL ENDPAGE;
+    IF LINECOUNT=0 THEN CALL HEADER;
+        DO WHILE (CHAR:=GETMORE)<>CR;
+        CALL PUTCHAR(CHAR);		/* WILL PRINT IF LINE TOO LONG */
+        END;
+        DO WHILE (CHAR:=GETMORE)<>LF;
+        END;
+    CALL CENTSTUB;    /* PRINT FLINE THROUGH NLINE CENTERED */
+    END;
+END CENTER;
+
+PAGE:  PROC;          /* SKIP TO BOTTOM OF PAGE */
+    CALL FLUSHLINE;
+    IF LINECOUNT<>0  THEN
+        CALL ENDPAGE;
+END PAGE;
+
+FINISH:  PROC;		/* NORMAL END, WRITE AND BOOT */
+    CALL PAGE;
+    CALL PUTDEST(ENDFILE);
+    IF NOT LSTOUT AND NDEST<>0 THEN CALL WRITEDEST;
+    CALL LAST;
+END FINISH;
+
+CMDERR:  PROC;
+    CALL ERROR (.('COMMAND VERIFY$'));
+    CALL FINISH;
+    END CMDERR;
+
+DCL DIGIT BYTE; /* LAST DIGIT OR CHAR READ IN GETNUM */
+
+CLEAR$CRLF:  PROC;
+    IF DIGIT <> CR  THEN CALL CMDERR;
+        DO WHILE GETSOURCE <> LF;
+        END;
+END CLEAR$CRLF;
+
+
+GETNUM: PROC ADDRESS;
+    /* READ NEXT NUMBER ON COMMAND LINE */
+    DCL NUM ADDR;
+
+    GETNEXT: PROC;
+        DIGIT = GETSOURCE;
+        END GETNEXT;
+
+    NUMERIC: PROCEDURE BYTE;
+        RETURN (DIGIT-'0') < 10;
+        END NUMERIC;
+
+    NSIGN, NUM = 0;
+        DO WHILE DIGIT = ' ';
+        CALL GETNEXT;
+        END;
+    IF DIGIT = CR THEN RETURN 0;
+    /* INPUT IS DEBLANKED */
+    IF DIGIT = '+' THEN
+        DO; NSIGN = 1; CALL GETNEXT;
+        END; ELSE
+    IF DIGIT = '-' THEN
+        DO; NSIGN = 255; CALL GETNEXT;
+        END;
+    IF NOT NUMERIC THEN CALL CMDERR;
+        DO WHILE NUMERIC;
+        NUM = NUM * 10 + (DIGIT-'0');
+        CALL GETNEXT;
+        END;
+    RETURN NUM;
+    END GETNUM;
+
+GETAN: PROC(A) ADDRESS;
+    DCL (A, INC) ADDR;
+    DIGIT=' ';
+    INC=GETNUM; /* READ A NUMBER */
+    IF NSIGN=0 THEN A=INC;
+    IF NSIGN=1 THEN A=A+INC;
+    IF NSIGN=255 THEN A=A-INC;
+    IF ROL(HIGH(A),1) THEN A = 0;
+    CALL CLEAR$CRLF;
+    RETURN A;
+    END GETAN;
+
+GETBN: PROC(B) BYTE;	/* GET INCREMENTAL BYTE VALUE */
+    DCL B BYTE;
+    DCL A ADDRESS;
+    IF HIGH(A:=GETAN(DOUBLE(B))) <> 0 THEN CALL CMDERR;
+    RETURN LOW(A);
+    END GETBN;
+
+GETN:  PROC BYTE;
+    DCL B BYTE;
+    B = GETBN(0);
+    IF NSIGN <> 0 THEN CALL CMDERR;
+    RETURN B;
+    END GETN;
+
+NEXT$CHAR:  PROC BYTE;
+    DCL CHAR BYTE;
+
+    /* READ PAST 'CRLF' OF COMMAND LINE */
+    IF (CHAR:=GETSOURCE)=CR  THEN
+        DO WHILE (CHAR:=GETSOURCE)=LF;
+        END;
+    /* RETURN LAST CHAR OBTAINED (MAY BE ENDFILE) */
+    RETURN CHAR;
+END NEXT$CHAR;
+ 
+IGNORE:  PROC;	/* SKIP TO NEXT COMMAND */
+    DCL CHAR BYTE;
+
+    IF (CHAR:=NEXT$CHAR)='.' OR CHAR=ENDFILE  THEN RETURN;
+        DO FOREVER;
+            DO WHILE (CHAR:=GETMORE)<>LF;
+            END;
+        IF (CHAR:=GETSOURCE)='.' OR CHAR=ENDFILE  THEN RETURN;
+        END;
+END IGNORE;
+
+THRUPUT:  PROC;		/* LITERAL COPY TO NEXT COMMAND */
+    DCL CHAR BYTE;
+    DCL I    BYTE;
+
+    CALL FLUSHLINE;
+    IF (CHAR:=NEXT$CHAR)='.' OR CHAR=ENDFILE  THEN RETURN;
+        DO FOREVER;
+        IF LINECOUNT=0  THEN CALL HEADER;
+        CALL PUT$LEFT$MARGIN;
+        CALL PUTDEST(CHAR);
+            DO WHILE (CHAR:=GETMORE) <> LF;
+            CALL PUTDEST(CHAR);
+            END;
+        CALL PUTDEST(CHAR);   /* CHAR=LF */
+        LINECOUNT = LINECOUNT+1;
+        IF TOOLONG  THEN CALL ENDPAGE;
+        IF (CHAR:=GETSOURCE)='.' OR CHAR=ENDFILE THEN RETURN;
+        END;
+END THRUPUT;
+
+
+TRANSLATE: PROC BYTE;
+    DCL C BYTE;
+
+    IF (C:=GETSOURCE)<'A' THEN CALL CMDERR;
+    ELSE IF C>=61H THEN C=C-20H;
+    IF C>'U' THEN CALL CMDERR;
+    RETURN C;
+    END TRANSLATE;
+
+
+    DCL DUMMY LIT 'CALL CMDERR';
+
+COMMAND:  PROC;
+
+
+    DCL (CMD1,CMD2,CNT1,CNT2,CNT3) BYTE;
+    DCL ACNT ADDR;
+
+ CONTINUE:
+    CMD1=TRANSLATE;
+    CMD2=TRANSLATE;
+    
+
+    DO CASE (CMD1:=CMD1-'A');
+
+        DO;    /*  A  */
+            IF CMD2='D' THEN  /* ADJUST MARGINS */
+                DO;
+                CALL FLUSHLINE;
+                LEFT$FLUSH,RIGHT$FLUSH=TRUE;
+                END;  ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /* B */
+            IF CMD2='L' THEN
+                DO;  CALL FLUSHLINE;
+                    IF (CNT1:=GETN)=0 THEN CNT1=1;
+                    CALL SKIPLINES(CNT1*LSPACING);
+                END; ELSE
+
+            IF CMD2='P' THEN		/* NEW PAGE; SET PAGE NUMBER */
+                DO;
+                CALL PAGE;
+                IF (ACNT:=GETAN(PAGECOUNT-1))<>0 THEN
+                   DO;
+                   PAGECOUNT=ACNT;
+                   NUMBER$PAGES=TRUE;
+                   END;
+                END;  ELSE
+
+            IF CMD2='R'  THEN   /* BREAK */
+                CALL FLUSHLINE;
+                ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /*  C  */
+           IF CMD2='E' THEN /*CENTER COMMAND*/
+            DO;  CALL FLUSHLINE;
+                IF (CNT1:=GETN)=0 THEN CNT1=1;
+                CALL CENTER(CNT1);
+            END;  ELSE
+
+            IF CMD2='P'  THEN   /* CONDITIONAL PAGE (=.NE) */
+                DO;
+                IF (LINECOUNT+(GETN*LSPACING)) >= TEXTLENGTH+TOP$MARGIN
+                    THEN CALL PAGE;
+                END;
+
+           ELSE
+           CALL CMDERR;
+        END;
+
+        DO;    /*  D  */
+            IF CMD2='S' THEN
+                DO;
+                CALL FLUSHLINE;
+                LSPACING=2;
+                END;  ELSE
+
+            CALL CMDERR;
+        END;
+
+        DUMMY;    /* E  */
+
+        DO;	/* F  */
+            IF CMD2='L' THEN   /* FLUSH (SAME AS .BR) */ 
+                CALL FLUSHLINE;
+            ELSE
+ 
+            IF CMD2='T'  THEN   /* foot TITLE */
+                DO; 
+                if shr (bot$margin,1) < 3 then
+                    do;
+                    call error (.('No room for FOOT$'));
+                    end;
+                CNT1=255;
+                CALL FILL(.footBUF,' ',length(footbuf));
+                IF (CNT2:=GETMORE)<>' ' THEN
+                    IF CNT2=CR  THEN GO TO footXIT;
+                    ELSE  /* CNT2= FIRST CHAR OF foot */
+                        DO;
+                        footBUF(0)=CNT2;
+                        CNT1=0;
+                        END;
+
+                    DO WHILE (CNT1:=CNT1+1)<length(footbuf);
+                    IF (CNT2:=GETMORE)=CR  THEN GO TO footXIT;
+                    footBUF(CNT1) = CNT2;
+                    END;
+                RETURN;
+
+         footXIT:   IF (CNT2:=GETMORE)<>LF  THEN
+                     CALL ERROR(.('INVALID CRLF SEQUENCE$'));
+                footBUF(CNT1)=0;
+                END;  ELSE  
+
+            CALL CMDERR;
+        END;
+
+        DUMMY;    /* G  */
+
+        DO;    /*  H  */
+            IF CMD2='E'  THEN   /* HEADING TITLE */
+                DO; 
+                CNT1=255;
+                CALL FILL(.HEADBUF,' ',length(headbuf));
+                IF (CNT2:=GETMORE)<>' ' THEN
+                    IF CNT2=CR  THEN GO TO XIT;
+                    ELSE  /* CNT2= FIRST CHAR OF HEADING */
+                        DO;
+                        HEADBUF(0)=CNT2;
+                        CNT1=0;
+                        END;
+
+                    DO WHILE (CNT1:=CNT1+1)<length(headbuf);
+                    IF (CNT2:=GETMORE)=CR  THEN GO TO XIT;
+                    HEADBUF(CNT1) = CNT2;
+                    END;
+                RETURN;
+
+         XIT:   IF (CNT2:=GETMORE)<>LF  THEN
+                     CALL ERROR(.('INVALID CRLF SEQUENCE$'));
+                HEADBUF(CNT1)=0;
+                END;  ELSE  
+
+           IF CMD2='M'  THEN    /* HEADING MARGIN */
+                 DO;            /* SPACE BETWEEN HEADING AND TEXT */                                   
+                 MT2 = GETBN(MT2);
+                 IF MT2>=TOP$MARGIN  THEN
+                     DO;
+                     CALL ERROR (.('HM COMMAND$'));
+                     IF TOP$MARGIN < 2 
+                         THEN MT2=0;
+                         ELSE MT2=TOP$MARGIN-1;
+                     END;
+                 IF TOP$MARGIN=0    /* IF TOP$MARGIN<>0 THEN TOP$MARGIN>MT2 */
+                     THEN MT1=0;
+                     ELSE MT1=TOP$MARGIN-MT2-1;
+                 END;   ELSE
+
+             CALL CMDERR;
+        END;
+
+        DO; /* I */
+            IF CMD2='G' THEN
+                DO;                
+                CALL IGNORE;
+                GO TO CONTINUE;
+                END; ELSE
+
+            IF CMD2='N' THEN
+                DO;
+                CALL FLUSHLINE;
+                LEFT$FLUSH=TRUE;
+                INDENT$MARGIN=GETBN(INDENT$MARGIN);
+                IF LEFT$MARGIN+INDENT$MARGIN>MAXLINE  THEN
+                    INDENT$MARGIN=DEFIM;
+                LINELENGTH=PAGEWIDTH-LEFT$MARGIN-INDENT$MARGIN;
+                END; ELSE
+
+            CALL CMDERR;
+        END;
+
+        DUMMY;  /*  J  */
+
+        DUMMY;    /* K  */
+
+        DO;    /*  L  */
+            IF CMD2='C' THEN LCASE=TRUE;  ELSE
+            IF CMD2='I' THEN
+                DO; CALL THRUPUT;
+                GO TO CONTINUE;
+                END; ELSE
+
+            IF CMD2='L' THEN
+                DO; CNT1=GETBN(LINELENGTH);   /* CNT1=NEW LINELENGTH */
+                    IF CNT1<LINELENGTH THEN
+                        DO;
+                        LINELENGTH$CHG=TRUE;
+                        LONG$LINELENGTH=LINELENGTH;
+                        END;
+                    IF CNT1>MAXLINE
+                        THEN LINELENGTH=DEFLL;
+                        ELSE LINELENGTH=CNT1;
+                    PAGEWIDTH=LEFT$MARGIN+INDENT$MARGIN+LINELENGTH;
+                END; ELSE
+
+            IF CMD2='S' THEN
+                DO;
+                CALL FLUSHLINE;
+                LSPACING=GETBN(LSPACING);
+                END;  ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /* M */
+            IF CMD2='B' THEN /*BOTTOM MARGIN*/
+                DO;  BOT$MARGIN=GETBN(BOT$MARGIN);
+                IF BOT$MARGIN>=PAGELENGTH-TOP$MARGIN THEN 
+                    DO;
+                    CALL ERROR (.('MB COMMAND$'));
+                    BOT$MARGIN=1;
+                    END;
+                TEXTLENGTH=PAGELENGTH-(TOP$MARGIN+BOT$MARGIN);
+                END;  ELSE
+
+            IF CMD2='T' THEN /*TOP MARGIN*/
+                DO;  TOP$MARGIN=GETBN(TOP$MARGIN);
+                IF TOP$MARGIN>=PAGELENGTH-BOT$MARGIN THEN 
+                    DO;
+                    CALL ERROR (.('MT TOO LARGE$'));
+                    TOP$MARGIN=1;
+                    END;
+                TEXTLENGTH=PAGELENGTH-(TOP$MARGIN+BOT$MARGIN);
+
+                /* RESET HEADING MARGINS (MT1 MT2) IF NECESSARY */
+                IF TOP$MARGIN>MT2  THEN
+                    MT1 = TOP$MARGIN-MT2-1;
+                ELSE DO;
+                    MT1=0;
+                    IF TOP$MARGIN<2  THEN
+                         MT2=0;
+                    ELSE MT2=TOP$MARGIN-1;
+                    END;
+                END;   ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /*  N  */
+            IF CMD2='A' THEN     /* JUSTIFY DISABLE */
+                DO;
+                CALL FLUSHLINE;
+                RIGHT$FLUSH=FALSE;
+                END;  ELSE
+
+            IF CMD2='E' THEN
+                DO;
+                IF (LINECOUNT+(GETN*LSPACING))>=TEXTLENGTH+TOP$MARGIN 
+                    THEN CALL PAGE;
+                END;
+
+            ELSE CALL CMDERR;
+        END;
+
+        DO;    /* O  */
+            IF CMD2='P' THEN  /* OMIT PAGE NUMBERS */
+                NUMBER$PAGES=FALSE; ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /* P */
+            IF CMD2='A' THEN		/* PAGE ADVANCE 1 OR N */
+                DO; CALL FLUSHLINE;
+                    IF (CNT1:=GETN)=0  THEN CNT1=1;
+                    IF LINECOUNT=0  THEN CNT1=CNT1-1; 
+                        DO CNT2=1 TO CNT1;
+                        CALL ENDPAGE;
+                        END;
+                END; ELSE
+
+            IF CMD2='L' THEN /*PAGE LENGTH*/
+                DO;  PAGELENGTH=GETBN(PAGELENGTH);
+                IF PAGELENGTH>128 OR PAGELENGTH=0 THEN PAGELENGTH=DEFPL;
+                TEXTLENGTH=PAGELENGTH-(BOT$MARGIN+TOP$MARGIN);
+                END;  ELSE
+
+            IF CMD2='N' THEN /*NUMBER PAGES BEGINNING WITH N*/
+                DO;
+                    IF (PAGECOUNT:=GETAN(PAGECOUNT))=0 THEN PAGECOUNT=1;
+                    NUMBER$PAGES=TRUE;
+                END; ELSE
+
+            IF CMD2='O' THEN  /* LEFT MARGIN = PAGE OFFSET */
+                DO;
+                CALL FLUSHLINE;
+                FIRSTPAGE=TRUE;
+                LEFT$MARGIN=GETBN(LEFT$MARGIN);
+                PAGEWIDTH=LEFT$MARGIN+INDENT$MARGIN+LINELENGTH;
+                IF PAGEWIDTH>MAXLINE  THEN 
+                  DO;
+                  LINELENGTH=MAXLINE;
+                  PAGEWIDTH=MAXLINE+LEFT$MARGIN+INDENT$MARGIN;
+                  END;
+                END;   ELSE
+    
+            IF CMD2='P' THEN /*PARAGRAPH*/
+                DO;
+                CALL FLUSHLINE;
+                IF LINECOUNT=0
+                   THEN CALL HEADER;
+                   ELSE CALL SKIPLINES(LSPACING);
+                LEFT$FLUSH=TRUE;
+                IF (CNT1:=GETN) <> 0 THEN
+                    DO;
+                    IF CNT1<LINELENGTH
+                        THEN NINDENT=CNT1;
+                        ELSE CALL ERROR (.('PP COMMAND $'));
+                    END;
+                DO CNT2=1 TO NINDENT;
+                    CALL PUTCHAR(' ');
+                END;
+                END; ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO;	/*  Q  */
+            IF CMD2='I' THEN
+            DO;
+                CALL FLUSHLINE;
+                INDENT$MARGIN=0;
+                LINELENGTH=PAGEWIDTH-LEFT$MARGIN;
+            END;  ELSE
+
+            CALL CMDERR;
+        END;
+        DUMMY;    /* R  */
+
+        DO; /* S */
+            IF CMD2='P' THEN        /* SPACE DOWN N LINES OF TEXT: 
+                                       DOES NOT SPACE PAST PAGE BOUNDARY */
+                DO;
+                CALL FLUSHLINE;
+                IF (CNT1:=GETN)=0  THEN CNT1=1;
+                CALL SKIPLINES(CNT1*LSPACING);
+                END;  ELSE
+
+            IF CMD2='S' THEN
+                DO;
+                CALL FLUSHLINE;
+                LSPACING=1;
+                END;  ELSE
+
+            CALL CMDERR;
+        END;
+
+        DO; /* T */
+
+        IF CMD2 = 'B' THEN /* TAB SET */
+            DO; DIGIT = ' '; CNT2 = 0;
+                DO CNT1 = 0 TO TABLAST;
+                IF (CNT3:=(TABARRAY(CNT1):=GETNUM)) = 0 THEN
+                    DO; TABARRAY(CNT1) = 255; /* END OF TABS */
+                    CNT1 = TABLAST;
+                    END; ELSE
+                IF CNT3>CNT2 THEN CNT2=CNT3; ELSE CALL CMDERR;
+                END;
+            CALL CLEAR$CRLF;
+            END; ELSE
+
+        IF CMD2='I' THEN /* TEMPORARY INDENT */
+            DO;    
+            CALL FLUSHLINE;
+            TEMP$INDENT,LEFT$FLUSH=TRUE;
+            CNT1=GETBN(INDENT$MARGIN);
+                DO WHILE (CNT1:=CNT1-1) <> 255;
+                CALL PUTCHAR(' ');
+                END;
+            END; ELSE
+
+            CALL CMDERR;
+        END;
+
+
+        DO;    /*  U  */
+            IF CMD2='C' THEN LCASE=FALSE;  ELSE
+            CALL CMDERR;
+        END;
+
+    END; /* OF COMMAND CASES  */
+
+
+    END COMMAND;
+
+SCAN:  PROC;
+    DCL CHAR BYTE,
+        EOL$FLAG BYTE;
+
+    LINE$END: PROCEDURE;
+        IF EOL$FLAG THEN
+            DO;
+                ELINE = NLINE;
+                CALL PUTLINE(' ');
+                IF SCAN$STATE = ENDSENT$STATE THEN
+                     CALL PUTLINE(' ');
+                WLINE = NLINE;
+                SCAN$STATE = BLANKS$STATE;
+            END;
+    END LINE$END;
+
+
+    SENTENCE$END: PROCEDURE BYTE;
+        /* RETURNS TRUE IF END OF SENTENCE ENCOUNTERED */
+        IF CHAR = '.' 
+        OR CHAR = QM
+        OR CHAR = EXCL
+        OR CHAR = ':'  THEN
+            DO; /* CANDIDATE FOR END OF LINE */
+                CALL LOOKAHEAD; /* TO ENSURE NEXT CHAR IS READY */
+                IF LOOKCHR = CR OR LOOKCHR = ENDFILE OR LOOKCHR = ' ' THEN
+                   RETURN TRUE;
+            END;
+        RETURN FALSE;
+    END SENTENCE$END;
+
+    EOL$FLAG=FALSE;
+    SCAN$STATE=START$STATE;
+    ELINE,WLINE=NLINE;
+
+    /* ELINE MARKS END+1 OF LAST COMPLETE WORD. */
+    /* WLINE MARKS START OF NEXT WORD */
+
+    DO WHILE (CHAR:=GETSOURCE)<>ENDFILE;
+
+        IF CHAR=CR THEN
+            DO;
+            EOL$FLAG=TRUE;
+            DO WHILE (CHAR:=GETSOURCE)=LF; END;
+            IF CHAR=ENDFILE THEN RETURN;
+            END;
+        ELSE EOL$FLAG = FALSE;
+
+RESCAN:			/* KEEP CHAR AND CONTINUE ANALYSIS */
+        IF CHAR=CR THEN		/* MULTIPLE END OF LINES */
+            DO;
+            IF SCAN$STATE<>SKIP$STATE THEN CALL FLUSHLINE;
+            DO WHILE (CHAR:=GETSOURCE) = LF; END;
+            CALL DUMPLINE;		/* PRINT EMPTY LINE */
+            SCAN$STATE=SKIP$STATE;
+            IF CHAR=ENDFILE THEN RETURN;
+            GO TO RESCAN;
+            END;
+
+
+        ELSE IF CHAR = ' ' THEN
+            DO;
+            IF SCAN$STATE<>BLANKS$STATE THEN ELINE=NLINE;
+                           /* MARK END OF COMPLETE WORD */
+            CALL PUTLINE(CHAR);
+            SCAN$STATE=BLANKS$STATE;
+            END;
+
+        ELSE IF SENTENCE$END THEN /* DELIMITER FOLLOWED BY CR OR BLANK */
+            DO; /* CHECK FOR DELIM AT WORD END */
+            IF SCAN$STATE <> WORDS$STATE THEN WLINE = NLINE;
+            CALL PUTLINE(CHAR);
+            WLINE, ELINE = NLINE;
+            SCAN$STATE=ENDSENT$STATE;
+            END;
+        ELSE IF CHAR = '.' AND
+             (EOL$FLAG OR (SCAN$STATE=START$STATE) OR (SCAN$STATE=SKIP$STATE))
+             THEN DO;
+                 CALL LINE$END;
+                 CALL COMMAND;
+                 R$TO$L , HEADER$SCAN = TRUE;
+                 SCAN$STATE = START$STATE;
+                 END;
+        ELSE DO;	/* NON-SPECIAL CHARACTER */
+            CALL LINE$END;
+            IF SCAN$STATE<>WORDS$STATE THEN WLINE=NLINE;
+            CALL PUTLINE (CHAR);
+            SCAN$STATE=WORDS$STATE;
+            END;
+    END;	/* OF DO WHILE */
+END SCAN;
+
+PARMSCAN:  PROC;      /* ANALYZE PARAMETERS IN TEX INPUT LINE */
+    DCL (C,I,DOLLAR) BYTE;
+
+    DOLLAR,I=0;
+        DO WHILE (C:=TEX$BUFF(I:=I+1))<>0;
+        IF DOLLAR THEN          /* PARAMETERS EXIST */
+            DO;
+            IF C='C' THEN    /* OUTPUT TO CON: DEVICE ONLY */
+                DO;
+                LSTOUT=TRUE;
+                OUT$DEVCE=2;
+                END;
+            ELSE
+            IF C='L' THEN    /* OUTPUT TO LST: DEVICE ONLY */
+                DO;
+                LSTOUT=TRUE;
+                OUT$DEVCE=1;
+                END;
+            ELSE
+            IF C='S' THEN    /* OUTPUT SUPPRESSION */
+                DO;
+                LSTOUT=TRUE;
+                OUT$DEVCE=0;
+                END;
+            ELSE
+            IF C='E' THEN    /* ERROR MESSAGES ON LST: DEVICE */
+                LSTERR=TRUE;
+            ELSE
+            IF C='F' THEN    /* FOR PAGING, USE FORMSFEED CHAR */
+                FORMS$FEED=TRUE;
+            ELSE
+            IF C='P' THEN    /*INSERT NEW PAGE */
+                DO;
+                PAGE$MODE=TRUE;
+                LSTOUT=TRUE;
+                OUT$DEVCE=1;
+                END;
+            ELSE
+            IF C<>' ' AND C<>'$' THEN
+                  CALL FERROR (.('PARAMETER SCAN$'));
+            END;  /* IF DOLLAR */
+        ELSE
+        IF C='$' THEN DOLLAR=TRUE;
+        END;  /* DO WHILE */
+END PARMSCAN;
+
+SETFILES: PROC;		/* OPEN SOURCE AND DESTINATION */
+                /* FILE ARGUMENTS A:M.X AND B:N.Y ARE LEFT */
+                /* BY CCP AT TFCB AND TFCB+16              */
+                /* TFCB(0):A  TFCB(1):M  TFCB(9):X         */
+                /* TFCB(16):B TFCB(17):N TFCB(25):Y        */
+                        /* COPY FORMAT:  COPY(S,D,N) */
+
+    IF SFCB(1)=' ' THEN    /* SOURCE FILE ARGUMENT MISSING? */
+        CALL FERROR (.('OPENING SOURCE$'));
+                       /* SET DEFAULT FILETYPE FOR FIRST ARG? */
+    IF SFCB(9)=' ' THEN CALL COPY (.('TEX'),.SFCB+9,3);
+                       /* DEST FILE ARGUMENT MISSING? */
+    IF SFCB(17)=' ' OR  SFCB(17)='$' THEN
+        DO;
+        CALL COPY (.SFCB,.DFCB,16);
+        DFCB(0) = SFCB(16);
+        CALL COPY (.('PRN'),.DFCB+9,3);
+        END;
+    ELSE          /* COPY DEST FILENAME TO DEST BUFFER */
+        DO;
+        CALL COPY(.SFCB+16,.DFCB,16);
+        IF DFCB(9)=' ' THEN CALL COPY(.('PRN'),.DFCB+9,3);
+        END;
+
+    SFCB(32),DFCB(32)=0;	/* START AT THE FRONT */
+
+    CALL PARMSCAN;
+ 
+    CALL OPEN(.SFCB);		/* OPEN SOURCE */
+    IF DCNT=255 THEN CALL FERROR(.('OPENING SOURCE$'));
+   
+    IF NOT LSTOUT THEN          /* OPEN DESTINATION */
+        DO;
+        CALL DELETE(.DFCB);	/* DELETE OLD DEST FILES */
+        CALL MAKE(.DFCB);	/* MAKE NEW DESTINATION FILE */
+        IF DCNT=255 THEN CALL FERROR(.('OPENING DESTINATION$'));
+        END;
+END SETFILES;
+
+PRINTVER: PROC;
+            /* IF OUTPUT IS PRINTING TO CONSOLE
+               THEN IF FORMS$FEED PARAMETER IS GIVEN
+               THEN PRINT TEX-VERSION MSG AND SKIP A PAGE;
+               OTHERWISE OMIT TEX-VERSION MESSAGE.
+            */
+    IF OUT$DEVCE <> 2 THEN
+        CALL PRINT (.('TEX VERSION 1.1$'));
+    ELSE
+        DO;
+        IF FORMS$FEED THEN
+            DO;
+            CALL PRINT (.('TEX VERSION  1.1$'));
+            CALL PUTDEST (FF);
+            END;
+        END;
+END PRINTVER;
+
+SETPARS: PROC;
+
+    NSOURCE=SBUFFL;	/* SET TO FORCE INITIAL READ */
+    SBUFF(1)=0;
+    FLINE=(NLINE:=0);
+    NDEST=0;			/* OUTPUT BUFFER IS EMPTY */
+    OUT$DEVCE=0;
+    LINECOUNT=0;
+    PAGECOUNT=1;
+    ERRCNT = 0;
+    COLUMN=1;
+        /* SET TOP MARGIN DEFAULT VALUES */
+    HEADBUF(0)=0;         /* TO TEST IF .HE CONDITION ON  */
+    HEADBUF(maxcolumn)=0;   /* TO DELIMIT HEADING IN BUFFER */
+    footBUF(0)=0;         /* TO TEST IF .ft CONDITION ON  */
+    footBUF(maxcolumn)=0;   /* TO DELIMIT foot IN BUFFER */
+        /* SET DEFAULTS OF OTHER KEY VALUES */
+    LINELENGTH   =DEFLL;
+    LEFT$MARGIN  =DEFLM;
+    INDENT$MARGIN=DEFIM;
+    NINDENT      =DEFPP;
+    PAGEWIDTH    =DEFPW;
+    PAGELENGTH   =DEFPL;
+    TEXTLENGTH   =DEFTL;
+    TOP$MARGIN   =DEFMT;
+    MT1 = 3;
+    MT2 = 2;
+    BOT$MARGIN   =DEFMB;
+    LSPACING     =DEFLS;
+        /* SET SWITCH VALUES */
+    LEFT$FLUSH,
+    RIGHT$FLUSH  =TRUE;
+    TEMP$INDENT,
+    LINELENGTH$CHG,
+    HEADER$SCAN,
+    LCASE,
+    FORMS$FEED,
+    PAGE$MODE,
+    LSTERR,
+    LSTOUT       =FALSE;
+    FIRSTPAGE,
+    NUMBER$PAGES,
+    R$TO$L       =TRUE;
+    LOOKED       =FALSE;
+END SETPARS;
+
+/* TEX MAIN PROGRAM BEGINS HERE */
+
+declare last$dseg$byte byte
+  initial (0);
+
+TEXCOMMAND:
+    /* SIZE MEMORY FOR SOURCE AND OUTPUT BUFFERS */
+    SBUFFL=SHR((BDOSLOC-.MEMORY) AND 0FF00H,1);
+    SBUFFA=.MEMORY;
+    DBUFFA=SBUFFA+SBUFFL;
+
+    CALL SETPARS;
+    CALL SETFILES;
+    CALL PRINTVER;
+    CALL CRLF;
+    CALL SCAN;		/* UNTIL END OF FILE */
+    CALL FINISH;
+END TEX;
+

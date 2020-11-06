@@ -1,0 +1,114 @@
+; 
+; 		Z8000 CPM kernal to DDT debugger interface
+; 
+; 
+; 			Oct. 20, 1982 Thorn Smith
+; 
+; 
+;   			*****  PROPRIETARY ******
+; 
+; 	  This document is the property of Zilog corporation,
+; 	  and is protected from unauthorized duplication under
+; 	  applicable federal, state, and civil copyright laws.
+; 	  No part of this document may be reproduced, stored,
+; 	  or transmitted, in any form or by any means, such as
+; 	  electronic, mechanical, photocopying, recording, or
+; 	  otherwise, without the prior written permission of
+; 	  Zilog, inc. 1315 Dell Avenue, Campbell, Ca. 95008
+; 	  tel: (408) 370-8000		   twx: 910-338-7621
+; 
+; 	 Copyright 1982 Zilog Corporation, all rights reserved.
+; 
+; date listed:	______  ____/____/____  ____:____  ____
+; 
+; project name:		#916ss - Zilog cross software development
+; 
+; program name:		Breakpoint to debugger interface.
+; 
+; programmer:		Thorn Smith x 8317
+; 
+; environment:		Zilog S8000  1  v1.7
+; 
+; language:		Zilog PLZ-ASM, Zeus C
+; 
+; approvals-mgr:	________________________________________, Zilog
+; 
+; approvals-q.a:	________________________________________, Zilog
+; 
+; approvals-d.v:	________________________________________, Zilog
+; 
+
+SUPV	.equ	62	; supervisor state BDOS call
+MEM_SC	.equ	1	; memory call
+BDOS_SC	.equ	2	; system call number 2
+
+	.global	_frame
+	.global	_dbg
+
+	.global	_getsp
+	.global	_bkptrap
+
+;	*************************************************
+;	*						*
+;	*   S T A R T   O F   C O D E			*
+;	*						*
+;	*************************************************
+
+__text	.sect
+
+;
+;********	get the sp (rr14)
+;
+
+_getsp:
+	ldl	rr6,rr14
+	ret
+
+;
+;********	unimplemented instruction trap interface to debugger
+;
+; upon entry, rr14 points to a frame structure as follows:
+; trap return address, r0-r15, 0x7f00, FCW, pcseg, pcoff
+;
+
+_bkptrap:
+	ldl	rr8,rr14	; rr8= frame pointer
+	inc	r9,#4		; bump the long return address to this rtn
+
+	ldctl	r0,FCW
+	and	r0,#03FFFh	; unset nonseg and system mode
+	or	r0,#01800h	; enable vi, nvi
+	ldctl	FCW,r0		; BOOM! NOW IN NORMAL NONSEG MODE W/NORMAL SP !
+
+				; rr6= source (adjusted stack)
+	ldl	rr6,#_frame	; rr4= dest. temporary address in this segment
+	ld	r5,#0		; 0= caller data space
+	ldl	rr2,#0		;
+	sc	#MEM_SC		; map adr, rr6= physical address
+
+	ldl	rr2,#040	; rr2= length
+	ldl	rr4,rr6		; rr4= dest= physical address of #_frame
+	ldl	rr6,rr8		; rr6= source= frame on stack
+	pushl	@r15,rr4	; preserve physical address of #_frame
+	sc	#MEM_SC		; copy memory
+
+	push	@r15,#_frame	; state
+	call	_dbg		; call the debugger with the frame as an arg.
+	inc	r15,#2		;
+
+	popl	rr6,@r15 	; rr6= source= physical address of #_frame
+	ldl	rr4,rr8		; rr4= dest= top of stack on frame
+	ldl	rr2,#040	; rr2= length
+	sc	#MEM_SC		; copy memory
+
+	ld	r5,#SUPV	; SUPV= request to switch to system mode.
+	sc	#BDOS_SC	; BOOM! NOW IN SYSTEM SEG MODE W/SYSTEM SP !
+
+	ret			; presumably, this does the xfer.
+
+;	*************************************************
+;	*						*
+;	*   S T A R T   O F   R A M			*
+;	*						*
+;	*************************************************
+

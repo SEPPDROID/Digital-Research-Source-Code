@@ -1,0 +1,3908 @@
+;*********************************************
+
+;this file is included in M4LDBIOS or M4CBIOS
+;to generate a complete BIOS for M4LOADER
+;or CPM.SYS respectively
+
+;************************************************
+;*                                              *
+;*      M-Four Basic I/O System (M4BIOS)        *
+;*                                              *       
+;*  Version: 21         Date: 24 May 1983       *
+;*                                              *
+;*      For CP/M version 1.1                    *
+;*                                              *
+;************************************************
+
+
+;*********************************************
+;*                                           *
+;* Loader_bios is true if assembling the     *
+;* LOADER BIOS, otherwise BIOS is for the    *
+;* CPM.SYS file.                             *
+;*                                           *
+;*********************************************
+
+        IF      NOT cal
+keybd_int_typ   equ     65h     ;keyboard int. (parallel)
+
+        ENDIF
+
+        IF      cal
+keybd_int_typ   equ     60h
+        ENDIF
+
+bdos_int        equ     224     ;reserved BDOS interrupt
+
+dpblen          equ     24
+
+xon             equ     11h
+xoff            equ     13h
+cntrl_Z         equ     26
+
+flop_flags      equ     .45aah          ;only used by special version
+flop_step_rate  equ     .45adh          ;ditto
+
+        IF      not loader_bios
+;---------------------------------------------
+;|                                           |
+
+bios_code       equ 2500h
+ccp_offset      equ 0000h
+bdos_ofst       equ 0B06h       ;BDOS entry point
+
+;|                                           |
+;---------------------------------------------
+        ENDIF   ;not loader_bios
+
+        IF      loader_bios
+;---------------------------------------------
+;|                                           |
+
+bios_code       equ     1200h   ;start of LDBIOS
+bdos_ofst       equ     0406h   ;stripped BDOS entry
+
+        IF      NOT mpm
+ccp_offset      equ     0003h   ;base of CPMLOADER
+        ENDIF
+
+        IF      mpm
+ccp_offset      equ     0103h   ;base of MPMLDR
+        ENDIF
+
+;|                                           |
+;---------------------------------------------
+        ENDIF   ;loader_bios
+
+
+;*********************************************
+;*                                           *
+;*          Dummy Data Section               *
+;*                                           *
+;*********************************************
+
+        dseg    0       ;absolute low memory
+        org     0       ;(interrupt vectors)
+
+first   equ     $
+
+int0_offset     rw      1
+int0_segment    rw      1
+
+        org     4 * 4
+
+int4_offset     rw      1
+int4_segment    rw      1
+
+        org     61h * 4
+
+crt_int_offset  rw      1
+crt_int_segment rw      1
+
+        org     64h * 4
+
+clock_int_offset        rw      1
+
+        org     keybd_int_typ * 4
+
+keybd_int_offset        rw      1
+
+        org     67h * 4
+
+printer_int_offset      rw      1
+
+        org     bdos_int * 4    
+        
+bdos_int_offset         rw      1
+bdos_int_segment        rw      1
+
+        org     0400h
+
+msdos_jmp       rb      128
+debug_wrksp     rb      256
+prom_wrksp      rb      128
+nvram           rb      128
+keytab          rb      512
+
+        cseg
+
+;********************************************************************
+
+; equates / locations in cpm to be patched/used at run time
+; to run cpm 80 com files.
+
+ccp_file        equ     .0827h  ; filename to be loaded
+ccp_file_type   equ     .0831h  ; filetype of ^
+ccp_file_rec    equ     .0847h  ; record count of ^
+ccp_file_ext    equ     .0833h  ; extent number of ^
+
+com_patch       equ     .0727h  ; address in ccp to be patched to force
+                                ; jump to bios routine to check for .com
+                                ; file if not .cmd file.
+com_desc        equ     .000ah  ; location of command line descriptor
+com_line        equ     .000bh  ; location of command line cpm 86, as input
+
+ccp_parse_patch equ     .07a0h  ; here is put a temporary ret to end ccp parse
+                                ; routine
+
+        org     00edh
+ccp_open:                       ; routine to open a file
+
+        org     46ch
+ccp_cleanup:                    ; cleanup routine to be called before running
+                                ; cpm80, or if allocation of z80 bank/ load
+                                ; of cpm80 file fail.
+
+        org     3deh
+ccp_exit:                       ; back to cpm86 command level
+
+        org     732h
+ccp_cmd:                        ; back to load .CMD file
+        
+        org     738h    
+ccp_parse:                      ; routine to parse command line to fcb1/fcb2
+                                ; + dma buffer
+        org     072ch           
+ccp_error:                      ; routine to give cpm86 command error
+
+;***************************************************************************
+
+        org     ccpoffset
+ccp:
+
+        org     bios_code
+
+;*********************************************
+;*                                           *
+;* BIOS Jump Vector for Individual Routines  *
+;*                                           *
+;*********************************************
+
+        JMP     INIT            ;Enter from BOOT ROM or LOADER
+        JMP     WBOOT           ;Arrive here from BDOS call 0  
+        JMP     CONST           ;Return console keyboard status
+        JMP     CONIN           ;Return console keyboard char
+        JMP     CONOUT          ;Write char to console device
+        JMP     LISTOUT         ;Write character to list device
+        JMP     PUNCH           ;Write character to punch device
+        JMP     READER          ;Return char from reader device 
+        JMP     HOME            ;Move to trk 00 on cur sel drive
+        JMP     SELDSK          ;Select disk for next rd/write
+        JMP     SETTRK          ;Set track for next rd/write
+        JMP     SETSEC          ;Set sector for next rd/write
+        JMP     SETDMA          ;Set offset for user buff (DMA)
+        JMP     READ            ;Read a 128 byte sector
+        JMP     WRITE           ;Write a 128 byte sector
+        JMP     LISTST          ;Return list status 
+        JMP     SECTRAN         ;Xlate logical->physical sector 
+        JMP     SETDMAB         ;Set seg base for buff (DMA)
+        JMP     GETSEGT         ;Return offset of Mem Desc Table
+        JMP     GETIOB          ;Return I/O map byte (IOBYTE)
+        JMP     SETIOB          ;Set I/O map byte (IOBYTE) 
+
+;*********************************************
+;*                                           *
+;* INIT Entry Point, Differs for LDBIOS and  *
+;* BIOS, according to "Loader_Bios" value    *
+;*                                           *
+;*********************************************
+
+INIT:                   ;print signon message and initialize hardware
+        int     3                               ; DEBUG
+        mov     ax,cs                           ;we entered with a JMPF so use
+        mov     ds,ax                           ;CS: as the initial value of DS:,
+        mov     es,ax                           ;ES:
+
+;use local stack during initialization
+
+        mov     ss,ax
+        mov     sp,offset stkbase
+
+        IF      loader_bios
+;---------------------------------------------
+;|                                           |
+        push    bp                              ;tells which boot disc
+;|                                           |
+;---------------------------------------------
+        ENDIF
+
+        IF      not loader_bios
+;---------------------------------------------
+;|                                           |
+; This is a BIOS for the CPM.SYS file.
+
+        mov     ax,cs
+        mov     kstat_ptr_seg,ax                ; bios is segment relocatable
+        mov     iobyte_ptr_seg,ax
+        mov     cl,4
+        shl     ax,cl
+        add     fn_expand_ptr,ax                ; so bios is segment relocatable
+
+; establish if 128 or 256 k system
+
+        push    es
+        mov     ax,1000h
+        mov     es,ax
+        mov     di,0ffffh               ; write to top of 128k,55
+        mov     es:byte ptr [di],55h
+        mov     ax,3000h
+        mov     es,ax
+        mov     es:byte ptr [di],00     ; write to top of 256,0
+        mov     ax,1000h
+        mov     es,ax
+        cmp     es:byte ptr [di],55h    ; see if 128 top changed
+        pop     es                      ; top 128 mirrored to bottom if absent
+        je      big_sys                 ; must be 256 k system
+        sub     seg_len,2000h
+        mov     si,offset size_txt_small        ; amend signon
+        mov     di,offset size_txt
+        mov     cx,3
+        cld
+        rep     movs    al,al           ; replace 256k with 128k at sign-on
+
+big_sys:
+
+; Print firmware revision number
+
+        push    ds
+        mov     ax,0fc00h
+        mov     ds,ax
+        mov     al,byte ptr .3fffh
+        pop     ds
+        aam
+        add     ax,3030h
+        xchg    al,ah
+        mov     word ptr firm_rev,ax
+
+;Give sign-on message
+
+        mov     bx,offset signon        ;print sign on message
+        call    pmsg
+
+; Patch cpm to include routine to test for .com files
+
+        mov     byte ptr com_patch,0e9h         ;jump instruction
+        mov     word ptr com_patch+1,offset cmd_chk - (offset com_patch + 3)
+
+;|                                      |
+;----------------------------------------
+        ENDIF   ;not loader_bios
+
+;If Winchester present then find CP/M partitions
+
+        callf   get_switch
+;       test    al,bit2                         ;8" drives?
+;       jz      not_8_in
+;       mov     buffer_size,8 * 1024            ;ensure buffer big enough
+;not_8_in:
+        test    al,bit3
+        jz      no_winch
+        mov     dx,1                            ;read sector 1
+        mov     cx,1
+        mov     bx,offset part_buf
+        mov     al,20h
+        callf   hdsk_all
+        jz      hd_read_ok
+
+        mov     cl,true                         ;indicate hard disc access
+        call    print_error
+        mov     bx,offset part_err_msg
+        call    pmsg
+        jmps    $
+
+hd_read_ok:
+        mov     si,offset part_buf
+        mov     di,offset dpb_7
+        call    set_size
+        mov     si,offset part_buf + 2
+        mov     di,offset dpb_8
+        call    set_size
+
+no_winch:
+        xor     bx,bx
+        push    ds              ;save the DS register
+        mov     ds,bx
+
+        IF      NOT loader_bios
+;------------------------------------------------
+;|                                              |
+        push    es
+        mov     es,bx
+
+        mov     int0_segment,cs
+        mov     int0_offset,offset div_trap
+
+        mov     si,offset int4_offset
+        mov     word ptr [si],offset int_trap
+        mov     2[si],cs
+        mov     cx,512 - 10
+        lea     di,4[si]
+        pushf
+        push    crt_int_offset
+        push    crt_int_segment
+        cld
+        cli
+        rep     movsw
+        pop     crt_int_segment
+        pop     crt_int_offset
+        popf
+        pop     es
+
+        mov     clock_int_offset,offset clock_int
+        mov     keybd_int_offset,offset keybd_int
+        mov     printer_int_offset,offset printer_int
+
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;not loader_bios
+
+; BDOS offset to proper interrupt
+
+        mov     bdos_int_offset,bdos_ofst
+        mov     bdos_int_segment,cs                     ;for loader bios
+
+        pop     ds                              ;restore the DS register
+
+
+        IF      (NOT cal) AND (NOT loader_bios)
+;------------------------------------------------
+;|                                              |
+
+;clear type-ahead buffer
+
+key_buf_test:
+        mov     dl,0
+        callf   sio_in_stat
+        jz      key_buf_clear           ; if no chars in buffer
+        callf   sio_in
+        jmps    key_buf_test
+
+key_buf_clear:  
+        mov     al,5
+        out     kybd_cntl,al            ; enable keyboard irq
+
+        cli
+        in      al,pic_imr
+        and     al,not  bit5            ; enable its level
+        out     pic_imr,al
+        sti
+
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;(not cal) and (not loader_bios)
+        IF      cal AND (NOT loader_bios)
+;------------------------------------------------
+;|                                              |
+
+        mov     dx,sio_0b_stat
+        mov     al,12h
+        out     dx,al
+        mov     al,0
+        out     dx,al           ;set up dart vector
+        mov     al,11h
+        out     dx,al
+        mov     al,1ch
+        out     dx,al           ;status affects vector & enable rx interrupt
+
+        cli
+        in      al,pic_imr
+        and     al,not bit0
+        out     pic_imr,al
+        sti
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;cal and (not loader_bios)
+
+
+; set up dph's & dpb's
+
+        callf   get_switch
+        mov     ah,al
+        and     al,1111b
+        cmp     al,0101b        ; double sided 8", no Winchester ?
+        mov     al,ah
+        jne     ds8             ; if no
+
+;If d.s. 8 inch and no Winchester, test for double sided disc actually present
+
+        in      al,kybd_stat
+        test    al,bit3
+        mov     al,ah
+        jz      ds8             ;8" ds there
+        and     al,not bit0     ;8" ss there
+ds8:
+
+        IF      NOT loader_bios
+        and     ax,1fh
+        ENDIF
+
+        IF      loader_bios
+        pop     bp
+        cmp     bp,offset hdsk_all
+        mov     dx,07h                  ;mask all but 1st floppy
+        jne     not_hdsk_boot
+        mov     dx,08h                  ;mask all but Winchester
+not_hdsk_boot:
+        and     ax,dx
+        ENDIF
+
+        mov     bx,offset avail_tab
+scan_sys:
+        cmp     word ptr [bx],-1
+        je      not_recog
+        cmp     [bx],ax
+        je      sys_recog
+        add     bx,22
+        jmps    scan_sys
+
+not_recog:
+        mov     bx,offset unrecd_tx     ;unrecognised system type
+        call    pmsg
+        jmps    $                       ;hard stop
+
+sys_recog:
+        lea     si,2[bx]
+        mov     dx,offset bdos_scr
+
+;       mov     dx,offset hst_buf
+;       add     dx,buffer_size          ;get address if 1st free byte
+
+        mov     bx,offset dph_a
+        mov     di,offset dpb_a
+        xor     cl,cl
+
+set_hdr_loop:
+        call    set_header
+        add     si,4                    ;length of AVAIL_TAB entry
+        add     di,dpblen               ;length of DPB
+        add     bx,16                   ;length of DPH
+        inc     cl
+        cmp     cl,5
+        jb      set_hdr_loop
+
+; dx = offset of first free byte
+
+        add     dx,15                   ;round up to paragraph
+        mov     cl,4
+        shr     dx,cl                   ;cvt to paragraph
+        mov     ax,cs
+        add     ax,dx
+        mov     seg_start,ax            ;store 1st free para in seg table
+        sub     seg_len,ax              ;and update free space
+
+
+        IF      NOT loader_bios
+;------------------------------------------------
+;|                                              |
+        push    es
+
+; clear keyboard table
+
+        xor     ax,ax
+        mov     es,ax
+        mov     di,offset keytab
+        mov     cx,length keytab
+        mov     al,8dh
+        rep     stos al
+
+; Get address of system data area
+
+        mov     cl,49
+        int     224
+        mov     word ptr sysdat_offset,bx
+        mov     word ptr sysdat_segment,es
+
+; Enable clock interrupt (if clock present)
+
+        mov     dx,010ah
+        in      al,dx
+        or      al,0fh          ;max period (500 ms)
+        out     dx,al
+        inc     dx
+        mov     al,01000110b
+        out     dx,al           ;24h,enable interrupt
+        cli
+        in      al,pic_imr
+        and     al,not bit4
+        out     pic_imr,al
+        sti
+
+        pop     es
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+
+        mov     cl,0            ;default to dr A: on coldstart
+        jmp     ccp             ;jump to cold start entry of CCP
+
+
+;Routine to set up drive parameter header
+
+set_header:
+
+        xor     ax,ax
+        mov     [bx],ax
+        mov     2[bx],ax
+        mov     4[bx],ax
+        mov     6[bx],ax
+
+        push    si
+        mov     si,[si]
+        test    si,si
+        jz      null_header
+
+        test    byte ptr 15[si],bit3            ;single density ?
+        jz      set_hdr_1
+        mov     [bx],offset xlt26               ;if yes
+
+set_hdr_1:
+        mov     8[bx],offset dirbuf
+        mov     10[bx],di
+        mov     12[bx],dx
+        add     dx,11[si]
+        mov     14[bx],dx
+        mov     ax,5[si]                ;get disk size
+        add     ax,15                   ;to round up
+        push    cx
+        mov     cl,3
+        shr     ax,cl                   ;divide by 8 to get alloc vec size
+        add     dx,ax
+
+        push    di
+        mov     cx,dpblen                       ;max. dpb length
+        cld
+        rep     movs    al,al
+        pop     di
+        pop     cx
+        pop     si
+
+        mov     ax,2[si]
+        mov     18[di],al               ;set drive number
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+        call    print_drive
+;|                                      |
+;----------------------------------------
+        ENDIF   ;not loader_bios
+
+        ret
+
+null_header:
+        mov     word ptr 10[bx],0
+        pop     si
+        ret
+
+
+; Routine to set size of hard disc partition in DPB
+; Enter with SI pointing to partition table and DI to DPB
+
+set_size:
+        push    si
+        push    di
+        callf   hdsk_size                       ;sectors/track to CL
+
+;       mov     ax,512
+;       mov     ch,0
+;       mul     cx                              ;get required buffer size
+;       cmp     ax,buffer_size
+;       jbe     no_set_bufsize
+;       mov     buffer_size,ax
+;no_set_bufsize:
+
+        pop     di
+        pop     si
+
+        mov     17[di],cl                       ;store sectors/track
+        mov     ax,cx
+        shl     ax,1
+        shl     ax,1                            ;get CP/M sectors/track
+        mov     [di],ax
+
+        mov     ax,[si]                         ;get track offset of partition
+        mul     cx                              ;convert to sector
+        mov     20[di],ax                       ;save sector offset
+
+        mov     ax,2[si]                        ;start of next partition
+        sub     ax,[si]                         ;get partition size
+        dec     ax                              ;less 1 reserved track
+        js      no_part
+
+        mul     cx                              ;get no of 512b sectors
+        mov     cl,4
+        shr     ax,cl                           ;convert 512b sectors to 8K blocks
+        dec     ax                              ;get last available block no.
+        mov     5[di],ax                        ;store number of free blocks
+        test    ah,ah                           ;DSM > 255?
+        jnz     exm_3_ok
+        mov     byte ptr 4[di],7                ;reset EXM from 3 to 7
+exm_3_ok:
+        ret
+
+no_part:
+        mov     bx,offset no_part_msg
+        call    pmsg
+        jmps    $
+
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+
+; print drive name and type
+; cl= drive name (A..), di= associated dpb
+
+print_drive:
+        push    bx
+        push    cx
+        push    si
+        push    di
+        add     cl,'A'
+        call    conout
+        mov     cl,':'
+        call    conout
+        mov     cl,' '
+        call    conout
+        pop     di
+        push    di
+        mov     bx,offset win_tx
+
+        test    dpb_flags[di],bit4      ;see if disk is floppy or winch
+        jnz     chk4                    ;skip if winchester
+        test    dpb_phy_disk[di],bit0
+        mov     cl,'L'
+        jz      chk1
+        mov     cl,'R'
+chk1:
+        call    conout
+        mov     bx,offset floptx
+        call    pmsg
+        pop     di
+        push    di
+        mov     al,dpb_flags[di]                ;get flags
+
+        IF      NOT cal                 ;nested IF
+;----------------------------------------
+;|                                      |
+        mov     cl,'5'                  ;print disk size
+        test    al,bit2
+        jz      boot5
+        mov     cl,'8'
+boot5:
+        push    ax
+        call    conout                  ;print 5 or 8
+        mov     bx,offset driv_tx
+        call    pmsg
+        pop     ax
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        test    al,bit0
+        mov     bx,offset single_tx
+        jz      chk2
+        mov     bx,offset double_tx
+chk2:
+        push    ax
+        call    pmsg
+        mov     bx,offset sides_tx
+        call    pmsg
+        pop     ax
+        test    al,bit1
+        mov     bx,offset quad_tx
+        jnz     chk3
+        test    al,bit3
+        mov     bx,offset double_tx
+        jz      chk3
+        mov     bx,offset single_tx
+chk3:
+        call    pmsg
+        mov     bx,offset density_tx
+chk4:
+        call    pmsg
+        pop     di
+        pop     si
+        pop     cx
+        pop     bx
+        ret                                     ; from print_drive
+
+
+; default divide overflow trap
+
+div_trap:
+        mov     bx,offset divide_error_tx
+        jmps    int_trap_1
+
+; trap for other uninitialised interrupts
+
+int_trap:
+        mov     bx,offset int_trap_tx
+int_trap_1:
+        sti
+        call    pmsg
+        mov     cl,0
+        mov     dl,0
+        int     224             ;exit to ccp
+
+
+; Level 7 interrupt routine (8259A cleanup)
+
+printer_int:
+        mov     cs:ax_save_7,ax
+        mov     al,67h
+        out     pic_icw,al
+        mov     ax,cs:ax_save_7
+        iret
+
+
+; Real time clock interrupt (frequency 2 Hz)
+
+clock_int:
+        mov     cs:ss_save,ss
+        mov     cs:sp_save,sp
+        mov     cs:clock_stack,ax
+        mov     ax,cs
+        mov     ss,ax
+        mov     sp,offset clock_stack
+        sti
+
+        push    bx
+        push    cx
+        push    dx
+        push    si
+        push    di
+        push    bp
+        push    ds
+        push    es
+
+        mov     ds,ax                   ;AX still holds copy of CS
+
+        mov     dx,010ch
+        in      al,dx                   ; clear interrupt
+
+        call    gettim                  ; get the time /date
+        jnz     time_not_ok
+
+        les     di,dword ptr sysdat_offset
+        lea     di,32[di]               ;point to TOD field
+
+        mov     ch,'/'
+        mov     al,month
+        call    dec2
+
+        mov     al,day_no
+        call    dec2
+
+        mov     ch,','
+        mov     al,yr
+        add     al,80                   ;year is from 1980
+        call    dec2
+
+        mov     ch,':'
+        mov     al,byte ptr hour
+        call    dec2
+
+        mov     al,byte ptr minute
+        call    dec2
+
+        mov     ch,','
+        mov     al,byte ptr second
+        call    dec2
+
+time_not_ok:
+        cli
+        mov     al,64h
+        out     pic_icw,al              ;eoi to PIC
+
+        pop     es
+        pop     ds
+        pop     bp
+        pop     di
+        pop     si
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+
+        cli
+        mov     ss,cs:ss_save
+        mov     sp,cs:sp_save
+        iret
+
+
+; Routine to get date and time from clock
+; Returns Z if ok
+
+gettim:
+        mov     cx,1500                 ; timeout loop
+        mov     dx,100h+10              ; adress
+clk_wait:
+        in      al,dx                   
+        test    al,10000000b            ;bit7
+        loopnz  clk_wait
+        jz      clk_ok
+        or      al,0ffh                 ; clock u/s: return al = ff
+        ret
+
+clk_ok:
+        mov     dx,100h
+        mov     di,offset clock_temp
+
+read_time:                              ; loop round reading clock registers
+        in      al,dx   
+        mov     [di],al
+        inc     di
+        inc     dx
+        cmp     dx,100h+10
+        jne     read_time
+; Test data for validity
+
+        cmp     second,59               ; check all clock inputs
+        ja      error                   ; 0 - 59 ok
+        cmp     minute,59
+        ja      error                   ; 0 - 59 ok
+        cmp     hour,23
+        ja      error                   ; 0 - 23 ok
+        cmp     day_no,1
+        jb      error
+        cmp     day_no,31
+        ja      error                   ; 1 - 31 ok
+        cmp     month,1
+        jb      error
+        cmp     month,12
+        ja      error                   ; 1 - 12 ok
+        cmp     yr,99
+        ja      error                   ; 0 - 99 ok (1980 - 2079)
+        xor     ax,ax
+        ret
+
+error:
+        or      ax,1                    ; 1 is duf date return
+        ret
+
+; Routine to convert AL to 2-character ASCII number
+;  and store at [ES:DI] followed by character in CH
+; DI is incremented by 3
+
+dec2:
+        cld
+        mov     ah,0
+        mov     cl,10
+        div     cl
+        add     al,'0'
+        stos    al
+        mov     al,ah
+        add     al,'0'
+        stos    al
+        mov     al,ch
+        stos    al
+        ret
+
+
+;|                                         |
+;-------------------------------------------
+        ENDIF
+
+
+WBOOT:
+        mov     ax,cs
+        mov     ds,ax
+        mov     es,ax
+        mov     ss,ax
+        mov     sp,offset stkbase       ;to prevent re-use of stack
+
+        IF      not loader_bios
+;------------------------------------------------
+;|                                              |
+
+        call    z80_abort               ; cleanup z80 bank if needed
+
+; write out host buffer if necessary
+
+        cmp     write_req,0
+        je      no_flush
+        call    rw_command              ;can't do much about errors here
+        mov     write_req,0
+no_flush:
+
+; No need to deselect host buffer - this is better done in SELDSK
+
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+        jmp     ccp+6           ;direct entry to CCP at command level
+
+
+
+;*********************************************
+;*                                           *
+;*   CP/M Character I/O Interface Routines   *
+;*                                           *
+;*********************************************
+;
+;IOBYTE descriptions and actions (what this bios does):
+;
+; Values for M-Four:
+;
+;CONSOLE FIELD (bits 0 & 1)
+;       0 - Port 1              (TTY:)
+;       1 - Monitor             (CRT:)
+;       2 - Port 2              (BAT:)
+;       3 - Port 3              (UC1:)
+;
+;READER FIELD (bits 2 & 3)
+;       0 - Port 1              (TTY:)
+;       1 - Port 2              (PTR:)
+;       2 - Port 3              (UR1:)
+;       3 - Port 4              (UR2:)
+;
+;PUNCH FIELD (bits 4 & 5)
+;       0 - Port 1              (TTY:)
+;       1 - Port 2              (PUN:)
+;       2 - Port 3              (UP1:)
+;       3 - Port 4              (UP2:)
+;
+;LIST FIELD (bits 6 & 7)
+;       0 - Port 1              (TTY:)
+;       1 - Monitor             (CRT:)
+;       2 - Centronics          (LPT:)
+;       3 - Port 2              (UL1:)
+
+; Values for Cal-PC:
+;
+;CONSOLE FIELD (bits 0 & 1)
+;       0 - Port 2              (TTY:)
+;       1 - Monitor             (CRT:)
+;       2 - Port 3              (BAT:)
+;       3 - Port 2              (UC1:)
+;
+;READER FIELD (bits 2 & 3)
+;       0 - Port 2              (TTY:)
+;       1 - Port 3              (PTR:)
+;       2 - Port 4              (UR1:)
+;       3 - Null                (UR2:)
+;
+;PUNCH FIELD (bits 4 & 5)
+;       0 - Port 2              (TTY:)
+;       1 - Port 3              (PUN:)
+;       2 - Port 4              (UP1:)
+;       3 - Null                (UP2:)
+;
+;LIST FIELD (bits 6 & 7)
+;       0 - Port 2              (TTY:)
+;       1 - Monitor             (CRT:)
+;       2 - Centronics          (LPT:)
+;       3 - Port 3              (UL1:)
+
+; Loader bios does not use IOBYTE or interrupts
+
+        IF      NOT loader_bios         ;using nested IFs here
+;------------------------------------------------
+;|                                              |
+
+        IF      NOT cal
+console_tab     db      1, 0, 2, 3
+list_tab        db      1, 0, 5, 2
+        ENDIF
+
+        IF      cal
+console_tab     db      2, 0, 3, 2
+list_tab        db      2, 0, 5, 3
+        ENDIF
+
+; service keyboard int
+keybd_int:
+        mov     cs:saved_ax,ax
+        mov     cs:saved_ds,ds
+        mov     cs:saved_bx,bx
+
+        IF      NOT cal
+;----------------------------------------
+;|                                      |
+        in      al,kybd_data
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        IF      cal
+;----------------------------------------
+;|                                      |
+        in      al,sio_int_vec
+        cmp     al,04h
+        je      rec_chr_int
+        cmp     al,06h
+        je      rec_chr_int
+        int     68h             ;user interrupt
+        jmps    sio_int_eoi
+
+rec_chr_int:
+        in      al,sio0b_data
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        mov     bx,cs
+        mov     ds,bx
+        mov     bx,kbuf_put_ptr
+        inc     bx
+        cmp     bx,offset kbuf_end
+        jne     no_putp_ovf
+        mov     bx,offset kbuf_start
+no_putp_ovf:
+        cmp     bx,kbuf_get_ptr
+        je      kbuf_full
+        xchg    bx,kbuf_put_ptr
+        mov     [bx],al
+        lds     bx,kstat_ptr
+        mov     byte ptr [bx],-1
+kbuf_full:
+
+        IF      NOT cal
+;----------------------------------------
+;|                                      |
+        mov     al,65h
+        out     pic_icw,al
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        IF      cal
+;----------------------------------------
+;|                                      |
+sio_int_ret:
+        mov     al,38h
+        out     sio0a_stat,al           ;eio to DART
+sio_int_eoi:
+        mov     al,60h
+        out     pic_icw,al
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        mov     bx,cs:saved_bx
+        mov     ds,cs:saved_ds
+        mov     ax,cs:saved_ax
+        iret
+
+
+;Console status routine
+;   Input: none
+;   Output: IF ready THEN AL:=0FFH
+;                    ELSE AL:=00
+
+CONST:
+        push    bx
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+
+        and     al,11b          ;get console bits from iobyte
+        cmp     al,01b
+        jz      fkybdst
+
+;Here if (IOBYTE & 11b) <> 01b
+
+        mov     bx,offset console_tab
+        xlat    al
+        push    dx
+        mov     dl,al
+        callf   sio_in_stat
+        pop     dx
+        mov     al,0
+        jz      const_out
+        or      al,-1
+const_out:
+        pop     bx
+        ret
+
+
+;Here if (IOBYTE & 11b) = 01b
+
+fkybdst:
+        push    ds
+        lds     bx,kstat_ptr
+        mov     al,byte ptr [bx]
+        pop     ds
+        pop     bx
+        ret
+
+; Console input routine
+;   Input: none
+;   Output: AL:=char AND 07FH
+
+CONIN:
+        push    ds
+        push    bx
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     bx
+        pop     ds
+
+        and     al,11b          ;get CONSOLE bits from IOBYTE
+        cmp     al,01b
+        jz      fkybdin
+
+;Here if CONSOLE field <> 1
+
+        push    bx
+        mov     bx,offset console_tab
+        xlat    al
+        pop     bx
+        push    dx
+        mov     dl,al
+        callf   sio_in
+        pop     dx
+        and     al,not bit7     ;mask parity bit
+        ret
+
+;Here if CONSOLE field = 01b
+;Decode keyboard function keys
+
+fkybdin:
+        push    bx
+        cmp     fn_expand_flag,false    ;jump if key not being decoded
+        je      no_dec_in_prog
+dec_in_prog:
+        push    ds
+        xor     bx,bx
+        mov     ds,bx                   ;DS := 0
+        mov     bx,cs: fn_expand_ptr    ;BX := pointer
+
+fn_decode:
+        inc     bx
+        mov     al,[bx]                 ;get character from bottom segment
+        mov     cs: fn_expand_ptr,bx    ;store new pointer of char just got
+
+fn_decode2:
+        pop ds
+        test    al,bit7                 ;end of this key's data ?
+        jz      fkey_don                ;return if not
+        mov     fn_expand_flag,false    ;else reset
+
+fkybdin_out:
+        call    set_kstat
+
+fkey_don:
+        pop     bx
+        and     al,not bit7             ;and return
+        ret
+
+no_dec_in_prog:
+wait_for_key:
+        mov     bx,kbuf_get_ptr
+        cmp     bx,kbuf_put_ptr
+        jz      wait_for_key
+        mov     al,[bx]
+        inc     bx
+        cmp     bx,offset kbuf_end
+        jne     no_getp_ovf
+        mov     bx,offset kbuf_start
+no_getp_ovf:
+        mov     kbuf_get_ptr,bx
+
+        IF      NOT cal
+;----------------------------------------
+;|                                      |
+        test    al,bit7                 ;function key ?
+        jz      fkybdin_out             ;return if not
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+
+        IF      cal
+;----------------------------------------
+;|                                      |
+        mov     bx,offset fn_key_tab
+        mov     ah,80h                  ;map function keys to 80h upwards
+fn_key_chk:
+        cmp     al,[bx]
+        jz      do_decode
+        cmp     byte ptr [bx],-1
+        jz      fkybdin_out
+        inc     ah
+        inc     bx
+        jmps    fn_key_chk
+
+do_decode:
+        mov     al,ah
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        push    ds
+        push    cx
+        xor     cx,cx
+        mov     ds,cx                   ;else DS := 0
+        mov     bx,offset keytab -1     ;start at KEYTAB in bottom segment
+        mov     cx,length keytab        ;for length KEYTAB chars
+        and     al,not bit7             ;mask function bit
+        jz      lookup_end              ;skip if first function key
+        mov     ah,al                   ;else AH := fn. key no.
+
+fn_key_lookup:
+        inc     bx
+        test    byte ptr [bx],bit7
+        loopz   fn_key_lookup
+        jz      fn_overflow
+        dec     ah
+        jnz     fn_key_lookup
+
+lookup_end:
+        pop     cx
+        not     cs: fn_expand_flag      ;was false, now true.
+        jmps    fn_decode               ;go get char from memory & return
+
+fn_overflow:
+        pop     cx
+        mov     al,bit7                 ;here if past end of fn_table
+        jmps    fn_decode2
+
+
+        IF      cal
+;----------------------------------------
+;|                                      |
+fn_key_tab      db      80h,81h,82h,83h,84h,85h,86h,87h,88h
+                db      8ah,8bh
+                db      0b7h,0b9h
+                db      0aah,0b1h,0b3h
+                db      0b0h
+                db      -1
+;|                                      |
+;----------------------------------------
+        ENDIF
+        
+;Console output routine
+;   Input: CL:=char
+;   Output: none
+
+CONOUT:
+        push    bx
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+
+conout0:
+        and     al,11b
+        cmp     al,1
+        jz      mon_out
+
+;Here if console field <> 1
+
+        mov     bx,offset console_tab
+        xlat    al
+        push    dx
+        mov     dl,al
+sio_out_wait:
+        call    cpm_sio_out_stat        ;don't use PROM as early ones don't test CTS or DTR
+        jnz     sio_out_wait
+        mov     al,cl
+        callf   sio_out                 ;PROM ok here
+        pop     dx
+        pop     bx
+        ret
+
+; Routine to test if SIO ready to transmit
+; Like PROM routine but tests CTS and DTR
+; Returns opposite flags, i.e. Z = ready to transmit
+
+cpm_sio_out_stat:
+        push    dx
+        push    bx
+        mov     bx,offset port_table -1
+        xchg    ax,dx
+        xlat    al
+        pop     bx
+        xchg    ax,dx
+        mov     dh,0
+        mov     al,10h
+        out     dx,al           ;flush CTS/DSR fifo
+        in      al,dx
+        and     al,00101100b    ;test for CTS, DSR and transmit buf empty
+        cmp     al,00101100b
+        pop     dx
+        ret
+
+port_table      db      sio0b_stat, sio0a_stat, sio1b_stat, sio1a_stat
+
+;Here if CONSOLE field = 1
+mon_out:
+        mov     al,cl
+        push    dx
+        mov     dl,0
+        callf   sio_out         ;Send byte to screen
+        pop     dx
+        pop     bx
+        ret
+
+
+; List output routine
+;   Input: CL:=char
+;   Output: none
+
+LISTOUT:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+
+        rol     al,1
+        rol     al,1
+        and     al,11b
+        cmp     al,2
+        jz      print_out               ;Output to printer if 2
+
+; Here if output to VDU or serial port
+
+        mov     bx,offset list_tab
+        xlat    al
+        mov     dl,al
+list_wait:
+        call    list_stat
+        jnz     list_wait
+        mov     al,cl
+        callf   sio_out
+        ret
+
+; Here if output to Centronics port
+
+print_out:
+        mov     al,cl           ;get data
+        callf   prntr_out
+        ret
+
+; Routine to get list device status for port DL
+; Return Z if ready for output
+; XON, XOFF recognised
+
+list_stat:
+        cmp     dl,0
+        jz      list_stat_ret           ;monitor always ready
+more_stat:
+        callf   sio_in_stat             ;test for XON, XOFF
+        jz      test_stat               ;if no received character
+        callf   sio_in
+        and     al,7fh
+        cmp     al,xon
+        jz      setx
+        cmp     al,xoff
+        jne     more_stat
+setx:
+        mov     xonxoff,al
+        jmps    more_stat
+
+test_stat:
+        cmp     xonxoff,xon
+        jne     list_stat_ret           ;if XOFF received last
+        call    cpm_sio_out_stat        ;test buffer empty, CTS, DCD
+list_stat_ret:
+        ret
+
+
+;List status routine
+;   Input: none
+;   Output: IF ready THEN AL:=0FFH
+;                    ELSE AL:=00
+
+LISTST:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+
+        rol     al,1
+        rol     al,1
+        and     al,11b
+        cmp     al,2
+        jz      print_stat                      ;Jump if printer
+        mov     bx,offset list_tab
+        xlat    al
+        mov     dl,al
+        call    list_stat
+        mov     al,0
+        jnz     listst_ret
+        mov     al,-1
+listst_ret:
+        ret
+
+;Here if LIST field = 2
+print_stat:
+        callf   prntr_st
+        mov     al,0
+        jz      listst_ret_2
+        mov     al,-1
+listst_ret_2:
+        ret
+
+
+;Punch output routine
+;   Input: CL:=char
+;   Output: none
+
+PUNCH:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+
+        ror     al,1
+        ror     al,1
+        ror     al,1
+        ror     al,1
+        and     al,11
+        inc     ax
+
+        IF      cal
+        inc     ax
+        cmp     al,4
+        ja      punch_ret
+        ENDIF
+
+        mov     dl,al
+        mov     al,cl
+        callf   sio_out
+punch_ret:
+        ret
+
+;Reader input routine
+;   Input: none
+;   Output: AL:=char AND 07FH
+
+READER:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+        ror     al,1
+        ror     al,1
+        and     al,11b
+        inc     ax
+
+        IF      cal
+        inc     ax
+        cmp     al,4
+        jbe     rdr_1
+        mov     al,cntrl_Z
+        ret
+
+rdr_1:
+        ENDIF
+
+        mov     dl,al
+        callf   sio_in
+        and     al,07fh
+        ret
+
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;not loader_bios
+
+        IF      loader_bios
+;------------------------------------------------
+;|                                              |
+
+CONST:
+        push    dx
+        mov     dl,0
+        callf   sio_in_stat
+        pop     dx
+        mov     al,0
+        jz      const_ret
+        mov     al,0ffh
+const_ret:
+        ret
+
+
+CONIN:
+        push    dx
+        mov     dl,0
+        callf   sio_in
+        pop     dx
+        test    al,bit7
+        jnz     conin                   ;ignore function keys
+        ret
+
+
+CONOUT:
+        mov     al,cl
+        push    dx
+        mov     dl,0
+        callf   sio_out         ;Send byte to screen
+        pop     dx
+
+LISTOUT:
+LISTST:
+PUNCH:
+READER:
+        ret
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;loader_bios
+
+
+;Get IOBYTE
+;   Input: none
+;   Output: AL:=IOBYTE
+
+GETIOB:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        pop     ds
+        ret
+
+;Set IOBYTE
+;   Input: CL:=IOBYTE
+;   Output: none
+
+SETIOB:
+        push    ds
+        lds     bx,iobyte_ptr
+        mov     al,[bx]
+        mov     [bx],cl
+        pop     ds
+        xor     al,cl
+        test    al,bit6+bit7            ;see if printer assignment changed
+        jz      no_set_xon
+        mov     xonxoff,xon
+no_set_xon:
+        ret
+
+
+;*********************************************
+;*                                           *
+;*          Disk Input/Output Routines       *
+;*                                           *
+;*********************************************
+
+SELDSK:                         ;select disk given by register CL
+        test    dl,bit0         ;1st time selected?
+        jnz     seldsk_1        ;if no
+        cmp     cl,hst_disk     ;same drive as sector in buffer?
+        jne     seldsk_1        ;if no
+
+        mov     hst_disk,-1     ;deselect buffer
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+        cmp     write_req,0     ;check no write was pending
+        je      seldsk_1
+
+; Error - write pending and disc may have been changed
+
+        mov     write_req,0
+        push    cx
+        mov     bx,offset write_pending_tx
+        call    pmsg
+        pop     cx
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+seldsk_1:
+        xor     bx,bx           ;ready for error return
+        cmp     cl,5            ;n beyond max disks?
+        jnb     return          ;return if so
+
+        mov     al,cl           ;save required disk
+        mov     req_disk,al     ;store disk_no in M4 memory
+set_prm:
+        cbw                     ;ah := 0
+        mov     cl,4            ;multiply by 16 (length of dp_block)
+        shl     ax,cl
+        add     ax,offset dph_A ;add base of dpbase
+        mov     bx,ax           ;bx := .dph
+        mov     ax,10[bx]       ;get address of dpb
+        test    ax,ax           ;drive exists ?
+        jne     return          ;if yes
+        mov     bx,ax           ;no, return 0
+return: ret
+
+HOME:   ;move selected disk to home position (Track 0)
+        xor     cx,cx   ;set disk i/o to track zero
+                        ;drop through to SETTRK
+
+SETTRK: ;set track address given by CX
+        mov     req_trk,cx
+        ret
+
+SETSEC: ;set sector number given by CL
+        mov     req_sect,cl
+        ret
+
+SECTRAN: ;translate sector CX using table at [DX]
+        mov     bx,cx
+        test    dx,dx
+        jz      no_tran
+        add     bx,dx   ;add sector to tran table address
+        mov     bl,[bx] ;get logical sector
+no_tran:
+        ret
+
+SETDMA: ;set DMA offset given by CX
+        mov     dma_adr,CX
+        ret
+
+SETDMAB: ;set DMA segment given by CX
+        mov     dma_seg,CX
+        ret
+;
+GETSEGT:  ;return address of physical memory table
+        mov     bx,offset seg_table
+        ret
+
+;*********************************************
+;*                                           *
+;*  All disk I/O parameters are setup:       *
+;*     DISK     is disk number      (SELDSK) *
+;*     TRK      is track number     (SETTRK) *
+;*     SECT     is sector number    (SETSEC) *
+;*     DMA_ADR  is the DMA offset   (SETDMA) *
+;*     DMA_SEG  is the DMA segment  (SETDMAB)*
+;*  READ reads the selected sector to the DMA*
+;*  address, and WRITE writes the data from  *
+;*  the DMA address to the selected sector   *
+;*  (return 00 if successful, 01 if perm err)*
+;*                                           *
+;*********************************************
+
+READ:
+        mov     al,false
+        jmps    disc_tfr
+
+WRITE:
+        mov     write_type,cl   ;save write information
+        mov     al,true
+disc_tfr:
+        mov     write_flag,al   ;save read or write flag
+
+; IF   (hst_disc = req_disc) & (hst_trk = req_trk)
+; THEN no read required
+
+        mov     al,hst_disk
+        cmp     al,req_disk
+        jne     rd_req
+        mov     ax,hst_trk
+        cmp     ax,req_trk
+        je      do_tfr
+
+rd_req:
+        cmp     write_req,0     ;skip if write not required
+        je      rd_req2
+        call    rw_command
+        mov     write_req,0
+        jnz     j_wr_err
+rd_req2:
+        mov     ax,req_trk      ;hst_trk := req_trk
+        mov     hst_trk,ax
+        mov     al,req_disk     ;hst_disc := req_disc
+        mov     hst_disk,al
+
+        mov     ah,0            ;reset m4prom in case CPM has read discs
+        mov     cl,4
+        shl     ax,cl           ;ax := ax * 16
+        add     ax,offset dph_A
+        mov     bx,ax           ;save start of header table
+        mov     bx,10[bx]       ;get start of parameter block
+        mov     hst_dpb,bx
+        mov     al,dpb_flags[bx]        ;get flags
+        mov     cx,dpb_ret_sidleng[bx]  ;get retries + sideleng
+        mov     si,dpb_max_sectors[bx]  ;get max_sectors
+        mov     bp,dpb_secsiz[bx]       ;get sec_size
+
+        test    al,bit4         ;Winchester?
+        jnz     no_set          ;if so
+        test    al,bit1         ;quad density?
+        jnz     do_set          ;if yes
+        xchg    al,ah
+        callf   get_switch
+        xchg    al,ah
+        test    ah,bit1         ;quad density drives?
+        jz      do_set          ;if no
+        or      al,bit4         ;read alternate tracks
+do_set:
+        callf   flop_set
+
+        IF      special
+;----------------------------------------
+;|                                      |
+        mov     si,0fc00h                       ;PROM segment
+        push    ds
+        mov     ds,si
+        mov     byte ptr flop_flags,al          ;ensure 8"/5" set
+        mov     byte ptr flop_step_rate,3       ;set slow step rate in case 5"
+        pop     ds
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+no_set:
+        call    rw_command                      ;read since write_req = 0
+j_wr_err:
+        jnz     rd_err
+do_tfr:
+        mov     al,req_sect
+        mov     ah,0
+        xchg    al,ah
+        shr     ax,1                            ;ax := req_sect * 128
+        add     ax,offset hst_buff
+        mov     si,ax
+        mov     di,dma_adr
+        mov     cx,128 /2
+        push    ds
+        push    es
+        mov     es,dma_seg
+        cmp     byte ptr write_flag,false
+        je      rw_move                         ;skip if read
+        xchg    si,di
+        push    es
+        push    ds
+        pop     es
+        pop     ds
+rw_move:
+        cld
+        rep     movsw
+        pop     es
+        pop     ds
+
+        cmp     write_flag,false                ;return if (write_flag = false)
+        je      rw_out_ok
+
+        cmp     write_req,2
+        jnb     no_wr_inc
+
+        mov     si,hst_dpb
+        mov     al,dpb_secsiz_msb[si]           ;al := 0,1,2,4
+        cmp     al,4
+        jb      flip4to3
+        dec     ax                              ;if 4, al := 3
+flip4to3:
+        mov     cl,al
+        mov     al,req_sect                     ;divide req_sect
+        shr     al,cl                           ;... by 1,2,4 or 8
+
+        cmp     write_req,0                     ;first write?
+        je      set_rw_sec                      ;if yes
+        cmp     al,hst_sect                     ;same sector as before?
+        je      no_wr_inc                       ;if yes
+
+; fall thru to increment write_req if no
+
+set_rw_sec:
+        mov     hst_sect,al                     ;and store
+        inc     write_req
+
+no_wr_inc:
+        cmp     byte ptr write_type,1           ;write to directory ?
+        jne     rw_out_ok
+        call    rw_command
+        mov     write_req,0
+        jnz     wr_err
+rw_out_ok:
+        mov     al,0
+        ret
+
+
+rd_err:
+wr_err:
+        mov     hst_disk,-1                     ;deselect host buffer
+        mov     al,1
+        ret
+
+
+; Routine to do actual read/write transfers
+; Does a read if write_req is 0, otherwise a write
+; Parameters used are hst_track, hst_sect, hst_dpb
+; Error Correction will take place in this routine
+
+rw_command:
+        mov     si,hst_dpb
+
+; Check here for SS/DS same as before
+
+        IF      (NOT special) AND (NOT cal)
+;------------------------------------------------
+;|                                              |
+        test    dpb_flags[si],bit4
+        jnz     no_test                 ;don't check if winnie
+        callf   get_switch
+        and     al,101b
+        cmp     al,101b
+        jne     no_test                 ; dont check if not ds 8"
+        cli
+        in      al,aux_cmd              ; select side 0
+        and     al,not bit6             ; to ensure can go ready
+        out     aux_cmd,al              ; if single sided
+        sti
+rwait:
+        mov     al,dpb_phy_disk[si]
+        mov     ah,0
+        xor     dx,dx
+        callf   flopall                 ; select drive
+        test    ah,bit7
+        jnz     rwait                   ; wait till ready
+        in      al,kybd_stat
+        mov     cl,3
+        shr     al,cl
+        xor     al,dpb_flags[si]
+        test    al,1
+        jnz     test_ok
+
+        mov     bx,offset change_msg
+        call    pmsg
+        or      al,-1
+        ret
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+no_test:
+test_ok:
+rw_retry:
+        mov     si,hst_dpb              ;in case here from retry
+        mov     cl,dpb_sidleng[si]      ;1 physical track to read
+        mov     ch,0
+        mov     ax,hst_trk
+        mul     cx
+        mov     dx,ax                   ;logsec := trk * (sects per trk)
+        mov     bx,offset hst_buff
+
+; Check here for only 1 write needed
+
+        cmp     write_req,1             ;IF only 1 write
+        jne     whole_trk
+        mov     cx,1                    ;THEN just do 1 sector
+        mov     al,hst_sect
+        cbw
+        add     dx,ax                   ;remembering to update log sector no.
+        push    dx
+        mul     dpb_secsiz[si]          ;corrupts dx
+        pop     dx
+        add     bx,ax                   ;update buffer address
+
+whole_trk:
+        mov     al,dpb_phy_disk[si]
+        and     al,0fh
+        or      al,20h                          ;read
+        cmp     write_req,0
+        je      is_read
+        xor     al,50h XOR 20h                  ;write + verify
+
+is_read:
+        test    dpb_flags[si],bit4
+        jnz     rw_winch
+        callf   flopall
+        mov     cl,false
+        jnz     first_err
+        ret
+
+rw_winch:       
+        add     dx,dpb_part_offset[si]          ;add partition offset
+        callf   hdsk_all
+        mov     cl,true
+        jnz     first_err
+        ret
+
+first_err:                              ;code here to give error, wait for key
+                                        ;and repeat or exit with error
+                                        ;CL is true if hard disc
+        call    print_err               ;print error type here
+
+repeat:
+        call    flush
+        mov     bx,offset retry_msg
+        call    pmsg
+
+        call    conin                   ;get response
+        push    ax
+        mov     cl,al                   ;echo it
+        call    conout
+        mov     cl,cr                   ;print <CR>
+        call    conout
+        pop     ax
+        and     al,5fh                  ;check for Y/N
+        cmp     al,'Y'
+        jne     repeat1
+        mov     bx,offset crlf
+        call    pmsg    
+        jmps    rw_retry                ;retry if "Y"
+
+repeat1:
+        cmp     al,'N'
+        jne     repeat
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+        call    z80_abort
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        or      al,0ffh
+        ret
+
+; Print first part of disc error message
+; Called from INIT and PRINT_ERR
+; CL is true if was a hard disc error
+
+print_error:
+        push    ax
+        push    cx
+        mov     bx,offset crlf
+        call    pmsg
+        pop     cx
+        pop     ax
+        push    ax
+        and     al,0f8h                         ;mask off retry count
+        mov     bx,offset floppy_error_tab
+        cmp     cl,true
+        jne     error_scan                      ;if floppy
+        mov     bx,offset hd_error_tab_1
+        cmp     al,78h
+        jnz     error_scan                      ;if hard disc handshake error
+        mov     bx,offset hd_error_tab_2
+        mov     al,ah                           ;controller gave error code
+        and     al,3fh
+
+error_scan:
+        cmp     al,[bx]
+        jz      got_error
+        cmp     byte ptr [bx], -1
+        jz      got_error
+        add     bx,3
+        jmps    error_scan
+
+got_error:
+        mov     bx,1[bx]                        ;get address of error text
+        call    pmsg
+
+        mov     bx,offset err_msg1              ;print ' Error ('
+        call    pmsg
+
+        pop     ax
+        call    print_ax_hex
+
+        mov     bx,offset err_msg2              ;print 'H) '
+        call    pmsg
+        ret
+
+; Print full error message
+; CL is true if hard disc
+
+print_err:
+        call    print_error
+        cmp     write_req,0
+        mov     bx,offset write_msg
+        jnz     writing
+        mov     bx,offset read_msg
+writing:
+        call    pmsg                            ;print 'writ' or 'read'
+
+        mov     bx,offset drive_msg             ;print 'ing drive '
+        call    pmsg
+
+        mov     al,hst_disk
+        add     al,'A'
+        mov     cl,al
+        call    conout
+        ret
+
+flush:
+        call    const
+        test    al,al
+        jz      end_flush
+        call    conin
+        jmp     flush
+
+end_flush:
+preturn:
+        ret
+
+
+; Print message at CS:BX until zero terminator found
+
+pmsg:
+        mov     cl,cs:[bx]
+        inc     bx
+        test    cl,cl
+        jz      preturn
+        call    conout
+        jmp     pmsg
+
+
+print_ax_hex:
+        push    ax
+        mov     al,ah
+        call    print_al_hex
+        pop     ax
+print_al_hex:
+        push    ax
+        mov     cl,4
+        shr     al,cl
+        call    print_al_nib
+        pop     ax
+print_al_nib:
+        and     al,15
+        add     al,'0'
+        cmp     al,'9'
+        jbe     pnib1
+        add     al,'A'-'0'-10
+pnib1:
+        mov     cl,al
+        call    conout
+        ret
+
+
+;*** CP/M entry codes for disk r/w **
+
+wr_all  equ     0       ;write allocated
+wr_dir  equ     1       ;write directory - forced physical write
+wr_ual  equ     2       ;write unallocated
+
+
+change_msg      db      bell,cr,lf,'Disc has wrong number of sides',0
+
+
+
+
+
+err_msg1        db      ' Error (',0
+
+err_msg2        db      'H) ',0
+retry_msg       db      cr,lf,'Retry (Y/N) ?',0
+
+
+read_msg        db      'read',0
+write_msg       db      'writ',0
+drive_msg       db      'ing drive ',0
+
+
+floppy_error_tab:
+        db      10h !   dw      err1
+        db      20h !   dw      err2
+        db      30h !   dw      err3
+        db      38h !   dw      err4
+        db      40h !   dw      err5
+        db      50h !   dw      err6
+        db      60h !   dw      err7
+        db      70h !   dw      err8
+        db      80h !   dw      err9
+        db      90h !   dw      err10
+        db      0a0h !  dw      err11
+        db      0b0h !  dw      err3
+        db      -1 !    dw      err0
+
+hd_error_tab_1:
+        db      08h !   dw      err12
+        db      10h !   dw      err12
+        db      18h !   dw      err12
+        db      20h !   dw      err12
+        db      28h !   dw      err12
+        db      48h !   dw      err13
+        db      70h !   dw      err8
+        db      80h !   dw      err9
+        db      -1 !    dw      err0
+
+hd_error_tab_2:
+        db      01h !   dw      err14
+        db      02h !   dw      err15
+        db      03h !   dw      err16
+        db      04h !   dw      err17
+        db      06h !   dw      err4
+        db      10h !   dw      err2
+        db      11h !   dw      err7
+        db      12h !   dw      err18
+        db      14h !   dw      err5
+        db      15h !   dw      err1
+        db      19h !   dw      err19
+        db      -1 !    dw      err0
+
+
+err1    db      'Seek',0
+err2    db      'ID CRC',0
+
+err3    db      'Write Protect',0
+
+
+err4    db      'No Trk 00',0
+
+err5    db      'Record Not Found',0
+
+
+err6    db      'Lost Data',0
+
+err7    db      'Data CRC',0
+
+err8    db      'DMA',0
+err9    db      'Busy',0
+err10   db      'Sector out of range',0
+
+
+
+err11   db      'Bank Cross',0
+
+err12   db      'Handshake',0
+
+err13   db      'Error Enquiry',0
+
+
+err14   db      'No Index',0
+
+err15   db      'No Seek Complete',0
+
+
+err16   db      'Write Fault',0
+
+err17   db      'Drive Not Ready',0
+
+
+err18   db      'No Address Mark',0
+
+
+err19   db      'Bad Track Flag',0
+
+
+err0    db      'Unknown',0
+
+
+crlf    db      cr,lf,0
+
+
+        IF      NOT loader_bios
+;------------------------------------------------
+;|                                              |
+
+; Code to run 8-bit CP/M applications
+
+; Enter here when CCP is about to look for .CMD file
+
+cmd_chk:
+        push    dx
+        call    z80_abort
+        pop     dx
+
+        call    ccp_open                ; this replaces code patched
+        je      com_chk                 ; if .CMD file not found
+        jmp     ccp_cmd                 ; back to ccp to load .CMD file
+
+com_chk:
+
+; check for SAVE command
+
+        mov     si,offset ccp_file+1
+        mov     di,offset save_tx
+        mov     cx,5
+        cld
+        repe    cmps    al,al
+        je      save_0
+        jmp     com_chk_0
+
+; SAVE command - save contents of z80 bank
+
+save_0:
+        call    parse_tail
+        mov     ds,mcb_base             ; get bank
+        mov     si,offset zfcb_1+1      ; ready to get no of pages
+        xor     ah,ah
+save_1:
+        mov     al,[si]
+        sub     al,'0'
+        jb      save_error
+        cmp     al,9
+        ja      save_error
+        inc     si
+        add     al,ah
+        cmp     byte ptr [si],' '
+        je      save_2
+        cmp     al,20
+        ja      save_error
+        mov     cl,10
+        mul     cl
+        mov     ah,al
+        jmps    save_1
+
+save_2:
+        mov     cs:save_pages,al
+
+; create save file
+
+        mov     dx,offset zfcb_2
+        push    dx
+        mov     cl,19                   ;delete old file
+        int     224
+        pop     dx
+        mov     cl,22
+        int     224                     ;make file
+        test    al,al
+        js      save_error
+        mov     bx,offset zfcb_2
+        mov     byte ptr 12[bx],0       ;initialise extent no.
+        mov     byte ptr 32[bx],0       ;initialise current record
+        mov     dx,ds
+        mov     cl,51
+        int     224                     ;set DMA segment
+        mov     dx,0100h                ;initial DMA offset
+        mov     cl,cs:save_pages
+        mov     ch,0
+        add     cx,cx
+save_3:
+        push    cx
+        push    dx
+        mov     cl,26
+        int     224                     ;set DMA offset
+        mov     dx,offset zfcb_2
+        mov     cl,21
+        int     224                     ;write sequential
+        pop     dx
+        pop     cx
+        test    al,al
+        jne     save_error
+        add     dx,080h
+        loop    save_3
+
+; close file
+
+        mov     dx,offset zfcb_2
+        mov     cl,16
+        int     224
+
+; end of SAVE
+
+        mov     bx,offset save_ok_tx
+        jmps    end_of_save
+
+save_error:
+        mov     bx,offset save_error_tx
+end_of_save:
+        mov     ax,cs
+        mov     ds,ax
+        mov     es,ax
+        call    pmsg
+        jmp     back_2_ccp
+
+
+com_chk_0:
+        mov     ccp_file_type,'MO'
+        mov     dx,offset ccp_file
+        call    ccp_open                ; open .com file
+        jne     com_chk_1
+        jmp     ccp_error               ; not found
+
+com_chk_1:
+        mov     bx,offset crlf
+        call    pmsg
+        cmp     z80_flag,0
+        jne     got_bank                ; if have mem from last time
+        mov     mcb_base,1000h          ; get a bank to run cpm in
+get_bank:
+        mov     dx,offset mcb_base
+        mov     cl,38h
+        push    es
+        int     224                     ; attempt to allocate memory 
+        pop     es
+        test    al,al
+        jz      got_bank                
+        add     mcb_base,1000h          ; failed to get bank, try next
+        cmp     mcb_base,4000h          ; but not past 4
+        jne     get_bank
+        mov     bx,offset no_bank_message
+        call    pmsg
+        call    ccp_cleanup
+        jmp     back_2_ccp              ; go back to cpm86
+
+got_bank:
+        mov     z80_flag,1              ; memory allocated,not executing yet
+        mov     byte ptr ccp_file_rec,0 ; zero record count + extent in cpm80 
+        mov     byte ptr ccp_file_ext,0 ; fcb to be loaded
+        mov     cl,33h                  ; set dma segment
+        mov     dx,mcb_base             ; to z80 bank
+        int     224
+
+        mov     dx,0100h                ; to 80h
+red:
+        push    dx
+        mov     cl,1ah                  ; set dma
+        int     224
+
+        mov     cl,14h
+        mov     dx,offset ccp_file
+        int     224                     ; read .com file sequentially
+        pop     dx
+        cmp     al,01
+        je      eof                     ; got to end
+        add     dx,128                  ; increment dma address
+        cmp     dx,0f800h               ; make sure less than 64k read
+        jb      red
+	mov	bx,offset com_2_big
+        call    pmsg
+        call    ccp_cleanup
+        jmp     dealloc_exit            ; de-allocate & exit
+
+eof:
+        mov     ax,mcb_base             ; z80 bank
+        cli                             ; disable keybd int
+        mov     kstat_ptr_seg,ax
+        mov     kstat_ptr_off,offset kstat_80 ;offset of kstat 80 (z80 bank)
+        mov     iobyte_ptr_seg,ax
+        mov     iobyte_ptr_off,offset iobyte_80
+        sti
+
+        mov     z80_flag,2
+        call    set_kstat
+
+        call    ccp_cleanup             ; reset default disc
+        mov     cl,19h
+        int     224                     ; get current(default) disc
+        mov     def_drive_tmp,al        ; to Z80
+
+        call    parse_tail
+        mov     bx,offset copy_table
+        call    copy                    ; copy all to Z80 bank
+
+        mov     cl,1ah                  ; set dma address
+        mov     dx,080h
+        int     224
+
+        mov     ax,mcb_base
+        mov     cl,4
+        shr     ah,cl
+        mov     al,ah
+        out     30h,al
+
+
+; loop on function call
+; Wait for function to process
+
+        push    es
+        mov     z80_flag,3              ; z80 now executing
+
+poll:
+        mov     es,mcb_base
+        mov     es:fncode,0
+
+        out     38h,al                  ;start Z80 mode
+        nop
+        mov     bl,es:byte ptr fncode
+        mov     bh,0
+        call    word ptr jumptab[bx]            ; Process function
+        jmps    poll
+
+; return here at end of z80 prog
+
+end_cpm_80:
+        pop     es
+        mov     z80_flag,2
+        call    z80_abort
+
+        mov     cl,0
+        mov     dl,1
+        int     224                     ; warm boot : normal end
+
+dealloc_exit:
+        call    z80_abort               ; exit here if program load failed
+
+back_2_ccp:
+        jmp     ccp_exit                ; exit here if alllocation failed
+
+
+; Use ccp code to process command line tail
+parse_tail:
+        mov     al,byte ptr ccp_parse_patch     ; save patch contents
+        push    ax
+        mov     byte ptr ccp_parse_patch,0c3h   ; insert ret
+        mov     bx,mcb_base                     ; set bx = cpm80 bank
+        call    ccp_parse                       ; parse command line
+                                                ; to fcb1/2 in 80 bank
+        pop     ax
+        mov     byte ptr ccp_parse_patch,al     ; un-patch it.
+        mov     byte ptr com_desc,0             ; reset descriptor
+        ret
+
+
+; copy copies according to a table at [bx].
+; each entry is 3 words long.
+; word 1 = source offset (in this segment, i.e. 0100h)
+; word 2 = destination offset (in z80 segment)
+; word 3 = number of bytes to copy (0 = end of table)
+
+copy:
+        push    es              ;save es
+        mov     ax,mcb_base     ; get the z80 bank
+        mov     es,ax           ; to es
+        cld
+
+more_copy:
+        mov     si,[bx]         ; from in si
+        mov     di,2[bx]        ; to in di
+        mov     cx,4[bx]        ; no words
+        cmp     cx,0            ; end of table?
+        jz      end_copy
+        rep     movs    al,al   ; move
+        add     bx,6
+        jmps    more_copy
+
+end_copy:
+        pop     es
+        ret     
+
+
+set_kstat_ptr:
+        cli
+        mov     kstat_ptr_off,offset kstat_86
+        mov     kstat_ptr_seg,cs
+        sti
+        call    set_kstat
+        ret
+
+
+; Abort Z80 if it is running and deallocate its memory
+
+z80_abort:
+        cmp     z80_flag,3              ; z80 running ?
+        jne     z80_abort_1             ; if no
+
+        dec     z80_flag
+        push    ds
+        mov     ds,mcb_base
+abort_lp_2:
+        mov     byte ptr z80_nmi,jump
+        mov     word ptr z80_nmi+1,0
+        mov     al,1*2                  ; clear bit 1 to pulse NMI low
+        out     ptr_flag,al
+        mov     fncode,0
+        mov     al,1*2+1
+        out     ptr_flag,al             ; reset NMI high
+abort_loop:
+        out     38h,al                  ; enable z80
+        cmp     fncode,0
+        jz      abort_loop
+        cmp     fncode,4                ; wait for warm boot request
+        jne     abort_lp_2
+        pop     ds
+
+z80_abort_1:
+        cmp     z80_flag,2
+        jne     z80_abort_2
+
+        dec     z80_flag
+        call    set_kstat_ptr
+        mov     iobyte_ptr_seg,cs
+        mov     iobyte_ptr_off,offset iobyte
+        push    es
+        mov     es,mcb_base
+        mov     cl,es:iobyte_80
+        pop     es
+        call    setiob
+
+z80_abort_2:
+        cmp     z80_flag,1
+        jne     z80_abort_ret
+
+        dec     z80_flag
+        mov     mcb_ext,0
+        mov     cl,39h
+        mov     dx,offset mcb_base
+        push    es
+        int     224
+        pop     es
+
+z80_abort_ret:
+        ret
+
+; Routine to set kstat
+; All registers except flags preserved
+
+set_kstat:
+        push    ax
+        push    bx
+        push    ds
+        lds     bx,kstat_ptr
+
+        cli
+        mov     al,cs:byte ptr kbuf_get_ptr
+        xor     al,cs:byte ptr kbuf_put_ptr
+        jz      kbuf_empty
+        mov     al,-1
+kbuf_empty:
+        mov     byte ptr [bx],al
+        sti
+
+        pop     ds
+        pop     bx
+        pop     ax
+        ret
+
+
+no_bank_message db      'No bank available to run CP/M-80',cr,lf,0
+
+
+
+
+
+com_2_big       db      '.COM file too large !',cr,lf,0
+
+
+
+
+
+
+;Order of parms in list:
+; Flags - only stored, not loaded
+; AX
+; BX
+; CX
+; DX
+; SI
+; DI
+; BP
+; DS
+; ES not loaded so we know where Z80 is running
+
+ESC8088:
+        push    ds              ;these need to be saved
+        push    es
+
+        mov     ax,es:desav
+        mov     esc_addr,ax
+        mov     word ptr esc_addr+2,es
+
+        mov     bx,es:bcsav
+        mov     ax,es:2[bx]
+        push    es:word ptr 4[bx]
+        mov     cx,es:6[bx]
+        mov     dx,es:8[bx]
+        mov     si,es:10[bx]
+        mov     di,es:12[bx]
+        mov     bp,es:14[bx]
+        mov     ds,es:16[bx]
+        pop     bx
+
+        push    es
+        callf   cs:dword ptr esc_addr
+        pop     es
+
+        push    bx
+        mov     bx,cs:mcb_base
+        mov     es,bx
+
+        mov     bx,es:bcsav
+        pushf
+        pop     es:word ptr [bx]                ;flags
+        mov     es:2[bx],ax
+        mov     es:6[bx],cx
+        mov     es:8[bx],dx
+        mov     es:10[bx],si
+        mov     es:12[bx],di
+        mov     es:14[bx],bp
+        mov     es:16[bx],ds
+        pop     es:word ptr 4[bx]               ;bx
+
+        pop     es
+        pop     ds
+exitint:
+        ret
+
+zerror:
+        mov     bx,offset duf_bios_call
+        call    pmsg
+        jmp     zwboot
+
+duf_bios_call   db      cr,lf,'Unsupported direct bios call',cr,lf,0
+
+zconst:
+        call    const           ; get console status
+        test    al,al
+        jz      zconst1         ; 0 = no char
+        mov     al,0ffh         ;-86 = 01 for char: change to ff for -80
+zconst1:
+        mov     es:asav,al
+        ret
+
+zconin:
+        call    conin
+        mov     es:asav,al
+        ret
+
+zconout:
+        mov     cl,es:csav
+        jmp     conout
+
+zlist:
+        mov     cl,es:csav
+        jmp     listout
+
+zpunch:
+        mov     cl,es:csav
+        jmp     punch
+        
+zreader:
+        call    reader
+        mov     es:asav,al
+        ret
+
+zlistst:
+        call    listst
+        mov     es:asav,al
+        ret     
+        
+RDKTAB:
+        push    ds
+        xor     si,si
+        mov     ds,si                   ; table is in seg 0
+        mov     si,offset keytab
+        mov     di,es:hlsav
+        mov     cx,512 /2
+        cld
+        rep     movs ax,ax
+        pop     ds
+        ret
+
+WRKTAB:
+        push    es                      ;save regs
+        push    ds
+        xor     si,si
+        mov     ds,si
+        mov     di,offset keytab
+        mov     si,es:hlsav
+        push    es                      ;xchg es,ds
+        push    ds
+        pop     es
+        pop     ds
+        mov     cx,512 /2
+        cld
+        rep     movs    ax,ax
+        pop     ds                      ;restore regs
+        pop     es
+        ret
+
+WRFONT1:
+        mov     di,1000h
+        jmp     wrfnt
+WRFONT2:
+        mov     di,1800h
+wrfnt:
+        push    es
+        push    ds
+        mov     si,es:hlsav
+        push    es                      ;xchg es,ds
+        push    ds
+        pop     es
+        pop     ds
+        mov     cx,0fc00h
+        mov     es,cx
+        mov     bx,8                    ;8 passes
+wt_v_end:
+        in      al,crt_stat
+        test    al,bit5
+        jnz     wt_v_end
+
+wt_v_start:
+        in      al,crt_stat
+        test    al,bit5
+        jz      wt_v_start
+
+        mov     cx,1024 /8              ;1/8 of 2K in words
+        rep     movs    ax,ax
+
+        dec     bx
+        jnz     wt_v_end
+
+        mov     al,31
+        out     crt_addr,al
+
+        pop     ds
+        pop     es
+        ret
+
+
+zwboot:
+        pop     bx
+        jmp     end_cpm_80
+
+
+PORTIN:                         ;read from port C , data into reg A
+        mov     dl,es:csav
+        mov     dh,0
+        in      al,dx
+        mov     es:asav,al
+        ret
+
+PORTOUT:                        ;write to port C , data in reg B
+        mov     ax,es:bcsav
+        mov     dl,al
+        mov     dh,0
+        mov     al,ah
+        out     dx,al
+        ret
+
+zbdos:
+        mov     cl,es:csav
+        mov     dx,es:desav
+        cmp     cl,6
+        jz      zbdos6
+        cmp     cl,27
+        jz      zbdos27
+        cmp     cl,31
+        jz      zbdos31
+zbdos0:
+        push    ds
+        push    es
+        pop     ds
+        int     224
+        push    ds
+        pop     es      
+        pop     ds
+
+zbdos_end:
+        mov     es:hlsav,ax
+        ret
+
+zbdos6:
+        cmp     dl,0fdh         ; console input (like MPM-II) ?
+        jz      zbdos6a
+        cmp     dl,0feh         ; console status ?
+        jz      zbdos6b
+        cmp     dl,0ffh         ; console input/status request?
+        jz      zbdos6c
+        mov     cl,dl
+        call    conout
+        ret
+
+zbdos6c:
+        call    const
+        test    al,al
+        jz      zbdos_end       ; if no character available zbdos6a:
+        call    conin
+        jmps    zbdos_end
+
+zbdos6b:
+        call    const
+        jmps    zbdos_end
+
+zbdos27:
+        mov     di,offset zalloc
+        mov     ax,256                  ;largest alloc vector is 512 bytes
+        jmps    zbdos31a
+
+zbdos31:
+        mov     di,offset mfcb_a
+        mov     ax,8                    ;count of bytes
+zbdos31a:
+        push    di                      ;save destination offset
+        push    ax                      ;save count
+        push    es
+        int     224
+        mov     ax,es
+        pop     es
+        pop     cx                      ;count to cx
+        pop     di
+        push    ds
+        mov     ds,ax
+        mov     si,bx
+        mov     ax,di
+        cld
+        rep     movs ax,ax
+        pop     ds
+        jmps    zbdos_end 
+
+bdos6:
+        mov     cl,6
+bdos:
+        push    es
+        int     224
+        pop     es
+        ret
+;|                                              |
+;------------------------------------------------
+        ENDIF   ;not loader_bios
+
+;***********************************************************************
+
+; Data areas
+
+data_offset     equ     offset $
+                
+        dseg
+        org     data_offset
+
+        IF      NOT loader_bios
+;---------------------------------------------
+;|                                           |
+
+divide_error_tx db      cr,lf,'*** Divide overflow - execution terminated',cr,lf,0
+int_trap_tx     db      cr,lf,'*** Uninitialised interrupt - execution terminated',cr,lf,0
+save_tx         db      'SAVE '
+save_ok_tx      db      cr,lf,'Save complete.',0
+save_error_tx   db      cr,lf,'Error in SAVE command or disc full.',0
+writepending_tx db      cr,lf,'*** Error - disc logged in has write pending!',cr,lf,0
+
+submit_txt      db      'submit autoexec',cr+bit7
+
+;|                                           |
+;---------------------------------------------
+        ENDIF   ;not loader_bios
+
+unrecd_tx       db      cr,lf,'System not recognized',0
+
+;*** Variables here can be accessed by utilities, using BIOS GETSEGT call ***
+
+;*** System Memory Segment Table ***
+
+segtable        db      1       ;1 active segment out of 8 maximum
+seg_start       dw      0       ;1st seg starts after BIOS
+seg_len         dw      4000h   ;and extends to 40000h (256K)
+                rw      2*7     ;reserve space for 7 more regions
+
+xlt26:
+        db      0,6,12,18,24,4,10,16,22,2,8,14,20
+        db      1,7,13,19,25,5,11,17,23,3,9,15,21
+
+;*** M4 specific variables - values inserted depend on configuration ***
+
+;*** Disk parameter headers - values inserted depend on configuration ***
+;*** Header format : xlt, scr, scr, scr, dirbuf, dpb, csv, alv ***
+
+DPBASE  EQU     $               ;Base of disk parameter table
+
+;Header here for drive A
+DPH_A   DW      0,0,0,0, offset dirbuf , offset dpb_A ,0,0
+
+;Header here for drive B
+DPH_B   DW      0,0,0,0, offset dirbuf , offset dpb_B ,0,0
+
+;Header here for drive C
+DPH_C   DW      0,0,0,0, offset dirbuf , offset dpb_C ,0,0
+
+;Header here for drive D
+DPH_D   DW      0,0,0,0, offset dirbuf , offset dpb_D ,0,0
+
+dph_e   dw      0,0,0,0, offset dirbuf, offset dpb_e, 0,0
+
+                IF      not loader_bios
+;---------------------------------------------------
+;|                                                 |
+; Data to be copied to z80 bank prior to running cpm80 programs
+
+copy_table      dw      offset iobyte           ; from offset in ds
+                dw      offset iobyte_80        ; to offset in z80 bank
+                dw      1                       ; number of words to copy
+
+                dw      offset def_drive_tmp
+                dw      offset def_drive
+                dw      1
+
+                dw      offset mbios            ; copy z80 code
+                dw      offset bios_80
+                dw      offset z80_end_bios - offset mbios
+
+                dw      offset tmp_jmp          ; set up temp jump
+                dw      offset bios_jmp
+                dw      3
+
+                dw      offset bdos_jmp_80
+                dw      offset bdos_jmp
+                dw      3
+
+                dw      offset mbdos
+                dw      offset bdos_80
+                dw      offset z80_end_bdos - offset mbdos
+
+                dw      0       ; Hard stopper block
+                dw      0       
+                dw      0
+
+def_drive_tmp   db      0
+tmp_jmp         db      jump    ; first time at cpm loc 0
+                dw      offset put_bios_jmp - offset mbios + offset bios_80
+
+bdos_jmp_80     db      jump
+                dw      offset bdos_80
+
+esc_addr        rw      2
+
+
+; all 'zerror' entries are illegal direct bios calls
+jumptab:
+        dw      exitint         ;exit after an interrupt
+        dw      zerror          ;this will be endcpm function call
+        dw      zwboot          ;arrive here for warm boot
+        dw      zconst          ;check for console char ready
+        dw      zconin          ;read console character in
+;10
+        dw      zconout         ;write console character out
+        dw      zlist           ;write listing character out
+        dw      zpunch          ;punch
+        dw      zreader         ;read reader
+        dw      zerror          ;move to track 00
+;20
+        dw      zerror          ;select disc driv
+        dw      zerror          ;set track number
+        dw      zerror          ;set sector number (eg 1-8)
+        dw      zerror          ;set dma address
+        dw      zerror          ;read selected secto
+;30
+        dw      zerror          ;write selected sector
+        dw      zlistst         ;return list status
+        dw      zerror          ;sector translate subroutine
+        dw      exitint         ;dummy XIOS functions for MP/M compatability
+        dw      exitint
+;40
+        dw      exitint
+        dw      exitint
+        dw      exitint
+        dw      exitint
+        dw      exitint
+;50
+        dw      exitint
+        dw      exitint
+        dw      exitint
+        dw      exitint
+        dw      exitint
+;60
+        dw      exitint
+        dw      zwboot          ;end CP/M function call
+        dw      portin          ;input character from port C
+        dw      portout         ;output char in B to port C
+        dw      rdktab          ;read 512 bytes of keytab to (HL)
+;70
+        dw      wrktab          ;write 512 bytes from (HL) to keytab
+        dw      esc8088         ;8088 escape routine at (HL:DE), parms at (BC)
+        dw      wrfont1         ;write 2048 bytes at (HL) to font ram 1
+        dw      wrfont2         ;write 2048 bytes at (HL) to font ram 2
+        dw      exitint         ;set/reset drive logging
+;80
+        dw      zbdos
+        dw      zerror
+        dw      exitint
+        dw      exitint
+        dw      exitint
+;90
+        dw      exitint         ;only got limited amount of space
+        dw      exitint         ;so only allow max of 48 functions
+        dw      exitint         ;ie code 0-94
+
+;
+; Below is the skeletal BIOS which will be moved to Z80 bank
+; This BIOS will transfer function calls back to the 8088
+;
+jump    equ     0c3h
+lda     equ     3ah
+sta     equ     32h
+lhld    equ     2ah
+shld    equ     22h
+movac   equ     79h
+movca   equ     4fh
+movad   equ     7ah
+movhb   equ     60h
+movlc   equ     69h
+movlm   equ     6eh
+movbh   equ     44h
+moval   equ     7dh
+lxib    equ     01h
+lxisp   equ     31h
+lxih    equ     21h
+dadb    equ     09h
+mvia    equ     3eh
+mvih    equ     26h
+ani     equ     0e6h
+orae    equ     0b3h
+jrz     equ     28h
+rz      equ     0c8h
+exdehl  equ     0ebh
+pushh   equ     0e5h
+oraa    equ     0b7h
+jumpz   equ     0cah
+retun   equ     0c9h
+znop    equ     00h
+
+mbios:
+        db      jump            ;Z80    jmp      
+        dw      (offset mcboot - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mwboot - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mconst - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mconin - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mconout - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mlist - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mpunch - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mreader  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mhome  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset mseldsk  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset msettrk  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp      
+        dw      (offset msetsec  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset msetdma  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mread  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mwrite - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mlistst - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset msectran - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mwboot  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mportin  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mportout  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mrdktab  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mwrktab  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mesc8088 - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mwrfont1 - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mwrfont2  - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+        db      jump            ;Z80    jmp
+        dw      (offset mempty - offset mbios) + offset bios_80
+
+mcboot:
+mwboot:
+        db      mvia,4
+mwboot1:
+        db      sta
+        dw      fncode
+        db      0dbh,50h,0
+        db      jump
+        dw      0000
+
+mconst:
+        db      lda             ;Z80    ld      a,(iobyte)
+        dw      offset iobyte
+        db      ani,3           ;Z80    and     a,3
+
+        db      jrz,4           ;Z80    jr      z,$+4
+
+        db      lda             ;Z80    ld      a,(kstat_80)
+        dw      offset kstat_80
+
+        db      retun           ;Z80    ret
+
+        db      mvia,6          ;Z80    ld      a,6
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      lda             ;Z80    ld      a,(asav)
+        dw      asav
+
+        db      retun           ;Z80    ret
+
+mconin:
+        db      mvia,8          ;Z80    ld      a,8
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      lda             ;Z80    ld      a,(asav)
+        dw      asav
+
+        db      retun           ;Z80    ret
+
+mconout:
+        db      movac           ;Z80    ld      a,c
+
+        db      sta             ;Z80    ld      csav,a
+        dw      csav
+
+        db      mvia,10         ;Z80    ld      a,10
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      retun           ;Z80    ret
+
+mlist:
+        db      movac           ;Z80    ld      a,c
+        db      sta             ;Z80    ld      csav,a
+        dw      csav
+
+        db      mvia,12         ;Z80    ld      a,12
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      retun           ;Z80    ret
+
+mpunch:
+        db      movac           ;Z80    ld      a,c
+
+        db      sta             ;Z80    ld      csav,a
+        dw      csav
+
+        db      mvia,14         ;Z80    ld      a,14
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      retun           ;Z80    ret
+
+mreader:
+        db      mvia,16         ;Z80    ld      a,16
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      lda             ;Z80    ld      a,(asav)
+        dw      asav
+
+        db      retun           ;Z80    ret
+
+mhome:
+mseldsk:
+msettrk:
+msetsec:
+msetdma:
+mread:
+mwrite:
+msectran:
+        db      mvia,62
+        db      jump
+        dw      (offset mwboot1 - offset mbios) + offset bios_80
+mportin:
+        db      movac
+        db      sta
+        dw      csav
+        db      mvia,64
+        db      sta
+        dw      fncode
+        db      0dbh,50h,0
+        db      lda
+        dw      asav
+        db      retun
+
+mportout:
+        db      0edh,043h       ; ld (bcsav),bc
+        dw      bcsav
+        db      mvia,66
+        db      sta
+        dw      fncode
+        db      0dbh,50h,0
+        db      retun
+
+mrdktab:
+        db      shld
+        dw      hlsav
+        db      mvia,68
+        db      sta
+        dw      fncode
+	db	0dbh,50h,0
+        db      retun
+
+mwrktab:
+        db      shld
+        dw      hlsav
+        db      mvia,70
+        db      sta
+        dw      fncode
+        db      0dbh,50h,0
+        db      retun
+
+mlistst:
+        db      mvia,32         ;Z80    ld      a,32
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      lda             ;Z80    ld      a,(asav)
+        dw      asav
+        db      retun           ;Z80    ret
+
+mesc8088:
+        db      shld            ;Z80    ld      (hlsav),hl      ;segment
+        dw      hlsav
+
+        db      0edh,053h       ;Z80    ld      (desav),de      ;offset
+        dw      desav
+
+        db      0edh,043h       ;Z80    ld      (bcsav),bc      ;parm list
+        dw      bcsav
+
+        db      mvia,72         ;Z80    ld      a,72
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      0edh,04bh       ;Z80    ld      bc,(bcsav)      ;parm list
+        dw      bcsav
+
+        db      lda             ;Z80    ld      a,(asav)        ;status
+        dw      asav
+
+        db      retun           ;Z80    ret
+
+mwrfont1:
+        db      shld            ;Z80    ld      (hlsav),hl
+        dw      hlsav
+
+        db      mvia,74         ;Z80    ld      a,74
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      retun           ;Z80    ret
+
+mwrfont2:
+        db      shld            ;Z80    ld      (hlsav),hl
+        dw      hlsav
+
+        db      mvia,76         ;Z80    ld      a,76
+
+        db      sta             ;Z80    ld      (fncode),a
+        dw      fncode
+
+        db      0dbh,50h,0      ;Z80    in      a,(50h) ; nop
+
+        db      retun           ;Z80    ret
+
+mempty:
+        db      retun           ;Z80    ret
+
+
+put_bios_jmp:
+        db      lxih
+        dw      offset bios_80 + 3
+        db      shld
+        dw      0001h
+        db      lxisp           ; set stack to top of TPA
+        dw      offset z80_stack
+        db      pushh
+        db      jump
+        dw      0100h           ; go execute program
+
+z80_end_bios    equ     $
+
+
+mbdos:
+        db      movac
+        db      oraa
+        db      jumpz
+        dw      0000
+
+        db      sta
+        dw      csav
+
+        db      0edh,053h       ; ld(desav),de
+        dw      desav
+        db      mvia,80         ; ld a,80
+        db      sta
+        dw      fncode
+        db      0dbh,50h,0
+        db      lhld
+        dw      hlsav
+        db      movbh
+        db      moval
+        db      retun
+
+z80_end_bdos    equ     $
+
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+;************************************************************
+
+; initialised data space
+
+mcb_base        dw      1000h   ; memory control block for z80
+                dw      1000h   ; length 64k
+mcb_ext         dw      0
+
+
+IOBYTE          db      95h     ; CON:=CRT:, LST:=LPT:
+iobyte_ptr_off  dw      offset iobyte
+iobyte_ptr_seg  rw      1       ;filled in
+iobyte_ptr      equ     dword ptr iobyte_ptr_off
+
+xonxoff         db	xon
+
+dma_adr         dw      0       ; DMA offset from DS
+dma_seg         dw      0       ; DMA Base Segment
+
+hst_disk        db      -1
+hst_sect        db      0
+hst_trk         dw      0
+hst_dpb         dw      0
+
+req_disk        db      0
+req_sect        db      0
+req_trk         dw      0
+req_ofs         db      0
+
+write_flag      db      0
+write_type      db      0
+write_req       db      0
+
+;buffer_size    dw      5 * 1024                        ;5" value
+
+
+        IF      not loader_bios
+;----------------------------------------
+;|                                      |
+
+fn_expand_flag  db      true
+fn_expand_ptr   dw      offset submit_txt - 1           ;gets modified by INIT
+
+kstat_86        db      true
+
+kstat_ptr_off   dw      offset kstat_86
+kstat_ptr_seg   rw      1
+
+kstat_ptr       equ     dword ptr kstat_ptr_off
+
+saved_ax        rw      1
+saved_ds        rw      1
+saved_bx        rw      1       ;used by keyboard interrupt
+
+ax_save_7       rw      1       ;used by level 7 interrupt
+
+kbuf_get_ptr    dw      offset kbuf_start
+kbuf_put_ptr    dw      offset kbuf_start
+
+z80_flag        db      0       ; 0 if 8088, 1 if z80 allocated,2 if running
+save_pages      rb      1       ; number of pages to SAVE
+
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+
+;************* end of initialised data
+
+temp_data       equ     offset $
+
+; data here is only needed at system startup
+;  so is overwritten by disc buffer etc.
+
+
+        IF      loader_bios
+;------------------------------------------------
+;|                                              |
+
+avail_tab:
+        dw      0h, dpb_0,0, 0,0, 0,0, 0,0, 0,0         ;5" ss dd
+        dw      1h, dpb_1,0, 0,0, 0,0, 0,0, 0,0         ;5" ds dd
+        dw      2h, dpb_2,0, 0,0, 0,0, 0,0, 0,0         ;5" ss qd
+        dw      3h, dpb_3,0, 0,0, 0,0, 0,0, 0,0         ;5" ds qd
+        dw      4h, dpb_4,0, 0,0, 0,0, 0,0, 0,0         ;8" ss dd
+        dw      5h, dpb_5,0, 0,0, 0,0, 0,0, 0,0         ;8" ds dd
+        dw      8h, dpb_7,80h, 0,0, 0,0, 0,0, 0,0       ;Winchester
+        dw      -1
+
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+        IF      (NOT loader_bios) AND (NOT special)
+;------------------------------------------------
+;|                                              |
+
+avail_tab:                                              
+        dw      10h, dpb_0,0, dpb_0,1, 0,0, 0,0, 0,0                    ;5" ss/dd + 5"ss/dd
+
+
+
+        dw      11h, dpb_1,0, dpb_1,1, dpb_0,1, 0,0, 0,0                ;5  ds dd + 5 ds dd
+
+
+
+        dw      12h, dpb_2,0, dpb_2,1, dpb_0,1, 0,0, 0,0                ;5  ss qd + 5 ss qd
+
+
+        dw      13h, dpb_3,0, dpb_3,1, dpb_2,1, dpb_1,1, dpb_0,1        ;5  ds qd + 5 ds qd
+
+
+
+        dw      14h, dpb_4,0, dpb_4,1, dpb_6,1, 0,0, 0,0                ;8  ss dd + 8 ss dd
+
+
+
+        dw      15h, dpb_5,0, dpb_5,1, dpb_4,1, dpb_6,1, 0,0            ;8  ds dd + 8 ds dd
+
+
+
+        dw      09h, dpb_7,80h, dpb_8,80h, dpb_1,0, dpb_0,0, 0,0        ;5  ds dd + w
+
+
+
+        dw      0bh, dpb_7,80h, dpb_8,80h, dpb_3,0, dpb_1,0, dpb_0,0    ;5  ds qd + w
+
+
+
+        dw      0dh, dpb_7,80h, dpb_8,80h, dpb_5,0, dpb_4,0, dpb_6,0    ;8  ds dd + w
+
+
+
+        dw      -1                      ; stopper
+
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+        IF      (NOT loader_bios) AND special
+;------------------------------------------------
+                                    |
+avail_tab:
+        dw      15h, dpb_5,0, dpb_1,1, 0,0, 0,0, 0,0
+        dw      -1
+;|                                              |
+;------------------------------------------------
+        ENDIF
+
+
+; Extended disc parameter block layout
+
+dpb_flags       equ     byte ptr 15             ;flags
+dpb_ret_sidleng equ     word ptr 16             ;retries and sectors/track
+dpb_sidleng     equ     byte ptr 17             ;sectors/track
+dpb_phy_disk    equ     byte ptr 18             ;drive number
+dpb_max_sectors equ     word ptr 20             ;total sectors on floppy disc
+dpb_part_offset equ     word ptr 20             ;hard disc partition offset
+dpb_secsiz      equ     word ptr 22             ;bytes per sector
+dpb_secsiz_msb  equ     byte ptr 23             ;msb of above
+
+; Disc parameter blocks
+
+; Single Sided, Double Density 5" drives (SA 400L)
+DPB_0:
+                                ;Block allocation size = 1024   (BLS)
+        DW      40              ;CP/M Sectors per track         (SPT)
+        DB      03              ;Block shift factor             (BSH)
+        DB      07              ;Block mask                     (BLM)
+        DB      00              ;Null mask                      (EXM)
+        DW      189             ;Disk size - 1                  (DSM)
+        DW      063             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      16              ;Check size                     (CKS)
+        DW      2               ;Track offset                   (OFF)
+
+        db      0000b           ;Flags - 5" SS
+        db      10              ;10 retries
+        db      5               ;no. of sectors per side of trk
+        db      0               ;space for drive no.
+        db      0               ;spare
+        dw      40*5            ;total sectors per disc
+        dw      1024            ;sector size
+
+;Double Sided, Double Density 5" drives (SA 450L)
+DPB_1:
+                                ;Block allocation size = 2048   (BLS)
+        DW      40              ;CP/M Sectors per track         (SPT)
+        DB      04              ;Block shift factor             (BSH)
+        DB      15              ;Block mask                     (BLM)
+        DB      01              ;Null mask                      (EXM)
+        DW      194             ;Disk size - 1                  (DSM)
+        DW      127             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      32              ;Check size                     (CKS)
+        DW      2               ;Track offset                   (OFF)
+
+        db      0001b           ;Flags - 5" DS
+        db      10              ;10 retries
+        db      5               ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      40*5*2          ;total sectors per disc
+        dw      1024            ;sector size
+
+;Single Sided, Quad Density 5" drives (SA 410)
+DPB_2:
+                                ;Block allocation size = 2048   (BLS)
+        DW      40              ;CP/M Sectors per track         (SPT)
+        DB      04              ;Block shift factor             (BSH)
+        DB      15              ;Block mask                     (BLM)
+        DB      01              ;Null mask                      (EXM)
+        DW      194             ;Disk size - 1                  (DSM)
+        DW      127             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      32              ;Check size                     (CKS)
+        DW      2               ;Track offset                   (OFF)
+
+        db      0010b           ;Flags - 5" SS quad
+        db      10              ;10 retries
+        db      5               ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      80*5            ;total sectors per disc
+        dw      1024            ;sector size
+
+;Double Sided, Quad Density 5" drives (SA 460)
+DPB_3:
+                                ;Block allocation size = 2048   (BLS)
+        DW      40              ;CP/M Sectors per track         (SPT)
+        DB      04              ;Block shift factor             (BSH)
+        DB      15              ;Block mask                     (BLM)
+        DB      00              ;Null mask                      (EXM)
+        DW      394             ;Disk size - 1                  (DSM)
+        DW      255             ;Directory max                  (DRM)
+        DB      11110000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      64              ;Check size                     (CKS)
+        DW      2               ;Track offset                   (OFF)
+
+        db      0011b           ;Flags - 5" DS quad
+        db      10              ;10 retries
+        db      5               ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      80*5*2          ;total sectors per disc
+        dw      1024            ;sector size
+
+;Single Sided, Double Density 8" drives (SA 800)
+DPB_4:
+                                ;Block allocation size = 2048   (BLS)
+        DW      64              ;CP/M Sectors per track         (SPT)
+        DB      04              ;Block shift factor             (BSH)
+        DB      15              ;Block mask                     (BLM)
+        DB      00              ;Null mask                      (EXM)
+        DW      303             ;Disk size - 1                  (DSM)
+        DW      127             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      32              ;Check size                     (CKS)
+        DW      1               ;Track offset                   (OFF)
+        db      0100b           ;Flags - 8" SS
+        db      10              ;10 retries
+        db      8               ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      77*8            ;total sectors per disc
+        dw      1024            ;sector size
+
+;Double Sided, Double Density 8" drives (SA 850)
+DPB_5:
+                                ;Block allocation size = 2048   (BLS)
+        DW      64              ;CP/M Sectors per track         (SPT)
+        DB      04              ;Block shift factor             (BSH)
+        DB      15              ;Block mask                     (BLM)
+        DB      00              ;Null mask                      (EXM)
+        DW      611             ;Disk size - 1                  (DSM)
+        DW      255             ;Directory max                  (DRM)
+        DB      11110000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      64              ;Check size                     (CKS)
+        DW      1               ;Track offset                   (OFF)
+
+        db      0101b           ;Flags - 8" DS
+        db      10              ;10 retries
+        db      8               ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      77*8*2          ;total sectors per disc
+        dw      1024            ;sector size
+
+;Single Sided, Single Density 8" drives (SA 800)
+DPB_6:
+                                ;Block allocation size = 1024   (BLS)
+        DW      26              ;CP/M Sectors per track         (SPT)
+        DB      03              ;Block shift factor             (BSH)
+        DB      07              ;Block mask                     (BLM)
+        DB      00              ;Null mask                      (EXM)
+        DW      242             ;Disk size - 1                  (DSM)
+        DW      063             ;Directory max                  (DRM)
+        DB      11110000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      16              ;Check size                     (CKS)
+        DW      2               ;Track offset                   (OFF)
+
+        db      1100b           ;Flags - 8" SS SDen
+        db      10              ;10 retries
+        db      26              ;no. of sectors per side of trk
+        db      0               ;drive no.
+        db      0               ;spare
+        dw      77*26           ;total sectors per disc
+        dw      128             ;sector size
+;Winnie, partition A
+DPB_7:
+                                ;Block allocation size = 8192   (BLS)
+        DW      17*4            ;CP/M Sectors per track         (SPT)
+        DB      06              ;Block shift factor             (BSH)
+        DB      63              ;Block mask                     (BLM)
+        DB      03              ;Extent mask, mod. by set_size  (EXM)
+        DW      0               ;Disk size (filled in)          (DSM)
+        DW      511             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      0               ;Check size                     (CKS)
+        DW      1               ;Track offset                   (OFF)
+
+        db      10000b          ;Flags - Winchester
+        db      10              ;10 retries
+        db      17              ;no. of sectors per side of trk
+        db      0               ;drive no. (filled in later)
+        db      0               ;spare
+        dw      0               ;partition offset (filled in)
+        dw      512             ;sector size
+
+DPB_8:
+                                ;Block allocation size = 8192   (BLS)
+        DW      17*4            ;CP/M Sectors per track         (SPT)
+        DB      06              ;Block shift factor             (BSH)
+        DB      63              ;Block mask                     (BLM)
+        DB      03              ;Extent mask, mod. by set_size  (EXM)
+        DW      0               ;Disk size (filled in)          (DSM)
+        DW      511             ;Directory max                  (DRM)
+        DB      11000000b       ;Alloc 0                        (AL0)
+        DB      0               ;Alloc 1                        (AL1)
+        DW      0               ;Check size                     (CKS)
+        DW      1               ;Track offset                   (OFF)
+
+        db      10000b          ;Flags - Winchester
+        db      10              ;10 retries
+        db      17              ;no. of sectors per side of trk
+        db      0               ;drive no. (filled in later)
+        db      0               ;spare
+        dw      0               ;partition offset (filled in)
+        dw      512             ;sector size
+
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+signon          db      esc,'E','CP/M-86/80 Version 1.1, '
+                db      'Level 21 (24/05/83)',cr,lf
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        IF      (NOT loader_bios) AND (NOT cal)
+;----------------------------------------
+;|                                      |
+                db      'LSI Computers Ltd, Woking',cr,lf
+size_txt        db      '256K System M-Four'
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        IF      (NOT loader_bios) AND cal
+;----------------------------------------
+;|                                      |
+size_txt        db      '256K CAL Personal Computer'
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+                db      ', Firmware Level '
+firm_rev        db      '00',cr,lf,lf
+                db      'Available drives :-',cr,lf,0
+win_tx          db      'Winchester',cr,lf,0
+flop_tx         db      '.H. drive, ',0
+driv_tx         db      '" ',0
+single_tx       db      'single',0
+double_tx       db      'double',0
+quad_tx         db      'quad',0
+sides_tx        db      ' sided, ',0
+density_tx      db      ' density',cr,lf,0
+size_txt_small  db      '128'
+;|                                      |
+;----------------------------------------
+        ENDIF
+
+part_err_msg    db      'reading Winchester partition table',0
+no_part_msg     db      'Winchester disc has no CP/M partition.',0
+part_buf        rb      512             ;for reading partition table
+
+; end of temporary data
+
+        org     temp_data
+
+; uninitialised data space
+
+dirbuf          rb      128             ;overwritten by temp_data
+hst_buff        rb      19 * 512        ;overwritten by temp_data
+
+                rw      32              ;local stack for init. & warm boot
+stkbase         equ     $
+
+;*** Disk parameter blocks ***
+
+DPB_A   rb      dpblen
+DPB_B   rb      dpblen
+DPB_C   rb      dpblen
+DPB_D   rb      dpblen
+dpb_e   rb      dpblen
+
+; Keyboard buffer
+
+kbuf_start      rb      32
+kbuf_end        equ     $
+
+
+; Workspace used by clock interrupt
+
+clock_temp:             ;data read from clock to here (image of clock registers)
+second  rb      1       ;seconds        0        0 - 60
+        rb      1       ;               1       
+minute  rb      1       ;minutes        2        0 - 60
+        rb      1       ;               3
+hour    rb      1       ;hour           4        0 - 24
+        rb      1       ;               5
+        rb      1       ;               6
+day_no  rb      1       ;day            7        1 - 31
+month   rb      1       ;month          8        1 - 12
+yr      rb      1       ;year           9        0 - 99 (from 1980)
+        rb      1       ;               10
+
+sysdat_offset   rw      1
+sysdat_segment  rw      1       ;must come after sysdat_offset
+
+ss_save         rw      1
+sp_save         rw      1
+                rw      30      ;space for clock stack, allowing for interrupts
+clock_stack     rw      1       ;must be at end of stack space
+
+; End of clock workspace
+
+bdos_scr        rs      1
+
+;******** end of everything
+
+;**********************************************************
+
+        IF      NOT loader_bios
+;----------------------------------------
+;|                                      |
+
+; Map of skeletal cpm 80 bios to be put in Z80 bank
+
+                org     0
+bios_jmp        rs      3
+iobyte_80       rs      1
+def_drive       rs      1
+bdos_jmp        rs      3       
+
+                org     5ch
+zfcb_1          rs      36
+
+                org     66h
+z80_nmi         rs      3
+
+                org     6ch
+zfcb_2          rs      36
+
+                org     80h     
+dma_buf         rs      80h
+prog_80         equ     $
+
+                org     0fb00h
+z80_stack       equ     $
+        
+                org     0fb06h
+bdos_80         equ     $
+
+                org     0fc00h
+z_alloc         rs      512             ;allocation vector
+
+                org     0fe00h
+bios_80         equ     $
+
+                org     0ffe0h
+mfcb_a          rb      16
+asav            rb      1
+csav            rb      1
+bcsav           rw      1       
+esav            rb      1       
+desav           rw      1       
+lsav            rb      1       
+hlsav           rw      1       
+
+kstat_80        rb      1
+
+                org     0fffeh
+fncode          rw      2
+
+;|                                              |
+;------------------------------------------------
+        ENDIF   ; not loader bios
+
+; End of M4BIOS.ASM file
+
+
+                                END
+

@@ -1,0 +1,385 @@
+$title('File Concatenation')
+concat:
+do;
+
+$include (copyrt.lit)
+
+  declare true literally '0FFFFH';
+  declare false literally '0';
+  declare forever literally 'while true';
+  declare boolean literally 'byte';
+
+  declare start label;
+  declare jmp$to$start structure (
+    jmp$instr byte,
+    jmp$location address ) data  (
+    0C3H,
+    .start-3);
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+  declare fcb (1) byte external;
+  declare fcb16 (1) byte external;
+  declare tbuff (1) byte external;
+
+  /**************************************
+   *                                    *
+   *       B D O S   Externals          *
+   *                                    *
+   **************************************/
+
+  system$reset:
+    procedure;
+      call mon1 (0,0);
+    end system$reset;
+
+  read$console:
+    procedure byte;
+      return mon2 (1,0);
+    end read$console;
+
+  write$console:
+    procedure (char);
+      declare char byte;
+      call mon1 (2,char);
+    end write$console;
+
+  print$console$buffer:
+    procedure (buffer$address);
+      declare buffer$address address;
+      call mon1 (9,buffer$address);
+    end print$console$buffer;
+
+  open$file:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (15,fcb$address);
+    end open$file;
+
+  close$file:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (16,fcb$address);
+    end close$file;
+
+  delete$file:
+    procedure (fcb$address);
+      declare fcb$address address;
+      call mon1 (19,fcb$address);
+    end delete$file;
+
+  read$record:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (20,fcb$address);
+    end read$record;
+
+  write$record:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (21,fcb$address);
+    end write$record;
+
+  create$file:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (22,fcb$address);
+    end create$file;
+
+  set$DMA$address:
+    procedure (DMA$address);
+      declare DMA$address address;
+      call mon1 (26,DMA$address);
+    end set$DMA$address;
+  
+  crlf:
+    procedure;
+      call write$console (0dh);
+      call write$console (0ah);
+    end crlf;
+
+
+  parse:
+    procedure (pcb$adr) address;
+    declare pcb$adr address;
+    declare pcb based pcb$adr structure (
+      filename$adr address,
+      fcb$adr address      );
+    declare pcb$filename$adr address;
+    declare pcb$fcb$adr address;
+    declare filename based pcb$filename$adr (1) byte;
+    declare fcb based pcb$fcb$adr (1) byte;
+  
+    declare
+      /* return conditions */
+      endline literally '00000H',
+      badfile literally '0FFFFH',
+      /* useful literals */
+      disk    literally 'fcb(0)',
+      fcbname literally '8',  /* end of name */
+      fcbtype literally '11', /* end of type field */
+      fcbsize literally '16'; /* partial size of fcb */
+  
+    declare char byte; /* global temp for current char */
+    declare fnp  byte; /* index into file name buffer */
+    declare fnlen byte;
+  
+    gnctran:
+      procedure(b) byte;
+        declare b byte;
+  
+        if b < ' ' then return 0dh; /* all non-graphics */
+        /* translate alpha to upper case */
+        if b >= 'a' and b <= 'z' then
+          b = b and 101$1111b; /* upper case */
+        return b;
+      end gnctran;
+  
+    gnc:
+      procedure;
+  
+        char = gnctran(filename(fnp := fnp + 1));
+      end gnc;
+  
+    delimiter:
+      procedure byte;
+        declare i byte;
+        declare del(*) byte data
+          (0dh,' =.:<>_[],');
+  
+        do i = 0 to last(del);
+          if char = del(i) then return true;
+        end;
+        return false;
+      end delimiter;
+  
+    putchar:
+      procedure;
+  
+        fcb(fnlen:=fnlen+1) = char;
+        /* can check here for ambig ref's "char = '?'" */
+      end putchar;
+  
+    fillq:
+      procedure(len);
+      /* fill current name or type with question marks */
+  
+        declare len byte;
+  
+        char = '?'; /* question mark */
+        do while fnlen < len; 
+          call putchar;
+        end;
+      end fillq;
+  
+    /* initialize local bases */
+    pcb$filename$adr = pcb.filename$adr;
+    pcb$fcb$adr      = pcb.fcb$adr;
+    /* initialize file control block to empty */
+    char  = ' ';
+    fnlen  = 0;
+    fnp   = -1;
+    do while fnlen < fcbsize-1;
+      if fnlen = fcbtype then char = 0;
+      call putchar;
+    end;
+    disk = 0;
+    /* scan next name */
+    do forever;
+    /* deblank command buffer */
+      call gnc;
+      do while char = ' ';
+        call gnc;
+      end;
+      if delimiter then return badfile;
+      fnlen = 0;
+      do while not delimiter;
+        if fnlen >= fcbname then /* error, file name too long */
+          return badfile;
+        if char = '*' then call fillq(fcbname); else call putchar;
+        call gnc;
+      end;
+  
+      /* check for disk name */
+      if char = ':' then
+      do;
+        if not (disk = 0 and fnlen = 1) then
+          return badfile;
+        /* must be a disk name */
+        if (disk := fcb(1) - 'A' + 1) > 26
+          /* invalid disk name */
+          then return badfile;
+          /* valid disk name replace space in name */
+          else fcb(fnlen) = ' ';
+      end;
+      else
+      do;
+        /* char is not ':', so file name is set. scan remainder */
+        /* at least one char scanned */
+        fnlen = fcbname;
+        if char = '.' then /* scan file type */
+        do;
+          call gnc;
+          do while not delimiter;
+            if fnlen >= fcbtype then
+              /* error, type field too long */
+              return badfile;
+            if char = '*'
+              then call fillq(fcbtype);
+              else call putchar;
+              call gnc;
+          end;
+        end;
+  
+        if char = 0dh
+          then return endline;
+          else return .filename(fnp);
+      end;
+    end; /* of forever */
+  end parse;
+
+  declare pcb structure (
+    filename$adr address,
+    fcb$adr address      );
+  declare nxt$chr$adr address;
+  declare old$nxt$chr$adr address at (.pcb.filename$adr);
+  declare char byte;
+  declare ret byte at (.char);
+  declare delim based nxt$chr$adr byte;
+  declare fcbin (33) byte;
+  declare fcbout (33) byte initial (
+    0,'        ','   ',0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0);
+  declare default$fcb (33) byte data (
+    0,'        ','   ',0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0);
+  declare nmb$sect literally '32';
+  declare buffer (nmb$sect) structure (
+    record (128) byte);
+
+
+  setup$output$file:
+    procedure;
+      pcb.filename$adr = .tbuff(1);
+      pcb.fcb$adr = .fcbout;
+      nxt$chr$adr = parse (.pcb);
+      if delim <> '=' then
+      do;
+        if nxt$chr$adr = 0 then
+        do;
+          call print$console$buffer (.(
+            'No input files specified','$'));
+          go to error;
+        end;
+        if nxt$chr$adr = 0ffffh then
+        do;
+          call print$console$buffer (.(
+            'Bad output file name','$'));
+          go to error;
+        end;
+        call print$console$buffer (.(
+          'A ''='' delimeter expected after output file name','$'));
+        go to error;
+      end;
+      call set$DMA$address (.buffer);
+      if open$file (.fcbout) <> 255 then
+      do;
+        call print$console$buffer (.(
+          'Destination file exists, delete (Y/N) ? ','$'));
+        char = read$console;
+        if (char <> 'y') and (char <> 'Y')
+          then call system$reset;
+        call crlf;
+        call delete$file (.fcbout);
+      end;
+      if create$file (.fcbout) = 255 then
+      do;
+        call print$console$buffer (.(
+          'Directory full','$'));
+        call system$reset;
+      end;
+    end setup$output$file;
+
+  setup$input$file:
+    procedure;
+      pcb.filename$adr = nxt$chr$adr + 1;
+      pcb.fcb$adr = .fcbin;
+      call move (33,.default$fcb,.fcbin);
+      if (nxt$chr$adr := parse (.pcb)) = 0ffffh then
+      do;
+        call print$console$buffer (.(
+          'Bad input file name','$'));
+        go to error;
+      end;
+      call set$DMA$address (.buffer);
+      if open$file (.fcbin) = 255 then
+      do;
+        call print$console$buffer (.(
+          'No such input file','$'));
+        go to error;
+      end;
+    end setup$input$file;
+
+  copy$file:
+    procedure;
+      declare (i,cnt) byte;
+      declare (ok,more$input) boolean;
+
+      more$input = true;
+      do while more$input;
+        cnt = 0;
+        ok = true;
+        do while ok;
+          call set$DMA$address (.buffer((cnt := cnt+1)-1));
+          ok = (read$record (.fcbin) = 0) and
+               (cnt <> nmb$sect);
+        end;
+        if (more$input := (cnt = nmb$sect))
+          then cnt = cnt - 1;
+          else cnt = cnt - 2;
+        do i = 0 to cnt;
+          call set$DMA$address (.buffer(i));
+          if write$record (.fcbout) <> 0 then
+          do;
+            call print$console$buffer (.(
+              'Disk write error','$'));
+            call system$reset;
+          end;
+        end;
+      end;
+    end copy$file;
+
+  /*
+      F i l e   C o n c a t e n a t i o n
+  */
+
+start:
+  call setup$output$file;
+  do forever;
+    call setup$input$file;
+    call copy$file;
+    if nxt$chr$adr = 0 then
+    do;
+      ret = close$file (.fcbout);
+      call system$reset;
+    end;
+  end;
+  
+error:
+  call crlf;
+  tbuff(tbuff(0)+1) = '$';
+  call print$console$buffer (old$nxt$chr$adr);
+  call system$reset;
+
+end concat;
+

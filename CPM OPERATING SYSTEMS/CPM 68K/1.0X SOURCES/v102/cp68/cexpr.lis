@@ -1,0 +1,346 @@
+1File: CEXPR.C                                                             Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "preproc.h"
+     9    
+    10   #define	OPPRI	077
+    11   #define	OPBIN	0100
+    12   #define STKLEN	64
+    13   int oprstk[STKLEN];					/*operator stack*/
+    14   int opnstk[STKLEN];					/*operand stack*/
+    15   int pristk[STKLEN];					/*operator priority stack*/
+    16   int *oprptr;						/*pointer to operator stack*/
+    17   int *opnptr;						/*pointer to operand stack*/
+    18   int *priptr;						/*pointer to priority stack*/
+    19   int cvalue;
+    20    
+    21   int opinfo[] {
+    22   	0,								/*EOF=0*/
+    23   	16|OPBIN,						/*SUB=1*/
+    24   	16|OPBIN,						/*ADD=2*/
+    25   	20,								/*NOT=3*/
+    26   	20,								/*NEG=4*/
+    27   	22,								/*LPAREN=5*/
+    28   	2,								/*RPAREN=6*/
+    29   	6|OPBIN,						/*QMARK=7*/
+    30   	6|OPBIN,						/*COLON=8*/
+    31   	8|OPBIN,						/*OR=9*/
+    32   	10|OPBIN,						/*AND=10*/
+    33   	8|OPBIN,						/*XOR=11*/
+    34   	12|OPBIN,						/*EQUAL=12*/
+    35   	12|OPBIN,						/*NEQUAL=13*/
+    36   	14|OPBIN,						/*LESS=14*/
+    37   	14|OPBIN,						/*LSEQUAL=15*/
+    38   	14|OPBIN,						/*GREAT=16*/
+    39   	14|OPBIN,						/*GREQUAL=17*/
+    40   	4|OPBIN,						/*LSHIFT=18*/
+    41   	4|OPBIN,						/*RSHIFT=19*/
+    42   	18|OPBIN,						/*MULT=20*/
+    43   	18|OPBIN,						/*DIV=21*/
+    44   	18|OPBIN,						/*MOD=22*/
+    45   	20,								/*COMPL=23*/
+    46   };
+    47    
+    48   /* cexpr - constant expression evaluation*/
+    49   /*		Does priority-driven operator/operand stack evaluation of*/
+    50   /*		constant expressions.*/
+    51   cexpr()								/* returns constant evaluated*/
+    52   {
+    53   	register int lop, type;
+    54    
+    55   	oprptr = &oprstk[0];
+    56   	opnptr = &opnstk[0];
+    57   	priptr = &pristk[0];
+    58   	*priptr = 0;
+    59   	lop = -1;
+1File: CEXPR.C                                                             Page       2
+    60   	while(1) {
+    61   		switch( type = getctok() ) {
+    62    
+    63   		case CONST:
+    64   			if( !lop )			/*last was not operator*/
+    65   				goto syntax;
+    66   			if( opnptr >= &opnstk[STKLEN] ) {
+    67   				error("expression stack overflow");
+    68   				cexit();
+    69   			}
+    70   			lop = FALSE;
+    71   			*++opnptr = cvalue;
+    72   			continue;
+    73    
+    74   		case SUB:
+    75   			if( lop )
+    76   				type = NEG;	/*unary minus*/
+    77   			break;
+    78    
+    79   		case ADD:
+    80   			if( lop )
+    81   				continue;	/*ignore unary +*/
+    82   			break;
+    83    
+    84   		case COMPL:
+    85   		case LPAREN:
+    86   		case NOT:
+    87   			if( !lop )
+    88   				goto syntax;
+    89   			break;
+    90    
+    91   		case RPAREN:
+    92   			if( lop )
+    93   				goto syntax;
+    94   			lop = FALSE;
+    95   			if( !stkop(type) )
+    96   				goto syntax;
+    97   			continue;
+    98    
+    99   		case NEWL:
+   100   		case EOF:
+   101   			if( lop || !stkop(EOF) || opnptr != &opnstk[1] )
+   102   				goto syntax;
+   103   			type = opnstk[1];
+   104   			putback('\n');
+   105   			return(type);
+   106    
+   107   		default:
+   108   			if( lop || type > LASTOP )
+   109   				goto syntax;
+   110   			break;
+   111   		}
+   112   		lop = TRUE;
+   113   		if( !stkop(type) )
+   114   			goto syntax;
+   115   	}
+   116   syntax:
+   117   	error("expression syntax");
+   118   	if( type == NEWL )
+1File: CEXPR.C                                                             Page       3
+   119   		putback('\n');
+   120   	return(0);
+   121   }
+   122    
+   123   /* getctok - get a constant expression token*/
+   124   /*		Handles conversion of quoted character strings and numbers.*/
+   125   getctok()
+   126   {
+   127   	register int type, c, count;
+   128   	register char *p;
+   129   	char token[TOKSIZE];
+   130    
+   131   	while( 1 ) {
+   132   		switch( type = getntok(token) ) {
+   133   	
+   134   		case DIGIT:
+   135   			cvalue = const(token);
+   136   			return(CONST);
+   137   	
+   138   		case SQUOTE:
+   139   			for( cvalue = 0, p = &token[1], count = 2; --count >= 0; ) {
+   140   				if( (c= *p++) == '\'' )
+   141   					break;
+   142   				if( c == '\\' ) {
+   143   					if( *p >= '0' && *p <= '7' ) {
+   144   						for( c = 0; *p >= '0' && *p <= '7'; )
+   145   							c = (c<<3) + (*p++ - '0');
+   146   					}
+   147   					else switch( c = *p++ ) {
+   148   		
+   149   					case 'n':
+   150   						c = '\n';
+   151   						break;
+   152   	
+   153   					case 't':
+   154   						c = '\t';
+   155   						break;
+   156   	
+   157   					case 'b':
+   158   						c = '\b';
+   159   						break;
+   160   	
+   161   					case 'r':
+   162   						c = '\r';
+   163   						break;
+   164   	
+   165   					case 'f':
+   166   						c = '\f';
+   167   						break;
+   168   					}
+   169   				}
+   170   				cvalue = (cvalue<<8) | c;
+   171   			}
+   172   			return(CONST);
+   173    
+   174   		case ALPHA:
+   175   			if( p = lookup(token) )
+   176   				expand(p);
+   177   			else
+1File: CEXPR.C                                                             Page       4
+   178   				return(ALPHA);
+   179   			break;
+   180    
+   181   		default:
+   182   			return(type);
+   183   		}
+   184   	}
+   185   }
+   186    
+   187   /* stkop - stack an operator on the operand stack*/
+   188   /*		Unstack all operators of lower priority, evaluating them as*/
+   189   /*		they are unstacked.*/
+   190   stkop(opr)							/* returns 1 if ok, 0 otherwise*/
+   191   int opr;							/* operator to stack*/
+   192   {
+   193   	register int i, j, op1, op2, pri;
+   194    
+   195   	for( pri = opinfo[opr]&OPPRI; pri < *priptr; ) {
+   196   		if( *oprptr == LPAREN ) {
+   197   			if( opr == RPAREN ) {
+   198   				oprptr--;
+   199   				priptr--;
+   200   				return(1);
+   201   			}
+   202   			break;
+   203   		}
+   204   		op1 = *opnptr;
+   205   		if( (i=opinfo[*oprptr]) & OPBIN ) {
+   206   			op2 = op1;
+   207   			op1 = *--opnptr;
+   208   		}
+   209   		switch(*oprptr) {	/*operator*/
+   210    
+   211   		case ADD:
+   212   			op1 =+ op2;
+   213   			break;
+   214    
+   215   		case SUB:
+   216   			op1 =- op2;
+   217   			break;
+   218    
+   219   		case COLON:
+   220   			priptr--;
+   221   			if( *--oprptr != QMARK )
+   222   				return(0);
+   223   			op1 = (*--opnptr ? op1 : op2);
+   224   			break;
+   225    
+   226   		case QMARK:
+   227   			return(0);
+   228    
+   229   		case XOR:
+   230   			op1 =^ op2;
+   231   			break;
+   232    
+   233   		case OR:
+   234   			op1 =| op2;
+   235   			break;
+   236    
+1File: CEXPR.C                                                             Page       5
+   237   		case AND:
+   238   			op1 =& op2;
+   239   			break;
+   240    
+   241   		case EQUAL:
+   242   			op1 = (op1 == op2);
+   243   			break;
+   244    
+   245   		case NEQUAL:
+   246   			op1 = (op1 != op2);
+   247   			break;
+   248    
+   249   		case LESS:
+   250   			op1 = (op1 < op2);
+   251   			break;
+   252    
+   253   		case LSEQUAL:
+   254   			op1 = (op1 <= op2);
+   255   			break;
+   256    
+   257   		case GREAT:
+   258   			op1 = (op1 > op2);
+   259   			break;
+   260    
+   261   		case GREQUAL:
+   262   			op1 = (op1 >= op2);
+   263   			break;
+   264    
+   265   		case LSHIFT:
+   266   			op1 = (op1 << op2);
+   267   			break;
+   268    
+   269   		case RSHIFT:
+   270   			op1 = (op1 >> op2);
+   271   			break;
+   272    
+   273   		case NEG:
+   274   			op1 = -op1;
+   275   			break;
+   276    
+   277   		case NOT:
+   278   			op1 = !op1;
+   279   			break;
+   280    
+   281   		case COMPL:
+   282   			op1 = ~ op1;
+   283   			break;
+   284    
+   285   		case MULT:
+   286   			op1 =* op2;
+   287   			break;
+   288    
+   289   		case DIV:
+   290   			op1 =/ op2;
+   291   			break;
+   292    
+   293   		case MOD:
+   294   			op1 =% op2;
+   295   			break;
+1File: CEXPR.C                                                             Page       6
+   296    
+   297   		}
+   298   		*opnptr = op1;
+   299   		priptr--;
+   300   		oprptr--;
+   301   	}
+   302   	if( priptr >= &pristk[STKLEN-1] ) {
+   303   		error("expression operator stack overflow");
+   304   		cexit();
+   305   	}
+   306   	*++oprptr = opr;	/*operator value*/
+   307   	*++priptr = pri;	/*operator priority*/
+   308   	return(1);
+   309   }
+   310    
+   311   #define toupper(c)	((c) & ~32)
+   312   /* const - alpha to int conversion, handles octal and hexidecimal*/
+   313   /*		Uses Horner's method to evaluate number.*/
+   314   const(str)							/* returns number evaluated*/
+   315   char *str;							/* pointer to string to convert*/
+   316   {
+   317   	register int c, ch, i, radix;
+   318    
+   319   	i = 0;
+   320   	radix = 10;
+   321   	if( *str == '0' ) {
+   322   		radix = 8;
+   323   		if( *++str == 'x' || *str == 'X' ) {
+   324   			radix = 16;
+   325   			str++;
+   326   		}
+   327   	}
+   328   	while( c = *str++ ) {
+   329   		if( (ch=toupper(c)) >= 'A' && ch <= 'F' )
+   330   			c = ch - ('A'-10);
+   331   		else if( c >= '0' && c <= '9' )
+   332   			c =- '0';
+   333   		else
+   334   			break;
+   335   		if( c >= radix )
+   336   			break;
+   337   		i = i*radix + c;
+   338   	}
+   339   	return(i);
+   340   }

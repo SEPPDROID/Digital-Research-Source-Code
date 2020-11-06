@@ -1,0 +1,191 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                           CP/M 3 Loader BIOS                           *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+;
+; v1.00 - 17 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+	.z80
+;
+	maclib	TPORTS.LIB
+;
+	public	dph, dpb, xlt
+;
+	extrn	rdrv
+;
+	jp	boot		;initial entry on cold start
+	jp	null		;not required
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	crtop		;send console output character
+	jp	null		;not required
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	home		;set disks to logical home
+	jp	seldsk		;select drive, return disk parameter info
+	jp	settrk		;set disk track
+	jp	setsec		;set disk sector
+	jp	setdma		;set disk I/O memory address
+	jp	read		;read physical block(s)
+	jp	null		;not required
+	jp	null		; "     "
+	jp	sectrn		;translate logical to physical sector
+	jp	crtost		;return console output status
+	jp	null		;not required
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	move		;block move memory to memory
+	jp	null		;not required
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+	jp	null		; "     "
+;
+; null code
+null:	ld	a,1ah		;end of file character
+	ret
+;
+; boot code
+boot:	out	(crt1in),a	;initialize CRT driver
+	out	(gtboot),a	;what drive did boot come from
+	cp	2		;floppy A: or B: drive ?
+	ld	a,rdhard
+	jp	nc,settyp
+	ld	a,rdflop
+settyp:	ld	(flphdd+1),a	;set floppy or HDD read port
+	ret
+;
+; block move
+move:	ex	de,hl
+	ldir
+	ex	de,hl
+	ret
+;
+; home disk
+home:	ld	c,0		;fall through to set track
+;
+; set track
+settrk:	ld	a,c
+	ld	(track),a
+	ret
+;
+; set sector
+setsec:	ld	a,c
+	ld	(sector),a
+	ret
+;
+; set DMA address
+setdma:	ld	(dma),bc
+	ret
+;
+; select disk
+seldsk:	ld	hl,dph		;DPH address
+	ret
+;
+; sector translate
+sectrn:	ld	hl,xlt		;translate table address
+	add	hl,bc		;add logical sector
+	ld	l,(hl)		;get physical sector
+	ld	h,0
+	ret
+;
+; read sector from boot disk
+read:	ld	a,(rdrv)
+	ld	h,a
+	ld	d,0		;side #0
+	ld	a,(track)
+	sla	h
+	jp	c,side0		;single sided disk if carry
+	sla	h
+	jp	c,dsdisk	;double sided disk if carry
+	cp	40
+	jp	c,side0		;side 0 of up-down if carry
+	ld	b,a		;side 1 of up-down
+	ld	a,79
+	sub	b
+	jp	side1
+dsdisk:	srl	a
+	jp	nc,side0
+side1:	ld	d,1		;side #1
+side0:	ld	b,a		;track number
+	ld	a,(sector)
+	ld	c,a		;sector number
+	ld	hl,(dma)
+	out	(gtboot),a	;what drive did boot come from
+	ld	e,a		;drive information
+	ld	a,2		;sector size code for floppy driver (2=512)
+flphdd:	out	(0ffh),a	;read 1 sector
+	or	a
+	ret	z
+	ld	a,1
+	ret
+;
+crtost:	out	(crt1st),a	;CRT output status
+	ret
+;
+crtop:	out	(crt1op),a	;CRT output
+	ret
+;
+track:	db	0
+sector:	db	0
+dma:	dw	0
+;
+; Disk Parameter Header
+	db	0		;UNIT
+	db	0		;TYPE
+dph:	dw	xlt		;XLT
+	db	0,0,0		;-0-    (BDOS scratch use)
+	db	0,0,0		;-0-
+	db	0,0,0		;-0-
+	db	0		;Media flag
+	dw	dpb		;DPB
+	dw	csv		;CSV
+	dw	alv		;ALV
+	dw	dirbcb		;DIRBCB
+	dw	dtabcb		;DTABCB
+	dw	0ffffh		;HASH   (n/a)
+	db	0		;HBANK  (n/a)
+;
+; Disk Parametr Block table
+dpb:	ds	17		;filled in by PUTLDR.COM utility
+;
+; disk skew table
+xlt:	ds	128		;filled in by PUTLDR.COM utility
+;
+; checksum table
+csv:	ds	512		;2048 directory entries maximum
+;
+; allocation table
+alv:	ds	512		;512 * 8 blocks, space = 512 * 8 * BLS
+;
+; directory buffer control block
+dirbcb:	db	0ffh,0,0,0,0,0,0,0,0,0
+	dw	buff0
+;
+; data buffer control block
+dtabcb:	db	0ffh,0,0,0,0,0,0,0,0,0
+	dw	buff1
+;
+; directory and data buffers
+buff0	equ	$		;1k directory buffer
+buff1	equ	buff0+1024	;1k data buffer
+;
+	end

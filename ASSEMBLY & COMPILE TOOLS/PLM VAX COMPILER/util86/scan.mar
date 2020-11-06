@@ -1,0 +1,445 @@
+        .TITLE  SCAN. (UTIL-VAX Character Scan Routines)
+;-----------------------------------------------------------------------
+;
+;               D I S C L A I M E R   N O T I C E
+;               -------------------   -----------
+;
+;  This document and/or portions of the material and data furnished
+;  herewith, was developed under sponsorship of the U. S. Government.
+;  Neither the U.S. nor the U.S.D.O.E., nor the Leland Stanford Junior
+;  University, nor their employees, nor their respective contractors,
+;  subcontractors, or their employees, makes any warranty, express or
+;  implied, or assumes any liability or responsibility for accuracy,
+;  completeness or usefulness of any information, apparatus, product
+;  or process disclosed, or represents that its use will not infringe
+;  privately-owned rights.  Mention of any product, its manufacturer,
+;  or suppliers shall not, nor is it intended to, imply approval, dis-
+;  approval, or fitness for any particular use.  The U. S. and the
+;  University at all times retain the right to use and disseminate same
+;  for any purpose whatsoever.  Such distribution shall be made by the
+;  National Energy Software Center at the Argonne National Laboratory
+;  and only subject to the distributee furnishing satisfactory proof
+;  that he has a valid license from the Intel Corporation in effect.
+;
+;-----------------------------------------------------------------------
+;
+;		R E V I S I O N   H I S T O R Y
+;
+;
+;  15FEB82  Alex Hunter  1. Changes required by new entry point vector
+;			    scheme.
+;
+;-----------------------------------------------------------------------
+ 
+	.SHOW	EXPANSIONS
+ 
+        .PSECT  $CGROUP_VECTOR,RD,NOWRT,EXE,GBL,CON,LONG
+;
+;  A macro to automatically generate entry point vector code
+;  for procedure entry points.
+;
+
+        .MACRO  AENTRY  NAME,MASK
+        .PSECT  $CGROUP_VECTOR
+        .ENTRY  V.'NAME,MASK
+        JMP     NAME+2
+        .PSECT  UTIL_CODE
+        .ENTRY  NAME,MASK
+        .ENDM   AENTRY
+ 
+        .PSECT  UTIL_CODE,RD,NOWRT,EXE,GBL,CON,LONG
+ 
+;-----------------------------------------------------------------------
+;
+;    LOOKUP TABLE FOR NON-NUMERIC CHARACTER CLASSES.
+;
+;-----------------------------------------------------------------------
+ 
+;  BIT DEFINITIONS:
+ 
+ALFA = 0		; ANY LETTER.
+TOKEN = 1		; ANY CHARACTER WHICH CAN BE PART OF A TOKEN.
+FILE = 2		; ANY CHARACTER WHICH CAN BE PART OF A FILENAME.
+BLANK = 3		; ANY CHARACTER REPRESENTING WHITE SPACE.
+CRLF = 4		; A CR OR LF.
+TERM = 5		; A LINE TERMINATOR CHARACTER.
+LOWERCASE = 6		; A LOWERCASE LETTER.
+ALFANUM = 7		; ANY LETTER OR DIGIT.
+ 
+;  BIT MASKS:
+ 
+M.ALFA = 1@ALFA
+M.TOKEN = 1@TOKEN
+M.FILE = 1@FILE
+M.BLANK = 1@BLANK
+M.CRLF = 1@CRLF
+M.TERM = 1@TERM
+M.LOWERCASE = 1@LOWERCASE
+M.ALFANUM = 1@ALFANUM
+ 
+;  TABLE:
+ 
+ACLASS:
+        .BYTE   0                                              ; 00 NUL
+        .BYTE   0                                              ; 01 SOH
+        .BYTE   0                                              ; 02 STX
+        .BYTE   0                                              ; 03 ETX
+        .BYTE   0                                              ; 04 EOT
+        .BYTE   0                                              ; 05 ENQ
+        .BYTE   0                                              ; 06 ACK
+        .BYTE   0                                              ; 07 BEL
+        .BYTE   0                                              ; 08 BS
+        .BYTE   <M.BLANK>                                      ; 09 HT
+        .BYTE   <M.CRLF+M.TERM>                                ; 0A LF
+        .BYTE   0                                              ; 0B VT
+        .BYTE   0                                              ; 0C FF
+        .BYTE   <M.CRLF+M.TERM>                                ; 0D CR
+        .BYTE   0                                              ; 0E SO
+        .BYTE   0                                              ; 0F SI
+        .BYTE   0                                              ; 10 DLE
+        .BYTE   0                                              ; 11 DC1
+        .BYTE   0                                              ; 12 DC2
+        .BYTE   0                                              ; 13 DC3
+        .BYTE   0                                              ; 14 DC4
+        .BYTE   0                                              ; 15 NAK
+        .BYTE   0                                              ; 16 SYN
+        .BYTE   0                                              ; 17 ETB
+        .BYTE   0                                              ; 18 CAN
+        .BYTE   0                                              ; 19 EM
+        .BYTE   0                                              ; 1A SUB
+        .BYTE   <M.TERM>                                       ; 1B ESC
+        .BYTE   0                                              ; 1C FS
+        .BYTE   0                                              ; 1D GS
+        .BYTE   0                                              ; 1E RS
+        .BYTE   0                                              ; 1F US
+        .BYTE   <M.BLANK>                                      ; 20 SP
+        .BYTE   0                                              ; 21 !
+        .BYTE   0                                              ; 22 "
+        .BYTE   0                                              ; 23 #
+        .BYTE   <M.FILE>                        ;(VMS only)    ; 24 $
+        .BYTE   0                                              ; 25 %
+        .BYTE   0                                              ; 26 &
+        .BYTE   0                                              ; 27 '
+        .BYTE   0                                              ; 28 (
+        .BYTE   0                                              ; 29 )
+        .BYTE   0                                              ; 2A *
+        .BYTE   0                                              ; 2B +
+        .BYTE   0                                              ; 2C ,
+        .BYTE   0                                              ; 2D -
+        .BYTE   <M.FILE>                                       ; 2E .
+        .BYTE   0                                              ; 2F /
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 30 0
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 31 1
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 32 3
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 33 3
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 34 4
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 35 5
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 36 6
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 37 7
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 38 8
+        .BYTE   <M.TOKEN+M.FILE+M.ALFANUM>                     ; 39 9
+        .BYTE   <M.FILE>                                       ; 3A :
+        .BYTE   <M.FILE>                        ; (VMS only)   ; 3B ;
+        .BYTE   0                                              ; 3C <
+        .BYTE   0                                              ; 3D =
+        .BYTE   0                                              ; 3E >
+        .BYTE   <M.TOKEN>                                      ; 3F ?
+        .BYTE   <M.TOKEN>                                      ; 40 @
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 41 A
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 42 B
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 43 C
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 44 D
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 45 E
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 46 F
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 47 G
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 48 H
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 49 I
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4A J
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4B K
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4C L
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4D M
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4E N
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 4F O
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 50 P
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 51 Q
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 52 R
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 53 S
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 54 T
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 55 U
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 56 V
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 57 W
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 58 X
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 59 Y
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM>              ; 5A Z
+        .BYTE   <M.FILE>                        ; (VMS only)   ; 5B [
+        .BYTE   0                                              ; 5C \
+        .BYTE   <M.FILE>                        ; (VMS only)   ; 5D ]
+        .BYTE   0                                              ; 5E ^
+        .BYTE   <M.TOKEN>                                      ; 5F _
+        .BYTE   0                                              ; 60 `
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 61 a
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 62 b
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 63 c
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 64 d
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 65 e
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 66 f
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 67 g
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 68 h
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 69 i
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6A j
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6B k
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6C l
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6D m
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6E n
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 6F o
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 70 p
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 71 q
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 72 r
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 73 s
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 74 t
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 75 u
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 76 v
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 77 w
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 78 x
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 79 y
+        .BYTE   <M.ALFA+M.TOKEN+M.FILE+M.ALFANUM+M.LOWERCASE>  ; 7A z
+        .BYTE   0                                              ; 7B {
+        .BYTE   0                                              ; 7C |
+        .BYTE   0                                              ; 7D }
+        .BYTE   0                                              ; 7E ~
+        .BYTE   0                                              ; 7F DEL
+	.BYTE	0[128]			; (Just in case...)    ; 80-FF.
+ 
+;-----------------------------------------------------------------------
+;
+;    LOOKUP TABLE FOR NUMERIC CHARACTER CLASSES.
+;  
+;    BITS <3:0> OF EACH ENTRY REPRESENT THE BINARY VALUE OF THE
+;    CORRESPONDING ASCII CHARACTER.
+;
+;    OTHER BITS ARE DEFINED BELOW.
+;
+;-----------------------------------------------------------------------
+ 
+BINARY = 4		; BINARY DIGIT.
+OCTAL = 5		; OCTAL DIGIT.
+DECIMAL = 6		; DECIMAL DIGIT.
+HEX = 7			; HEXADECIMAL DIGIT.
+ 
+;  BIT MASKS:
+ 
+M.BINARY = 1@BINARY
+M.OCTAL = 1@OCTAL
+M.DECIMAL = 1@DECIMAL
+M.HEX = 1@HEX
+ 
+;  LOOKUP TABLE:
+ 
+NCLASS:
+        .BYTE   0                                              ; 00 NUL
+        .BYTE   0                                              ; 01 SOH
+        .BYTE   0                                              ; 02 STX
+        .BYTE   0                                              ; 03 ETX
+        .BYTE   0                                              ; 04 EOT
+        .BYTE   0                                              ; 05 ENQ
+        .BYTE   0                                              ; 06 ACK
+        .BYTE   0                                              ; 07 BEL
+        .BYTE   0                                              ; 08 BS
+        .BYTE   0                                              ; 09 HT
+        .BYTE   0                                              ; 0A LF
+        .BYTE   0                                              ; 0B VT
+        .BYTE   0                                              ; 0C FF
+        .BYTE   0                                              ; 0D CR
+        .BYTE   0                                              ; 0E SO
+        .BYTE   0                                              ; 0F SI
+        .BYTE   0                                              ; 10 DLE
+        .BYTE   0                                              ; 11 DC1
+        .BYTE   0                                              ; 12 DC2
+        .BYTE   0                                              ; 13 DC3
+        .BYTE   0                                              ; 14 DC4
+        .BYTE   0                                              ; 15 NAK
+        .BYTE   0                                              ; 16 SYN
+        .BYTE   0                                              ; 17 ETB
+        .BYTE   0                                              ; 18 CAN
+        .BYTE   0                                              ; 19 EM
+        .BYTE   0                                              ; 1A SUB
+        .BYTE   0                                              ; 1B ESC
+        .BYTE   0                                              ; 1C FS
+        .BYTE   0                                              ; 1D GS
+        .BYTE   0                                              ; 1E RS
+        .BYTE   0                                              ; 1F US
+        .BYTE   0                                              ; 20 SP
+        .BYTE   0                                              ; 21 !
+        .BYTE   0                                              ; 22 "
+        .BYTE   0                                              ; 23 #
+        .BYTE   0                                              ; 24 $
+        .BYTE   0                                              ; 25 %
+        .BYTE   0                                              ; 26 &
+        .BYTE   0                                              ; 27 '
+        .BYTE   0                                              ; 28 (
+        .BYTE   0                                              ; 29 )
+        .BYTE   0                                              ; 2A *
+        .BYTE   0                                              ; 2B +
+        .BYTE   0                                              ; 2C ,
+        .BYTE   0                                              ; 2D -
+        .BYTE   0                                              ; 2E .
+        .BYTE   0                                              ; 2F /
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL+M.BINARY>+0           ; 30 0
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL+M.BINARY>+1           ; 31 1
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+2                    ; 32 3
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+3                    ; 33 3
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+4                    ; 34 4
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+5                    ; 35 5
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+6                    ; 36 6
+        .BYTE   <M.HEX+M.DECIMAL+M.OCTAL>+7                    ; 37 7
+        .BYTE   <M.HEX+M.DECIMAL>+8                            ; 38 8
+        .BYTE   <M.HEX+M.DECIMAL>+9                            ; 39 9
+        .BYTE   0                                              ; 3A :
+        .BYTE   0                                              ; 3B ;
+        .BYTE   0                                              ; 3C <
+        .BYTE   0                                              ; 3D =
+        .BYTE   0                                              ; 3E >
+        .BYTE   0                                              ; 3F ?
+        .BYTE   0                                              ; 40 @
+        .BYTE   <M.HEX>+10                                     ; 41 A
+        .BYTE   <M.HEX>+11                                     ; 42 B
+        .BYTE   <M.HEX>+12                                     ; 43 C
+        .BYTE   <M.HEX>+13                                     ; 44 D
+        .BYTE   <M.HEX>+14                                     ; 45 E
+        .BYTE   <M.HEX>+15                                     ; 46 F
+        .BYTE   0                                              ; 47 G
+        .BYTE   0                                              ; 48 H
+        .BYTE   0                                              ; 49 I
+        .BYTE   0                                              ; 4A J
+        .BYTE   0                                              ; 4B K
+        .BYTE   0                                              ; 4C L
+        .BYTE   0                                              ; 4D M
+        .BYTE   0                                              ; 4E N
+        .BYTE   0                                              ; 4F O
+        .BYTE   0                                              ; 50 P
+        .BYTE   0                                              ; 51 Q
+        .BYTE   0                                              ; 52 R
+        .BYTE   0                                              ; 53 S
+        .BYTE   0                                              ; 54 T
+        .BYTE   0                                              ; 55 U
+        .BYTE   0                                              ; 56 V
+        .BYTE   0                                              ; 57 W
+        .BYTE   0                                              ; 58 X
+        .BYTE   0                                              ; 59 Y
+        .BYTE   0                                              ; 5A Z
+        .BYTE   0                                              ; 5B [
+        .BYTE   0                                              ; 5C \
+        .BYTE   0                                              ; 5D ]
+        .BYTE   0                                              ; 5E ^
+        .BYTE   0                                              ; 5F _
+        .BYTE   0                                              ; 60 `
+        .BYTE   <M.HEX>+10                                     ; 61 a
+        .BYTE   <M.HEX>+11                                     ; 62 b
+        .BYTE   <M.HEX>+12                                     ; 63 c
+        .BYTE   <M.HEX>+13                                     ; 64 d
+        .BYTE   <M.HEX>+14                                     ; 65 e
+        .BYTE   <M.HEX>+15                                     ; 66 f
+        .BYTE   0                                              ; 67 g
+        .BYTE   0                                              ; 68 h
+        .BYTE   0                                              ; 69 i
+        .BYTE   0                                              ; 6A j
+        .BYTE   0                                              ; 6B k
+        .BYTE   0                                              ; 6C l
+        .BYTE   0                                              ; 6D m
+        .BYTE   0                                              ; 6E n
+        .BYTE   0                                              ; 6F o
+        .BYTE   0                                              ; 70 p
+        .BYTE   0                                              ; 71 q
+        .BYTE   0                                              ; 72 r
+        .BYTE   0                                              ; 73 s
+        .BYTE   0                                              ; 74 t
+        .BYTE   0                                              ; 75 u
+        .BYTE   0                                              ; 76 v
+        .BYTE   0                                              ; 77 w
+        .BYTE   0                                              ; 78 x
+        .BYTE   0                                              ; 79 y
+        .BYTE   0                                              ; 7A z
+        .BYTE   0                                              ; 7B {
+        .BYTE   0                                              ; 7C |
+        .BYTE   0                                              ; 7D }
+        .BYTE   0                                              ; 7E ~
+        .BYTE   0                                              ; 7F DEL
+	.BYTE	0[128]			; (Just in case...)    ; 80-FF.
+ 
+;-----------------------------------------------------------------------
+;
+;    CHARACTER SCAN PROCEDURES.
+;
+;-----------------------------------------------------------------------
+ 
+        AENTRY  DDIGCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#DECIMAL,#1,NCLASS[R0],R0
+	RET
+ 
+        AENTRY  QDIGCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#OCTAL,#1,NCLASS[R0],R0
+	RET
+ 
+        AENTRY  BDIGCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#BINARY,#1,NCLASS[R0],R0
+	RET
+ 
+        AENTRY  HDIGCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#HEX,#1,NCLASS[R0],R0
+	RET
+ 
+        AENTRY  ANYCH,<^M<>>
+	MCOML	#0,R0
+	RET
+ 
+        AENTRY  FORCUP,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	BBC	#LOWERCASE,ACLASS[R0],1$
+	SUBB2	#<^A'a'-^A'A'>,R0	; Convert lowercase to uppercase.
+1$:	RET
+ 
+        AENTRY  LETRCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#ALFA,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  LTNMCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#ALFANUM,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  TOKCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#TOKEN,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  FILECH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#FILE,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  CRLFCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#CRLF,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  TERMCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#TERM,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  BLNKCH,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTV	#BLANK,#1,ACLASS[R0],R0
+	RET
+ 
+        AENTRY  ASCBIN,<^M<>>
+        MOVZBL  @W^SCANP-K.(R11),R0
+	EXTZV	#0,#4,NCLASS[R0],R0
+	RET
+ 
+	.END

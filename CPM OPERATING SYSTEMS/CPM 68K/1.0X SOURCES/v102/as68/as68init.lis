@@ -1,0 +1,462 @@
+1File: AS68INIT.C                                                          Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "machine.h"
+     9   #include "ctype.h"
+    10    
+    11   #ifdef PDP11
+    12   	struct {
+    13   		char lobyte;
+    14   		char hibyte;
+    15   	};
+    16   	struct {
+    17   		char *ptrw1;
+    18   		char *ptrw2;
+    19   	};
+    20   	struct {
+    21   		int wd1;
+    22   		int wd2;
+    23   	};
+    24   	struct {
+    25   		int swd1;
+    26   	};
+    27   #endif
+    28    
+    29   #ifdef MC68000
+    30   	struct {
+    31   		char hibyte;
+    32   		char lobyte;
+    33   	};
+    34   	struct {
+    35   		char *ptrw2;
+    36   	};
+    37   	struct {
+    38   		int wd1;
+    39   		int wd2;
+    40   	};
+    41   	struct {
+    42   		int swd1;
+    43   	};
+    44   #endif
+    45    
+    46   #ifdef VAX
+    47   	struct {
+    48   		short wd2;
+    49   		short wd1;
+    50   	};
+    51   	struct {
+    52   		short swd1;
+    53   	};
+    54    
+    55   	struct {
+    56   		char lobyte;
+    57   		char hibyte;
+    58   	};
+    59   	struct {
+1File: AS68INIT.C                                                          Page       2
+    60   		char *ptrw2;
+    61   	};
+    62   #endif
+    63    
+    64   /* format of a symbol entry in the main table*/
+    65    
+    66   # define NAMELEN	8		/*length of name in symbol table*/
+    67   struct symtab {
+    68   	char name[NAMELEN];		/*symbol name*/
+    69   	int  flags;			/*bit flags*/
+    70   	char *tlnk;			/*table link*/
+    71   	long  vl1;			/*symbol value*/
+    72   };
+    73    
+    74   struct symtab *symtptr;
+    75   # define STESIZE (sizeof *symtptr) /*byte length of symbol table entry*/
+    76    
+    77   /* flags for symbols*/
+    78   # define SYDF	0100000		/*defined*/
+    79   # define SYEQ	0040000		/*equated*/
+    80   # define SYGL	0020000		/*global - entry or external*/
+    81   # define SYER	0010000		/*equated register*/
+    82   # define SYXR	0004000		/*external reference*/
+    83   # define SYRA	0002000		/*DATA based relocatable*/
+    84   # define SYRO	0001000		/*TEXT based relocatable*/
+    85   # define SYBS	0000400		/*BSS based relocatable*/
+    86   # define SYIN	0000200		/*internal symbol -- opcode, directive or equ*/
+    87   # define SYPC	0000100		/*[vlh]equated using star '*' expression*/
+    88   # define SYRM	0000040		/*[vlh]register mask equate*/
+    89    
+    90   /*flags for opcodes and directives*/
+    91   # define OPDR	0100000		/*0=>opcode, 1=>directive*/
+    92   # define OPFF	037		/*type of instruction (used as mask)*/
+    93    
+    94   struct irts {
+    95   	char *irle;		/*ptr to last entry in chain*/
+    96   	char *irfe;		/*ptr to first entry in chain*/
+    97   };
+    98    
+    99   long stlen;			/*length of symbol table*/
+   100    
+   101   /*
+   102    * intermediate text file
+   103    * format of the intermediate text for one statement:
+   104    *
+   105    *	******************************************************
+   106    *	*  it type = ITBS      *     # it entries            *  0
+   107    *	******************************************************
+   108    *	*       absolute line number (long)                  *
+   109    *	******************************************************
+   110    *	*  it type = ITSY      * instr length                *  1
+   111    *	******************************************************
+   112    *	*  symbol table pointer for stmt label (long)        *
+   113    *	******************************************************
+   114    *	*  it type = ITSY      *  instr mode length          *  2
+   115    *	******************************************************
+   116    *	*            opcode ptr (long)                       *
+   117    *	******************************************************
+   118    *	*  it type = ITCN      *  relocation base            *  3
+1File: AS68INIT.C                                                          Page       3
+   119    *	******************************************************
+   120    *	*            location counter (pass 1)               *
+   121    *	******************************************************
+   122    *	*  it type             *  relocation flag            *  4 - oprnds
+   123    *	******************************************************
+   124    *	*               value (long)                         *
+   125    *	******************************************************
+   126    *                         .
+   127    *			   .
+   128    *                         .
+   129    *	******************************************************
+   130    *	*  it type             *  relocation flag            *  n - oprnds
+   131    *	******************************************************
+   132    *	*               value (long)                         *
+   133    *	******************************************************
+   134    */
+   135    
+   136   #define ITOP1	4	/*first it entry for operands*/
+   137    
+   138   /*
+   139    *	it type				meaning
+   140    *		0			beginning of statement
+   141    *		1			value is pointer to symbol table
+   142    *		2			value is a constant
+   143    *		3			value is a specal char
+   144    *
+   145    *  relocation flag for opcode it entry is operand length:
+   146    *		'b' => byte
+   147    *		'w' => word
+   148    *		'l' => long
+   149    */
+   150    
+   151   struct it {
+   152   	char itty;		/*it type*/
+   153   	char itrl;		/*relocation flag or # it entries*/
+   154   	long  itop;
+   155   };
+   156    
+   157   int mode=0;		/*operand mode (byte, word, long)*/
+   158   int modelen=0;		/*operand length per mode*/
+   159   #define BYTE	'b'
+   160   #define WORD	'w'
+   161   #define LONG	'l'
+   162    
+   163   /* parameters that define the main table*/
+   164   #define SZMT 300			/*initial size of the main table */
+   165   					/*must be large enough to initialize*/
+   166   #ifdef PDP11
+   167   #define ICRSZMT 10		/*add to main table when run out*/
+   168   #else
+   169   #define ICRSZMT	50		/*add to main table when run out*/
+   170   #endif
+   171   int cszmt=0;				/*current size of main table*/
+   172   char *bmte=0;				/*beginning of main table*/
+   173   char *emte=0;				/*end of main table*/
+   174    
+   175   /* intermediate text types*/
+   176   #define ITBS	0		/*beginning of statement*/
+   177   #define ITSY	1		/*pointer to symbol table*/
+1File: AS68INIT.C                                                          Page       4
+   178   #define ITCN	2		/*constant*/
+   179   #define ITSP	3		/*special*/
+   180   #define ITRM	4		/*[vlh]register mask!*/
+   181   #define ITPC	5		/*[vlh]pc relative argument*/
+   182    
+   183   # define ITBSZ	256		/*size of the it buffer*/
+   184   int itbuf[ITBSZ]={0};		/*it buffer*/
+   185    
+   186   #define STMAX	200		/*size of intermediate text buffer*/
+   187   struct it stbuf[STMAX]={0};	/*holds it for one statement*/
+   188    
+   189   char sbuf[512]={0};		/*holds one block of source*/
+   190    
+   191   /*initial reference table for symbols*/
+   192   # define SZIRT	128
+   193   char *sirt[SZIRT]={0};
+   194    
+   195   /*initial reference table to opcodes*/
+   196   char *oirt[SZIRT]={0};
+   197    
+   198   /*external symbol table*/
+   199   #define EXTSZ	512
+   200   char *extbl[EXTSZ]={0};
+   201   int extindx=0;			/*index to external symbol table*/
+   202   char **pexti=0;			/*ptr to external symbol table*/
+   203    
+   204   int absln=0;		/*absolute line number*/
+   205   int p2absln=0;	/*pass 2 line number*/
+   206   int fcflg=0;		/*0=>passed an item.  1=>first char*/
+   207   int fchr=0;		/*first char in term*/
+   208   int ifn=0;		/*source file descriptor*/
+   209   int *pitix=0;		/*ptr to it buffer*/
+   210   int itwc=0;		/*number of words in it buffer*/
+   211   struct it *pitw=0;	/*ptr to it buffer next entry*/
+   212   int itype=0;		/*type of item*/
+   213   long ival=0;		/*value of item*/
+   214   char *lblpt=0;		/*label pointer*/
+   215   char lbt[NAMELEN]={0};	/*holds label name*/
+   216   char *lmte=0;		/*last entry in main table*/
+   217   long loctr=0;		/*location counter*/
+   218   long savelc[4]={0};	/*save relocation counters for 3 bases*/
+   219   int nite=0;		/*number of entries in stbuf*/
+   220   struct it *pnite=0;
+   221   int lfn=0;		/*loader output file descriptor*/
+   222   char *opcpt=0;		/*pointer to opcode entry in main table*/
+   223   int p2flg=0;		/*0=>pass 1  1=>pass 2*/
+   224   char **pirt=0;		/*entry in initial reference table*/
+   225   int reloc=0;		/*relocation value returned by expression evaluator (expr)*/
+   226   int rlflg=0;		/*relocation value of current location counter*/
+   227   /*relocation values*/
+   228   # define ABS	0		/*absolute*/
+   229   # define DATA	1
+   230   # define TEXT	2
+   231   # define BSS	3
+   232   # define EXTRN	4		/*externally defined*/
+   233    
+   234   #define EOLC	'\n'		/*end of line character*/
+   235   #define EOF	0		/*end of file indicator*/
+   236   #define NULL	0		/* [vlh] character null '\0' */
+1File: AS68INIT.C                                                          Page       5
+   237   #define TRUE	1		/* [vlh] boolean values */
+   238   #define FALSE	0		/* [vlh] boolean values */
+   239    
+   240   int format=0;
+   241   int sbuflen=0;		/*number of chars in sbuf*/
+   242   char *psbuf=0;		/*ptr into sbuf*/
+   243   int itfn=0;			/*it file number*/
+   244   char itfnc=0;			/*last char of it file name*/
+   245   int trbfn=0;			/*temp for text relocation bits*/
+   246   char trbfnc=0;		/*last char of text rb file*/
+   247   int dafn=0;			/*file for data stuff*/
+   248   char dafnc=0;			/*last char of data file*/
+   249   int drbfn=0;			/*file for data relocation bits*/
+   250   char drbfnc=0;		/*last char*/
+   251   int prtflg=0;			/*print output flag*/
+   252   int undflg=0;			/*make undefined symbols external flag*/
+   253    
+   254   int starmul=0;		/* * is multiply operator*/
+   255    
+   256   char *endptr=0, *addptr=0;
+   257   char *orgptr=0;
+   258   char *subptr=0, *addiptr=0, *addqptr=0, *subiptr=0, *subqptr=0;
+   259   char *cmpptr=0, *addaptr=0, *cmpaptr=0, *subaptr=0, *cmpmptr=0;
+   260   char *equptr=0;
+   261   char *andptr=0, *andiptr=0, *eorptr=0,  *eoriptr=0, *orptr=0, *oriptr=0;
+   262   char *cmpiptr=0;
+   263   char *moveptr=0, *moveqptr=0;
+   264   char *exgptr=0;
+   265   char *evenptr=0;
+   266   char *jsrptr=0, *bsrptr=0, *nopptr=0;
+   267    
+   268   char peekc=0;
+   269   int numcon[2]=0, numsym[2]=0, indir[2]=0, immed[2]=0, numreg[2]=0;
+   270   int plevel=0;		/*parenthesis level counter*/
+   271   int opdix=0;		/*operand index counter*/
+   272   int p1inlen=0;	/*pass 1 instr length*/
+   273   int instrlen=0;	/*pass 2 bytes in current instruction*/
+   274    
+   275   /* effective address mode bits*/
+   276   #define DDIR		000
+   277   #define ADIR		010
+   278   #define INDIRECT	020
+   279   #define INDINC		030
+   280   #define DECIND		040
+   281   #define INDDISP		050
+   282   #define INDINX		060
+   283   #define SADDR		070
+   284   #define LADDR		071
+   285   #define IMM		074
+   286    
+   287   #define AREGLO		8
+   288   #define AREGHI		15
+   289    
+   290   /* relocation bit definitions:*/
+   291   #define RBMASK		07		/*tells type of relocation*/
+   292   #define INSABS		7		/*first word of instr -- absolute*/
+   293   #define DABS		0		/*data word absolute*/
+   294   #define TRELOC		2		/* TEXT relocatable*/
+   295   #define DRELOC		1		/* DATA relocatable*/
+1File: AS68INIT.C                                                          Page       6
+   296   #define BRELOC		3		/* BSS relocatable*/
+   297   #define EXTVAR		4		/* ref to external variable*/
+   298   #define LUPPER		5		/* upper word of long*/
+   299   #define EXTREL		6		/* external relative mode*/
+   300    
+   301   /* ptrs to ins[] and rlbits[]*/
+   302   int *pins=0;
+   303   int *prlb=0;
+   304   int ins[5]={0};					/*holds instruction words*/
+   305    
+   306   #define PRTCHLEN 128
+   307   char prtchars[PRTCHLEN]={0};	/*line buffer for putchar*/
+   308   char *prtchidx=0;		/*index for putchar*/
+   309    
+   310   int extflg=0, extref=0;		/*external in expr*/
+   311    
+   312   #define CCR	16
+   313   #define SR	17
+   314   #define USP	18
+   315   #define MOVECCR	042300
+   316   #define MOVESR	043300
+   317   #define SRMOVE	040300
+   318   #define MOVEUSP	047140
+   319    
+   320   struct op {
+   321   	int ea;			/* effective address bits*/
+   322   	int len;		/* effective address length in bytes*/
+   323   	long con;		/*constant or reloc part of operand*/
+   324   	int drlc;		/*reloc of con*/
+   325   	int ext;		/*external variable #*/
+   326   	int idx;		/*index register if any*/
+   327   	int xmod;		/*mode of index reg*/
+   328   } opnd[2]={0};
+   329   #define	OPSTLEN	10
+   330   #define	TREELEN	20
+   331   struct buf{
+   332   	int fildes;
+   333   	int nunused;
+   334   	char *xfree;
+   335   	char buff[512];
+   336   };
+   337    
+   338   struct buf lbuf={0};
+   339   struct buf tbuf={0};
+   340   struct buf dabuf={0};
+   341   struct buf drbuf={0};
+   342    
+   343   int nerror=0;		/*# of assembler errors*/
+   344   int in_err=0;		/*[vlh] don't generate instrlen err if already err state*/
+   345   int shortadr=0;	/*short addresses if set*/
+   346    
+   347   #define CLRFOR	24
+   348   #define CLRVAL	041000
+   349    
+   350   long itoffset=0;
+   351    
+   352   #define LASTCHTFN	tfilname[11]
+   353   #define PC	22
+   354    
+1File: AS68INIT.C                                                          Page       7
+   355   int equflg=0;		/*doing an equate stmt*/
+   356    
+   357   #define ANDI	01000
+   358   #define AND	0140000
+   359   #define ORI	0
+   360   #define OR	0100000
+   361   #define EORI	05000
+   362   #define EOR	0130000
+   363   #define MOVE	0
+   364    
+   365   long lseek();
+   366   char *sbrk();
+   367   char *lemt();
+   368    
+   369   int refpc=0;		/* * referenced in expr*/
+   370   #define SOH	1
+   371    
+   372   /* Conditional Assembly variables and constants [vlh] */
+   373   #define LOW_CA	21		/* [vlh] */
+   374   #define HI_CA	30		/* [vlh] */
+   375    
+   376   int ca_true=0;	/* true unless in a false CA*/
+   377   int ca=0;	/* depth of conditional assembly, none = 0*/
+   378   int ca_level=0;	/* at what CA depth did CA go false?*/
+   379    
+   380   /* pass 1 global variables */
+   381   int numops=0;		/*number of operands*/
+   382   int inoffset=0;	/*[vlh]offset directive*/
+   383   int didorg=0;
+   384   int initflg=0;	/*initialize flag*/
+   385    
+   386   /* defines */
+   387   #define igblk()		while(fchr==' ') fchr=gchr()
+   388   #define ckein()		((pitw >= pnite))
+   389    
+   390   /* is it an alterable operand */
+   391   #define memalt(ap)	(memea(ap) && altea(ap))
+   392   #define dataalt(ap)	(dataea(ap) && altea(ap))
+   393   #define altea(ap)	((((ap)->ea&070)!=SADDR || ((ap)->ea&6)==0))
+   394    
+   395   /* is it the specific type of operand */
+   396   #define memea(ap)	(((ap)->ea&070) >= INDIRECT)
+   397   #define dataea(ap)	(((ap)->ea&070) != ADIR)
+   398   #define pcea(ap)	((ap)->ea==072 || (ap)->ea==073)
+   399   #define ckdreg(ap)	((ap)->ea>=0 && (ap)->ea<AREGLO)
+   400   #define ckareg(ap)	((ap)->ea>=AREGLO && (ap)->ea<=AREGHI)
+   401   /*
+   402    *	DRI Listing Hacks:
+   403    */
+   404   char	*sfname=0;		/* -> Source filename	*/
+   405   int	xline=0;		/* Current line number  */
+   406   int	xpage=0;		/* Current page number  */
+   407   /*
+   408    *	More Initializations:
+   409    */
+   410   char	*tfilname[80] = {0};	/* Temp filename area	*/
+   411   char	*initfnam[80] = {0};	/* Init filename area	*/
+   412   struct	it	exitm={0};
+   413   int	prcnt=0;
+1File: AS68INIT.C                                                          Page       8
+   414   int	rval=0;
+   415   int	lpflg=0;
+   416   int	lastopr=0;
+   417   int	rlbits[5]={0};
+   418   int	pline=0;
+   419   int	prsp=0;
+   420   int	amode=0;
+   421   long	stlen=0;
+   422   int	udfct=0;
+   423   int	errno=0;
+   424   int	nitleft=0;
+   425   int	hibytflg[4]={0};
+   426   int	hibytw[4]={0};
+   427   struct	it *piop=0;
+   428   struct	it *pitr=0;
+   429   struct	it  opstk[OPSTLEN]={0};
+   430   struct	it  tree[TREELEN]={0};
+   431   int	chmvq=0;
+   432   int	explmod=0;
+   433   int	ftudp=0;
+   434   int	iop=0;
+   435   int	itr=0;
+   436   char	ldfn[40]={0};
+   437   int	opcval=0;
+   438   int	poslab=0;
+   439   int	symcon=0;
+   440   char	*tfilptr=0;
+   441   int	tlab1=0;
+   442   #define HDSIZE	(sizeof couthd)	/**.o file header size*/
+   443   struct hdr {
+   444   	short ch_magic;		/*c.out magic number 060016 = $600E*/
+   445   	long ch_tsize;		/*text size*/
+   446   	long ch_dsize;		/*data size*/
+   447   	long ch_bsize;		/*bss size*/
+   448   	long ch_ssize;		/*symbol table size*/
+   449   	long ch_stksize;	/*stack size*/
+   450   	long ch_entry;		/*entry point*/
+   451   	short ch_rlbflg;	/*relocation bits suppressed flag*/
+   452   } couthd={0};
+   453    
+   454   #define MAGIC	0x601a	/* bra .+26 instruction*/

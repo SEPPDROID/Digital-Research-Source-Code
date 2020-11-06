@@ -1,0 +1,212 @@
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   1
+Source File: ccpload.s
+
+   1                               *****************************************************************
+   2                               *                                                               *
+   3                               *               COMMAND FILE LOADER FOR CPM68K                  *
+   4                               *               ==============================                  *
+   5                               *                                                               *
+   6                               *       (c)     COPYRIGHT Digital Research 1983                 *
+   7                               *               all rights reserved                             *
+   8                               *                                                               *
+   9                               *       THIS IS THE DUAL PROCESSOR,ROMABLE CP/M-68K SYSTEM      *
+  10                               *       ==================================================      *
+  11                               *                                                               *
+  12                               *       Description:                                            *
+  13                               *       -----------     The command file loader is envoked by   *
+  14                               *                       the CCP after the CCP has successfully  *
+  15                               *                       opened that file.  The loader must      *
+  16                               *                       call the BDOS to obtain the boundries   *
+  17                               *                       of the TPA.  The load parameter block   *
+  18                               *                       defined in this loader holds all the    *
+  19                               *                       memory size and location details.       *
+  20                               *                       Next the loader returns the system to   *
+  21                               *                       its original user #.  The CCP might     *
+  22                               *                       have switched to user zero during its   *
+  23                               *                       search for the file.  Next the default  *
+  24                               *                       dma address is set for the loaded       *
+  25                               *                       program.  Next the command tail is      *
+  26                               *                       placed,along with the first two parsed  *
+  27                               *                       fcb's,into the user basepage.           *
+  28                               *                       Lastly the user stack pointer is set up *
+  29                               *                       and the return address is put on the    *
+  30                               *                       user stack.  An RTE transferes control. *
+  31                               *                       If a load was not successfull, the      *
+  32                               *                       appropriate error message is printed.   *
+  33                               *                                                               *
+  34                               *       Created by:     Tom Saulpaugh                           *
+  35                               *                                                               *
+  36                               *       Last Modified:  3/02/83                                 *
+  37                               *                                                               *
+  38                               *****************************************************************
+  39                               
+  40                               
+  41                               
+  42                                       .globl _load68k         * make this procedure public
+  43                                       .globl _user            * global user # before load occured
+  44                                       .globl _cmdfcb          * parsed fcb
+  45                                       .globl _tail            * global pointer to command tail
+  46                                       .globl _fill_fcb        * procedure to fill fcb's
+  47                                       .globl flags            * ROM SYSTEM INITIALIZATION
+  48                                       .globl TPAB             * ROM SYSTEM INITIALIZATION
+  49                               
+  50                               
+  51                               reboot   =  0
+  52                               printstr =  9
+  53                               setdma   = 26
+  54                               chuser   = 32
+  55                               pgmldf   = 59
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   2
+Source File: ccpload.s
+
+  56                               gettpa   = 63
+  57                               
+  58                               _load68k:
+  59                               *
+  60                               *       Load the 68k file into the TPA
+  61                               *       ------------------------------
+  62                               * 
+  63 00000000                              .text
+  64                               
+  65 00000000 223C00000016                 move.l  #TPAB,d1        * move in address of tpa parameter block
+  66 00000006 303C003F                     move.w  #gettpa,d0      * get function number
+  67 0000000A 4E42                         trap    #2              * get the tpa limits 
+  68 0000000C 23F90000001800000004         move.l  low,lowadr      * put it in the lpb
+  69 00000016 23F90000001C00000008         move.l  high,hiadr      * put high tpa addr in lpb
+  70 00000020 23FC0000000000000000         move.l  #_cmdfcb,LPB    * get address of opened fcb
+  71 0000002A 703B                         move.l  #pgmldf,d0      * move in bdos function no
+  72 0000002C 223C00000000                 move.l  #LPB,d1         * d1 points to load block
+  73 00000032 4E42                         trap    #2              * do the program load
+  74 00000034 4A40                         tst     d0              * was the load successful?
+  75 00000036 66000096                     bne     lderr           * if not print error message and return
+  76                               *
+  77                               *       return to original user #
+  78                               *       -------------------------
+  79 0000003A 323900000000                 move.w  _user,d1        * put user # to switch to in d1
+  80 00000040 7020                         move.l  #chuser,d0      * put bdos func # in d0
+  81 00000042 4E42                         trap    #2              * do the user # change
+  82                               *
+  83                               *       set the default dma address
+  84                               *       ---------------------------
+  85 00000044 4281                         clr.l   d1              * clear d1 register
+  86 00000046 22390000000C                 move.l  baspag,d1       * d1 points to user base page
+  87 0000004C D27C0080                     add     #$80,d1         * d1 points to default dma in base page
+  88 00000050 2241                         movea.l d1,a1           * save it for later use
+  89 00000052 701A                         move    #setdma,d0      * move in bdos function no
+  90 00000054 4E42                         trap    #2              * set the default dma address
+  91                               *
+  92                               *       move in the command tail
+  93                               *       ------------------------
+  94 00000056 2449                         move.l  a1,a2           * save a pointer to the count field
+  95 00000058 5289                         add.l   #$01,a1         * point past count field
+  96 0000005A 207900000000                 move.l  _tail,a0        * point to command tail
+  97 00000060 4280                         clr.l   d0              * clear out d0
+  98 00000062 0C100000             mvtail: cmpi.b  #$00,(a0)       * check for a NULL ending byte
+  99 00000066 670C                         beq     done            * NULL byte terminates command
+ 100 00000068 0C100021                     cmpi.b  #$21,(a0)       * check for an '!'
+ 101 0000006C 6706                         beq     done            * '!' ends the command
+ 102 0000006E 12D8                         move.b  (a0)+,(a1)+     * move a byte of the command tail
+ 103 00000070 5240                         addq    #1,d0           * bump up the character count
+ 104 00000072 60EE                         bra     mvtail          * continue byte move
+ 105 00000074 1480                 done:   move.b  d0,(a2)         * put in the character count
+ 106 00000076 12BC0000                     move.b  #$00,(a1)       * terminate cmd tail with a NULL byte
+ 107                               *
+ 108                               *       fill fcb1 & fcb2
+ 109                               *       ----------------
+ 110 0000007A 2F3C00000000                 move.l  #_cmdfcb,-(sp)  * put address of fcb buffer onto stack
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   3
+Source File: ccpload.s
+
+ 111 00000080 3F3C0001                     move.w  #1,-(sp)        * put 1 on stack(parm1) 
+ 112 00000084 4EB900000000                 jsr     _fill_fcb       * jump to 'C' code & fill cmdfcb with parm1
+ 113 0000008A 5C8F                         add.l   #6,sp           * clean off the stack
+ 114 0000008C 4280                         clr.l   d0              * clear register d0
+ 115 0000008E 705C                         moveq   #$5c,d0         * put basepage address of fcb1 in d0
+ 116 00000090 6142                         bsr     movfcb          * put fcb1 in the basepage
+ 117 00000092 2F3C00000000                 move.l  #_cmdfcb,-(sp)  * put address of fcb buffer onto stack
+ 118 00000098 3F3C0002                     move.w  #2,-(sp)        * put 2 on stack(parm2)
+ 119 0000009C 4EB900000000                 jsr     _fill_fcb       * jump to 'C' code & fill cmdfcb with parm2
+ 120 000000A2 5C8F                         add.l   #6,sp           * clean off the stack
+ 121 000000A4 4280                         clr.l   d0              * clear register d0
+ 122 000000A6 7038                         moveq   #$38,d0         * put basepage address of fcb1 in d0
+ 123 000000A8 612A                         bsr     movfcb          * put fcb2 in the basepage
+ 124                               *
+ 125                               *       now push rte stuff on stack
+ 126                               *       ---------------------------
+ 127 000000AA 207900000010                 movea.l usrstk,a0       * get user stack pointer
+ 128 000000B0 22790000000C                 move.l  baspag,a1       * get basepage address
+ 129 000000B6 2F290008                     move.l  8(a1),-(sp)     * push address we want to jump to
+ 130 000000BA 40C0                         move    sr,d0           * get the status register in d0
+ 131 000000BC 02405F00                     andi    #$5f00,d0       * mask trace,system bits,user flags
+ 132 000000C0 3F00                         move.w  d0,-(sp)        * push it on stack
+ 133 000000C2 2109                         move.l  a1,-(a0)        * push addr of basepage onto user stack
+ 134 000000C4 213C000000D0                 move.l  #cmdrtn,-(a0)   * push return address onto user stack
+ 135 000000CA 4E60                         move.l  a0,usp          * set up user stack pointer
+ 136 000000CC 4E73                         rte
+ 137                               *
+ 138                               *       load error
+ 139                               *       ----------
+ 140                               lderr:
+ 141 000000CE 4E75                         rts                     * return with error code in d0
+ 142                               cmdrtn:
+ 143 000000D0 7000                         move    #reboot,d0      * reboot CPM
+ 144 000000D2 4E42                         trap    #2
+ 145                               movfcb:
+ 146 000000D4 D0B90000000C                 add.l   baspag,d0       * get offset into basepage 
+ 147 000000DA 2040                         move.l  d0,a0           * move address into a0
+ 148 000000DC 227C00000000                 move.l  #_cmdfcb,a1     * a1 points to fcb to be moved
+ 149 000000E2 4280                         clr.l   d0              * clear register d0
+ 150 000000E4 7023                         moveq   #35,d0          * get length of fcb
+ 151                               mov1:
+ 152 000000E6 10D9                         move.b  (a1)+,(a0)+     * move a byte into the basepage
+ 153 000000E8 51C8FFFC                     dbf     d0,mov1         * if not done branch to mov1            
+ 154 000000EC 4E75                         rts
+ 155                               
+ 156                               
+ 157 00000000                              .bss
+ 158                               
+ 159                                       .even
+ 160                               *
+ 161                               * LOAD PARAMETER BLOCK
+ 162                               *
+ 163 00000000                      LPB:     .ds.l   1
+ 164 00000004                      lowadr:  .ds.l   1
+ 165 00000008                      hiadr:   .ds.l   1
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   4
+Source File: ccpload.s
+
+ 166 0000000C                      baspag:  .ds.l   1
+ 167 00000010                      usrstk:  .ds.l   1
+ 168 00000014                      flags:   .ds.w   1
+ 169                               
+ 170                               *
+ 171                               * TPA Parameter Block
+ 172                               *
+ 173                                       .even
+ 174 00000016                      TPAB:   .ds.w   1
+ 175 00000018                      low:    .ds.l   1
+ 176 0000001C                      high:   .ds.l   1
+ 177                               
+ 178                               
+ 179                               
+ 180                               
+ 181                               
+ 182                               
+ 183                               
+ 184                               
+ 185                               
+ 186                               
+ 187                               
+ 188 00000020                              .end
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   5
+Source File: ccpload.s
+
+S y m b o l   T a b l e
+
+LPB       00000000 BSS   TPAB      00000016 BSS   _cmdfcb   ******** EXT   _fill_fc  ******** EXT   
+_load68k  00000000 TEXT  _tail     ******** EXT   _user     ******** EXT   baspag    0000000C BSS   
+chuser    00000020 ABS   cmdrtn    000000D0 TEXT  done      00000074 TEXT  flags     00000014 BSS   
+gettpa    0000003F ABS   hiadr     00000008 BSS   high      0000001C BSS   lderr     000000CE TEXT  
+low       00000018 BSS   lowadr    00000004 BSS   mov1      000000E6 TEXT  movfcb    000000D4 TEXT  
+mvtail    00000062 TEXT  pgmldf    0000003B ABS   printstr  00000009 ABS   reboot    00000000 ABS   
+setdma    0000001A ABS   usrstk    00000010 BSS   

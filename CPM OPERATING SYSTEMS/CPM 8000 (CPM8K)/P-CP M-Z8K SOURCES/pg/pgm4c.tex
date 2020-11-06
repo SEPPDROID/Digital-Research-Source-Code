@@ -1,0 +1,472 @@
+.bp
+.cs 5
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.he CP/M-8000 Programmer's Guide            4.2  File Access Functions
+.ft All Information Presented Here is Proprietary to Digital Research
+.tc         4.2.13  Set File Attributes Function
+.sh
+4.2.13  Set File Attributes Function
+.qs
+.ix set file attributes function
+.sp 3
+.nf
+                FUNCTION 30:  SET FILE ATTRIBUTES
+
+                Entry Parameters:
+                   Register   R5:  1EH
+                   Register  RR6:  FCB Address
+
+                Returned  Values:
+                   Register   R7:  Return Code
+
+                                   success:  00H
+                                     error:  FFH
+.sp 2
+.fi
+.pp
+The Set File Attributes Function sets or resets file attributes
+supported by CP/M-8000 and user defined attributes for application 
+programs. CP/M-8000 supports read-only, system, and archive 
+attributes. 
+.pp
+The high bit of each character in the ASCII filename (f1 through
+f8) and filetype (t1 through t3) fields in the FCB denotes
+whether attributes are set. When the high bit in any of these
+fields has the value 1, the attribute is set. Table 4-7 denotes
+the FCB fields and their attributes. 
+.pp
+The address of the
+FCB is passed in register  RR6.  Wildcards cannot be specified in
+the filename and filetype fields. 
+.pp
+This function searches the directory on the disk drive, specified
+in the FCB drive field (dr), for directory entries that match the
+FCB filename and filetype fields. All matching directory entries
+are updated with the attributes this function sets.
+.pp
+A zero is returned in register   R7 when the attributes are set. 
+However, if a matching entry cannot be found, register   R7 contains 
+FFH.  
+.bp
+.ix file attributes
+.ce
+.sh
+Table 4-7.  File Attributes
+.sp 
+.in 5
+.nf
+    Field                       Attribute
+.fi
+.qs
+.sp
+.ll 60
+.in 20
+.ti -15
+f1 through f4  User-defined attributes for application 
+programs.
+.sp
+.ti -15
+f5 through f8  Reserved for future use by CP/M-8000.
+.sp
+.ti -15
+t1             The Read-Only attribute indicates the file
+status is Read-Only.  The BDOS does not allow write commands
+to write to a file whose status is Read-Only. The BDOS does not
+permit a Read-Only file to be deleted.
+.sp
+.ti -15
+t2             The System attribute indicates the file is a system file. 
+Some built-in commands and system utilities differentiate
+between system and user files. For example, the DIRS command
+provides a directory of system files. The DIR command provides a
+directory of user files for the current user number.   For
+details on these commands, refer to the \c
+.ul
+CP/M-8000 Operating System User's Guide. 
+.qu
+.sp
+.ti -15
+t3             The Archive attribute is reserved but not used by CP/M-8000.
+If set, it indicates that the file has been written to backup storage by 
+a user-written archive program.  To implement this facility, the archive 
+program sets this attribute when it copies a file to backup storage;
+any programs updating or creating files reset this
+attribute.  The archive program backs up only those files that have
+the Archive attribute reset.  Thus, an automatic backup facility restricted to
+modified files can be implemented easily.
+.ix open file function
+.ix close file function
+.in 0
+.ll 65
+.sp
+.pp
+The Open File (15) and Close File (16) Functions do not use the high bit in
+the filename and filetype fields when matching filenames.
+However, the high bits in these fields should equal zero when you
+open a file. Also, the Close File Function does not update the
+attributes in the directory entries when it closes a file. 
+.ix set file attributes
+.bp
+.tc         4.2.14  Read Random Function
+.sh
+4.2.14  Read Random Function
+.qs
+.ix read random function
+.sp 3
+.nf
+                    FUNCTION 33:  READ RANDOM
+
+              Entry Parameters:
+                 Register   R5:  21H
+                 Register  RR6:  FCB Address
+
+              Returned  Values:
+                 Register   R7:  Return Code
+
+                                 success:  00H
+                                   error:  01H, 03H
+                                           04H, 06H
+.sp 2
+.fi
+.pp
+The Read Random Function reads records randomly, rather than
+sequentially. The file must be opened with an Open File Function 
+(15) or a Make File Function (22) before this function is 
+invoked. The address of a 36-byte FCB is passed in register  RR6.
+The FCB random record field denotes the record
+this function reads. The random record field is a 24-bit field,
+with a value ranging from 00000H through 3FFFFH. This field spans
+bytes r0, r1, and r2 which are bytes 33 through 35 of the FCB. The
+most significant byte is first, r0, and the least significant
+byte, r2, is last. This byte sequence is consistent with the
+addressing conventions for the Z8000 microprocessor but differs
+from other versions of CP/M. 
+.ix read random
+.ix random record number
+.ix random record field
+.pp 
+The random record number must be stored in the FCB random record
+field before the BDOS is called to read the record.  After
+reading the record, register   R7 either contains an error code
+(see Table 4-8), or the value 00H which indicates the read operation
+was successful.  In the latter case, the current DMA buffer
+contains the randomly accessed record.  
+The record number is not incremented. The FCB extent and current 
+record fields are updated to correspond to the location of the 
+random record that was read.  A subsequent Read Sequential (20)
+or Write Sequential (21) Function starts from the record which was
+randomly accessed. Therefore, the randomly read
+record is reread when a program switches from randomly
+reading records to sequentially reading records. This is also
+true for the Write Random Functions (34, 40).  The last record written is
+rewritten if the program switches from randomly writing records
+to sequentially writing records with the Write Sequential 
+Function (21). However, a program can obtain
+the effect of sequential I/O operations by incrementing the random
+record field following each Read Random Function (33) or Write Random 
+Function (34, 40). 
+.ne 27
+.pp
+Numeric codes returned in register   R7 following a random
+read operation are listed in Table 4-8.
+.sp 2
+.ll 60
+.ce
+.sh
+Table 4-8.  Read Random Function Return Codes
+.sp
+.nf
+     Code                         Meaning
+.qs
+.fi
+.sp
+.in 13
+.ti -7
+00     Success - returned in   R7 when the Read Random Function 
+succeeds.
+.sp
+.ti -7
+01     Reading unwritten data -  returned when a random read operation
+accesses a previously unwritten data block.
+.sp
+.ti -7
+03     Cannot close current extent -  returned when the BDOS cannot
+close the current extent prior to moving to the new extent
+containing the FCB random record number.  This error can be
+caused by an overwritten FCB or a read random operation on an FCB
+that has not been opened. 
+.sp
+.ti -7
+04     Seek to unwritten extent -  returned when a random read
+operation accesses a nonexistent extent. This error situation is
+equivalent to error 01. 
+.sp
+.ti -7
+06     Random record number out of range -  returned when the value of 
+the FCB random record field is greater than 3FFFFH.
+.in 0
+.ll 65
+.bp
+.tc         4.2.15  Write Random Function
+.ll 65
+.sh
+4.2.15  Write Random Function
+.sp 3
+.ix write random function
+.nf
+                   FUNCTION 34:  WRITE RANDOM
+
+              Entry Parameters:
+                 Register   R5:  22H
+                 Register  RR6:  FCB Address
+
+              Returned  Values:
+                 Register   R7:  Return Code
+
+                                 success:  00H
+                                   error:  02H, 03H
+                                           05H, 06H
+.sp 2
+.fi
+.pp
+The Write Random Function writes a 128-byte record from the
+current DMA address to the disk file that matches the 
+FCB referenced in register  RR6.  Before this function is invoked,
+the file must be opened with either the Open File Function (15)
+or the Make File Function (22).
+.pp
+This function requires a 36-byte FCB. The last three bytes of the
+FCB contain the random record field. It contains the record number of
+the record that is written to the file. To append to an existing file, the
+Compute File Size Function (35) can be used to write the random
+record number to the FCB random record field. For a new file,
+created with the Make File Function (22), you do not need to use
+the Compute File Size Function to write the first record in the 
+newly created file.  Instead, specify the value 00H
+in the FCB random record field. The first record written
+to the newly created file is zero. 
+.pp
+When an extent or data block must be allocated for the record, the
+Write Random Function allocates it before writing the record to
+the disk file. The random record number is not changed following a
+Write Random Function. Therefore, a new random record number must 
+be written to the FCB random record field before each Write random 
+Function is invoked.
+.pp
+However, the logical extent number and current record field of
+the FCB are updated and correspond to the random record number
+that is written. Thus, a Read Sequential (20) or Write Sequential 
+(21) Function that 
+follows a Write Random Function, either rereads or rewrites the
+record that was accessed by the Read or Write Random Function. To avoid
+overwriting the previously written record and simulate sequential
+write functions, increment the 
+random record number after each Write Random Function. 
+.ix write random
+.pp
+After the random write function completes, register   R7 contains
+either an error code (see Table 4-9), or the value 00H that
+indicates the operation was successful. 
+.sp 2
+.ll 60
+.ce
+.sh
+Table 4-9.  Write Random Function Return Codes
+.sp
+.nf
+     Code                         Meaning
+.qs
+.fi
+.sp     
+.in 13
+.ti -7
+00     Success - returned when the Write Random Function succeeds 
+without error.
+.sp
+.ti -7
+02     No available data block - occurs when
+the Write Random function attempts to allocate a new data block to the
+file, but the selected disk does not contain any unallocated data blocks.
+.sp
+.ti -7
+03     Cannot close current extent - occurs when the BDOS cannot
+close the current extent prior to moving to the new extent that
+contains the record specified by the FCB random record field. 
+This error can be caused by an overwritten FCB or a write random
+operation on an FCB that has not been opened. 
+.sp
+.ti -7
+05     No available directory space - occurs when
+the write function attempts to create a new extent that requires a
+new directory entry but the selected disk drive does not have any 
+available directory entries. 
+.sp
+.ti -7
+06     Random record number out of range -  returned when 
+the value of the FCB random record field is greater than 3FFFFH.
+.in 0
+.ll 65
+.bp
+.tc         4.2.16 Compute File Size Function
+.sh
+4.2.16 Compute File Size Function
+.qs
+.ix compute file size function
+.sp 3
+.nf
+                 FUNCTION 35:  COMPUTE FILE SIZE
+
+         Entry Parameters:
+            Register   R5:  23H
+            Register  RR6:  FCB Address
+
+         Returned  Values:
+            Register   R7:  00H
+
+                            success:  File Size written
+                                      to FCB random 
+                                      Record Field
+                              error:  Zero written to
+                                      FCB Random Record
+                                      Field
+.sp 2
+.fi
+.pp
+The Compute File Size Function computes the size of a file and writes
+it to the random record field of the 36-byte FCB whose address is passed in  
+register  RR6. 
+.ix compute file size
+.pp
+The FCB filename and filetype are used to scan the directory for
+an entry with a matching filename and filetype. If a match cannot be found,
+the value zero is written to the FCB random record field. However, when a match
+occurs, the virtual file size is written in the FCB random
+record field. 
+.ix virtual file size
+.ix physical file size
+.ix file size
+.ix sparse files
+.mb 5
+.fm 1
+.pp
+The virtual file size is the record number of the
+record following the end of the file. The virtual size of a file
+corresponds to the physical size when the file is written
+sequentially.  However, the virtual file size may not equal the
+physical file size when the records in the file were created by
+random write functions. The Compute File Size Function computes
+the file size by adding the value 1 to the record number of last
+record in a file.  However, for files that contain randomly
+written records, the record number of the last record does not
+necessarily indicate the number of records in a file.  For
+example, the number of the last record in a sparse file does not
+denote the number of records in the file. Record numbers for 
+sparse files are not usually sequential.  Therefore, gaps can exist
+in the record numbering sequence.   You can create sparse files with
+the Write Random Functions (34 and 40).
+.pp
+In addition to computing the file size, you can use this function to
+determine the end of an existing file.  For example, when you append data
+to a file, this function writes the record number of the first unwritten
+record to the FCB random record field. When you use the Write Random (34)
+or the Write Random With Zero Fill (40) Function, your program more
+efficiently appends data to the file because the FCB already contains the
+appropriate record number. 
+.bp
+.mb 6
+.fm 2
+.tc         4.2.17  Set Random Record Function
+.sh 
+4.2.17 Set Random Record Function
+.qs
+.ix set random record function
+.sp 3
+.nf
+                 FUNCTION 36:  SET RANDOM RECORD
+
+                Entry Parameters:
+                   Register   R5:  24H
+                   Register  RR6:  FCB Address
+
+                Returned  Values:
+                   Register  RR6:  00H
+                   Register  FCB:  Random Record
+                                   Field Set
+.sp 2
+.fi
+.ix random record number
+.pp
+The Set Random Record Function calculates the random record number of the
+current position in the file. The current position in 
+the file is defined by the last operation performed on the file.
+Table 4-10 lists the current position relative to operations
+performed on the file.
+.sp 2
+.ce
+.sh
+Table 4-10.  Current Position Definitions
+.sp
+.in 3
+.nf
+   Operation             Function          Current Position
+.sp
+Open file          Open File (15)          record 0   
+.sp
+Create file        Make File (22)          record 0
+.sp
+Random read        Read Random (33)        last record read
+.sp
+Random write       Write Random (34)       last record 
+                   Write Random  With      written
+                     Zero Fill (40)
+.sp
+Sequential read    Read Sequential (20)    record following 
+                                           the last record 
+                                           read
+.sp 
+Sequential write   Write Sequential (21)   record following
+                                           the last record 
+                                           written
+.fi
+.in 0
+.sp 2
+This function writes the random record number in the random record field
+of the 36-byte FCB whose address your program passes in register  RR6.
+.ix random record field
+.pp
+You can use this function to set the random record field of the
+next record your program accesses when it switches from 
+accessing records sequentially to accessing them randomly. For
+example, your program sequentially reads or writes 128-byte data records to an
+arbitrary position in the file that is defined by your program.  Your program 
+then invokes this function to set the random record field in the FCB. 
+The next random read or write operation that your program performs 
+accesses the next record in the file. 
+.ix set random record
+.pp
+Another application for this function is to create a key list from a file
+that you read sequentially. Your program sequentially reads and scans a
+file to extract the positions of key fields. After your program locates
+each key, it calls this function to compute the random record position for
+the record following the record containing the key.  To obtain the random
+record number of the record containing the key, subtract one from
+the random record number that this function calculates. CP/M-8000 reads and
+writes 128-byte records. If your record size is also 128 bytes, your
+program can insert the record position minus one into a table with the key
+for later retrieval. By using the random record number stored in the table
+when your program performs a random read or write operation, your program
+locates the desired record more efficiently. 
+.pp
+Note that if your data records are not equal to 128 bytes, your program
+must store the random record number and an offset into the physical record.
+For example, you must generalize this scheme for variable-length records.
+To find the starting position of key records, your program stores the
+buffer-relative position and the random record number of the records
+containing keys. 
+.nx fourd

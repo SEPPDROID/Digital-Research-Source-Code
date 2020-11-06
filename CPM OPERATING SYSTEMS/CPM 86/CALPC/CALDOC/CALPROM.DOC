@@ -1,0 +1,682 @@
+
+FIRMWARE SPECIFICATION                               1
+
+The_Firmware_(PROM)_Primatives
+
+All Prom routines are entered via a Far Call (CALLF) 
+instruction to the required entry point in the prom 
+jump table. The jump table is located at the start of 
+the prom at segment address FC00h, offset 3000h.
+
+The disc related routines usually require large 
+amounts of stack space.
+
+All registers not used for returning results, have 
+their entry value preserved.
+
+The only re-entrant routines are the get switch 
+routine and the SIO input/output/status routines (when 
+called with different port numbers).
+
+.PAŠ
+FIRMWARE SPECIFICATION                               2
+
+The following is a list of all the PROM calls and 
+their entry point within the jump table:
+
+
+Function      Entry      Action_Performed
+
+BOOT          FC00:3000  Bootstrap loader
+
+SIO_IN        FC00:3005  Serial Input
+SIO_OUT       FC00:300A  Serial Output
+SIO_IN_STAT   FC00:300F  Serial Input status
+SIO_OUT_STAT  FC00:3014  Serial Output status
+
+PRNTR_ST      FC00:3019  Printer status
+PRNTR_OUT     FC00:301E  Printer output
+
+FLOP_SET      FC00:3023  Floppy initialisation
+FLOP_ALL      FC00:3028  Floppy perform activity
+FLOP_START    FC00:302D  Floppy start activity
+FLOP_CONT     FC00:3032  Floppy continue activity
+FLOP_ABORT    FC00:3037  Floppy abort activity
+
+HDSK_ALL      FC00:303C  Hard disc perform activity
+HDSK_START    FC00:3041  Hard disc start activity
+HDSK_CONT     FC00:3046  Hard disc continue activity
+HDSK_ABORT    FC00:304B  Hard disc abort activity
+HDSK_SIZE     FC00:3050  Return size of hard disc
+
+GET_SWITCH    FC00:3055  Get system byte
+
+.PAŠ
+FIRMWARE SPECIFICATION - INITIALISE                  3
+
+BOOT
+
+Bootstrap_Loader
+
+
+Entry Values :      None
+Exit Values  :      None
+
+
+This is the Prom restart.
+
+It performs a self test and initialises all the 
+hardware.
+
+All interrupt vectors are set to a dummy routine which 
+clears the trap-flag and returns.
+
+Sector zero is loaded from floppy or winchester into 
+memory at address FC00:BC00. If the six bytes from 
+offset BC02 match 'Lsi_M4' or 'Cal_PC' then a jump is 
+made to FC00:BC00. Failing that, a boot error message 
+is displayed, and once a key has been pressed the 
+process is repeated.
+
+This routine does NOT return.
+
+.PAŠ
+FIRMWARE SPECIFICATION - SERIAL I/O                  4
+
+Serial_I/O_Routines
+
+
+SIO_IN          -    Serial Input
+SIO_OUT         -    Serial Output
+SIO_IN_STAT     -    Serial Input status
+SIO_OUT_STAT    -    Serial Output status
+
+
+Definition_of_M-Four_Logical_Ports
+
+     0 = Keyboard and Monitor
+     1 = RS232 port 1 - DART Channel B
+     2 = RS232 port 2 - DART Channel A
+     3 = RS232 port 3 - SIO Channel B
+     4 = RS422 port   - SIO Channel A
+
+Definition_of_Cal-PC_Logical_Ports
+
+     0 = Keyboard and Monitor
+     1 = Keyboard and Monitor
+     2 = RS232 port 1 - DART Channel A
+     3 = RS232 port 2 - SIO Channel B
+     4 = RS422 port   - SIO Channel A
+
+.PAŠ
+FIRMWARE SPECIFICATION - SERIAL I/O                  5
+
+SIO_IN
+
+Serial_Input
+
+
+Entry Values:       DL = logical port number
+Exit Values:        AL = character
+
+
+All registers preserved.
+
+This routine waits until a character is available.
+
+.PAŠ
+FIRMWARE SPECIFICATION - SERIAL I/O                  6
+
+SIO_OUT
+
+Serial_Output
+
+
+Entry Values:       AL = character
+                    DL = logical port number
+Exit Values:        Flags affected
+                    Direction-flag reset if monitor
+
+
+Escape sequences are handled if monitor port.
+
+If not monitor port, the routine loops until 
+SIO_OUT_STAT returns ready status, before outputting 
+the character.
+
+.PAŠ
+FIRMWARE SPECIFICATION - SERIAL I/O                  7
+
+SIO_IN_STAT
+
+Serial_Input_Status
+
+
+Entry Values:       DL = logical port number
+Exit Values:        NZ - character available
+                     Z - character not available
+
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - SERIAL I/O                  8
+
+SIO_OUT_STAT
+
+Serial_Output_Status
+
+
+Entry Values:       DL = logical port number
+Exit Values:        NZ - ready
+                     Z - not ready
+
+
+All registers preserved.
+
+Port 0 (the monitor) is always ready.
+
+SIO ports are ready if the transmit buffer is not full 
+and the DSR and CTS inputs are active.
+
+.PAŠ
+FIRMWARE SPECIFICATION - CENTRONICS PRINTER          9
+
+PRNTR_ST
+
+Printer_Status
+
+
+Entry Values:       None
+Exit Values:        NZ - centronics port ready
+                     Z - centronics port not ready
+
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - CENTRONICS PRINTER         10
+
+PRNTR_OUT
+
+Printer_Output
+
+
+Entry Values:       AL = character to print
+Exit Values:        None
+
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            11
+
+Floppy_Disc_Routines
+
+
+FLOP_SET        -    Floppy initialisation
+FLOP_ALL        -    Floppy perform activity
+FLOP_START      -    Floppy start activity
+FLOP_CONT       -    Floppy continue activity
+FLOP_ABORT      -    Floppy abort activity
+
+
+Definition_of_Floppy_Disc_Parameters
+
+Floppy_Flag_Byte
+
+Bit       0_-_reset           1_-_set
+
+ 0        SINGLE SIDED        DOUBLE SIDED
+ 1        unused              unused
+ 2        unused              unused
+ 3        DOUBLE DENSITY      SINGLE DENSITY
+ 4        unused              DD DISC IN QD DRIVE
+ 5        unused              unused
+ 6        unused              unused
+ 7        unused              unused
+
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            12
+
+Definition_of_Floppy_Disc_Parameters_-_continued
+
+Floppy_Command_Byte
+
+Bit       Action
+
+7         RECAL
+6         WRITE
+5         READ
+4         VERIFY
+3         unused
+2         unused
+1         unused
+0         DRIVE
+
+
+Valid_Command_Bit_Combinations
+
+Bit  7    6    5    4
+
+     0    0    0    0    Status only
+     1    1    1    1    Uncommitted entry point
+     1    0    0    0    Recal only
+     x    0    0    1    Verify
+     x    0    1    0    Read
+     x    0    1    1    Unused
+     x    1    0    0    Write
+     x    1    0    1    Write + verify
+     x    1    1    0    Seek
+     x    1    1    1    NEVER to be used due to
+                         Confusion with seek + recal
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            13
+
+Definition_of_Floppy_Disc_Parameters_-_continued
+
+Prom_error_codes_returned_in_AL
+
+     10        Seek error
+     20        CRC error in ID
+     30        Write protected (from FDC)
+     38        No track zero
+     40        Record not found
+     50        Lost data (from FDC)
+     60        CRC error in data
+     70        DMA not reached terminal count
+     80        Prom busy
+     90        Sector out of range
+     A0        Bank crossing
+     B0        Write protected disc
+
+Retry count returned in bits 0, 1, and 2
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            14
+
+Definition_of_Floppy_Disc_Parameters_-_continued
+
+FD-1793_error_codes_returned_in_AH
+
+Return codes for:
+
+RESTORE, SEEK, STEP IN/OUT
+
+     BIT 7 - Drive is not ready
+     BIT 6 - Drive is write protected
+     BIT 5 - Head is loaded
+     BIT 4 - Seek error on desired track
+     BIT 3 - CRC error in sector ID field
+     BIT 2 - Read/write head is at track zero
+     BIT 1 - Index mark has been detected
+     BIT 0 - Command is in progress
+
+Return codes for:
+
+READ/WRITE SECTOR, READ ADDRESS, READ/WRITE TRACK
+
+     BIT 7 - Drive is not ready
+     BIT 6 - Drive is write protected
+     BIT 5 - On read record 1 = deleted data mark
+                            0 = data mark
+             On any write   1 = write fault
+     BIT 4 - Desired track, sector or side not found
+     BIT 3 - If bit 4 = 1 - CRC error in ID field
+             If bit 4 = 0 - CRC error in data field
+     BIT 2 - Computer not taking data fast enough
+     BIT 1 - Date available on read operation or
+           - Data required during write operation
+     BIT 0 - Command is being executed
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            15
+
+FLOP_SET
+
+Floppy_initialisation
+
+
+Entry Values:       AL = floppy flag byte
+                    CL = retries (usually 10)
+                    CH = sectors per track
+                    SI = total sectors per disc
+                    BÐ ½ byteó peò sector
+Exit Values:        None
+
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            16
+
+FLOP_ALL
+
+Floppy_complete_activity
+
+
+Entry Values:       AL = floppy command byte
+                    CX = number of sectors
+                    DX = logical sector number
+                    BX = buffer address
+                    DS = buffer segment
+Exit Values:        NZ - activity failed
+                     Z - activity successful
+                    AL = prom error code
+                    AH = FD-1793 status
+
+
+Perform a complete disc activity.
+
+Register AX plus flags affected.
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            17
+
+FLOP_START
+
+Floppy_start_activity
+
+
+Entry Values:       AL = floppy command byte
+                    CX = number of sectors
+                    DX = logical sector number
+                    BX = buffer address
+                    DS = buffer segment
+Exit Values:        NZ - activity finished
+                     Z - activity not finished
+                    AL = prom error code
+                    AH = FD-1793 status
+
+
+Initiate floppy disc activity.
+
+Register AX plus flags affected.
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            18
+
+FLOP_CONT
+
+Floppy_continue_activity
+
+
+Entry Values:       None
+Exit Values:        NZ - activity finished
+                     Z - activity not finished
+                    AL = prom error code
+                    AH = FD-1793 status
+
+
+Continue activity initiated by FLOP_START.
+
+This routine may be called at any time after a call to 
+FLOP_START or FLOP_CONT returned NZ. However the call 
+is only useful if the controller is ready (i.e 
+interrupt pending)
+
+Register AX plus flags affected.
+
+.PAŠ
+FIRMWARE SPECIFICATION - FLOPPY ROUTINES            19
+
+FLOP_ABORT
+
+Floppy_abort_activity
+
+
+Entry Values:       None
+Exit Values:        None
+
+
+Aborts any pending floppy disc activity.
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         20
+
+Hard_Disc_Routines
+
+
+HDSK_ALL        -    Hard disc perform activity
+HDSK_START      -    Hard disc start activity
+HDSK_CONT       -    Hard disc continue activity
+HDSK_ABORT      -    Hard disc abort activity
+HDSK_SIZE       -    Return size of hard disc
+
+
+Definition_of_Hard_Disc_Parameters
+
+Hard_Disc_Command_Byte
+
+Bit       Action
+
+7         RECAL
+6         WRITE
+5         READ
+4         VERIFY
+3         CONTROLLER NUMBER
+2         CONTROLLER NUMBER
+1         UNIT NUMBER
+0         UNIT NUMBER
+
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         21
+
+Definition_of_Hard_Disc_Parameters_-_continued
+
+Prom_error_codes_returned_in_AL
+
+     00-07   No error (or correctable if AH=98H)
+     08-0F   Select error
+     10-17   Timeout sending command data block
+     18-1F   Timeout waiting for Acknowledge
+     20-27   Wrong status after end-of-command int
+     28-2F   No message byte
+     48-4F   Error reading Xebec status
+     68-6F   Command or RAM error
+     70-77   DMA not reached terminal count
+     78-7F   Error successfully read
+     84      Prom controller busy
+     88      Controller bit busy
+     A0      Bank crossing error
+
+Retry count returned in bits 0, 1, and 2.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         22
+
+Definition_of_Hard_Disc_Parameters_-_continued
+
+Xebec_error_codes_returned_in_AH
+
+     00      No error detected
+     01      No index detected from disc drive
+     02      No seek complete from disc drive
+     03      Write fault from disc drive
+     04      Drive not ready after select
+     06      Track zero not found
+     10      ID field read error
+     11      Uncorrectable data error
+     12      Address Mark not found
+     14      Target sector not found
+     15      Seek error
+     18      Correctable data error
+     19      Bad track flag detected
+     1A      Format error
+     1C      Illegal access to alternate track
+     1D      On format alternate track command, the 
+             requested alternate track has already 
+             been assigned as an alternate, or is 
+             flagged a bad track
+     1E      When controller attempted to access an 
+             alternate track from the spared track, 
+             the alternate track was not flagged as an 
+             alternate
+     1F      On a format alternate track command, the 
+             bad track equalled the alternate track
+     20      Invalid command
+     21      Illegal disc address
+     30      Ram diagnostic failure
+     31      Program memory checksum error
+     32      ECC diagnostic failure
+
+The above codes may be output with bit 7 set, 
+indicating the previous command used a logical block 
+address.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         23
+
+HDSK_ALL
+
+Hard_disc_complete_activity
+
+
+Entry Values:       AL = command byte
+                 CH:DX = start sector (absolute)
+                    CL = number of sectors (1-256)
+                 DS:BX = buffer start address
+                    CH = bits 5,6,7 are control field
+                         (normally 0, 111 for diag)
+                    AH = user command if bits 7-4 of
+                         AL are clear
+                    DI = supplementary info if bits
+                         7-4 of AL are clear.
+                         bits 0-13  = length of DMA-1
+                         bit 14 set = read cntrlr
+                         bit 15 set = write cntrlr
+                         bites 14/15 clear = no DMA
+Exit Values:         Z = Ok
+                    NZ = error
+                    AL = error code + retry count
+                    AH = Xebec S1410 status
+     if error:
+                 CH:DX = bad sector address
+
+
+Perform a complete disc activity.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         24
+
+HDSK_START
+
+Hard_disc_start_activity
+
+
+Entry Values:       AL = command byte
+                 CH:DX = start sector (absolute)
+                    CL = number of sectors (1-256)
+                 DS:BX = buffer start address
+                    CH = bits 5,6,7 are control field
+                         (normally 0, 111 for diag)
+                    AH = user command if bits 7-4 of
+                         AL are clear
+                    DI = supplementary info if bits
+                         7-4 of AL are clear.
+                         bits 0-13  = length of DMA-1
+                         bit 14 set = read cntrlr
+                         bit 15 set = write cntrlr
+                         bites 14/15 clear = no DMA
+Exit Values:         Z = activity not finished
+                    NZ = activity finished
+                    AL = error code + retry count
+                    AH = Xebec S1410 status
+     if error:
+                 CL:DX = bad sector address
+
+Initiate a hard disc activity.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         25
+
+HDSK_CONT
+
+Hard_disc_continue_activity
+
+
+Entry Values:       None
+Exit Values:         Z = activity not finished
+                    NZ = activity finished
+                    AL = error code + retry count
+                    AH = Xebec S1410 status
+     if error:
+                 CL:DX = bad sector address
+
+
+Continue hard disc activity.
+
+This may be called any time after the preceding 
+HDSK_START or HDSK_CONT call gave a zero return. 
+However the call is only useful if a hard disc 
+interrupt is pending.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         26
+
+HDSK_ABORT
+
+Hard_disc_continue_activity
+
+
+Entry Values:       None
+Exit Values:        None
+
+
+Aborts any pending hard disc activity.
+
+All registers preserved.
+
+.PAŠ
+FIRMWARE SPECIFICATION - HARD DISC ROUTINES         27
+
+HDSK_SIZE
+
+Hard_disc:_return_size_of
+
+
+Entry Values:       None
+Exit Values:        BX = number of heads
+                    CX = sectors per track
+                    DX = number of cylinders
+                    AX = total sectors on disc
+
+.PAŠ
+FIRMWARE SPECIFICATION - SYSTEM SWITCH BYTE         28
+
+Definition_of_System_Switch_Byte
+
+
+     BIT 7 - Half height 5" floppy drives fitted
+     BITS 5 & 6 - Winchester drive type
+                  0,0 = 5mb  ST-412 (M4), RO201 (Cal)
+                  0,1 = 10mb RO202
+                  1,0 = 15mb RO203
+                  1,1 = 20mb RO204
+     BIT 4 - 2 floppies present (else only 1)
+     BIT 3 - Winchester present
+     BIT 2 - 8 inch drives
+     BIT 1 - Quad density drives
+     BIT 0 - Double sided drives
+.PAŠ
+FIRMWARE SPECIFICATION - SYSTEM SWITCH BYTE         29
+
+GET_SWITCH
+
+Get_system_switch_byte
+
+
+Entry Values:       None
+Exit Values:        AL = system dip switch setting
+
+
+Returns the system dip switch setting.
+
+All other registers plus flags preserved.
+
+.PAŠ

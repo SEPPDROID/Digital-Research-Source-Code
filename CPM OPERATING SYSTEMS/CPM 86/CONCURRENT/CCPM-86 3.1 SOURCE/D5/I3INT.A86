@@ -1,0 +1,228 @@
+
+title	'I3  interrupt entry'
+
+;************************************************
+;					        *
+;	INTERFACER 3 BOARD MODULE		*
+; 	Last changed : 2/10/84			*
+;						*
+;************************************************
+
+include	i3board.equ
+
+	dseg
+
+extrn	icdesctbl:word
+extrn   ocdesctbl:word
+extrn   i3_xmit_int_vec:byte
+extrn   bit_mask_tbl:byte
+
+	cseg
+
+public	i3r_int
+public  i3t_int
+extrn	sysdat:word
+extrn	reset_i3iint_pic:near
+extrn   reset_i3tint_pic:near
+extrn	store_char:near
+extrn	xmit_on:near
+extrn	xmit_off:near
+extrn	intco:near
+
+;;=======
+i3t_int:		; Interfacer 3 transmit interrupt entry
+;;=======
+;;
+;;	ENTRY:	from the interfacer 3's transmit ready interrupt line.
+;;		The interfacer 3's interrupt status register has 
+;;		a bit set for each USART whose transmit buffer is empty.
+;;		
+;;		I3_xmit_int_vec contains a bit vector of the USARTS on
+;;		Interfacer 3 that we have characters for.
+;;
+;;	EXIT:	back to the process we interrupted
+;;
+;;	NOTE:	All the USART's Xmit interrupts are wire ORed together
+;;		
+	push ds
+	mov ds,sysdat
+
+	mov i3_out_int_ss,ss
+	mov i3_out_int_sp,sp
+	mov ss,sysdat
+	mov sp,offset i3_out_int_tos
+
+	push ax
+	push bx
+	push cx
+	push dx
+
+co_test_lp:	
+	mov al, 0			;; We have to select a usart before
+	out I3_SELECT_REG, al		;; we can query the board, see page 9
+					;; of the interfacer 3 manual
+	mov ah, i3_xmit_int_vec	        ;; bit vector of expected interrupts
+	mov bx, offset bit_mask_tbl	;; byte mask for each Xmit interrupt
+	mov cx, 8			;; length of bit mask table
+co_lp:
+	test ah, [bx]
+	  jz co_lp_1
+	in al, I3_XMIT_INT_STAT	        ;; Get the board's interrupt status
+	test al, [bx]			;; Is this the interrupt we expect ?
+	  jnz co_found_it
+co_lp_1:
+	inc bx				;; point to the next mask
+	loop co_lp			;; check all the USARTS
+	 jmp co_exit
+
+co_found_it:                    	;; cx = the USART number that interrupted us
+	mov bx, offset ocdesctbl	;; base of Xmit Q table
+	shl cx, 1			
+	add bx, cx			;; index into the table
+	mov bx, [bx]			;; bx -> Xmit Q ctl Structure
+	call intco			;; send the character
+
+         jmps co_test_lp	        ;; In case another interrupt came in
+					;; while we were doing this one, check
+					;; the interrupt status again.
+
+co_exit:
+	call reset_i3tint_pic
+	pop dx				;; restore the environment
+	pop cx
+	pop bx 
+	pop ax
+
+	mov ss, i3_out_int_ss		;; restore the stack
+	mov sp, i3_out_int_sp
+
+	pop ds				;; restore the data segment
+
+	iret				;; back to the process we interrupted
+
+
+;
+;interfacer 3 output interrupt stack area
+
+		rw	32
+i3_out_int_tos:
+		rw	0
+i3_out_int_ss	rw	1
+i3_out_int_sp	rw	1
+
+
+;;-----------
+i3r_int:                                ;; Interfacer 3 receive interrupt entry
+;;---------
+;;
+;;	ENTRY:	from an interrupt
+
+    	push ds				;; establish a local data segment
+    	mov ds, sysdat
+
+	mov i3r_sss, ss		        ;; save the stack we came in on
+    	mov i3r_sps, sp		
+	mov ss, sysdat			;; and establish our own local stack
+    	mov sp, offset i3r_tos
+
+       	push ax				;; save the reg's we need for
+    	push bx				;; the interrupt handler
+
+	mov al, 0			;; We have to select a USART on the
+	out I3_SELECT_REG, al		;; interfacer 3 before we can query
+					;; the interrupt status register.
+					;; see page 9 of the interfacer 3
+					;; manual
+
+	in al, I3_RCV_INT_STAT 	        ;; read the interfacer 3's 
+					;; interrupt status
+	call res_usart		 	;; find which USART interrupted us
+	mov bx, ax			;; save the usart's number
+
+	out I3_SELECT_REG, al		;; select the USART
+	in al, I3_UART_STATUS		;; get the status
+	mov ah, al
+	in al, I3_UART_DATA		;; and the data
+	push ax				;; store the status and data
+
+	call reset_i3iint_pic
+	
+	xor bh, bh			;; clear the high byte of the index
+	inc bx				;; usart 0 in table is the SS board
+	shl bx, 1			;; word table
+	mov bx, icdesctbl[bx]		;; bx -> USART q
+
+	pop ax				;; retrieve the usart's status and data
+	call store_char			;; process the character
+    	pop bx				;; restore the cpu registers 
+    	pop ax
+
+	cli				;; entering a critical region
+	mov ss, i3r_sss		        ;; restore the stack
+	mov sp, i3r_sps
+
+	pop ds				;; restore the data segment
+
+	iret
+
+
+res_usart:
+;;---------
+;;
+;; This routine does a binary search for the bit representing the USART
+;; that interrupted us.
+;;
+;;	ENTRY:	al = the interfacer 3's receive interrupt status byte
+;;
+;;	EXIT:	al = the number of usart whose bit is set
+;;
+;;	NOTE:	This routine only uses ax and the flags
+
+	test al, 0FH 
+          jnz low_nibble
+	  test al, 30H                   ;; one of the bits in the upper nibble
+	   jz u_half
+	    test al,10H                  ;; in the lower half of the upper nibble
+	     jnz u_4
+	      mov al, 5                  ;; USART 5
+	      jmps ux
+u_4:
+	mov al,4                         ;; USART 4
+	 jmps ux
+u_half:
+	test al, 40H                     ;; it's either bit 6 or 7
+	 jnz u_6
+	  mov al, 7                      ;; USART 7
+	   jmps ux
+u_6:
+	mov al, 6                        ;; USART 6
+	 jmps ux
+low_nibble:
+	test al, 03H                     ;; one of the bits in the lower nibble
+	 jz u_half1
+	  test al, 01H                   ;; in the lower half of the lower nibble
+	   jnz u_0
+	    mov al, 1                    ;; USART 1
+	     jmps ux
+u_0:
+	mov al,0                         ;; USART 0
+	 jmps ux
+u_half1:
+	test al, 04H                     ;; it's either usart 2 or 3
+	 jnz u_2
+	  mov al, 3                      ;; USART 3
+	   jmps ux
+u_2:
+	mov al,2                         ;; USART 2
+ux:
+	ret
+
+
+i3r_sss	        dw	0	      ; interfacer 3 receive stack segment save
+i3r_sps	        dw	0	      ; interfacer 3 receive stack offset save
+		rw	40
+i3r_tos:	
+
+	end
+
+

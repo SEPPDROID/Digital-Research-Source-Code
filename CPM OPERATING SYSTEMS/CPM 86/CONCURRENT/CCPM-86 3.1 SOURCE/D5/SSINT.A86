@@ -1,0 +1,109 @@
+
+title	'System Support Board interrupt entry'
+
+;*************************************************
+;						 *
+;	SYSTEM  SUPPORT  BOARD  MODULE		 *
+;	Last changed: 2/10/84			 *
+;						 *
+;*************************************************
+
+include	ssboard.equ
+
+	dseg
+
+extrn	ciqctl:byte
+extrn	oq0desc:byte
+
+	cseg
+
+public	conin_int
+public	sst_int
+extrn	sysdat:word
+extrn	reset_ssiint_pic:near
+extrn	store_char:near
+extrn	intco:near
+extrn	reset_sstint_pic:near
+
+;;-------
+sst_int:                                ;; System Support's Transmit Int Entry
+;;-------
+;;
+;;	ENTRY:	hardware interrupt from System Support's USART transmit ready.
+;;
+;;	EXIT:	back to the interrupted process
+
+	push ds 			;; establish a data segment
+	mov ds,sysdat
+	mov conout_int_ss,ss		;; establish a stack
+	mov conout_int_sp,sp
+	mov ss,sysdat
+	mov sp,offset conout_int_tos
+	push ax				;; establish an environment
+	push bx
+	push dx
+
+	mov bx,offset oq0desc		;; bx -> system supports Xmit Q ctl
+	call intco			;; send the character
+	call reset_sstint_pic		;; set the PIC's IR line
+
+	pop dx 				;; restore the environment
+	pop bx 
+	pop ax
+	mov ss,conout_int_ss		;; restore the stack
+	mov sp,conout_int_sp
+	pop ds				;; restore the Data Segment
+
+	iret				;; back to the process we interrupted
+
+
+
+;
+; console output interrupt stack area
+
+		rw	32
+conout_int_tos	rw	0
+conout_int_ss	rw	1
+conout_int_sp	rw	1
+
+;;-------
+conin_int:                      ;; System Support's Conin Interrupt Entry
+;;---------
+;;
+
+    	push ds			;; establish a local data segment
+    	mov ds, sysdat
+	mov ss_save, ss		;; we need to establish a stack
+    	mov sp_save, sp		;; save  the stask segment and offset
+	mov ss, sysdat		;; new stack in our data segment
+    	mov sp, offset int_tos	
+
+       	push ax			;; save the environment
+    	push bx
+    
+    	in al, ssstat		;; get the system supports Usart status
+    	mov bh, al
+    	in al, ssdata		;; now get its data
+	mov bl, al    
+	call reset_ssiint_pic
+	mov ax, bx
+	mov bx, offset ciQctl	;; get the Q control structure
+	call store_char		;; store usart's status and data 
+
+ 	pop bx			;; restore the environment
+    	pop ax
+	mov ss, ss_save		;; restore the stack
+	mov sp, sp_save
+	pop ds			;; restore the data segment
+
+	iret
+
+
+ss_save		dw	0	; system support boards stack segment save
+sp_save		dw	0	; system support boards stack offset save
+		rw	40
+int_tos:
+
+	end
+
+

@@ -1,0 +1,178 @@
+
+title 'Clock process'
+
+;*****************************************************
+;*
+;*	CLOCK RSP
+;*
+;* The clock process will update the MP/M-86 Time of
+;* Day structure each time it returns from waiting for
+;* the 'Second' System Flag (Flag 2).  When the minute
+;* is updated, the 'minute' flag is set (Flag 3).
+;*
+;*****************************************************
+
+	; MPM functions
+
+mpmint		equ	224	; mpm entry interrupt
+mpm_flagw	equ	132	; flagwait
+mpm_flags	equ	133	; flagset
+mpm_tod		equ	155	; get tod address
+
+tod_offset	equ	07Eh
+sec_flag        equ     2
+min_flag        equ     3
+
+	; TOD format
+
+tod_day		equ	word ptr 0
+tod_hour	equ	byte ptr 2
+tod_min		equ	byte ptr 3
+tod_sec		equ	byte ptr 4
+
+	; PD fields
+
+pdlen   equ     48      ; length of process descriptor
+ps_run  equ     0       ; PD run status
+pf_keep equ     2       ; PD nokill flag
+
+	; RSP format
+
+rsp_top equ     0       ; rsp offset
+rsp_pd  equ     010h    ; PD offset
+rsp_uda equ     040h    ; UDA offset
+rsp_bottom equ  140h    ; end rsp header
+
+;*****************************************************
+;*
+;*	CLOCK CODE SEGMENT
+;*
+;*****************************************************
+
+	cseg
+	org	0
+
+
+mpm:	int mpmint ! ret
+
+clock:		; Clock process starts here
+
+	mov ds,sysdat
+	mov bx,tod_offset
+
+		; Loop forever
+clockloop:
+		; BX -> TOD structure in SYSDAT
+		; Wait for Seconds Flag
+	mov cx,mpm_flagw ! mov dx,sec_flag
+	push bx ! call mpm ! pop bx
+
+		; increment seconds
+	clc
+	mov al,tod_sec[bx]
+        inc al ! daa ! mov tod_sec[bx],al
+
+		; check for minute mark
+
+	cmp al,60h ! jae update_min
+	    jmp clock_loop
+
+update_min:
+		; set minute flag
+
+	mov tod_sec[bx],0
+	mov cx,mpm_flags ! mov dx,min_flag
+	push bx ! call mpm ! pop bx
+
+		; increment minute field of TOD
+
+	clc ! mov al,tod_min[bx]
+	inc al ! daa ! mov tod_min[bx],al
+
+		; check if hour
+
+	cmp al,60h ! jae update_hour
+	    jmp clock_loop
+
+update_hour:
+		;update hour field
+
+	mov tod_min[bx],0
+	clc ! mov al,tod_hour[bx]
+	inc al ! daa ! mov tod_hour[bx],al
+
+		; check for day
+
+	cmp al,24h ! jae update_day
+	    jmp clock_loop
+
+update_day:
+		; update Day field
+
+        mov tod_hour[bx],0
+        inc tod_day[bx]
+        jmp clock_loop           ; loop forever
+
+;*****************************************************
+;*
+;*	Data Segment
+;*
+;*****************************************************
+
+	dseg
+	org 	0
+
+sysdat	dw	0,0,0
+        dw	0,0,0
+        dw	0,0
+
+	org	rsp_pd
+
+        dw      0,0             ; link,thread
+        db      ps_run          ; status
+        db      190             ; priority
+        dw      pf_keep         ; flags
+        db      'CLOCK   '      ; name
+        dw      offset uda/10h  ; uda seg
+        db      0,0,0,0		; dsk,usr,ldsk,luser
+        dw      0		; mem partitions
+        dw      0,0             ; dvract,wait
+        db	0,0		; org,net
+	dw      0               ; parent
+	db	0,0,0,0		; cns,abort,cin,cout
+	db	0,0,0,0		; lst,sf3,sf4,sf5
+	dw	0,0,0,0		; reserved,pret,scratch
+
+	org	rsp_uda
+
+uda		dw	0,offset dma,0,0	;0
+		dw	0,0,0,0
+		dw	0,0,0,0			;10
+		dw	0,0,0,0
+		dw	0,0,0,0			;20
+		dw	0,0,0,0
+		dw	0,0,offset stack_tos,0	;30
+		dw	0,0,0,0
+		dw	0,0,0,0			;40
+		dw	0,0,0,0
+		dw	0,0,0,0			;50
+		dw	0,0,0,0
+		dw	0,0,0,0			;60
+		dw	0,0,0,0
+
+	org	rsp_bottom
+
+dma		rb	128
+stack		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+stack_tos	dw	offset clock	; offset
+		dw	0		; segment
+		dw	0		; flags
+
+		dw	0	; END OF DATA
+;
+
+	end

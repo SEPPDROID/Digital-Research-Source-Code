@@ -1,0 +1,305 @@
+
+;*****************************************************
+;*
+;*	More CIO Routines
+;*
+;*****************************************************
+
+;===============
+lstattach_entry:
+;===============
+	mov cx,0 ! mov si,p_lst
+	jmps cioattach
+
+;===============
+clstattch_entry:
+;===============
+	mov cx,0ffffh ! mov si,p_lst
+	jmps cioattach
+
+;===============
+cconattch_entry:
+;===============
+	mov cx,0ffffh ! mov si,p_cns
+	jmps cioattach
+
+;===============
+conattach_entry:
+;===============
+	mov cx,0 ! mov si,p_cns
+	;jmps cioattach
+
+;=========
+cioattach:
+;=========
+;	Attach calling process to default ciodev.
+;	if ciodev is being used, sleep on c_queue
+;	until another process detaches from device
+;	and calling process is next in queue.
+;	input:	SI = offset of dev number in PD
+;		CX = 0ffffh if conditional
+
+	push si ! push cx ! mov bx,rlr
+	mov dh,[si+bx] ! call getccbadr
+	pop cx
+		; BX = PD addr
+		; SI = CCB addr
+	pushf ! cli
+	cmp bx,c_attach[si] ! je ca_ret
+	    cmp c_attach[si],0 ! je ca_atch
+		cmp c_attach[si],0ffffh ! jne ca_chkslp
+			;This is a Mimic Device
+		    mov dh,c_msource[si]
+		    push cx ! push si ! call getccbadr
+		    cmp bx,c_attach[si]
+		    pop si ! pop cx ! je ca_ret
+ca_chkslp:	jcxz ca_sleep
+		    popf ! pop si ! mov bx,0ffffh
+		    mov cx,e_no_attach ! ret
+ca_sleep:	lea dx,c_queue[si]
+		mov p_stat[bx],ps_ciowait
+		mov cx,f_sleep ! call mpmif
+		popf ! pop si ! sub cx,cx
+		jmps cioattach
+ca_atch:    mov c_attach[si],bx
+ca_ret:	popf ! pop si
+	sub bx,bx ! mov cx,bx ! ret
+
+;===============
+lstdetach_entry:
+;===============
+	mov si,p_lst ! jmps ciodetach
+
+;===============
+condetach_entry:
+;===============
+	mov si,p_cns
+	;jmps ciodetach
+
+;=========
+ciodetach:
+;=========
+;	Detach Calling process from default ciodev.
+;	If current owner of ciodev then zero c_attach
+;	and wakeup the c_queue list to give another
+;	process the ciodev.
+;	input:	SI = offset of default dev in PD
+
+	mov bx,rlr
+	mov dh,[si+bx] ! call getccbadr
+		; SI = CCB address
+		; BX = PD address
+	pushf ! cli
+	cmp c_attach[si],0 ! je cd_ret
+	    cmp c_attach[si],bx ! je cd_detach
+		popf ! mov bx,0ffffh
+		mov cx,e_not_owner ! ret
+cd_detach:  mov ax,c_queue[si]
+	    mov c_attach[si],ax
+	    mov cx,f_wakeup
+	    lea dx,c_queue[si]
+	    call mpmif
+cd_ret:	popf ! sub bx,bx
+	mov cx,bx ! ret		
+
+;===============
+conassign_entry:
+;===============
+;	Attach specified console to specified process
+;
+;	input:	DX -> acb address in u_wrkseg
+;
+;	+-----+-----+-----+-----+
+;	| cns |match|  PD addr  |
+;	+-----+-----+-----+-----+-----+-----+-----+-----+
+;	|                     Name                      |
+;	+-----+-----+-----+-----+-----+-----+-----+-----+
+;
+;		cns - console to assign
+;		match - if not 0,
+;			PD's default console must match acb_cns
+;		PD addr - PD to assign to
+;		name - PD name to assign to if PD addr=0
+;
+;	return:	BX = 0 if success,0ffffh if failure
+;		CX = Error Code
+
+		;get console #
+
+	push ds ! mov ds,u_wrkseg
+	mov di,dx ! mov ah,acb_cns[di] ! pop ds
+		;DI->ACB in u_wrkseg
+		;AH = console
+
+		;check if legal console
+
+	cmp ah,ncns ! jbe as_gcns
+	    mov cx,e_ill_cns ! mov bx,0ffffh ! ret
+
+		;check if owner is passing console
+
+as_gcns:push di ! push dx ! push ax ! mov dh,ah
+	call getccbadr ! pop ax ! pop dx ! pop di
+	mov bx,si ! mov si,rlr
+		; AH = console
+		; BX = CCB address
+		; SI = Calling PD address
+		; DI = ACB in u_wrkseg
+	cmp c_attach[bx],0 ! je as_own
+	cmp c_attach[bx],si ! je as_own
+	    mov cx,e_not_owner ! mov bx,0ffffh ! ret
+as_own:
+		;find pd to assign to
+
+	mov bp,bx
+	push ds ! mov ds,u_wrkseg
+	mov bx,acb_pd[di]
+	cmp bx,0 ! jne as_gpd
+	    mov bx,(offset thrdrt)-p_thread
+as_trya:    push bp ! push ax ! push di
+	    lea dx,acb_name[di]
+	    mov cx,f_findpdname ! call mpmif
+	    pop di ! pop ax ! pop bp
+	    jcxz as_gpd
+		pop ds ! mov bx,0ffffh ! ret
+as_gpd:
+		;see if pd has same default cns
+		; BP -> CCB
+		; BX -> matched pd
+
+	mov cl,acb_match[di]
+	pop ds
+	cmp cl,0 ! jz as_mok
+	    cmp ah,p_cns[bx] ! je as_mok
+		push ds ! mov ds,u_wrkseg
+		jmps as_trya
+
+		; see if process is waiting in c_queue
+		; wakeup if it is
+
+as_mok:	mov si,bx ! mov bx,bp
+		; BP=BX = CCB
+		; SI = PD to assign to
+	mov c_attach[bx],si ! add bx,c_queue-p_link
+	pushf ! cli
+as_nqpd:cmp p_link[bx],0 ! jz as_gexit		; cnsque
+	    cmp p_link[bx],si ! je as_qfix
+		mov bx,p_link[bx] ! jmps as_nqpd
+			;found pd in c_queue
+			;take off queue and wakeup
+as_qfix:    mov ax,p_link[si] ! mov p_link[bx],ax
+	    mov bx,bp ! mov bp,c_queue[bx]
+	    mov c_queue[bx],si
+	    mov p_link[si],bp
+	    popf ! lea dx,c_queue[bx]
+	    mov cx,f_wakeup ! call mpmif
+	    jmps as_ge
+
+as_gexit:	; console is assigned
+	popf
+as_ge:	sub cx,cx ! mov bx,cx ! ret
+
+;===============	=====================
+getdefcon_entry:	; Get Default Console
+;===============	=====================
+
+	mov si,rlr
+	mov bh,0 ! mov bl,p_cns[si]
+	sub cx,cx ! ret
+
+;===============	==================
+getdeflst_entry:	; Get Default List
+;===============	==================
+
+	mov si,rlr
+	mov bh,0 ! mov bl,p_lst[si]
+	sub bl,ncondev
+	sub cx,cx ! ret
+
+;===============	=====================
+setdefcon_entry:	; Set Default Console
+;===============	=====================
+
+	cmp dl,ncondev ! jb sd_good
+	    mov cx,e_ill_cns
+	    mov bx,0ffffh ! ret
+sd_good:mov si,rlr
+	cmp dl,p_cns[si] ! je sd_nodet
+	    push dx ! call condetach_entry ! pop dx
+sd_nodet:
+	mov si,rlr ! mov p_cns[si],dl
+	sub bx,bx ! mov cx,bx ! ret
+
+;	jmp conattach_entry		; NO AUTO ATTACH
+
+;===============	==================
+setdeflst_entry:	; Set Default List
+;===============	==================
+
+	cmp dl,nlstdev ! jb sdl_good
+	    mov cx,e_ill_lst
+	    mov bx,0ffffh ! ret
+sdl_good:
+	add dl,ncondev
+	mov si,rlr
+	cmp dl,p_lst[si] ! je sdl_nodet
+	    push dx ! call lstdetach_entry ! pop dx
+sdl_nodet:
+	mov si,rlr ! mov p_lst[si],dl
+	sub bx,bx ! mov cx,bx ! ret
+
+;	jmp lstattach_entry		; NO AUTO ATTACH
+
+;===========		========================
+mimic_entry:		; mimic character device
+;===========		========================
+; mimic a device.  All character output from a source device
+; will be echoed on the mimic device.
+;	input:	DH=source
+;		DL=mimic device
+;	output:	BX = 0 if successful
+;		BX = 0ffffh on error
+;		CX = Error Code
+
+	; check if source is owned
+
+	push dx ! call getccbadr
+	mov bx,rlr ! pop dx
+	pushf ! cli
+	cmp c_attach[si],bx ! jne mim_err
+	    cmp c_mimic[si],0ffh ! jne mim_err
+		push si ! push dx ! mov dh,dl
+		call getccbadr ! pop dx ! pop di
+		cmp c_attach[si],0 ! jne mim_err
+		    cmp c_mimic[si],0ffh ! jne mim_err
+				; SI->mimic CCB , DI->source CCB
+			mov c_attach[si],0ffffh
+			mov c_msource[si],dh
+			mov c_mimic[di],dl ! popf ! ret
+mim_err:mov bx,0ffffh ! mov cx,e_no_mimic
+	popf ! ret
+
+;=============		===================
+unmimic_entry:		; un mimic a device
+;=============		===================
+;	input:	DL = device
+
+	mov dh,dl ! call getccbadr
+	pushf ! cli
+	cmp c_attach[si],0ffffh ! jne mim_err
+	    push dx ! push si
+	    mov dh,c_msource[si]
+	    call getccbadr ! pop di ! pop dx
+	    cmp c_mimic[si],dl ! jne mim_err
+		mov bx,rlr
+		mov c_attach[di],bx
+		mov c_msource[di],0ffh
+		mov al,c_mimic[di]
+		mov c_mimic[si],al
+		mov al,p_lst[bx]
+		mov p_lst[bx],dl
+		push ax ! push bx
+		call lstdetach_entry
+		pop bx ! pop ax ! mov p_lst[bx],al
+		popf ! ret
+

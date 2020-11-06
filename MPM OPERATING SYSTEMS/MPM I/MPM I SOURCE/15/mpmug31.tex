@@ -1,0 +1,276 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 96
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+3.2 Basic I/O System Entry Points
+.pp
+The entry points into the BIOS from the cold start loader and BDOS are
+detailed below.  Entry to the BIOS is through a "jump vector" located at
+the base of the BIOS, as shown below (see Appendix I as well).
+The jump vector is a sequence of 17 jump
+instructions which send program control to the individual BIOS
+subroutines.  The BIOS subroutines may be empty for certain functions
+(i.e., they may contain a single RET operation) during regeneration of
+MP/M, but the entries must be present in the jump vector.
+The extended I/O system entry points (XIOS) immediately follow the
+last BIOS entry point.
+.pp
+The jump vector takes the form shown below, where the
+individual jump addresses are given to the left:
+.li
+
+   BIOS+00H    JMP BOOT         ; COLD START
+   BIOS+03H    JMP WBOOT        ; WARM START
+   BIOS+06H    JMP CONST        ; CHECK FOR CONSOLE CHAR READY
+   BIOS+09H    JMP CONIN        ; READ CONSOLE CHARACTER IN
+   BIOS+0CH    JMP CONOUT       ; WRITE CONSOLE CHARACTER OUT
+   BIOS+0FH    JMP LIST         ; WRITE LISTING CHARACTER OUT
+   BIOS+12H    JMP PUNCH        ; WRITE CHARACTER TO PUNCH DEVICE
+   BIOS+15H    JMP READER       ; READ READER DEVICE
+   BIOS+18H    JMP HOME         ; MOVE TO TRACK 00
+   BIOS+1BH    JMP SELDSK       ; SELECT DISK DRIVE
+   BIOS+1EH    JMP SETTRK       ; SET TRACK NUMBER
+   BIOS+21H    JMP SETSEC       ; SET SECTOR NUMBER
+   BIOS+24H    JMP SETDMA       ; SET DMA ADDRESS
+   BIOS+27H    JMP READ         ; READ SELECTED SECTOR
+   BIOS+2AH    JMP WRITE        ; WRITE SELECTED SECTOR
+   BIOS+2DH    JMP LISTST       ; RETURN LIST STATUS
+   BIOS+30H    JMP SECTRAN      ; SECTOR TRANSLATE SUBROUTINE
+
+.pp
+Each jump address corresponds to a particular subroutine which performs
+the specific function, as outlined below.  There are three major
+divisions in the jump table:  the system (re)initialization which
+results from calls on BOOT and WBOOT, simple character I/O performed by
+calls on CONST, CONIN, CONOUT, LIST, and LISTST, and diskette
+I/O performed by calls on HOME, SELDSK, SETTRK, SETSEC, SETDMA, READ,
+WRITE, and SECTRAN.
+.pp
+All simple character I/O operations are assumed to be performed in
+ASCII, upper and lower case, with high order (parity bit) set to zero.
+An end-of-file condition for an input device is given by an ASCII
+control-z (1AH).  Peripheral devices are seen by MP/M as "logical"
+devices, and are assigned to physical devices within the BIOS.
+.pp
+In order to operate, the BDOS needs only the CONST, CONIN, and CONOUT
+subroutines (LIST and LSTST may be used by PIP, but not the
+BDOS).
+.cp 4
+.sp
+The characteristics of each device are
+.sp
+.in 16
+.ti 4
+CONSOLE    The principal interactive consoles which communicate with
+the operators, accessed through CONST, CONIN, and CONOUT. Typically,
+CONSOLEs are devices such as CRTs or Teletypes.
+.sp
+.ti 4
+LIST       The principal listing device, if it exists on your system,
+which is usually a hard-copy device, such as a printer or Teletype.
+.sp
+.ti 4
+DISK       Disk I/O is always performed through a sequence of calls on the various
+disk access subroutines which set up the disk number to access, the
+track and sector on a particular disk, and the direct memory access
+(DMA) address involved in the I/O operation.  After all these
+parameters have been set up, a call is made to the READ or WRITE
+function to perform the actual I/O operation.  Note that there is often
+a single call to SELDSK to select a disk drive, followed by a number of
+read or write operations to the selected disk before selecting another
+drive for subsequent operations.  Similarly, there may be a single call
+to set the DMA address, followed by several calls which read or write
+from the selected DMA address before the DMA address is changed.  The
+track and sector subroutines are always called before the READ or WRITE
+operations are performed.
+.pp
+Note that the READ and WRITE routines should perform several retries
+(10 is standard) before reporting the error condition to the BDOS.  If
+the error condition is returned to the BDOS, it will report the error
+to the user.  The HOME subroutine may or may not actually perform the
+track 00 seek, depending upon your controller characteristics; the
+important point is that track 00 has been selected for the next
+operation, and is often treated in exactly the same manner as SETTRK
+with a parameter of 00.
+.pp
+.in 0
+The exact responsibilities of each entry point subroutine are
+given below:
+.sp
+.sp
+.in 16
+.ti 4
+BOOT        The BOOT entry point gets called from the MP/M loader
+after it has been loaded by the cold start
+loader and is responsible for basic system initialization.
+Note that under MP/M a return must be made from BOOT to continue
+execution of the MP/M loader.
+.sp
+.ti 4
+WBOOT       The WBOOT entry point performs a BDOS system reset,
+terminating the calling process.
+.sp
+.ti 4
+CONST       Sample the status of the console device specified by
+register D
+and return 0FFH in register A if a character is ready to read,
+or 00H in register A if no console characters are ready.
+.sp
+.ti 4
+CONIN       Read the next character from the console device specified
+by register D into register A, and set
+the parity bit (high order bit) to zero.  If no console character is
+ready, wait until a character is typed before returning.
+.sp
+.ti 4
+CONOUT      Send the character from register C to the console output
+device specified by register D.  The character is in ASCII, with high
+order parity bit set to
+zero.  You may want to include a delay on a line feed or carriage
+return, if your console device requires some time interval at the end
+of the line (such as a TI Silent 700 terminal).  You can, if you
+wish, filter out control characters which cause your console device
+to react in a strange way (a control-z causes the Lear Seigler
+terminal to clear the screen, for example).
+.sp
+.ti 4
+LIST        Send the character from register C to the
+listing device.  The character is in ASCII with zero parity.
+.sp
+.ti 4
+PUNCH       The punch device is not implemented under MP/M.  The
+transfer vector position is preserved to maintain CP/M compatibility.
+Note that MP/M supports up to 16 character I/O devices, any of which
+can be a reader/punch.
+.sp
+.ti 4
+READER      The reader device is not implemented under MP/M.  See the
+note above for PUNCH.
+.sp
+.ti 4
+HOME        Return the disk head of the currently selected disk
+(initially disk A) to the track 00 position.  If your controller
+allows access to the track 0 flag from the drive, step the head until
+the track 0 flag is detected.  If your controller does not support
+this feature, you can translate the HOME call into a call on SETTRK
+with a parameter of 0.
+.sp
+.ti 4
+SELDSK      Select the disk drive given by register C for further
+operations, where register C contains 0 for drive A, 1 for drive
+B, and so-forth up to 15 for drive P (the
+standard MP/M distribution version supports four
+drives).
+On each disk select, SELDSK must return in HL the base address of a
+16-byte area, called the Disk Parameter Header, described in
+the digital research document titled "CP/M 2.0 Alteration Guide".
+For standard floppy disk drives, the
+contents of the header and associated tables does not change,
+and thus the program segment included in the sample XIOS
+performs this operation automatically.  If there is an attempt
+to select a non-existent drive, SELDSK returns HL=0000H as
+an error indicator.
+.pp
+On  entry to SELDSK it is possible to determine whether  it
+is  the  first time the specified disk has  been  selected.
+Register E, bit 0 (least significant bit) is a zero if the
+drive  has not been previously selected.  This information
+is  of  interest in systems which read  configuration
+information  from  the disk in order to set up  a  dynamic
+disk definition table.
+.pp
+Although SELDSK must return the header
+address on each call, it is
+advisable to postpone the actual physical disk select operation until an I/O
+function (seek, read or write) is actually performed, since disk
+selects often occur without utimately performing any disk I/O, and
+many controllers will unload the head of the current disk before
+selecting the new drive.  This would cause an excessive amount of
+noise and disk wear.
+.sp
+.ti 4
+SETTRK      Register BC contains the track number for subsequent disk
+accesses on the currently selected drive.  You can choose to seek the
+selected track at this time, or delay the seek until the next read or
+write actually occurs.  Register BC can take on values in the range
+0-76 corresponding to valid track numbers
+for standard floppy disk drives, and 0-65535 for non-standard
+disk subsystems.
+.sp
+.ti 4
+SETSEC      Register BC contains the sector number (1 through 26) for
+subsequent disk accesses on the currently selected drive.  You can
+choose to send this information to the controller at this point, or
+instead delay sector selection until a read or write operation occurs.
+.sp
+.ti 4
+SETDMA      Register BC contains the DMA (disk memory access) address for
+subsequent  read or write operations.  For example, if B = 00H and C
+= 80H when SETDMA is called, then all subsequent read operations read
+their data into 80H through 0FFH, and all subsequent write operations
+get their data from 80H through 0FFH, until the next call to SETDMA
+occurs.  The initial DMA address is assumed to be 80H.  Note that the
+controller need not actually support direct memory access.  If, for
+example, all data is received and sent through I/O ports, the XIOS
+which you construct will use the 128 byte area starting at the
+selected DMA address for the memory buffer during the following read
+or write operations.
+.sp
+.ti 4
+READ        Assuming the drive has been selected, the track has been
+set, the sector has been set, and the DMA address has been
+specified, the READ subroutine attempts to read one sector based
+upon these parameters, and returns the following error codes in
+register A:
+.sp
+.li
+                 0      no errors occurred
+                 1      non-recoverable error condition occurred
+
+.br
+Currently, MP/M responds only to a zero or non-zero value as the
+return code.  That is, if the value in register A is 0 then MP/M
+assumes that the disk operation completed properly. If an error
+occurs, however, the XIOS should attempt at least 10 retries to see
+if the error is recoverable. When an error is reported the BDOS will
+print the message "BDOS ERR ON x:  BAD SECTOR".  The operator then
+has the option of typing <cr> to ignore the error, or ctl-C to abort.
+.sp
+.ti 4
+WRITE       Write the data from the currently selected DMA address
+to the currently selected drive, track, and sector.  The data should
+be marked as "non deleted data" to maintain compatibility  with other
+MP/M systems.  The error codes given in the READ command are returned
+in register A, with error recovery attempts as described above.
+.sp
+.ti 4
+LISTST      Return the ready status of the list device.
+The value 00 is returned in A if the list device
+is not ready to accept a character, and 0FFH if a character
+can be sent to the printer.  Note that a 00 value always
+suffices.
+.sp
+.ti 4
+SECTRAN     Performs sector logical to physical sector translation
+in order to improve the overall response of MP/M.  Standard MP/M
+systems are shipped with a "skew factor" of 6, where six physical
+sectors are skipped between each logical read operation.  This
+skew factor allows enough time between sectors for most programs
+to load their buffers without missing the next sector.  In particular
+computer systems which use fast processors, memory, and disk
+subsystems, the skew factor may be changed to improve overall
+response.  Note, however, that you should maintain a single
+density IBM compatible version of MP/M for information transfer into and
+out of your computer system, using a skew factor of 6.
+In general, SECTRAN receives a logical sector number in BC, and
+a translate table address in DE.  The sector number is used as
+an index into the translate table, with the resulting physical
+sector number in HL.  For standard systems, the tables and
+indexing code is provided in the XIOS and need not be changed.
+.qi
+.br
+

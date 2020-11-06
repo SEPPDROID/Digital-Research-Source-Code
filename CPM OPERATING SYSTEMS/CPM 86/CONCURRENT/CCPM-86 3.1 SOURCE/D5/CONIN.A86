@@ -1,0 +1,136 @@
+
+title	'Software Console Input Handler'
+
+;*******************************************
+;					   *
+;	CONIN  MODULE			   *
+;	Last changed : 2/11/84		   *
+;					   *
+;*******************************************
+
+include flags.equ
+include	serdata.equ
+include chrcomm.equ
+include system.lib
+
+eject
+
+	dseg
+
+extrn	icdesctbl:word
+extrn	vccb_tbl:word
+
+	cseg
+
+public	io_conin
+public	io_const
+public  conin_0                  ; default routine for Q ctl structure's C_STATE
+
+extrn	supif:near               ; in header module
+extrn   serial_in:near           ; in serin.a86
+extrn   set_up_bx:near
+
+;========
+io_conin:
+;========
+;
+;	ENTRY:	dl = physical console number
+;	EXIT:	al = character
+;		ah = 000H if al contains a character
+;		     0ffH if al contains a virtual console number
+
+	call io_const		; bx -> Q control structure.
+	call C_STATE[bx]	; C_STATE = address of next routine in state
+				; machine.  Default is conin0 (see below).
+	ret
+	
+
+;========
+io_const:
+;========
+;
+;	ENTRY:	dl = physical console number
+;	EXIT:	al = 0FFH if a character is available
+;		   = 000H if NO character is available
+;		bx -> Recv Queue control structure
+
+
+	xor dh,dh			; clear the upper byte
+cst1:
+	shl dx, 1			; word table
+	mov bx, dx
+	mov bx, icdesctbl[bx]		; bx -> Receive Q control
+cst2:
+	pushf ! cli			; Check for chars in buffer
+	xor al,al			
+	test Q_STATE[bx], CHAR_AVAIL
+	  jz cst3			; char not available
+	dec al                          ; character ready signal
+cst3:
+	popf
+	ret
+
+
+conin_0:
+;------
+;	ENTRY:	bx = addr of the Q control block
+;	EXIT:	ah = 0 if characters are being returned.
+;		ah = 0FFH if this is a screen switch code being returned
+
+
+	push bx			; save the Q control addr
+	call serial_in		; get the character
+	pop bx			; restore the Q control addr
+	cmp al, ESC 
+	 je esc_now
+        mov ah, 0		; set ah as a character code
+	  ret
+esc_now:	                ; delay for 16 ms, check for another character
+	push bx			; save the Q control addr
+	mov dx, DELAY_16MS	; delay for 16 ms
+	mov cl, P_DELAY
+	call supif
+	pop bx			; restore the Q control addr
+	test Q_STATE[bx], CHAR_AVAIL
+	 jnz esc_seq           
+                                ; it must be a lone escape character
+        mov al, ESC		; al = the return character ( ESC )
+	mov ah, 0		; ah = character being returned code
+	  ret
+esc_seq:
+	push bx			; save the Q ctl addr	
+	call serial_in		; get the next char
+	pop bx			; restore the Q ctl addr
+        cmp al, '?' 
+         je exit_st		; ignore alt keypad
+        cmp al, 'S' 
+	 jb exit_st		; check for screen switch
+        cmp al, 'V' 
+	 ja exit_st		; ignore out-of-range function keys
+
+	                        ; this is a screen switch command
+        sub al, 'S'		; normalize the screen number to 0
+	mov ah, 0FFH		; set the screen switch return code
+        mov dh, P_CON[bx]	; Check if we're in the middle of an
+  	mov dl, dh		; escape sequence.
+        push bx			; If so, don't allow screen switch key to
+          call set_up_bx	; return to PIN until sequence is finished.
+        cmp OESC_CNT[bx],0
+        pop bx
+          je exit_st
+
+        or Q_STATE[bx], SWITCH_PEND                
+        xor dh,dh
+        add dl, SWITCH_BIAS
+        mov cl, f_flagwait
+        push ax
+         call supif
+        pop ax
+
+exit_st:
+	ret
+
+	end
+
+
+

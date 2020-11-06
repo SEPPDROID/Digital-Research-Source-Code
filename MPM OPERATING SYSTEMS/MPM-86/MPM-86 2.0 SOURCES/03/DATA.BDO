@@ -1,0 +1,404 @@
+;*****************************************************
+;*
+;*	BDOS Data Area
+;*
+;*****************************************************
+
+if	CPM
+
+;
+;       8086 variables that must reside in code segment
+;
+cseg    $
+;
+axsave          dw      0       ; register saves
+SS_save         dw      0
+SP_save         dw      0
+stack_begin	dw	endstack
+;
+;       Variables in data segment:
+;
+dseg    cpmsegment
+        org     bdosoffset+bdoscodesize
+
+header  rs      128
+        rs      72
+
+pag0	dw	0		;address of user's page zero
+ip0     db      0               ;initial page value for IP register
+;
+;     memory control block
+;
+umembase        dw      0       ;user'sbase for memory request 
+umemlg  dw      0       	;length of memory req 
+contf   db      0       	;flag indicates added memory is avail
+;
+;
+hold_info	dw	0	;save info  
+hold_spsave	dw	0	;save user SP during program load
+hold_sssave	dw	0	;save user SS during program load
+
+mod8080 	db      0
+;
+;       byte I/O variables:
+;
+compcol db      0               ;true if computing column position
+strtcol db      0               ;starting column position after read
+column  db      0               ;column position
+listcp  db      0               ;listing toggle
+kbchar  db      0               ;initial key char = 00
+
+endif
+if	MPM
+
+		DSEG
+		org	0c00h
+
+endif
+
+efcb		db	0e5h	;0e5=avail dir entry
+rodsk		dw	0	;read only disk vector
+dlog		dw	0	;logged-in disks
+
+if	MPM
+
+RLOG		DW	0	;REMOVEABLE LOGGED-IN DISKS
+TLOG		DW	0	;REMOVEABLE DISK TEST LOGIN VECTOR
+NTLOG		DW	0	;NEW TLOG VECTOR
+REM_DRV		DB	0	;REMOVABLE DRIVE FLAG
+				;1 = REMOVABLE DRIVE
+				;0 = PERMANENT DRIVE
+
+endif
+
+;The following variables are set to zero upon entry to file system
+
+fcbdsk		db	0		;disk named in fcb
+parcopfl	db	0		;true if parameter block copied
+resel		db	0		;reselection flag
+aret		dw	0		;adr value to return
+lret		equ	byte ptr aret	;low(aret)
+COMP_FCB_CKS	DB	0		;COMPUTE FCB CHECKSUM FLAG
+SEARCH_USER0	DB	0		;SEARCH USER 0 FOR FILE (OPEN)
+MAKE_XFCB	DB	0		;MAKE & SEARCH XFCB FLAG
+FIND_XFCB	DB	0		;SEARCH FIND XFCB FLAG
+usrcode		db	0	;curr user num
+zerolength	equ	(offset usrcode)-(offset fcbdsk)
+
+if	CPM
+
+curdsk		db	0	;curr disk num
+
+endif
+
+SELDSK		DB	0	;SELECTED DISK NUM
+info		dw	0	;info adr
+srcha		dw	0	;search adr
+
+;The Following variable order is critical 
+
+;Variables copied from UDA for MP/M			X
+
+;Variables included in FCB checksum for MP/M and CP/M     X
+
+;Variables used to access System Lock List for MP/M         X
+
+dmaad		dw	0	;dma offset		1
+dmabase		dw	0	;dma base		2
+FX		DB	0	;BDOS FUNCTION #	3
+srchl		db	0	;search len		4
+
+if	MPM
+
+srchaofst	dw	0	;search adr ofst	5
+srchabase	dw	0	;search adr base	6
+
+endif
+
+dcnt		dw	0	;directory counter	7
+DBLK		DW	0	;DIRECTORY BLOCK	8
+ERROR_MODE	DB	0	;BDOS ERROR MODE	9
+MULT_CNT	DB	0	;BDOS MULTI-SECTOR CNT 10
+DF_PASSWORD	RB	8	;PROCESS DEFAULT PW    11
+
+if	MPM
+
+PD_CNT		DB	0	;BDOS PROCESS CNT      12 1
+
+endif
+
+HIGH_EXT	DB	0	;FCB HIGH EXTENT BITS     2
+XFCB_READ_ONLY	DB	0	;XFCB READ ONLY FLAG	  3
+CURDSK		DB	0FFH	;CURRENT DISK		  4 1
+
+if	MPM
+
+PACKED_DCNT	DB	0	;PACKED DBLK+DCNT	    2
+		DB	0
+		DB	0	
+PDADDR		DW	0	;PROCESS DESCRIPTOR ADDR    3
+
+endif
+
+
+;	curtrka - alloca are set upon disk select
+;	(data must be adjacent)
+
+cdrmaxa		dw	0	;ptr to cur dir max val
+DRVLBLA 	dw	0	;DRIVE LABEL DATA BYTE ADDR
+buffa		dw	0	;ptr to dir dma addr
+dpbaddr 	dw	0	;curr disk param block addr
+checka		dw      0	;curr checksum vector addr
+alloca		dw      0	;curr alloc vector addr
+addlist 	EQU     8	;"$-buffa" = addr list size
+
+;	sectpt - offset obtained from disk parm block at dpbaddr
+;	(data must be adjacent)
+
+sectpt		dw	0	;sectors per track
+blkshf		db	0	;block shift factor
+blkmsk		db	0	;block mask
+extmsk		db	0	;extent mask
+maxall		dw	0	;max alloc num
+dirmax		dw	0	;max dir num
+dirblk		dw	0	;reserved alloc bits for dir
+chksiz		dw	0	;size of checksum vector
+offsetv		dw	0	;offset tracks at beginning
+endlist		rs	0	;end of list
+dpblist		equ	(offset endlist)-(offset sectpt)
+				;size
+
+;	local variables
+
+COMMON_DMA	RB	16	;COPY OF USER'S DMA 1ST 16 BYTES
+XDMAAD		DW	OFFSET COMMON_DMA
+RETURN_FFFF	DB	0	;SEL ERR FLAG FOR FXS 27 & 31
+MAKE_FLAG	DB	0	;MAKE FUNCTION FLAG
+FCB_EXISTS	DB	0	;FCB EXISTS FLAG (MAKE)
+ACTUAL_RC	DB	0	;DIRECTORY EXT RECORD COUNT
+SAVE_XFCB	DB	0	;SEARCH XFCB SAVE FLAG
+SAVE_MOD	DB	0	;OPEN_REEL MODULE SAVE FIELD
+SAVE_EXT	DB	0	;OPEN_REEL EXTENT SAVE FIELD
+ATTRIBUTES	DB	0	;FCB INTERFACE ATTRIBUTES HOLD BYTE
+
+if	MPM
+CHK_OLIST_FLAG	DB	0	;CHECK | TEST OLIST FLAG
+LOCK_SP		DW	0	;LOCK STACK PTR
+LOCK_SHELL	DB	0	;LOCK SHELL FLAG
+CHECK_FCB_RET	DB	0	;CHECK_FCB RETURN SWITCH
+LOCK_UNLOCK	DB	0	;LOCK | UNLOCK FUNCTION FLAG
+INCR_PDCNT	DB	0	;INCREMENT PROCESS_CNT FLAG ??
+FREE_MODE	DB	0	;FREE LOCK LIST ENTRIES FLAG ??
+				;1=FREE ENTRIES FOR CURDSK
+				;0=FREE ALL ENTRIES
+CUR_POS		DW	0	;CURRENT POSITION IN LOCK LIST
+PRV_POS		DW	0	;PREVIOUS POSITION IN LOCK LIST
+
+;SDCNT, SDBLK, SDCNT0, SDBLK0 order critical
+
+SDCNT		DW	0	;SAVED DCNT OF FILE'S 1ST FCB
+SDBLK		DW	0	;SAVED DBLK OF FILE'S 1ST FCB
+SDCNT0		DW	0	;SAVED DCNT (USER 0 PASS)
+SDBLK0		DW	0	;SAVED DBLK (USER 0 PASS)
+
+DONT_CLOSE	DB	0	;INHIBIT ACTUAL CLOSE FLAG
+OPEN_CNT	DB	0	;PROCESS OPEN FILE COUNT
+LOCK_CNT	DB	0	;PROCESS LOCKED RECORD COUNT
+FILE_ID		DW	0	;ADDRESS OF FILE' LOCK LIST ENTRY
+DELETED_FILES	DB	0	;DELETED FILES FLAG
+SET_RO_FLAG	DB	0	;SET DRIVE R/O FLAG
+CHECK_DISK	DB	0	;DISK RESET OPEN FILE CHECK FLAG
+FLUSHED		DB	0	;LOCK LIST OPEN FILE FLUSH FLAG
+
+;FREE_ROOT, LOCK_MAX, OPEN_MAX INITIALIZED BY SYSGEN
+
+		DW	OFFSET FREE_ROOT
+OPEN_ROOT	DW	0	;LOCK LIST OPEN FILE LIST ROOT
+LOCK_ROOT	DW	0	;LOCK LIST LOCKED RECORD LIST ROOT
+
+endif
+if	CPM
+
+CHAIN_FLAG	DB	0	;CHAIN FLAG ??
+STAMP		DB	0FFH,0FFH,0FFH,0FFH ??
+
+endif
+
+
+tranv		dw	0	;adr of translate vector
+fcbcopied	db	0	;true if copy$fcb called
+rmf		db	0	;read mode flag for open$reel
+wflag		db	0	;XIOS/BIOS write flag
+dirloc		db	0	;directory flag in rename, etc.
+seqio		db	0	;1 if seq i/o
+linfo		db	0	;low(info)
+dminx		db	0	;local for diskwrite
+tinfo		dw	0	;temp for info in "make"
+single		db	0	;set true if single byte 
+				;alloc map
+olddsk		db	0	;disk on entry to bdos
+rcount		db	0	;record count in curr fcb
+extval		db	0	;extent num and extmsk
+VRECORD 	DB	0	;curr virtual record
+arecord		dw	0	;curr actual record
+		DB	0	;CURR ACTUAL RECORD HIGH BYTE
+ablock		dw	0	;curr actual block# * blkmsk
+
+;	local variables for directory access
+
+dptr		db	0	;directory pointer 0,1,2,3
+ldcnt		equ	byte ptr dcnt	;low(dcnt)
+XDCNT		DW	0   	;EMPTY DIRECTORY DCNT
+XDBLK		DW	0	;EMPTY DIRECTORY DBLK
+USER_ZERO_PASS	DB	0	;SEARCH USER ZERO FLAG
+
+;	SHELL VARIABLES
+
+SHELL_SI	DW	0	;BDOS COMMAND OFFSET
+SHELL_DMA	DW	0	;DMAAD SAVE AREA
+SHELL_FLAG	DB	0	;PARSAVE SHELL FLAG
+SHELL_RR	DB	0,0,0	;R0,R1,R2 SAVE AREA
+
+
+;	Special 8086 variables:
+
+infosave	dw	0	;save for FCB adr
+parametersegment dw	0	;user parameter segment
+
+if	MPM
+
+returnseg	dw	0	;user return segment
+
+endif
+
+parlg		db	0	;len of parameter block
+
+;       error messages
+
+dskmsg		db	'Bdos Err On '
+dskerr		db	' : ',0	
+permsg		db	'Bad Sector',0
+selmsg		db	'Select',0
+rofmsg		db	'File '
+rodmsg		db	'R/O',0
+
+XERR_LIST:
+		DW	XE3,XE4,XE5,XE6,XE7,XE8,XE9,XE10,XE11
+
+XE3		DB	'File Opened in Read/Only Mode'
+XE4		DB	0
+XE5		DB	'File Currently Open',0
+XE6		DB	'Close Checksum Error',0
+XE7		DB	'Password Error',0
+XE8		DB	'File Already Exists',0
+XE9		DB	'Illegal ? in FCB',0
+XE10		DB	'Open File Limit Exceeded',0
+XE11		DB	'No Room in System Lock List',0
+
+crlfstr		db	13,10,0
+PR_FX		DB	'Bdos Function: '
+PR_FX1		DB	'   '
+PR_FCB		DB	'  File: '
+PR_FCB1		RS	12
+		DB	0
+
+DENIEDMSG	DB	13,13,'Disk reset denied, Drive '
+DENIEDDRV	DB	0,':'
+		DB	' Console '
+DENIEDCNS	DB	0
+		DB	' Program '
+DENIEDPRC	DB	'12345678',0
+
+;	Local buffer area:
+
+loc_par_area	rb	258	;local user parameter (FCB,...)
+
+if	MPM
+
+;	bdos stack switch variables and stack
+;	used for all bdos disk functions
+
+SAVE_SP		RW	1
+sssave		rw	1
+spsave		rw	1
+
+		; 60 word BDOS stack
+
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+bdosstack	rw	0
+
+setdf		db	0	;flag to see if disk needs set on entry
+setbf		db	0	;flag to see if dma needs set on entry
+pf_keepsav	dw	0	;save pf_keep flag
+
+
+
+mxdiskqd	dw	0	;link
+		db	0,0	;net,org
+		dw	qf_mx	;flags (MX queue)
+		db	'MXdisk  '
+		dw	0,1	;msglen,nmsgs
+		dw	0,0	;nq,dq
+		dw	0,0	;msgcnt,out
+		dw	0	;buffer ptr
+
+mxdiskqpb	db	0	;flgs
+		db	0	;net
+		dw	0	;qaddr
+		dw	1	;nmsgs
+		dw	0	;buffer
+		db	'MXdisk  '
+
+endif
+
+if	CPM
+
+;
+;       Special 8086 variables:
+;
+ioloc           db      0       ;iobyte
+user_parm_seg	dw	0	;holds user parameter seg during load
+nallocmem       db      0       ;no. of allocated memory segments
+ncrmem          db      0       ;no. of available memory segments
+crmem           dw      0,0     ;memory table (16 elements)
+                dw      0,0,0,0,0,0
+                dw      0,0,0,0,0,0,0,0
+                dw      0,0,0,0,0,0,0,0
+                dw      0,0,0,0,0,0,0,0
+;
+mem_stack_length        equ     40
+memstack        rs      mem_stack_length
+                        ;8 possible allocations
+stbase  equ     word ptr 0
+stlen   equ     word ptr 2
+ccpflag equ     byte ptr 4
+nccpalloc       db      0       ;number of current ccp allocations
+mem_stk_ptr     dw      0       ;current memory stack location
+
+stackarea       rw      ssize   ;stack size
+endstack        rb      0       ;top of stack
+;
+endif
+		org	0fffh
+		db	0
+		end
+

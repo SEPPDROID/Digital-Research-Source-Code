@@ -1,0 +1,334 @@
+1File: LEX.C                                                               Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "preproc.h"
+     9   char null[] "";
+    10    
+    11   char ctype[] {
+    12   	EOF,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC, /*BUG 2*/
+    13   	ANYC,	WHITE,	NEWL,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC, /*BUG 2*/
+    14   	ANYC,	ANYC,	ANYC,	ANYC,	NEWL,	ANYC,	ANYC,	ANYC, /*BUG 2*/
+    15   	ANYC,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC,	ANYC, /*BUG 2*/
+    16   	WHITE,	NOT,	DQUOTE,	POUND,	ANYC,	MOD,	AND,	SQUOTE, /*BUG 2*/
+    17   	LPAREN,	RPAREN,	MULT,	ADD,	COMMA,	SUB,	ANYC,	DIV,
+    18   	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,	DIGIT,
+    19   	DIGIT,	DIGIT,	COLON,	ANYC,	LESS,	EQUAL,	GREAT,	QMARK,
+    20   	ANYC,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	/*BUG 2*/
+    21   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    22   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    23   	ALPHA,	ALPHA,	ALPHA,	ANYC,	BSLASH,	ANYC,	XOR,	ALPHA,
+    24   	ANYC,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	/*BUG 2*/
+    25   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    26   	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,	ALPHA,
+    27   	ALPHA,	ALPHA,	ALPHA,	ANYC,	OR,		ANYC,	COMPL,	ANYC	/*BUG 2*/
+    28   };
+    29    
+    30   /* symhash - compute hash value for symbol*/
+    31   /*		Sums the symbols characters and takes that modulus the hash table*/
+    32   /*		size.*/
+    33   symhash(sym)						/* returns hash value for symbol*/
+    34   char *sym;							/* pointer to symbol*/
+    35   {
+    36   	register char *p;
+    37   	register int hashval, i;
+    38    
+    39   	for( p = sym, i = SSIZE, hashval = 0; *p != '\0' && i > 0; i-- )
+    40   		hashval =+ *p++;
+    41   	return( hashval % HSIZE );
+    42   }
+    43    
+    44   /* symequal - check for symbol equality*/
+    45   /*		Does comparison between two symbols.*/
+    46   symequal(sym1,sym2)					/* returns 1 if equal, 0 otherwise*/
+    47   char *sym1;							/* pointer to first symbol*/
+    48   char *sym2;							/* pointer to second symbol*/
+    49   {
+    50   	register char *p, *q;
+    51   	register int i;
+    52    
+    53   	q = sym2;
+    54   	i = SSIZE;
+    55   	for( p = sym1; *p == *q++; )
+    56   		if( *p++ == '\0' || --i == 0 )
+    57   			return(1);
+    58   	return(0);
+    59   }
+1File: LEX.C                                                               Page       2
+    60    
+    61   /* symcopy - symbol copy*/
+    62   /*		Copies one symbol to another.*/
+    63   symcopy(sym1,sym2)					/* returns - none*/
+    64   char *sym1;							/* pointer to symbol to copy*/
+    65   char *sym2;							/* pointer to area to copy to*/
+    66   {
+    67   	register char *p, *q;
+    68   	register int i;
+    69    
+    70   	for( p = sym1, q = sym2, i = SSIZE; --i >= 0; )
+    71   		if( *p )
+    72   			*q++ = *p++;
+    73   		else
+    74   			*q++ = '\0';
+    75   }
+    76    
+    77   /* error - output error message*/
+    78   /*		Outputs line number and error message and keeps track of errors.*/
+    79   error(s,x1,x2,x3,x4,x5,x6)				/* returns - none*/
+    80   char *s;								/* printf string*/
+    81   int x1, x2, x3, x4, x5, x6;				/* printf args*/
+    82   {
+    83   	if (filep == &filestack[0]) /* [vlh] 3.4 not in include */
+    84   		printf("# %d: ",lineno);
+    85   	else
+    86   		printf("%s : # %d: ",(filep)->ifile,(filep)->lineno);
+    87   	printf(s,x1,x2,x3,x4,x5,x6);
+    88   	putchar('\n');
+    89   	mfail++;
+    90   }
+    91    
+    92   /* putback - puts back a single character*/
+    93   /*		Checks for push back buffer overflow.*/
+    94   putback(c)
+    95   int c;
+    96   {
+    97   	if( pbp >= &pbbuf[PBSIZE] ) {
+    98   		error("too many characters pushed back");
+    99   		cexit();
+   100   	}
+   101   	*pbp++ = c;
+   102   }
+   103    
+   104   /* pbtok - push back a token*/
+   105   /*		Reverses token as its pushing it back.*/
+   106   pbtok(s)
+   107   char *s;
+   108   {
+   109   	register char *p;
+   110    
+   111   	for( p = s + strlen(s); p > s ; )
+   112   		putback(*--p);
+   113   }
+   114    
+   115   /* ngetch - get a (possibly) pushed back character*/
+   116   /*		This handles the include file stack and incrementing the line*/
+   117   /*		number for the lowest level file.*/
+   118   ngetch()								/* returns character or EOF*/
+1File: LEX.C                                                               Page       3
+   119   {
+   120   	register int c, i;
+   121   	register char *p, *q;
+   122    
+   123   	if( pbp > &pbbuf[0] )
+   124   		return(*--pbp);
+   125   	pbflag = 0;
+   126   	while( (c=getc(&(filep->inbuf))) < 0 ) {
+   127   		if( filep == &filestack[0] )
+   128   			return(EOF);
+   129   		close(filep->inbuf.fd);
+   130   		filep--;
+   131   		if( filep == &filestack[0] ) {	/*need line for #include...*/
+   132   			putc('\n',&outbuf);
+   133   			lineno++;
+   134   		}
+   135   	}
+   136   	return( c );
+   137   }
+   138    
+   139   /* getsp - get symbol pointer*/
+   140   /*		Calculates the symbol table pointer for a given symbol, if symbol*/
+   141   /*		is not defined, will point to appropriate place to insert symbol.*/
+   142   struct symbol *getsp(name)
+   143   char *name;
+   144   {
+   145   	register int wrap;
+   146   	register struct symbol *sp, *asp;
+   147    
+   148   	wrap = 0;
+   149   	asp = 0;
+   150   	for( sp = &symtab[symhash(name)]; sp->s_def != null; ) {
+   151   		if( symequal(sp->s_name,name) )
+   152   			return(sp);
+   153   		if( !asp && sp->s_def == null )
+   154   			asp = sp;
+   155   		if( ++sp >= &symtab[HSIZE] ) {
+   156   			if( wrap++ ) {
+   157   				error("symbol table overflow");
+   158   				cexit();
+   159   			}
+   160   			sp = &symtab[0];
+   161   		}
+   162   	}
+   163   	return( asp ? asp : sp );
+   164   }
+   165    
+   166   /* lookup - looks up a symbol to see if it is defined*/
+   167   /*		Returns pointer to definition if found.*/
+   168   char *lookup(name)							/* returns 0 or ptr to symbol*/
+   169   char *name;									/* symbol name*/
+   170   {
+   171   	register struct symbol *sp;
+   172    
+   173   	sp = getsp(name);
+   174   	if( sp->s_def == 0 || sp->s_def == null )
+   175   		return(0);
+   176   	return(sp);
+   177   }
+1File: LEX.C                                                               Page       4
+   178    
+   179   /* gettok - gets next token from input*/
+   180   /*		Collects character string in token and handles special tokens for*/
+   181   /*		the expression evaluator.*/
+   182   gettok(token)							/* returns token type*/
+   183   char *token;
+   184   {
+   185   	register char *p, c;
+   186   	register int type, count, t, l;
+   187    
+   188   	p = token;
+   189   	c = ngetch();
+   190   	*p++ = c;
+   191   	switch( type = ctype[c] ) {
+   192    
+   193   	case SQUOTE:
+   194   	case DQUOTE:
+   195   		getstr(token,TOKSIZE,c);
+   196   		return(type);
+   197    
+   198   	case DIGIT:
+   199   	case ALPHA:
+   200   		for( ; p < &token[TOKSIZE]; p++ ) {
+   201   			*p = ngetch();
+   202   			if( (t=ctype[*p]) != ALPHA && t != DIGIT )
+   203   				break;
+   204   		}
+   205   		putback(*p);
+   206   		break;
+   207    
+   208   	case NOT:
+   209   		if( peekis('=') ) {
+   210   			type = NEQUAL;
+   211   			*p++ = '=';
+   212   		}
+   213   		break;
+   214    
+   215   	case GREAT:
+   216   		if( peekis('>') ) {
+   217   			type = RSHIFT;
+   218   			*p++ = '>';
+   219   		}
+   220   		else if( peekis('=') ) {
+   221   			type = GREQUAL;
+   222   			*p++ = '=';
+   223   		}
+   224   		break;
+   225    
+   226   	case LESS:
+   227   		if( peekis('<') ) {
+   228   			type = LSHIFT;
+   229   			*p++ = '<';
+   230   		}
+   231   		else if( peekis('=') ) {
+   232   			type = LSEQUAL;
+   233   			*p++ = '=';
+   234   		}
+   235   		break;
+   236    
+1File: LEX.C                                                               Page       5
+   237   	case EQUAL:
+   238   		if( peekis('=') )
+   239   			*p++ = '=';
+   240   		else
+   241   			type = ANYC;
+   242   		break;
+   243    
+   244   	case DIV:
+   245   		if( peekis('*') ) {
+   246   			l = lineno;
+   247   			while( (c=ngetch()) != EOF )
+   248   				if( c == '\n' ) {
+   249   					if( filep == &filestack[0] && pbp == &pbbuf[0] ) {
+   250   						lineno++;
+   251   						putc('\n',&outbuf);
+   252   					}
+   253   				}
+   254   				else if( c == '*' && peekis('/') )
+   255   					break;
+   256   			if( c == EOF ) {
+   257   				lineno = l;
+   258   				error("no */ before EOF");
+   259   			}
+   260   			type = WHITE;
+   261   			token[0] = ' ';
+   262   		}
+   263   		else if( peekis('/') ) {
+   264   			while( (c=ngetch()) != EOF && c != '\n' )
+   265   				;
+   266   			type = NEWL;
+   267   			token[0] = '\n';
+   268   		}
+   269   		break;
+   270    
+   271   	case BADC:
+   272   		error("bad character 0%o",c);
+   273   		break;
+   274    
+   275   	}
+   276   	*p = '\0';
+   277   	return(type);
+   278   }
+   279    
+   280   /* getstr - get a quoted (single or double) character string*/
+   281   /*		Gets specified number of characters, handling escapes.*/
+   282   getstr(str,nchars,endc)				/* returns - none*/
+   283   char *str;							/* pointer to string buffer*/
+   284   int nchars;							/* max number of characters*/
+   285   char endc;							/* ending string character*/
+   286   {
+   287   	register char *p;
+   288   	register int i;
+   289   	register int c;
+   290   	register int j;
+   291    
+   292   	p = str;
+   293   	*p++ = endc;
+   294   	for( i = nchars-2; (c=ngetch()) != endc; ) {
+   295   		if( c == EOF || c == '\n' ) {
+1File: LEX.C                                                               Page       6
+   296   			error("string cannot cross line");
+   297   			break;
+   298   		}
+   299   		if( --i > 0 )					/*BUG 1*/
+   300   			*p++ = c;
+   301   		else if( !i )
+   302   			error("string too long");
+   303   		if( c == '\\' ) {
+   304   			c = ngetch();
+   305   			if( --i > 0 )				/*BUG 1*/
+   306   				*p++ = c;
+   307   			else if( !i )
+   308   				error("string too long");
+   309   		}
+   310   	}
+   311   	*p++ = endc;
+   312   	*p = '\0';
+   313   }
+   314    
+   315   /* peekis - peeks at next character for specific character*/
+   316   /*		Gets next (possibly pushed back) character, if it matches*/
+   317   /*		the given character 1 is returned, otherwise the character*/
+   318   /*		is put back.*/
+   319   peekis(tc)							/* returns 1 if match, 0 otherwise*/
+   320   int tc;								/* test character*/
+   321   {
+   322   	register int c;
+   323    
+   324   	if( (c=ngetch()) == tc )
+   325   		return(1);
+   326   	putback(c);
+   327   	return(0);
+   328   }

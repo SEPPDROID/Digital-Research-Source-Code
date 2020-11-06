@@ -1,0 +1,275 @@
+$title ('MP/M-86 2.0 Spool Program')
+$compact
+spool:
+do;
+
+$include(copyrt.lit)
+
+$include(vaxcmd.lit)
+
+$include(comlit.lit)
+
+dcl mpm$product lit '11h';
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+  mon3:
+    procedure (func,info) address external;
+      declare func byte;
+      declare info address;
+    end mon3;
+
+  declare fcb (1) byte external;
+  declare buff (1) byte external;
+
+  read$console:
+    procedure byte;
+      return mon2 (1,0);
+    end read$console;
+
+  print$console$buffer:
+    procedure (buff$adr);
+      declare buff$adr address;
+      call mon1 (9,buff$adr);
+    end print$console$buffer;
+
+  check$console$status:
+    procedure byte;
+      return mon2 (11,0);
+    end check$console$status;
+
+  version:
+    procedure address;
+      return mon3(12,0);
+    end version;
+
+  open:
+    procedure (fcb$adr) byte public;
+      declare fcb$adr address;
+      return mon2 (15,fcb$adr);
+    end open;
+  
+  readbf:
+    procedure (fcb$adr) byte public;
+      declare fcb$adr address;
+      return mon2 (20,fcb$adr);
+    end readbf;
+  
+  set$dma:
+    procedure (dma$adr) public;
+      declare dma$adr address;
+      call mon1 (26,dma$adr);
+    end set$dma;
+
+  free$drives:
+    procedure;
+      call mon1 (39,0ffffh);
+    end free$drives;
+
+  lo:
+    procedure (char) public;
+      declare char byte;
+      call mon1 (5,char);
+    end lo;
+
+  system$reset:
+    procedure;
+      call mon1 (0,0);
+    end system$reset;
+
+  crlf:
+    procedure;
+      call print$console$buffer(.(0ah,0dh,'$'));
+    end crlf;
+
+/* CP/M, XDOS function numbers */
+
+declare
+	set$dma$base		lit	'51',
+	get$max$mem		lit	'53',
+	alloc$mem		lit	'55',
+	free$mem		lit	'57',
+  	open$queue		lit	'135',
+	read$queue		lit	'137',
+	cond$read$queue 	lit	'138',
+	write$queue		lit	'139',
+	detach			lit	'147',
+	parse$fname		lit	'152',
+	attach$list 		lit	'158',
+	detach$list		lit	'159';
+
+
+  declare control$z literally '1AH';
+  declare (char,column,itab,jtab,i) byte;
+
+  declare bufpointer pointer;			/* base this structure */
+  declare bufptr structure (			/* where memory has been */
+    offset word, segment word ) at (@bufpointer); /* allocated */
+  declare buffer based bufpointer (128) byte;
+
+  list$buf:
+    procedure (sector) byte;
+      declare i byte, sector word;
+
+      do i = 0 to 127;
+        if (char := buffer(i + sector)) = control$z
+          then return true;
+        itab = (char = 09H) and (7 - (column and 7));
+        if char = 09H
+          then char = ' ';
+        do jtab = 0 to itab;
+          if char >= ' '
+            then column = column + 1;
+          if char = 0AH then column = 0;
+          call lo(char);
+
+        if check$console$status then
+          do;
+            i = read$console;  /* under MP/M-80 forced a dispatch */
+            call system$reset; /* when console detached, causes problems */
+          end;		       /* under MP/M-86 when detached ?? */
+			       /* leave in for test site since there is */
+			       /* no abort code and/or stop spooler */
+        end;
+      end;
+      return false;
+    end list$buf;
+
+  declare (nmbufs,actbuf) address;
+
+  copy$file:
+    procedure;
+      declare ok byte;
+      declare i word;			/* for signed compare below */
+
+      do forever;
+        actbuf = 0;
+        ok = true;
+        do while ok;
+          call set$dma (bufptr.offset + actbuf * 128);
+          if (ok := (readbf (.fcb) = 0)) then
+            do;
+            ok = ((actbuf := actbuf+1) < nmbufs);
+            end;
+          else
+            do;
+            if actbuf = 0 then return;
+            end;
+        end;
+        do i = 1 to actbuf;
+          if list$buf((i - 1) * 128) then
+            return;
+        end;
+      end;
+    end copy$file;
+
+  declare local$buffer (512) byte;  /* used if unsuccessful mem allocation */
+
+  declare pcb structure (
+    field$adr address,
+    fcb$adr address)
+    initial (0,.fcb);
+
+  declare (ret,ret2) byte;
+  declare nxt$chr$adr address;
+
+  declare reserved$for$disk (3) byte;
+  declare mcb structure (
+    base word, length word, ext byte) initial (0,0fffh,0); /* alloc 64k max */
+
+  declare uqcb literally 'structure (
+	q$id word, bufadr word, name (8) byte)';
+
+  declare mode1 lit '6';		/* offset in fcb for r/o attribute */
+
+plmstart: procedure public;
+
+    if high(version) <> mpmproduct then
+    do;
+      call print$console$buffer(.('Requires MP/M-86',0dh,0ah,'$'));
+      call system$reset;
+    end;
+
+    nxt$chr$adr = .buff(0);		/* make sure files exit */
+    do while (nxt$chr$adr <> 0);
+      pcb.field$adr = nxt$chr$adr + 1;
+      nxt$chr$adr = mon3 (parse$fname,.pcb);
+      fcb(mode1) = fcb(mode1) or 080h;    /* open files in read only mode */
+      if nxt$chr$adr = 0FFFFH then
+        do;
+        call print$console$buffer(.(0dh,0ah,'Illegal File Name',0dh,0ah,'$'));
+        call system$reset;
+        end;
+      else if open (.fcb) = 0FFH then
+        do;
+        call print$console$buffer (.(0dh,0ah,'Can''t Open File = $'));
+        fcb(12) = '$';
+        call print$console$buffer(.fcb(1));
+        call crlf;
+        call system$reset;
+        end;
+    end; /* of while */
+
+  if ret = mon2(get$max$mem,.mcb) and
+      mcb.length >= (size(local$buffer) / 16) + 8 then
+    do;		/* successful memory allocation and bigger than local buf */
+    if (nmbufs := shr (mcb.length,3)) > 512 then /* larger than 64K ? */
+       do;
+       nmbufs = 512;
+       mcb.base = mcb.base + 01000h;
+       mcb.length = mcb.length - 01000h;
+       mcb.ext = 0;
+       call mon1(free$mem,.mcb);	/* return extra memory past 64K */
+       end;
+    call mon1(set$dma$base,mcb.base);
+    bufptr.segment = mcb.base;
+    bufptr.offset = 0;
+    end;
+  else					/* not enough external memory: */
+    do;					/* use buffer internal to program */ 
+    bufpointer = @local$buffer;
+    nmbufs = size(local$buffer) / 128;
+    end;
+
+    call print$console$buffer(.(
+        'MP/M-86 V2.0 Spooler', 0dh, 0ah,
+        '- Enter STOPSPLR to abort the spooler', 0dh, 0ah,
+        '- Enter ATTACH SPOOL to re-attach console to spooler', 0dh, 0ah,
+        '*** Spooler Detaching From Console ***$'));
+    call mon1(detach,0);
+
+    nxt$chr$adr = .buff(0);
+    do while (nxt$chr$adr <> 0) and
+           (nxt$chr$adr <> 0FFFFH);
+      pcb.field$adr = nxt$chr$adr + 1;
+      nxt$chr$adr = mon3 (parse$fname,.pcb);
+      if nxt$chr$adr <> 0FFFFH then
+        do;
+        fcb(mode1) = fcb(mode1) or 080h;    /* open files in read only mode */
+        if open (.fcb) <> 0FFH then
+          do;
+          fcb(32) = 0;
+          call mon1(attach$list,0);
+          call copy$file;
+          call mon1(detach$list,0);
+          call free$drives;
+          end;
+        end;
+    end; /* of while */
+
+    call system$reset;
+
+  end plmstart;
+
+end spool;
+

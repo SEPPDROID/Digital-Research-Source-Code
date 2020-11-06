@@ -1,0 +1,1097 @@
+1File: MISC.C                                                              Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /* pass 2 miscellaneous routines */
+     9   #include "as68.h"
+    10   int p2gi();
+    11    
+    12   long stlen;
+    13   int stdofd 1;
+    14   char tfilname[];
+    15   int ins[], rlbits[], f2mode[];
+    16   int udfct, ftudp, pline, prsp;
+    17    
+    18   clrea(ap)
+    19   struct op *ap;
+    20   {
+    21   	register struct op *p;
+    22    
+    23   	p = ap;
+    24   	p->ea = p->len = p->xmod = p->drlc = 0; p->con = 0;
+    25   	p->ext = p->idx = -1;
+    26   }
+    27    
+    28   /*
+    29    * get one operand effective adddress (operand until , or EOS)
+    30    * returns:
+    31    *	opnd[opn].ea set to effective address mode bits
+    32    *	opnd[opn].len set to # bytes for operand
+    33    *	opnd[opn].con set to constant part of ea
+    34    *	opnd[opn].ext set to external symbol # if any
+    35    *	opnd[opn].idx set to index register if any
+    36    *	opnd[opn].drlc set to effective address relocation mode
+    37    *	opnd[opn].xmod set to index register addressing mode (word or long)
+    38    */
+    39   getea(opn)
+    40   {
+    41   	register i,disp;
+    42   	register struct op *p;
+    43   	register int t;
+    44    
+    45   	p = &opnd[opn];
+    46   	disp = 0;
+    47   	clrea(p);
+    48   	if(ckitc(pitw,(int)'#')) {
+    49   		p->len = (modelen==1) ? 2 : modelen;
+    50   		p->ea = IMM;
+    51   		pitw++;
+    52   		goto dosimp;
+    53   	}
+    54   	if(ckitc(pitw,(int)'(')) {
+    55   geteal1:
+    56   		pitw++;
+    57   		if((i=getrgs()) == PC) {	/*pc relative*/
+    58   			p->ea = 072;			/*set mode & register bits*/
+    59   			p->len = 2;
+1File: MISC.C                                                              Page       2
+    60   		}
+    61   		else {
+    62   			if(i != -1)		/*last was some type of register*/
+    63   				pitw--;		/*havent used it yet*/
+    64   			if((i=getareg()) < 0) {	/*not a reg # next*/
+    65   				if(disp || getreg()!=-1) {
+    66   					uerr(14);	/*illegal index reg*/
+    67   					return;
+    68   				}
+    69   				pitw--;
+    70   				goto dosimp;		/*must be expression in ()*/
+    71   			}
+    72   			p->ea = i&7;				/*put in a reg #*/
+    73   		}
+    74   		if(ckitc(pitw,(int)',')) {	/*must be index reg #*/
+    75   			do_ireg(p,i);
+    76   			return;
+    77   		}
+    78   		ckrparen();
+    79   		if(i != PC) {
+    80   			if(!disp && ckitc(pitw,(int)'+')) {
+    81   				pitw++;
+    82   				p->ea =| INDINC;
+    83   			}
+    84   			else if(disp) {		/*indirect with displacement*/
+    85   				p->ea =| INDDISP;
+    86   				p->len = 2;
+    87   			}
+    88   			else
+    89   				p->ea =| INDIRECT;
+    90   		}
+    91   		ckeop(9+opn);
+    92   		return;
+    93   	}
+    94   	if(ckitc(pitw,(int)'-')) {	/*predecrement maybe*/
+    95   		pitw++;
+    96   		if(ckitc(pitw,(int)'(')) {	/*must be*/
+    97   			pitw++;
+    98   			if((i = getareg()) < 0) {	/*not valid a reg*/
+    99   				pitw =- 2;		/*must be negative expr*/
+   100   				goto dosimp;
+   101   			}
+   102   			p->ea = i|DECIND;
+   103   			ckrparen();
+   104   			ckeop(9+opn);
+   105   			return;
+   106   		}
+   107   		pitw--;
+   108   	}
+   109   dosimp:					/*simple addr or imm expr*/
+   110   	if(i=gspreg()) {
+   111   		t = ins[0];
+   112   		if(i==PC || (i==USP && t!=MOVE))
+   113   			uerr(20);
+   114   		if(i==SR || i==CCR) {
+   115   			if(t!=AND&&t!=OR&&t!=EOR&&t!=ANDI&&t!=ORI&&t!=EORI&&t!=MOVE)
+   116   					uerr(20);
+   117   		}
+   118   		p->idx = i;
+1File: MISC.C                                                              Page       3
+   119   		ckeop(9+opn);
+   120   		return;
+   121   	}
+   122   	if((i=getreg()) >= 0) {	/*register direct*/
+   123   		p->ea = i;
+   124   		if(modelen==1 && i>=AREGLO && i<=AREGHI)
+   125   			uerr(20);
+   126   		ckeop(9+opn);
+   127   		return;
+   128   	}
+   129   	expr(&p2gi);
+   130   	if(pitw < pnite)	/*expr passes one token*/
+   131   		pitw--;
+   132   	if(extflg) {
+   133   		p->ext = extref;
+   134   		extflg = 0;
+   135   	}
+   136   	p->con = ival;
+   137   	p->drlc = reloc;		/*relocation factor*/
+   138   	if(ckitc(pitw,(int)'(')) {
+   139   		disp++;
+   140   		goto geteal1;
+   141   	}
+   142   	if(!p->ea) {	/*memory  address*/
+   143   		if(shortadr && (!ival.wd1 || ival.wd1== -1)) { /*16-bit addrs*/
+   144   			p->ea = SADDR;
+   145   			p->len = 2;
+   146   		}
+   147   		else {
+   148   			p->ea = LADDR;
+   149   			p->len = 4;
+   150   		}
+   151   	}
+   152   	ckeop(9+opn);
+   153   }
+   154    
+   155   do_ireg(p,i,opn)
+   156   struct op *p;
+   157   int i, opn;
+   158   {
+   159   	pitw++;
+   160   	p->idx = getreg();
+   161   	if(p->idx<0 || p->idx>AREGHI)
+   162   		uerr(14);
+   163   	p->len = 2;
+   164   	if(!ckitc(pitw,')')) {
+   165   		p->xmod = getrgs() - 20;
+   166   		if(p->xmod<0 || p->xmod>1) {
+   167   			uerr(34);
+   168   			p->xmod = 0;
+   169   		}
+   170   	}
+   171   	ckrparen();
+   172   	ckeop(9+opn);
+   173   	if(i==PC)
+   174   		p->ea =+ 1;
+   175   	else
+   176   		p->ea =| INDINX;
+   177   }
+1File: MISC.C                                                              Page       4
+   178    
+   179   /*
+   180    * get an A register specification
+   181    *  call with:
+   182    *		pitw pointing to reg operand
+   183    *  returns:
+   184    *		-1 if not vaid A reg
+   185    *		A reg # if valid
+   186    *		also updates pitw if valid
+   187    */
+   188   getareg()
+   189   {
+   190   	register i;
+   191    
+   192   	i = getreg();
+   193   	if(i>=AREGLO && i<=AREGHI) {
+   194   		return(i&7);
+   195   	}
+   196   	else {
+   197   		if(i != -1)
+   198   			pitw--;
+   199   		return(-1);
+   200   	}
+   201   }
+   202    
+   203   /*
+   204    * get any register specification
+   205    *  call with :
+   206    *		pitw pointing at operand
+   207    *  returns:
+   208    *		register # with pitw updated
+   209    *		-1 if not valid register
+   210    */
+   211   getreg()
+   212   {
+   213   	register i;
+   214    
+   215   	i = getrgs();
+   216   	if(i>=0 && i<=AREGHI)
+   217   		return(i);
+   218   	else {
+   219   		if(i != -1)
+   220   			pitw--;
+   221   		return(-1);
+   222   	}
+   223   }
+   224    
+   225   /*get any register specification*/
+   226   getrgs()
+   227   {
+   228   	register char *i;
+   229    
+   230   	if(pitw->itty == ITSY) {
+   231   		i = pitw->itop.ptrw2;		/*symbol ptr*/
+   232   		if(i->flags&SYER) {
+   233   			pitw++;
+   234   			return((int)i->vl1.wd2);	/*register #*/
+   235   		}
+   236   	}
+1File: MISC.C                                                              Page       5
+   237   	return(-1);
+   238   }
+   239    
+   240   /* check for a right paren as the next char*/
+   241   /*  output error msg if not found*/
+   242   ckrparen()
+   243   {
+   244   	if(ckitc(pitw,(int)')')) /*found it*/
+   245   		pitw++;
+   246   	else
+   247   		uerr(32);
+   248   }
+   249    
+   250   /*
+   251    * check intermedate text item for special character
+   252    *	call with:
+   253    *		pointer to desired item in stbuf
+   254    *		character to check for
+   255    *	returns:
+   256    *		0 => no match
+   257    *		1 => match
+   258    */
+   259   ckitc(ckpt,cksc)
+   260   char *ckpt;
+   261   {
+   262   	if(ckpt >= pnite || ckpt->itty != ITSP || ckpt->itop.wd2 != cksc)
+   263   		return(0);
+   264   	return(1);
+   265   }
+   266    
+   267   /*
+   268    * read intermediate text for one statement
+   269    * returns:
+   270    *	intermediate text in stbuf
+   271    */
+   272   ristb()
+   273   {
+   274   	register riix;
+   275   	register short *pi;
+   276   	register int i;
+   277    
+   278   	do {
+   279   		riix = stbuf[0].itrl;
+   280   		pi = &stbuf[0];
+   281   		for(i=0; i<(sizeof stbuf[0])/(sizeof *pi); i++) {
+   282   			*pi++ = doitrd();
+   283   		}
+   284   		if(stbuf[0].itty != ITBS) {	/*best be beginning of statement */
+   285   		  printf("it sync error itty=%x\n",stbuf[0].itty);
+   286   			if( stbuf[0].itty == 0)
+   287   				return(0);
+   288   			abort();
+   289   		}
+   290    
+   291   /* get the rest of the statement it*/
+   292   		riix = stbuf[0].itrl & 0377;	/*unsigned byte*/
+   293   		riix--;					/*already got first entry*/
+   294   		while(riix--) {
+   295   			for(i=0; i<(sizeof stbuf[0])/(sizeof *pi); i++) {
+1File: MISC.C                                                              Page       6
+   296   				*pi++ = doitrd();
+   297   			}
+   298   		}
+   299   	} while(stbuf[1].itrl == -1);	/* eliminated instr, read next one */
+   300   	return(1);
+   301   }
+   302    
+   303   int errno;
+   304   int nitleft;	/* # of shorts left in itbuf	*/
+   305    
+   306   doitrd()
+   307   {
+   308   	register short i;
+   309    
+   310   	if(pitix < itbuf || pitix > &itbuf[ITBSZ]) {
+   311   		printf("doitrd: buffer botch pitix=%lx itbuf=%lx end=%lx\n",
+   312   		pitix,itbuf,&itbuf[ITBSZ]);
+   313   		endit();
+   314   	}
+   315    
+   316   	if(nitleft <= 0)
+   317   	{
+   318   		pitix = itbuf;
+   319   		if((i=read(itfn,itbuf,sizeof itbuf)) != sizeof itbuf) {
+   320   			fprintf(stderr,"it read error i=%d errno=%o itoffset=%ld\n",
+   321   				i,errno,itoffset);
+   322   			abort();
+   323   		}
+   324   		nitleft = ITBSZ;
+   325   	}
+   326   	i = *pitix;
+   327   	nitleft--;
+   328   	itoffset += sizeof *pitix;
+   329   	pitix++;
+   330   	return(i);
+   331   }
+   332    
+   333   /*
+   334    * check for end of operand
+   335    * call with
+   336    *		error number if this is not end of operand
+   337    */
+   338   ckeop(uen)
+   339   {
+   340   	if(pitw>=pnite)	/*end of all operands*/
+   341   		return(1);
+   342   	if(!ckitc(pitw,(int)',')) {	/*not end of stmt must be op,op*/
+   343   		uerr(uen);
+   344   		return(0);
+   345   	}
+   346   	return(1);
+   347   }
+   348    
+   349   /* output symbol table to file*/
+   350   osymt()
+   351   {
+   352   	register char **sx1;
+   353   	register char *p;
+   354   	register i;
+1File: MISC.C                                                              Page       7
+   355   	register j;
+   356   	int symcmp();
+   357   	stlen = 0;
+   358   	if(extindx) {				/*output external symbols first*/
+   359   		sx1 = extbl;
+   360   		for(i=0;i<extindx;i++)	/*go through external table*/
+   361   			osyme(*sx1++);			/*output symbol*/
+   362   	}
+   363    
+   364   	for(p=bmte; p<lmte; p=+ STESIZE) {	/*want them in order defined*/
+   365   		if(p->flags&(SYXR|SYIN))
+   366   			continue;
+   367   		osyme(p);
+   368   	}
+   369   	if(prtflg)
+   370   	{
+   371   		xline = LPP;
+   372   		page();				/* Pop to next Page	*/
+   373   		printf("S y m b o l   T a b l e\n\n");
+   374   		xline++;			/* Bump Line count	*/
+   375   		j = ((lmte-bmte)/STESIZE);	/* # elements		*/
+   376   		qsort(bmte,j,STESIZE,symcmp);	/* Sort the symbols 1st */
+   377   		j = 0;				/* Now count symbols / line*/
+   378   		for(p=bmte; p<lmte; p+=STESIZE)
+   379   		{
+   380   			if(j > 3)
+   381   			{
+   382   				printf("\n");
+   383   				page();
+   384   				j = 0;
+   385   			}
+   386   			j += psyme(p);
+   387   		}		
+   388   	}
+   389   }
+   390   symcmp(a,b)
+   391   register char *a;
+   392   register char *b;
+   393   {
+   394   	return(strncmp(a,b,NAMELEN));
+   395   }
+   396   /* make all undefined symbols external*/
+   397   fixunds()
+   398   {
+   399   	register char **sx1, **sx2;
+   400    
+   401   /* loop thru symbol initial reference table*/
+   402   	for(sx1= sirt; sx1<&sirt[SZIRT-1]; sx1 =+ 2) {
+   403   		if(*(sx2 = sx1+1)==0)		/* this chain is empty*/
+   404   			continue;
+   405    
+   406   /* symbols on one chain*/
+   407   		sx2 = *sx2;	/*first entry on this chain*/
+   408   		while(1) {
+   409   			if(!(sx2->flags&SYDF)) {	/*not defined*/
+   410   				if(undflg || sx2->flags&SYGL) { /*all or globals*/
+   411   					sx2->flags = sx2->flags|SYDF|SYXR;
+   412   					mkextidx(sx2);
+   413   				}
+1File: MISC.C                                                              Page       8
+   414   			}
+   415   			if(sx2 == *sx1)	/*end of chain*/
+   416   				break;
+   417   			sx2 = sx2->tlnk;	/*next entry in chain*/
+   418   		}
+   419   	}
+   420   }
+   421    
+   422   /*
+   423    * output symbols in a form to be read by a debugger
+   424    * call with pointer to symbol table entry
+   425    * prints all undefined symbols
+   426    */
+   427   osyme(aosypt)
+   428   struct symtab *aosypt;
+   429   {
+   430   	register struct symtab *osypt;
+   431   	register char *p1;
+   432   	register int i;
+   433   	register short *ps1;
+   434    
+   435   	osypt = aosypt;		/*pointer to symbol table entry*/
+   436   	if(!prtflg && !(osypt->flags&SYDF)) {	/*undefined symbol*/
+   437   		pudfs(osypt);				/*print undefined*/
+   438   		return;
+   439   	}
+   440    
+   441    
+   442   	stlen =+ 14;	/*one more symbol out*/
+   443    
+   444   /*output symbol to loader file*/
+   445   	ps1 = &(osypt->name[0]);
+   446   	for(i=0; i<NAMELEN/2; i++) {		/*output symbol name*/
+   447   		putw(*ps1++,&lbuf);
+   448   	}
+   449    
+   450   	putw(osypt->flags,&lbuf);		/* output symbol flags */
+   451   	if(osypt->flags&SYXR) {		/*external symbol*/
+   452   #ifndef	PDP11
+   453   		putw(0,&lbuf);
+   454   		putw(osypt->vl1.wd1,&lbuf);
+   455   #else					/* Only for PDP-11 UNIX	*/
+   456   		putw(osypt->vl1.wd1,&lbuf);
+   457   		putw(0,&lbuf);
+   458   #endif
+   459   	}
+   460   	else {
+   461   #ifndef PDP11					/* 68K and vax only */
+   462   		putw(osypt->vl1.wd1,&lbuf);	/*upper half symbol value*/
+   463   		putw(osypt->vl1.wd2,&lbuf);		/*lower symbol value*/
+   464   #else						/* PDP-11 ONLY!!!!!	*/
+   465   		putw(osypt->vl1.wd2,&lbuf);	/* Upper half of value  */
+   466   		putw(osypt->vl1.wd1,&lbuf);	/* lower half           */
+   467   #endif
+   468   	}
+   469   }
+   470    
+   471   /*
+   472    * print undefined symbols
+1File: MISC.C                                                              Page       9
+   473    * call with
+   474    *	pointer to undefined symbol
+   475    */
+   476   pudfs(udspt)
+   477   struct symtab *udspt;
+   478   {
+   479   	nerror++;
+   480   	if(!ftudp) {		/*first time thru*/
+   481   		if(xline > (LPP-10)) xline = LPP;
+   482   		page();
+   483   		printf("\n&& UNDEFINED SYMBOLS &&\n");
+   484   		xline++;
+   485   		ftudp++;
+   486   		udfct=0;		/*no symbols on this line*/
+   487   	}
+   488    
+   489   	printf("%8s  ",&(udspt->name[0]));
+   490   	if(udfct++ > 6) {
+   491   		printf("\n");
+   492   		udfct=0;
+   493   	}
+   494   }
+   495    
+   496   psyme(osypt)
+   497   register struct symtab *osypt;
+   498   {
+   499   	register char *p1;
+   500    
+   501   	if(((osypt->flags & SYER) != 0) || (osypt->flags&SYIN))
+   502   		return(0);
+   503    
+   504   	p1 = &(osypt->name[0]);
+   505   	while(p1 < &osypt->name[NAMELEN])
+   506   	{
+   507   		if(*p1)
+   508   			putchar(*p1);
+   509   		else
+   510   			putchar(' ');
+   511   		p1++;
+   512   	}
+   513   	printf("  ");
+   514   	if(osypt->flags&SYXR)
+   515   	{
+   516   		printf("******** EXT   ");
+   517   		return(1);
+   518   	}
+   519    
+   520   	if(osypt->flags&SYDF)
+   521   	{
+   522    
+   523   		puthex(osypt->vl1.wd1,4);
+   524   		puthex(osypt->vl1.wd2,4);
+   525   		if(osypt->flags&SYRA)	/*print relocation factor*/
+   526   			printf(" DATA  ");
+   527   		else if(osypt->flags&SYRO)
+   528   			printf(" TEXT  ");
+   529   		else if(osypt->flags&SYBS)
+   530   			printf(" BSS   ");
+   531   		else    printf(" ABS   ");
+1File: MISC.C                                                              Page      10
+   532   	}
+   533    
+   534   	else
+   535   	{
+   536   			nerror++;
+   537   			printf("*UNDEFINED*    ");
+   538   	}
+   539   	return(1);
+   540   }
+   541    
+   542    
+   543   /*
+   544    * output source and object listing
+   545    *	call with
+   546    *		2 => print address and binary code only
+   547    *		1 => object in ins[] and instr type in format
+   548    *		0 => print address only
+   549    */
+   550   print(pflag)
+   551   {
+   552   	register i,j;
+   553   	register int *pi;
+   554    
+   555   	if( !prtflg ) return;		/*no printing desired*/
+   556   	if(fchr==EOF)	return;		/*end of source file*/
+   557    
+   558   	i = instrlen; instrlen = 1;		/*to print preceeding lines*/
+   559   	while(pline<p2absln) {		/*need to print some lines*/
+   560   		page();
+   561   		printf("%4d ",pline);	/*put source line num on listing*/
+   562   		printf("                              ");/*align the source*/
+   563   		prtline(1);
+   564   		putchar('\n');
+   565   		fchr=gchr();
+   566   		if(fchr==EOF) return;
+   567   		pline++;
+   568   	}
+   569   	instrlen = i;
+   570    
+   571   /* output current address, binary, and source*/
+   572   	page();
+   573   	printf("%4d ",p2absln);			/*put source line num on listing*/
+   574   	puthex((int)loctr.wd1,4);
+   575   	puthex((int)loctr.wd2,4);
+   576   	putchar(' ');
+   577   	if(!pflag) {			/*no binary*/
+   578   		printf("                     ");	/*blanks instead*/
+   579   	}
+   580   	else {
+   581   		pi = ins;
+   582   		for(i=0; i<instrlen/2; i++) {	/* binary*/
+   583   			puthex(*pi++,4);
+   584   		}
+   585   		if(instrlen&1)
+   586   			puthex(*pi,2);
+   587   		putchar(' ');
+   588   		for(;i<5;i++) {				/*four bytes max per line*/
+   589   			printf("    ");		/*align the source*/
+   590   		}
+1File: MISC.C                                                              Page      11
+   591   	}
+   592   	if(pline>p2absln || pflag==2) {
+   593   		putchar('\n');			/*end of line*/
+   594   	}
+   595   	else {
+   596   		prtline(0);
+   597   		if(fchr==EOF) return;
+   598   		putchar('\n');
+   599   		fchr=gchr();
+   600   		pline++;
+   601   	}
+   602   }
+   603   #ifdef	BLIVOT			/* This was so horrible ...		*/
+   604   /*print one line aligning source output*/
+   605   prtline(flg)
+   606   {
+   607   	register i;
+   608   	register col, blcnt;
+   609    
+   610   	if(fchr=='*' || flg) {	/*comment*/
+   611   		while(fchr!=EOLC && fchr!=EOF) {
+   612   			putchar(fchr);
+   613   			fchr = gchr();
+   614   		}
+   615   		return;
+   616   	}
+   617   	col = 1;
+   618   	blcnt = 0;
+   619   	while(1) {
+   620   		if(fchr==EOLC || fchr==EOF)
+   621   			return;
+   622   		if(fchr==' '&& blcnt<3) {
+   623   			i= (++blcnt == 3) ? 017 : 7;
+   624   			while(col&i) {
+   625   				putchar(' ');
+   626   				col++;
+   627   			}
+   628   			while(fchr==' ')
+   629   				fchr=gchr();
+   630   			if(fchr==EOLC || fchr==EOF)
+   631   				return;
+   632   		}
+   633   		putchar(fchr);
+   634   		fchr=gchr();
+   635   		col++;
+   636   	}
+   637   }
+   638   #else
+   639   prtline(flg)	/* What you see in the editor is what you get on the listing*/
+   640   {
+   641   	while(fchr != EOLC && fchr != EOF)
+   642   	{
+   643   		putchar(fchr);
+   644   		fchr = gchr();
+   645   	}
+   646   }
+   647   #endif
+   648   /*
+   649    *	Heading print routine
+1File: MISC.C                                                              Page      12
+   650    */
+   651   page()
+   652   {
+   653        if((prtflg == 0) || (++xline < LPP)) return;
+   654        printf("\014C P / M   6 8 0 0 0   A s s e m b l e r\t\t%s\t\tPage%4d\n",
+   655   		"Revision 02.03",++xpage);
+   656        printf("Source File: %s\n\n",sfname);
+   657        xline = 3;
+   658   }
+   659    
+   660    
+   661   int hibytflg[4], hibytw[4];
+   662    
+   663   outbyte(bv,br)
+   664   {
+   665   	if(hibytflg[rlflg]) {
+   666   		outword(hibytw[rlflg]|(bv&0xff),br);
+   667   		hibytflg[rlflg] = 0;
+   668   	}
+   669   	else {
+   670   		hibytw[rlflg] = bv<<8;
+   671   		hibytflg[rlflg]++;
+   672   	}
+   673   }
+   674    
+   675   outword(val,rb)
+   676   {
+   677   	switch(rlflg) {
+   678    
+   679   		case TEXT:
+   680   			putw(val,&lbuf);
+   681   			putw(rb,&tbuf);
+   682   			break;
+   683    
+   684   		case DATA:
+   685   			putw(val,&dabuf);
+   686   			putw(rb,&drbuf);
+   687   			break;
+   688    
+   689   		case BSS:
+   690   			uerr(39);
+   691   			break;
+   692    
+   693   		default:
+   694   			rpterr("& outword: bad rlflg\n");
+   695   			abort();
+   696   	}
+   697   }
+   698    
+   699   outinstr()
+   700   {
+   701   	register i;
+   702   	register int *p1, *p2;
+   703    
+   704   	i = instrlen>>1;
+   705   	p1 = ins;
+   706   	p2 = rlbits;
+   707   	while(i--) {
+   708   		outword(*p1++, *p2++);
+1File: MISC.C                                                              Page      13
+   709   	}
+   710   }
+   711    
+   712   /* copy data bits from temporary file to loader file*/
+   713   cpdata()
+   714   {
+   715   	myfflush(&lbuf);
+   716   	myfflush(&dabuf);
+   717   	docp(dafn,dafnc,savelc[DATA]);
+   718   }
+   719    
+   720   /* copy text then data relocation bits from temporary file to loader file*/
+   721   cprlbits()
+   722   {
+   723   	myfflush(&lbuf);
+   724   	myfflush(&drbuf);
+   725   	docp(trbfn, trbfnc,savelc[TEXT]);
+   726   	docp(drbfn, drbfnc,savelc[DATA]);
+   727   }
+   728    
+   729   /*
+   730    * copy one of the temporary files to the loader file
+   731    * call with:
+   732    *	file descriptor of the temporary file
+   733    *	last char of the temporary file name
+   734    *	length to copy
+   735    */
+   736   docp(cfn,cfnc,length)
+   737   long	length;
+   738   {
+   739   	register i;
+   740   	register j;
+   741   	close(cfn);
+   742   	LASTCHTFN = cfnc;
+   743   	cfn = openfi(tfilname,0);
+   744   /*	while((i=read(cfn,itbuf,512)) > 0) { */
+   745   	while(length > 0)
+   746   	{
+   747   		if(length > 512)
+   748   			j = 512;
+   749   		else
+   750   			j = length;
+   751    
+   752   		if((i=read(cfn,itbuf,j)) != j)
+   753   		{
+   754   			printf("& Read Error On Intermediate File: %s\n",
+   755   				tfilname);
+   756   			abort();
+   757   		}
+   758    
+   759   		if(write(lfn,itbuf,i) != i) {
+   760   			rpterr("& Object file write error\n");
+   761   			abort();
+   762   		}
+   763   		length -= j;
+   764   	}
+   765   }
+   766    
+   767   /* print one word in hex*/
+1File: MISC.C                                                              Page      14
+   768   puthex(v,l)
+   769   {
+   770   	register i,j,k;
+   771    
+   772   	j = 12;
+   773   	for(i=0; i<l; i++) {
+   774   		k = (v>>j)&017;
+   775   		k =+ (k >= 10) ? ('A'-10) : '0';
+   776   		putchar(k);
+   777   		j =- 4;
+   778   	}
+   779   }
+   780    
+   781   /* check for a control operand*/
+   782   controlea(ap)
+   783   struct op *ap;
+   784   {
+   785   	register i;
+   786    
+   787   	i = ap->ea&070;
+   788   	if(i==INDIRECT || i==INDDISP || i==INDINX)
+   789   		return(1);
+   790   	if(i==070) {
+   791   		if((ap->ea&7) <= 3)
+   792   			return(1);
+   793   	}
+   794   	return(0);
+   795   }
+   796    
+   797   ckcomma()
+   798   {
+   799   	if(ckitc(pitw,',')) {		/*next token a comma*/
+   800   		pitw++;
+   801   		return(1);
+   802   	}
+   803   	return(0);
+   804   }
+   805    
+   806   /*
+   807    * generate any necessary additional words for the effective address
+   808    *  call with:
+   809    *		pins pointing to next available word in ins[]
+   810    *		prlb pointing to next available word in rlbits[]
+   811    *		argument is ptr to op structure
+   812    *
+   813    * returns:
+   814    *		appropriate words in ins[] and rlbits[] for operand
+   815    *		pins and prlb updated.
+   816    */
+   817   doea(apea)
+   818   struct op *apea;
+   819   {
+   820   	register i,j;
+   821   	register struct op *p;
+   822    
+   823   	p = apea;
+   824   	switch((p->ea>>3)&7) {		/* ea mode bits*/
+   825    
+   826   	default:		/*no more words*/
+1File: MISC.C                                                              Page      15
+   827   		return;
+   828    
+   829   	case 5:			/* d(An)*/
+   830   		dodisp(p);
+   831   		return;
+   832    
+   833   	case 6:			/* d(An,Ri)*/
+   834   dindx:
+   835   		if (p->con > 127L || p->con < -128L) {
+   836   			uerr(35);
+   837   		}
+   838   		i = (p->con.wd2&0377) | (p->idx<<12) | (p->xmod<<11);
+   839   		if(p->drlc != ABS)
+   840   			uerr(27);
+   841   		*pins++ = i;
+   842   		*prlb++ = DABS;
+   843   		instrlen =+ 2;
+   844   		return;
+   845    
+   846   	case 7:		/*xxx.W, xxx.L, or #xxx*/
+   847   		switch(p->ea&7) {
+   848    
+   849   		case 1:		/* xxx.L*/
+   850   			doupper(p);
+   851   			p->con.wd1 = 0;		/*clear for dodisp check*/
+   852    
+   853   		case 0:		/* xxx.W*/
+   854   			dodisp(p);
+   855   			return;
+   856    
+   857   		case 2:		/*d(PC)*/
+   858   		case 3:		/*d(PC,Ri.X)*/
+   859   			if(p->drlc != ABS) {
+   860   				if(p->drlc != rlflg)	/*not same reloc base*/
+   861   					uerr(27);
+   862   				p->con =- (loctr+instrlen);
+   863   				p->drlc = ABS;
+   864   			}
+   865   			if((p->ea&7) == 3)		/*d(PC,Ri.X)*/
+   866   				goto dindx;
+   867   			dodisp(p);
+   868   			return;
+   869    
+   870   		case 4:		/* #xxx*/
+   871   			chkimm(p);		/*check for valid length*/
+   872   			if(modelen == 4) {		/*instr mode is long*/
+   873   				doupper(p);
+   874   				p->con.wd1 = 0;		/*clear for dodisp check*/
+   875   			}
+   876   			dodisp(p);
+   877   			return;
+   878   		}
+   879   	}
+   880   }
+   881    
+   882   dodisp(ap)
+   883   struct op *ap;
+   884   {
+   885   	register struct op *p;
+1File: MISC.C                                                              Page      16
+   886    
+   887   	p = ap;
+   888   	*pins++ = p->con.wd2;		/*displacement*/
+   889   	if(p->con.wd1 && p->con.wd1 != -1)
+   890   		uerr(41);		/*invalid 16-bit disp*/
+   891   	*prlb++ = (p->ext != -1) ? (p->ext<<3)|EXTVAR : p->drlc;
+   892   	instrlen =+ 2;
+   893   }
+   894    
+   895   doupper(p)
+   896   struct op *p;
+   897   {
+   898   	*pins++ = p->con.wd1;	/*upper half of long addr or constant*/
+   899   	*prlb++ = LUPPER;
+   900   	instrlen =+ 2;
+   901   }
+   902    
+   903   /*
+   904    * build a format 1 (add, sub, and, etc) instr
+   905    * call with:
+   906    *	register #
+   907    *	mode bits
+   908    *	ptr to operand structure for effective address
+   909    */
+   910   makef1(arreg, armode, apea)
+   911   struct op *apea;
+   912   {
+   913   	register i,j;
+   914   	register struct op *p;
+   915    
+   916   	p = apea;
+   917   	ins[0] =| (arreg<<9);	/*put in reg #*/
+   918   	ins[0] =| armode;	/*instr mode bits*/
+   919   	ins[0] =| p->ea;		/*put in effective addr bits*/
+   920   	doea(p);			/*may be more words in ea*/
+   921   }
+   922    
+   923   /* generate an immediate instr*/
+   924   genimm()
+   925   {
+   926   	ins[0] =| (f2mode[modelen] | opnd[1].ea);
+   927   	if(modelen == 4) {
+   928   		doupper(&opnd[0]);
+   929   		opnd[0].con.wd1 = 0;	/*clear for dodisp check*/
+   930   	}
+   931   	chkimm(&opnd[0]);	/*check for valid immed length*/
+   932   	dodisp(&opnd[0]);
+   933   	doea(&opnd[1]);
+   934   }
+   935    
+   936   chkimm(ap)
+   937   struct op *ap;
+   938   {
+   939   	register struct op *p;
+   940    
+   941   	p=ap;
+   942   	if(modelen == 2) {	/*word*/
+   943   		if(p->con.wd1 && p->con.wd1!=-1)
+   944   			uerr(42);
+1File: MISC.C                                                              Page      17
+   945   	}
+   946   	else if(modelen == 1) {	/*byte*/
+   947   		if(p->con.wd1 && p->con.wd1!=-1)
+   948   			uerr(43);
+   949   		if(p->con.wd2>255 || p->con.wd2<=-256)
+   950   			uerr(43);
+   951   	}
+   952   }
+   953    
+   954   /* try to make a normal instr into an immediate instr*/
+   955   makeimm()
+   956   {
+   957   	if(opnd[0].ea != IMM)
+   958   		return(0);
+   959   	if(!dataalt(&opnd[1]))
+   960   		return(0);
+   961   	if(opcpt == addptr)
+   962   		opcpt = addiptr;
+   963   	else if(opcpt == andptr)
+   964   		opcpt = andiptr;
+   965   	else if(opcpt == orptr)
+   966   		opcpt = oriptr;
+   967   	else if(opcpt == subptr)
+   968   		opcpt = subiptr;
+   969   	else if(opcpt == cmpptr)
+   970   		opcpt = cmpiptr;
+   971   	else if(opcpt == eorptr)
+   972   		opcpt = eoriptr;
+   973   	else
+   974   		return(0);
+   975   	ins[0] = opcpt->vl1.wd2;
+   976   	format = (opcpt->flags)&OPFF;
+   977   	genimm();
+   978   	return(1);
+   979   }
+   980    
+   981   ckbytea()
+   982   {
+   983   	if(modelen==1 && !dataea(&opnd[0]))
+   984   		uerr(20);	/*byte mod not allowed*/
+   985   }
+   986    
+   987   /* get a special register token (CCR, SR, or USP)*/
+   988   gspreg()
+   989   {
+   990   	register i;
+   991    
+   992   	i = getrgs();
+   993   	if(i>AREGHI)
+   994   		return(i);
+   995   	if(i != -1)
+   996   		pitw--;
+   997   	return(0);
+   998   }
+   999    
+  1000   /*
+  1001    * check an operand for a special register
+  1002    * call with:
+  1003    *  ptr to operand struct
+1File: MISC.C                                                              Page      18
+  1004    *  special register value
+  1005    */
+  1006   cksprg(ap,v1)
+  1007   struct op *ap;
+  1008   {
+  1009   	if(ap->ea)
+  1010   		return(0);
+  1011   	if(ap->idx == v1)
+  1012   		return(1);
+  1013   	return(0);
+  1014   }
+  1015    
+  1016   /* check for operand as any special register*/
+  1017   anysprg(ap)
+  1018   struct op *ap;
+  1019   {
+  1020   	if(ap->ea)
+  1021   		return(0);
+  1022   	if(ap->idx>=CCR && ap->idx<=USP)
+  1023   		return(1);
+  1024   	return(0);
+  1025   }
+  1026    
+  1027   /* copy opnd 0 to opnd 1*/
+  1028   cpop01()
+  1029   {
+  1030   	opnd[1].ea = opnd[0].ea;
+  1031   	opnd[1].len = opnd[0].len;
+  1032   	opnd[1].con = opnd[0].con;
+  1033   	opnd[1].drlc = opnd[0].drlc;
+  1034   	opnd[1].ext = opnd[0].ext;
+  1035   	opnd[1].idx = opnd[0].idx;
+  1036   	opnd[1].xmod = opnd[0].xmod;
+  1037   }
+  1038    
+  1039   cksize(ap)		/* [vlh] try to check displacement range */
+  1040   struct op *ap;
+  1041   {
+  1042   	long value;
+  1043    
+  1044   	if ((ap->ea&070) != 070) return;
+  1045   	value = (ap->con>0 && ap->con&0100000) ? -(ap->con&~0100000) : ap->con;
+  1046   	if (modelen == 1) {
+  1047   		if (value < -128L || value > 127L)	/* 8 bits */
+  1048   			uerr(35);
+  1049   	}
+  1050   	else if (modelen == 2)
+  1051   		if (value > 32767L || value < -32768L)	/* 16 bits */
+  1052   			uerr(41);
+  1053   }
+  1054    
+  1055   ccr_or_sr()		/* [vlh] */
+  1056   {
+  1057   	if(opnd[1].idx==CCR)
+  1058   		modelen = 1;		/*byte mode only*/
+  1059   	else	/* [vlh] SR */
+  1060   		if (modelen != 2) {
+  1061   			modelen = 2;
+  1062   			uerr(34);
+1File: MISC.C                                                              Page      19
+  1063   		}
+  1064   	cksize(&opnd[0]);
+  1065   	ins[0] =| IMM | f2mode[modelen];
+  1066   	dodisp(&opnd[0]);
+  1067   }
+  1068    
+  1069   get2ops()
+  1070   {
+  1071   	getea(0);		/*get first effective address*/
+  1072   	if(!ckcomma()) {
+  1073   		uerr(10);
+  1074   		return(1);		/*no second op*/
+  1075   	}
+  1076   	getea(1);		/*get second effective address*/
+  1077   	return(0);
+  1078   }

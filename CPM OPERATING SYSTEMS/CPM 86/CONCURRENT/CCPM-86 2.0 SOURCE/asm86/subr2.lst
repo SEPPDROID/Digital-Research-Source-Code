@@ -1,0 +1,342 @@
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE SUBR2
+OBJECT MODULE PLACED IN SUBR2.OBJ
+COMPILER INVOKED BY:  :F0: SUBR2.PLM DEBUG OPTIMIZE(2) DATE(10/5/81) PAGEWIDTH(100) XREF
+
+
+
+              $title ('SUBROUTINE MODULE - PART 2')
+   1          subr2:
+              do;
+              $include(:f1:macro.lit)
+          =   $nolist
+              $INCLUDE (:F1:STRUC.LIT)
+          =   $nolist
+              $include(:f1:io.ext)
+          =   $nolist
+
+              /*
+
+                modified  3/26/81  R. Silberstein
+                modified  3/28/81  R. Silberstein
+                modified  3/30/81  R. Silberstein
+
+              */
+
+  59   1      outtext: procedure (t) public;
+  60   2        dcl t addr,
+                    ch based t byte;
+  61   2        do while ch <> 0;
+  62   3          call write$console(ch);
+  63   3          t=t+1;
+  64   3        end$while;
+  65   2      end outtext;
+
+  66   1      OUTFILENAME: PROCEDURE (PTR);
+  67   2        DECLARE PTR ADDRESS, X BASED PTR FILEOSTRUCTURE, I BYTE;
+  68   2        CALL WRITE$CONSOLE (X.DISK + 'A');
+  69   2        CALL WRITE$CONSOLE (':');
+  70   2        DO I = 1 TO 8;
+  71   3          IF (X.FCBBLOCK (I) AND 7FH) = SPACE THEN I = 8;
+  73   3          ELSE CALL WRITE$CONSOLE (X.FCBBLOCK (I) AND 7FH);
+  74   3        END;
+  75   2        CALL WRITE$CONSOLE ('.');
+  76   2        DO I = 9 TO 11;
+  77   3          CALL WRITE$CONSOLE (X.FCBBLOCK (I) AND 7FH);
+  78   3        END;
+  79   2        CALL SYSTEMRESET;
+  80   2      END OUTFILENAME;
+
+  81   1      FILEABORT: PROCEDURE (PTR, TEXTADR) PUBLIC;
+  82   2        DECLARE (PTR, TEXTADR) ADDRESS;
+  83   2        CALL OUTTEXT (TEXTADR);
+  84   2        CALL WRITE$CONSOLE (':');
+  85   2        CALL WRITE$CONSOLE (SPACE);
+  86   2        CALL OUTFILENAME (PTR);
+  87   2      END FILEABORT;
+
+  88   1      fill: procedure (ch,n,pt) public;
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   2
+
+
+  89   2        dcl (ch,n) byte,pt address,buffer based pt byte;
+  90   2        DO WHILE (N := N - 1) <> 0FFH;
+  91   3          buffer=ch;
+  92   3          pt = pt + 1;
+  93   3        end$while;
+  94   2      end fill;
+
+  95   1      digit: procedure(ch) byte public;
+  96   2        dcl ch byte;
+  97   2        IF CH < '0' THEN RETURN FALSE;
+  99   2        return (ch <= '9');
+ 100   2      end digit;
+
+ 101   1      letter: procedure(ch) byte public;
+ 102   2        dcl ch byte;
+ 103   2        IF CH < 'A' THEN RETURN FALSE;
+ 105   2        return (ch <= 'Z');
+ 106   2      end letter;
+
+ 107   1      alphanumeric: proc(ch) byte public;
+ 108   2        dcl ch byte;
+ 109   2        if letter(ch) then return true;
+ 111   2        return digit(ch);
+ 112   2      end alphanumeric;
+
+ 113   1      asciichar: proc (ch) byte public;
+ 114   2        dcl ch byte;
+ 115   2        if ch=cr then return true;
+ 117   2        IF CH = LF THEN RETURN TRUE;
+ 119   2        IF CH < SPACE THEN RETURN FALSE;
+ 121   2        return (ch <= 7eh);
+ 122   2      end asciichar;
+
+
+ 123   1      upper: procedure(ch) byte public;
+ 124   2        dcl ch byte;
+ 125   2        if ch >= 61h THEN IF ch <= 7eh then ch=ch-20h;
+ 128   2        return ch;
+ 129   2      end upper;
+
+ 130   1      equal: procedure(n,s,d) byte public;
+ 131   2        dcl n byte,
+                    (s,d) address,
+                    sch based s byte,
+                    dch based d byte;
+ 132   2        DO WHILE (N := N - 1) <> 0FFH;
+ 133   3          IF SCH <> DCH THEN RETURN FALSE;
+ 135   3          S = S + 1;
+ 136   3          D = D + 1;
+ 137   3        END$WHILE;
+ 138   2        return true;
+ 139   2      end equal;
+
+
+ 140   1      hex1out: procedure(n,d) public;
+ 141   2        dcl n byte,d addr,
+                    dest based d (1) byte;
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   3
+
+
+ 142   2        hexdigit: procedure(digit) byte;
+ 143   3          dcl digit byte;
+ 144   3          digit=digit+'0';
+ 145   3          if digit > '9' then digit=digit+7;
+ 147   3          return digit;
+ 148   3        end hexdigit;
+
+ 149   2        dest(0)=hexdigit(SHR (N, 4));
+ 150   2        dest(1)=hexdigit(n and 0fh);
+ 151   2      end hex1out;
+
+ 152   1      hex2out: proc (n,d) public;
+ 153   2        dcl n addr,
+                    d addr;
+ 154   2        call hex1out(HIGH (N),d);
+ 155   2        call hex1out(LOW (N),d+2);
+ 156   2      end hex2out;
+
+
+ 157   1      decout: proc (n,d) public;
+ 158   2        dcl
+                n       addr,
+                d       address,
+                dest based d (1) byte,
+                (i,space$or$zero,digit) byte,
+                divis(5) addr data (10000,1000,100,10,1);
+
+ 159   2        space$or$zero=space;
+ 160   2        do i=0 to 4;
+ 161   3          if i=4 then space$or$zero='0';
+ 163   3          digit=n/divis(i);
+ 164   3          n=n mod divis(i);
+ 165   3          if digit=0 then$do
+ 167   4            dest(i)=space$or$zero;
+ 168   4          else$do
+ 170   4            dest(i)=digit+'0';
+ 171   4            space$or$zero='0';
+ 172   4          end$if;
+ 173   3        end$do;
+ 174   2      end decout;
+
+ 175   1      end subr2;
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   4
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+      2               ADDR . . . . . . .    LITERALLY        60   67  141  153  158 
+    107  0111H    27  ALPHANUMERIC . . .    PROCEDURE BYTE PUBLIC STACK=000AH
+    113  012CH    42  ASCIICHAR. . . . .    PROCEDURE BYTE PUBLIC STACK=0004H
+      3               BASEREGBIT . . . .    LITERALLY
+      3               BASEREGCOUNT . . .    LITERALLY
+      3               BREGBIT. . . . . .    LITERALLY
+      3               BREGCOUNT. . . . .    LITERALLY
+     89  0000H     1  BUFFER . . . . . .    BYTE BASED(PT)        91 
+     67  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)
+     67  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)
+    123  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       124  125  126  127
+                                             128 
+    113  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       114  115  117  119
+                                             121 
+     60  0000H     1  CH . . . . . . . .    BYTE BASED(T)         61   62 
+     88  0008H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC        89   91 
+     95  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC        96   97   99 
+    107  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       108  109  111 
+    101  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       102  103  105 
+     21  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        22 
+     18  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        19 
+     37  0000H        CLOSEFILE. . . . .    PROCEDURE BYTE EXTERNAL(15) STACK=0000H
+      3               CODEMACROHEAD. . .    LITERALLY
+     24  0000H        CONSTAT. . . . . .    PROCEDURE BYTE EXTERNAL(10) STACK=0000H
+      2               CR . . . . . . . .    LITERALLY       115 
+     49  0000H        CREATEFILE . . . .    PROCEDURE BYTE EXTERNAL(19) STACK=0000H
+     57  0000H        CRLF . . . . . . .    PROCEDURE EXTERNAL(22) STACK=0000H
+    140  0004H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       141  149  150 
+    152  0004H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       153  154  155 
+    130  0004H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       131  133  136 
+    157  0004H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       158  167  170 
+    131  0000H     1  DCH. . . . . . . .    BYTE BASED(D)        133 
+      2               DCL. . . . . . . .    LITERALLY
+    157  01FEH   122  DECOUT . . . . . .    PROCEDURE PUBLIC STACK=0006H
+     40  0000H        DELETEFILE . . . .    PROCEDURE EXTERNAL(16) STACK=0000H
+    158  0000H     1  DEST . . . . . . .    BYTE BASED(D) ARRAY(1)         167  170 
+    141  0000H     1  DEST . . . . . . .    BYTE BASED(D) ARRAY(1)         149  150 
+    158  0003H     1  DIGIT. . . . . . .    BYTE       163  165  170 
+     95  00DDH    26  DIGIT. . . . . . .    PROCEDURE BYTE PUBLIC STACK=0004H        111 
+    142  0004H     1  DIGIT. . . . . . .    BYTE PARAMETER AUTOMATIC       143  144  145  146
+                                             147 
+     67  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)        68 
+     28  0000H     1  DISKNUMBER . . . .    BYTE PARAMETER        29 
+    158  0000H    10  DIVIS. . . . . . .    WORD ARRAY(5) DATA        163  164 
+     54  0000H     2  DMAADDRESS . . . .    WORD PARAMETER        55 
+      2               ELSEDO . . . . . .    LITERALLY
+     13  0000H     2  ENDBUF . . . . . .    WORD EXTERNAL(5)
+      2               ENDCASE. . . . . .    LITERALLY
+      2               ENDDO. . . . . . .    LITERALLY
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   5
+
+
+      2               ENDFOREVER . . . .    LITERALLY
+      2               ENDIF. . . . . . .    LITERALLY
+      2               ENDMODULE. . . . .    LITERALLY
+      2               ENDOFFILE. . . . .    LITERALLY
+      2               ENDPROC. . . . . .    LITERALLY
+      2               ENDWHILE . . . . .    LITERALLY
+    130  0170H    45  EQUAL. . . . . . .    PROCEDURE BYTE PUBLIC STACK=0008H
+      2               FALSE. . . . . . .    LITERALLY        98  104  120  134 
+     10  0000H     1  FCB. . . . . . . .    BYTE ARRAY(1) EXTERNAL(2)
+     11  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(3)
+     49  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        50 
+     31  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        32 
+     43  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        44 
+     40  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        41 
+     37  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        38 
+     34  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        35 
+     46  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        47 
+     67  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)        71   73   77 
+     81  009EH    31  FILEABORT. . . . .    PROCEDURE PUBLIC STACK=0010H
+      3               FILEISTRUCTURE . .    LITERALLY
+      3               FILEOSTRUCTURE . .    LITERALLY        67 
+     88  00BDH    32  FILL . . . . . . .    PROCEDURE PUBLIC STACK=0008H
+      2               FOREVER. . . . . .    LITERALLY
+      2               FORMFEED . . . . .    LITERALLY
+      7  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         8 
+      4  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         5 
+    140  019DH    38  HEX1OUT. . . . . .    PROCEDURE PUBLIC STACK=000CH        154  155 
+    152  01DDH    33  HEX2OUT. . . . . .    PROCEDURE PUBLIC STACK=0014H
+    142  01C3H    26  HEXDIGIT . . . . .    PROCEDURE BYTE STACK=0004H          149  150 
+                      HIGH . . . . . . .    BUILTIN         154 
+    158  0001H     1  I. . . . . . . . .    BYTE       160  161  163  164  167  170 
+     67  0000H     1  I. . . . . . . . .    BYTE        70   71   72   73   76   77 
+      3               INDEXREGBIT. . . .    LITERALLY
+      3               INDEXREGCOUNT. . .    LITERALLY
+      7  0000H     2  INFO . . . . . . .    WORD PARAMETER         8 
+      4  0000H     2  INFO . . . . . . .    WORD PARAMETER         5 
+      2               INIT . . . . . . .    LITERALLY
+     52  0000H        INTERROGATEDISK. .    PROCEDURE BYTE EXTERNAL(20) STACK=0000H
+      3               IREGBIT. . . . . .    LITERALLY
+      3               IREGCOUNT. . . . .    LITERALLY
+    101  00F7H    26  LETTER . . . . . .    PROCEDURE BYTE PUBLIC STACK=0004H        109 
+      2               LF . . . . . . . .    LITERALLY       117 
+      2               LIT. . . . . . . .    LITERALLY         2    3 
+                      LOW. . . . . . . .    BUILTIN         155 
+      4  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H
+      7  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H
+    157  0006H     2  N. . . . . . . . .    WORD PARAMETER AUTOMATIC       158  163  164 
+    152  0006H     2  N. . . . . . . . .    WORD PARAMETER AUTOMATIC       153  154  155 
+    140  0006H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC       141  149  150 
+    130  0008H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC       131  132 
+     88  0006H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC        89   90 
+      3               NOOVERCOUNT. . . .    LITERALLY
+      3               NOOVERRIDEBIT. . .    LITERALLY
+     31  0000H        OPENFILE . . . . .    PROCEDURE BYTE EXTERNAL(13) STACK=0000H
+     34  0000H        OPENROFILE . . . .    PROCEDURE BYTE EXTERNAL(14) STACK=0000H
+      3               OPERANDSTRUC . . .    LITERALLY
+     66  0019H   133  OUTFILENAME. . . .    PROCEDURE STACK=0008H           86 
+PL/M-86 COMPILER    SUBROUTINE MODULE - PART 2                                   10/5/81    PAGE   6
+
+
+     59  0000H    25  OUTTEXT. . . . . .    PROCEDURE PUBLIC STACK=0008H         83 
+      2               PROC . . . . . . .    LITERALLY       107  113  152  157 
+     88  0004H     2  PT . . . . . . . .    WORD PARAMETER AUTOMATIC        89   91   92 
+     81  0006H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC        82   86 
+     66  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC        67   68   71   73
+                                              77 
+     16  0000H        READCONSOLE. . . .    PROCEDURE BYTE EXTERNAL(7) STACK=0000H
+     43  0000H        READRECORD . . . .    PROCEDURE BYTE EXTERNAL(17) STACK=0000H
+      2               REENT. . . . . . .    LITERALLY
+    130  0006H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       131  133  135 
+    131  0000H     1  SCH. . . . . . . .    BYTE BASED(S)        133 
+      3               SEGMBIT. . . . . .    LITERALLY
+      3               SEGMCOUNT. . . . .    LITERALLY
+      3               SEGTYPEBIT . . . .    LITERALLY
+      3               SEGTYPECOUNT . . .    LITERALLY
+     28  0000H        SELECTDISK . . . .    PROCEDURE EXTERNAL(12) STACK=0000H
+     54  0000H        SETDMAADDRESS. . .    PROCEDURE EXTERNAL(21) STACK=0000H
+                      SHR. . . . . . . .    BUILTIN         149 
+      2               SPACE. . . . . . .    LITERALLY        71   85  119  159 
+    158  0002H     1  SPACEORZERO. . . .    BYTE       159  162  167  171 
+      2               STRUC. . . . . . .    LITERALLY        67 
+      1  0000H        SUBR2. . . . . . .    PROCEDURE STACK=0000H
+      3               SYMBOLHEAD . . . .    LITERALLY
+      3               SYMBOLSTRUC. . . .    LITERALLY
+     14  0000H        SYSTEMRESET. . . .    PROCEDURE EXTERNAL(6) STACK=0000H         79 
+     59  0004H     2  T. . . . . . . . .    WORD PARAMETER AUTOMATIC        60   61   62   63
+                                            
+      2               TAB. . . . . . . .    LITERALLY
+     12  0000H     1  TBUFF. . . . . . .    BYTE ARRAY(1) EXTERNAL(4)
+     81  0004H     2  TEXTADR. . . . . .    WORD PARAMETER AUTOMATIC        82   83 
+      2               THENDO . . . . . .    LITERALLY       165 
+      2               TRUE . . . . . . .    LITERALLY       110  116  118  138 
+      3               TYPEBIT. . . . . .    LITERALLY
+      3               TYPECOUNT. . . . .    LITERALLY
+    123  0156H    26  UPPER. . . . . . .    PROCEDURE BYTE PUBLIC STACK=0004H
+     26  0000H        VERSION. . . . . .    PROCEDURE WORD EXTERNAL(11) STACK=0000H
+     18  0000H        WRITECONSOLE . . .    PROCEDURE EXTERNAL(8) STACK=0000H         62   68
+                                              69   73   75   77   84   85 
+     21  0000H        WRITELIST. . . . .    PROCEDURE EXTERNAL(9) STACK=0000H
+     46  0000H        WRITERECORD. . . .    PROCEDURE BYTE EXTERNAL(18) STACK=0000H
+     67  0000H   548  X. . . . . . . . .    STRUCTURE BASED(PTR)       68   71   73   77 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 0278H    632D
+     CONSTANT AREA SIZE = 000AH     10D
+     VARIABLE AREA SIZE = 0004H      4D
+     MAXIMUM STACK SIZE = 0014H     20D
+     372 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

@@ -1,0 +1,2734 @@
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   1
+
+
+                                title   'DDT86 1.1  10/2/81'
+                        ;
+                        ;       modified  5/14/81  R. Silberstein
+                        ;       modified  6/15/81  R. Silberstein
+                        ;       modified  8/12/81  R. Silberstein
+                        ;       modified  9/6/81   R. Silberstein
+                        ;       modified  9/16/81  R. Silberstein
+                        ;       modified  10/1/81  R. Silberstein
+                        ;
+                        ;
+                        ;       *****************************************
+                        ;       *                                       *
+                        ;       *       D D T  8 0 8 6 - 8 0 8 8        *
+                        ;       *                                       *
+                        ;       *****************************************       
+                        ;
+   0000                 debug           equ     00h     ;if set, use direct bios calls for console io
+                        ;
+   0100                 ddt_org         equ     100h            ;origin of this module
+   1400                 lasmorg         equ     ddt_org+1300h   ;origin of disassembler
+   2300                 asmorg          equ     ddt_org+2200h   ;origin of assembler
+                        ;
+                                        cseg
+                        ;
+                                        org     005ch
+ 005C                   fcb             rb      10h
+ 006C                   fcb2            rb      14h
+ 0080                   buff            rb      80h
+                        ;
+                                        org     lasmorg
+ 1400 B80000            disem:          mov     ax,0
+ 1403 C20400                            ret     4       ;remove parameters from stack
+                        ;
+                                        org     asmorg
+ 2300 B80000            assem:          mov     ax,0
+ 2303 C20400                            ret     4       ;remove parameters from stack
+                        ;
+                                        org     ddt_org
+
+ 0100 E94A01       024D                 jmp     ddt86   ;ccp transfers control here     
+ 0103 E9EB02       03F1                 jmp     conin
+ 0106 E9BB02       03C4                 jmp     plmconout
+ 0109 E9C502       03D1                 jmp     plmgetline
+ 010C E94B0A       0B5A                 jmp     asment  ;get here on error in assem (pl/m)
+ 010F E94508       0957                 jmp     plmset  ;assembler link to ddt set/verify
+                        ;
+ 0112 CDE0              bdosint:        int     bdosi   ;this is only here for user to patch
+                                                        ;actual bdos link gets set from here
+   0112                 bdosintloc      equ     offset bdosint
+   0113                 bdosintnum      equ     offset bdosint+1
+                        ;
+   00E0                 bdosi           equ     224     ;bdos interrupt number
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   2
+
+
+   0060                 stsize          equ     96      ;stack size
+   0002                 nbps            equ     2       ;number of breakpoints
+                        ;
+   0200                 ifmask16        equ     0200h   ;16-bit IF mask
+   0002                 ifmask8         equ     02h     ;8-bit IF mask
+                        ;
+   000A                 lf              equ     0ah     ;line feed
+   000D                 cr              equ     0dh     ;carriage return
+   000D                 eol             equ     cr
+   0013                 ctls            equ     13h     ;ascii ctl-s
+                        ;
+                        ;       *******************************************
+                        ;       *                                         *
+                        ;       *           m e s s a g e s               *
+                        ;       *                                         *
+                        ;       *******************************************
+                        ;
+ 0114 20434F505952      copyright       db      ' COPYRIGHT (C) 1981, DIGITAL RESEARCH '
+      494748542028
+      432920313938
+      312C20444947
+      4954414C2052
+      455345415243
+      4820
+                        ;
+ 013A 444454383620      signon          db      'DDT86 1.','1' or 80h
+      312EB1
+                        ;
+ 0143 2031302F3032      DATE            DB      ' 10/02/81 '
+      2F383120
+ 014D 41D8              regname         db      'A','X' or 80h
+ 014F 42D8                              db      'B','X' or 80h
+ 0151 43D8                              db      'C','X' or 80h
+ 0153 44D8                              db      'D','X' or 80h
+ 0155 53D0                              db      'S','P' or 80h
+ 0157 42D0                              db      'B','P' or 80h
+ 0159 53C9                              db      'S','I' or 80h
+ 015B 44C9                              db      'D','I' or 80h
+ 015D 43D3              segreg          db      'C','S' or 80h
+ 015F 44D3                              db      'D','S' or 80h
+ 0161 53D3                              db      'S','S' or 80h
+ 0163 45D3                              db      'E','S' or 80h
+ 0165 49D0                              db      'I','P' or 80h
+                        ;
+ 0167 4F444954535A      flagname        db      'ODITSZAPC'
+      415043
+ 0170 05060708090A      flagbits        db      5,6,7,8,9,10,12,14,16
+      0C0E10
+                        ;
+ 0179 43D3              segnames        db      'C','S' or 80h
+ 017B 44D3                              db      'D','S' or 80h
+ 017D 45D3                              db      'E','S' or 80h
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   3
+
+
+ 017F 53D3                              db      'S','S' or 80h
+ 0181 58B1                              db      'X','1' or 80h
+ 0183 58B2                              db      'X','2' or 80h
+ 0185 58B3                              db      'X','3' or 80h
+ 0187 58B4                              db      'X','4' or 80h
+                        ;
+ 0189 0D0A43414E4E      closem          db      cr,lf,'CANNOT CLOS','E' or 80h
+      4F5420434C4F
+      53C5
+ 0197 0D0A494E5355      loadm           db      cr,lf,'INSUFFICIENT MEMOR','Y' or 80h
+      464649434945
+      4E54204D454D
+      4F52D9
+ 01AC 0D0A4E4F2053      makem           db      cr,lf,'NO SPAC','E' or 80h
+      504143C5
+ 01B6 0D0A4D454D4F      memm            db      cr,lf,'MEMORY REQUEST DENIE','D' or 80h
+      525920524551
+      554553542044
+      454E4945C4
+ 01CD 0D0A4E4F2046      openm           db      cr,lf,'NO FIL','E' or 80h
+      494CC5
+ 01D6 202053544152      readm           db      '  START      EN','D' or 80h
+      542020202020
+      20454EC4
+ 01E6 0D0A56455249      verm            db      cr,lf,'VERIFY ERROR AT',' ' or 80h
+      465920455252
+      4F52204154A0
+ 01F8 0D0A4449534B      writem          db      cr,lf,'DISK WRITE ERRO','R' or 80h
+      205752495445
+      204552524FD2
+                        ;
+                        ;       ****************************************************
+                        ;       *                                                  *
+                        ;       *           i n i t i a l i z a t i o n            *
+                        ;       *                                                  *
+                        ;       ****************************************************
+                        ;
+                        setbdosint:                     ;copy vector at 0:bdosi*4 to (bdosi+1)*4
+ 020A A01301                    mov     al,byte ptr .bdosintnum ;get bdos interrupt #
+ 020D FEC0                      inc     al
+ 020F A21E03                    mov     byte ptr .ddtbdosintnum,al      ;ddt uses the next interrupt internally
+ 0212 2AE4                      sub     ah,ah
+ 0214 D1E0                      shl     ax,1
+ 0216 D1E0                      shl     ax,1            ;bdos int # * 4
+ 0218 8BF8                      mov     di,ax           ;[di] points to new bdos interrupt vector
+ 021A 8BF0                      mov     si,ax
+ 021C 83EE04                    sub     si,4            ;[si] points to actual bdos interrupt vector
+ 021F 1E                        push    ds              ;save ds
+ 0220 2BC0                      sub     ax,ax
+ 0222 8EC0                      mov     es,ax           ;set es and ds to 0 to move interrupt vectors
+ 0224 8ED8                      mov     ds,ax
+ 0226 B90400                    mov     cx,4
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   4
+
+
+ 0229 F3A4              rep     movs    al,al           ;copy bdos interrupt vector to next int vector
+ 022B 1F                        pop     ds              ;restore ds
+ 022C C3                        ret
+                        ;
+                        checkcmdtail:                   ;if command tail not empty, assume E command
+ 022D BE8000                    mov     si,offset buff
+ 0230 B400                      mov     ah,0
+ 0232 AC                        lods    al              ;get count from command tail
+ 0233 0AC0                      or      al,al
+ 0235 7415         024C         jz      cctret          ;nothing to do if tail empty
+ 0237 3C40                      cmp     al,conbuffmax
+ 0239 7602         023D         jbe     movcom
+ 023B B040                      mov     al,conbuffmax   ;truncate, if needed
+                        movcom:
+ 023D 8BC8                      mov     cx,ax           ;count to [cx]
+ 023F BFC311                    mov     di,offset conbuff
+ 0242 1E                        push    ds
+ 0243 07                        pop     es              ;point destination to ddt seg
+ 0244 F3A4              rep     movs    al,al           ;copy command tail into ddt command buff
+ 0246 B00D                      mov     al,eol
+ 0248 AA                        stos    al              ;store terminator
+ 0249 E84B0A       0C97         call    execute         ;command tail is assumed E command
+                        cctret:
+ 024C C3                        ret
+                        ;
+                        ddt86:
+ 024D FC                        cld
+ 024E 8C16BD11                  MOV     CCPSS,SS
+ 0252 8926BF11                  MOV     CCPSP,SP        ;SAVE CCP STACK POINTER
+ 0256 2E8C16B011                MOV     USERSS,SS
+ 025B 2E8926A411                MOV     USERSP,SP       ;INITIALIZE USER'S MACHINE STATE TO CCP STACK
+                        ;
+ 0260 9C                        pushf
+ 0261 58                        pop     ax              ;get flags
+ 0262 250002                    and     ax,ifmask16     ;mask to IF bit
+ 0265 88266B12                  mov     sysif,ah        ;save system IF state
+ 0269 2EA3B611                  mov     userfl,ax       ;initialize user's flags to sysif
+                        ;
+ 026D 8CC8                      mov     ax,cs
+ 026F FA                        cli                     ;entering critical region
+ 0270 8ED0                      mov     ss,ax           ;set ss = cs
+ 0272 BC1013                    mov     sp,offset stackp        ;set up stack pointer
+ 0275 F6066B1202                test    sysif,ifmask8   ;see if interrupts were enabled
+ 027A 7401         027D         jz      d0              ;don't turn them on if they were off
+ 027C FB                        sti
+                        d0:                             ;exiting critical region
+                        ;
+ 027D E88AFF       020A         call    setbdosint      ;copy vector since ddt uses bdosi+1 internally
+                        ;
+ 0280 F6066F12FF                test    savevecflag,0ffh        ;ddt interrupts saved on each g/t/u?
+ 0285 7503         028A         jnz     d1                      ;if so, don't initialize here
+ 0287 E8DA04       0764         call    bpvect                  ;if not, initialize them here
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   5
+
+
+                        d1:
+                                if      debug
+                        ;
+                                sub     ax,ax
+                                mov     es,ax
+                                mov     si,bdosi * 4 + 2
+                                mov     ax,es:[si]      ;get bdos segment
+                                mov     es,ax
+                                mov     biosentryseg,ax
+                                mov     di,biosentryoff
+                                mov     al,81h
+                                stos    al
+                                mov     al,0c3h
+                                stos    al
+                                mov     al,0h
+                                stos    al
+                                mov     al,25h
+                                stos    al
+                                mov     al,0ffh
+                                stos    al
+                                mov     al,0d3h
+                                stos    al
+                                mov     al,0cbh
+                                stos    al
+                        ;
+                                endif
+                        ;
+ 028A BE3A01                    mov     si,offset signon        ;get sign on message
+ 028D E8AD01       043D         call    printm          ;and print it
+                        ;
+ 0290 E8A700       033A         CALL    VERSION
+ 0293 3C30                      CMP     AL,30H          ;SEE IF WE ARE UNDER FILE SYSTEM III (MP/M)
+ 0295 B700                      MOV     BH,0
+ 0297 7207         02A0         JC      D2              ;IF EARLIER VERSION, SKIP
+ 0299 B2FE                      MOV     DL,0FEH
+ 029B E8EC00       038A         CALL    SETERRMODE      ;SO BDOS RETURNS TO DDT ON FILE ERRORS
+ 029E B701                      MOV     BH,1
+                        D2:
+ 02A0 883E7112                  MOV     ERRMODE,BH
+                        ;
+ 02A4 E886FF       022D         call    checkcmdtail    ;if non-blank, do E command
+                        ;
+                        ;       *************************************************
+                        ;       *                                               *
+                        ;       *           w o r k i n g  l o o p              *
+                        ;       *                                               *
+                        ;       *************************************************
+                        ;
+ 02A7 FC                start:  cld                     ;direction flag points up
+ 02A8 BC1013                    mov     sp,offset stackp        ;make sure stack is right
+ 02AB E86F01       041D         call    crlf            ;print crlf
+ 02AE B02D                      mov     al,'-'          ;and prompt
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   6
+
+
+ 02B0 E87300       0326         call    conout
+ 02B3 E82101       03D7         call    getline         ;get command line
+ 02B6 E83801       03F1         call    conin           ;read first char
+ 02B9 3C0D                      cmp     al,eol
+ 02BB 74EA         02A7         jz      start
+ 02BD 3C3B                      CMP     AL,';'
+ 02BF 74E6         02A7         JZ      START           ;IGNORE COMMENT LINES
+ 02C1 2C41                      sub     al,'A'          ;check range for valid command
+ 02C3 721A         02DF         jb      err
+ 02C5 3C19                      cmp     al,'Z'-'A'
+ 02C7 7716         02DF         ja      err
+ 02C9 D0E0                      shl     al,1            ;* 2 (2 bytes per ctable entry)
+ 02CB B400                      mov     ah,0
+ 02CD 93                        xchg    ax,bx
+ 02CE C6066C1201                mov     numreq,1        ;most commands require an argument
+ 02D3 C6066D1200                mov     wmode,0         ;most commands are not word mode
+ 02D8 2EFF97E902                call    word ptr ctable [bx]    ;immed call command routine
+ 02DD EBC8         02A7         jmps    start           ;start over
+                        ;
+                        err:
+ 02DF E83B01       041D         call    crlf
+ 02E2 B03F                      mov     al,'?'          ;error handler
+ 02E4 E83F00       0326         call    conout          ;print error char
+ 02E7 EBBE         02A7         jmps    start           ;stack maybe messed up, keep this jmp
+                        ;
+                        ;       **************************************************
+                        ;       *                                                *
+                        ;       *       c o m m a n d  j u m p  t a b l e        *
+                        ;       *                                                *
+                        ;       **************************************************
+                        ;
+ 02E9 2F0B              ctable  dw      assm            ;assemble mnemonics
+ 02EB 600B                      DW      BLOCKCOMPARE    ;COMPARE MEMORY BLOCKS
+ 02ED DF02                      dw      err
+ 02EF D60B                      dw      display         ;display memory
+ 02F1 970C                      dw      execute         ;load user program for execution
+ 02F3 150D                      dw      fill            ;fill memory with constant
+ 02F5 5B0D                      dw      gouser          ;go to user program
+ 02F7 BF0D                      dw      hexmath         ;compute hex sum and difference
+ 02F9 DE0D                      dw      ifcb            ;input file control block
+ 02FB DF02                      dw      err
+ 02FD DF02                      dw      err
+ 02FF 2E0E                      dw      lassm           ;disassemble memory
+ 0301 A40E                      dw      move            ;move block
+ 0303 DF02                      dw      err
+ 0305 DF02                      dw      err
+ 0307 DF02                      dw      err
+ 0309 DF02                      dw      err
+ 030B F20E                      dw      read            ;read file
+ 030D 4C0F                      dw      setmem          ;set memory
+ 030F A10F                      dw      trace           ;trace program execution
+ 0311 D70F                      dw      untrace         ;untraced program execution
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   7
+
+
+ 0313 DE0F                      dw      verify          ;display file info
+ 0315 3010                      dw      write           ;write memory block to disk
+ 0317 E410                      dw      xcom            ;display/alter CPU state
+ 0319 DF02                      dw      err
+ 031B DF02                      dw      err
+                        ;
+                        ;       *************************************************
+                        ;       *                                               *
+                        ;       *          b d o s   i n t e r f a c e          *
+                        ;       *                                               *
+                        ;       *************************************************
+                        ;
+                        bdos:                           ;this interrupt instruction is overwritten on initialization
+                                                        ;the actual int # used is the one at bdosint: + 1
+   031E                 ddtbdosintnum   equ     offset bdos + 1
+                        ;
+ 031D CDE0                      int     bdosi
+ 031F C3                        ret
+                        ;
+                                if      debug
+                        ;
+                        bios:
+                                callf   dword ptr biosentryoff
+                                ret
+                        ;
+                                endif
+                        ;
+                                if      debug
+                        ;
+                        consin:
+                                mov     bx,9
+                                call    bios
+                                push    ax
+                                call    conout
+                                pop     ax
+                                ret
+                        ;
+                                endif
+                        ;
+                                if      not debug
+                        ;
+                        consin:
+ 0320 B101                      mov     cl,1
+ 0322 E8F8FF       031D         call    bdos
+ 0325 C3                        ret
+                        ;
+                                endif
+                        ;
+                                if      debug
+                        ;
+                        conout:
+                                mov     bx,0ch
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   8
+
+
+                                mov     cl,al
+                                jmp     bios
+                        ;
+                                endif
+                        ;
+                                if      not debug
+                        ;
+                        conout:
+ 0326 B102                      mov     cl,2
+ 0328 8AD0                      mov     dl,al
+ 032A E8F0FF       031D         call    bdos
+ 032D C3                        ret
+                        ;
+                                endif
+                        ;
+                        rdconbuff:
+ 032E B10A                      mov     cl,10
+ 0330 E8EAFF       031D         call    bdos
+ 0333 C3                        ret
+                        ;
+                                if      debug
+                        ;
+                        constat:
+                                mov     bx,6
+                                jmp     bios
+                        ;
+                                endif
+                        ;
+                                if      not debug
+                        ;
+                        constat:
+ 0334 B10B                      mov     cl,11
+ 0336 E8E4FF       031D         call    bdos
+ 0339 C3                        ret
+                        ;
+                                endif
+                        ;
+                        VERSION:
+ 033A B10C                      MOV     CL,12
+ 033C E9DEFF       031D         JMP     BDOS
+                        ;
+                        open:
+ 033F B10F                      mov     cl,15
+ 0341 E8D9FF       031D         call    bdos
+ 0344 FEC0                      inc     al              ;test for 0ffh returned
+ 0346 7401         0349         jz      openerr
+ 0348 C3                        ret
+                        openerr:
+ 0349 BECD01                    mov     si,offset openm
+ 034C EB70         03BE         jmps    errm
+                        ;
+                        close:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE   9
+
+
+ 034E B110                      mov     cl,16
+ 0350 E8CAFF       031D         call    bdos
+ 0353 FEC0                      inc     al
+ 0355 7401         0358         jz      closeerr
+ 0357 C3                        ret
+                        closeerr:
+ 0358 BE8901                    mov     si,offset closem
+ 035B EB61         03BE         jmps    errm
+                        ;
+                        delete:
+ 035D B113                      mov     cl,19
+ 035F E9BBFF       031D         jmp     bdos
+                        ;
+                        readsec:
+ 0362 B114                      mov     cl,20
+ 0364 E9B6FF       031D         jmp     bdos
+                        ;
+                        writesec:
+ 0367 B115                      mov     cl,21
+ 0369 E8B1FF       031D         call    bdos
+ 036C 0AC0                      or      al,al
+ 036E 7501         0371         jnz     writeerr
+ 0370 C3                        ret
+                        writeerr:
+ 0371 BEF801                    mov     si,offset writem
+ 0374 EB48         03BE         jmps    errm
+                        ;
+                        make:
+ 0376 B116                      mov     cl,22
+ 0378 E8A2FF       031D         call    bdos
+ 037B FEC0                      inc     al
+ 037D 7401         0380         jz      makeerr
+ 037F C3                        ret
+                        makeerr:
+ 0380 BEAC01                    mov     si,offset makem
+ 0383 EB39         03BE         jmps    errm
+                        ;
+                        setdma:
+ 0385 B11A                      mov     cl,26
+ 0387 E993FF       031D         jmp     bdos
+                        ;
+                        SETERRMODE:
+ 038A B12D                      MOV     CL,45
+ 038C E98EFF       031D         JMP     BDOS
+                        ;
+                        setdmab:
+ 038F B133                      mov     cl,51
+ 0391 E989FF       031D         jmp     bdos
+                        ;
+                        getmaxmem:
+ 0394 B135                      mov     cl,53
+ 0396 E884FF       031D         call    bdos
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  10
+
+
+ 0399 FEC0                      inc     al
+ 039B 740B         03A8         jz      memerr
+ 039D C3                        ret
+                        ;
+                        allocabsmem:
+ 039E B138                      mov     cl,56
+ 03A0 E87AFF       031D         call    bdos
+                        ;       inc     al
+                        ;       jz      memerr
+ 03A3 90                        NOP
+ 03A4 90                        NOP
+ 03A5 90                        NOP
+ 03A6 90                        NOP             ;REPLACE INC AL, JZ MEMERR
+ 03A7 C3                        ret
+                        memerr:
+ 03A8 BEB601                    mov     si,offset memm
+ 03AB EB11         03BE         jmps    errm
+                        ;
+                        freemem:
+ 03AD B139                      mov     cl,57
+ 03AF E96BFF       031D         jmp     bdos
+                        ;
+                        load:
+ 03B2 B13B                      mov     cl,59
+ 03B4 E866FF       031D         call    bdos
+ 03B7 40                        inc     ax              ;test for 0ffffh returned
+ 03B8 7401         03BB         jz      loaderr
+ 03BA C3                        ret
+                        loaderr:
+ 03BB BE9701                    mov     si,offset loadm
+                        ;
+                        errm:
+ 03BE E87C00       043D         call    printm
+ 03C1 E9E3FE       02A7         jmp     start
+                        ;
+                        plmconout:
+ 03C4 55                        push    bp
+ 03C5 8BEC                      mov     bp,sp
+ 03C7 8B4604                    mov     ax,4[bp]
+ 03CA E859FF       0326         call    conout
+ 03CD 5D                        pop     bp
+ 03CE C20200                    ret     2
+                        ;
+                        plmgetline:
+ 03D1 55                        push    bp
+ 03D2 E80200       03D7         call    getline
+ 03D5 5D                        pop     bp              ;restore bp for pl/m
+ 03D6 C3                        ret
+                        ;
+                        ;       ****************************************************
+                        ;       *                                                  *
+                        ;       *      c o n s o l e  i / o  r o u t i n e s       *
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  11
+
+
+                        ;       *                                                  *
+                        ;       ****************************************************
+                        ;
+                                if      debug
+                        ;
+                        ctlx:
+                                mov     al,'#'
+                                call    conout
+                                call    crlf
+                        getline:
+                                mov     conptr,0
+                        get0:
+                                call    consin
+                                cmp     al,3
+                                jz      ctlc
+                                cmp     al,8
+                                jz      backsp
+                                cmp     al,24           ;ctl-x
+                                jz      ctlx
+                                cmp     al,cr
+                                jz      getlinedone
+                                cmp     conptr,conbuffmax
+                                jnb     getlinedone
+                                mov     di,offset conbuff       ;normal character store
+                                add     di,conptr
+                                mov     [di],al
+                                inc     conptr
+                                jmps    get0
+                        getlinedone:
+                                mov     di,offset conbuff
+                                add     di,conptr
+                                mov     byte ptr [di],eol
+                                mov     conptr,0
+                                ret
+                        backsp:
+                                cmp     conptr,0
+                                jz      get0
+                                dec     conptr
+                                call    blank
+                                mov     al,8
+                                call    conout
+                                jmps    get0
+                        ctlc:
+                                mov     cl,0
+                                mov     dl,0
+                                jmp     bdos
+                        ;
+                                endif
+                        ;
+                                if      not debug
+                        ;
+                        getline:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  12
+
+
+ 03D7 BAC111                    mov     dx,offset conbuffhdr
+ 03DA E851FF       032E         call    rdconbuff
+ 03DD 8A1EC211                  mov     bl,conbuffcnt
+ 03E1 B700                      mov     bh,0
+ 03E3 81C3C311                  add     bx,offset conbuff
+ 03E7 C6070D                    mov     byte ptr [bx], eol
+ 03EA C70604120000              mov     conptr,0
+ 03F0 C3                        ret
+                        ;
+                                endif
+                        ;
+                        conin:
+ 03F1 BEC311                    mov     si,offset conbuff
+ 03F4 03360412                  add     si,conptr
+ 03F8 AC                        lods    al
+ 03F9 FF060412                  inc     conptr
+                                                        ;fall thru to upper
+ 03FD 3C61              upper:  cmp     al,'a'          ;less than 'a'
+ 03FF 7206         0407         jb      upret           ;or
+ 0401 3C7A                      cmp     al,'z'          ;greater than 'z'
+ 0403 7702         0407         ja      upret           ;then no change
+ 0405 245F                      and     al,5fh          ;else convert to uc
+ 0407 C3                upret:  ret
+                        ;
+                        ctlchek:                        ;check for ctl-s, ctl-q and ctl-c
+ 0408 E829FF       0334         call    constat         ;keypress?
+ 040B 0AC0                      or      al,al           ;zero?
+ 040D 740D         041C         jz      ctlexit         ;no keypress so return
+ 040F E80EFF       0320         call    consin          ;if keypress then get the data
+ 0412 3C13                      cmp     al,ctls         ;check for ctl-s
+ 0414 7403         0419         jz      kwait
+ 0416 E98EFE       02A7         jmp     start           ;any other key will restart
+ 0419 E804FF       0320 kwait:  call    consin          ;if ctl-s then wait for another keypress
+                        ctlexit:
+ 041C C3                        ret
+                        ;
+                        crlf:
+ 041D B00D                      mov     al,cr           ;send cr and lf to console
+ 041F E804FF       0326         call    conout
+ 0422 B00A                      mov     al,lf
+ 0424 E8FFFE       0326         call    conout
+ 0427 C3                        ret
+                        ;
+                        CRLFCHK:                        ;DO CRLF AND CHECK FOR ABORT
+ 0428 E8F2FF       041D         CALL    CRLF
+ 042B E8DAFF       0408         CALL    CTLCHEK
+ 042E C3                        RET
+                        ;
+                        blank:                          ;print a blank.
+ 042F B020                      mov     al,' '
+ 0431 E8F2FE       0326         call    conout
+ 0434 C3                        ret
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  13
+
+
+                        ;
+                        tabs:                           ;print # blanks in cx
+ 0435 51                        push    cx
+ 0436 E8F6FF       042F         call    blank
+ 0439 59                        pop     cx
+ 043A E2F9         0435         loop    tabs
+ 043C C3                        ret
+                        ;
+                        printm:                         ;print the message at [si] on console
+                                                        ;end of message indicated by parity set.
+ 043D AC                        lods    al              ;get a byte
+ 043E A880                      test    al,80h          ;check for end of message
+ 0440 7507         0449         jnz     pquit           ;quit if parity set
+ 0442 56                        push    si
+ 0443 E8E0FE       0326         call    conout          ;otherwise display byte
+ 0446 5E                        pop     si
+ 0447 EBF4         043D         jmps    printm          ;print more message 
+                        pquit:
+ 0449 247F                      and     al,7fh          ;strip parity
+ 044B E8D8FE       0326         call    conout          ;print last byte
+ 044E C3                        ret
+                        ;
+                        ascout:                         ;output [al] in ascii
+ 044F 3C20                      cmp     al,' '
+ 0451 7204         0457         jb      perout          ;less than blank?
+ 0453 3C7E                      cmp     al,7eh
+ 0455 7602         0459         jna     ascend
+                        perout:
+ 0457 B02E                      mov     al,'.'          ;output '.'
+                        ascend:
+ 0459 E8CAFE       0326         call    conout          ;else output ascii
+ 045C C3                        ret
+                        ;
+                        print8or16:                     ;print byte or word at es:[si] depending on wmode
+ 045D 268B04                    mov     ax,es:[si]
+ 0460 F6066D1201                test    wmode,1
+ 0465 7415         047C         jz      printbyte
+ 0467 EB0C         0475         jmps    printword
+                        ;
+                        printdword:                     ;print double word as ssss:oooo
+                                ; called with:
+                                ;  es = segment
+                                ;  di = offset
+ 0469 57                        push    di
+ 046A 8CC0                      mov     ax,es
+ 046C E80600       0475         call    printword       ;print segment
+ 046F B03A                      mov     al,':'
+ 0471 E8B2FE       0326         call    conout
+ 0474 58                        pop     ax
+                        ;
+                        printword:                      ;print value in [ax] as 4 hex digits
+ 0475 50                        push    ax
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  14
+
+
+ 0476 8AC4                      mov     al,ah
+ 0478 E80100       047C         call    printbyte
+ 047B 58                        pop     ax
+                        ;
+                        printbyte:                      ;print value in [al] as 2 hex digits
+ 047C 50                        push    ax
+ 047D B104                      mov     cl,4
+ 047F D2E8                      shr     al,cl           ;shift al right 4 places
+ 0481 E80100       0485         call    printnibble     ;output upper nibble
+ 0484 58                        pop     ax              ;restore al (now we do lower nibble)
+                        ;
+                        printnibble:                    ;print value in low 4 bits of [al] as a hex digit
+ 0485 240F                      and     al,0fh          ;mask upper 4 bits
+ 0487 0490                      add     al,90h
+ 0489 27                        daa
+ 048A 1440                      adc     al,40h
+ 048C 27                        daa
+ 048D E896FE       0326         call    conout
+ 0490 C3                        ret
+                        ;
+                        ;       **************************************
+                        ;       *                                    *
+                        ;       *     file name parsing routines     *
+                        ;       *                                    *
+                        ;       **************************************
+                        ;
+                        parse:                          ;parse into fcb whose offset is in [di]
+ 0491 0E                        push    cs
+ 0492 07                        pop     es              ;set es=cs
+ 0493 57                        push    di              ;save fcb address
+ 0494 2AC0                      sub     al,al
+ 0496 B92400                    mov     cx,36           ;fcblen
+ 0499 F3AA              rep     stos    al              ;initialize fcb to 0
+ 049B 5F                        pop     di              ;restore fcb address
+                        ;
+                        parse2:                         ;enter here to parse without clearing
+                                                        ;assumes es = cs from parse:
+ 049C 893EAE12                  mov     fcbadr,di       ;save fcb address
+ 04A0 47                        inc     di              ;point to first byte of filename
+ 04A1 E82200       04C6         call    setupdisk       ;check for d: and set drive byte
+ 04A4 B90800                    mov     cx,8
+ 04A7 E84B00       04F5         call    fillfield       ;first item was disk, now get filename
+ 04AA B90300                    mov     cx,3            ;length of file type
+ 04AD 803EAD122E                cmp     lastchar,'.'
+ 04B2 7405         04B9         jz      filltype
+ 04B4 E86000       0517         call    fillbl          ;fill type with blanks if no '.'
+ 04B7 EB03         04BC         jmps    parseret
+                        filltype:
+ 04B9 E83900       04F5         call    fillfield       ;if '.', fill field from console buff
+                        parseret:
+ 04BC E85F00       051E         call    scanq           ;count '?'s in fcb
+ 04BF A0AD12                    mov     al,lastchar
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  15
+
+
+ 04C2 C3                        ret                     ;with last char scanned in [al]
+                        parseerr:
+ 04C3 E919FE       02DF         jmp     err
+                        ;
+                        setupdisk:                      ;set byte 0 of fcb according to char in fcb (1)
+ 04C6 E828FF       03F1         call    conin
+ 04C9 A2AD12                    mov     lastchar,al
+ 04CC 3C20                      cmp     al,' '
+ 04CE 74F6         04C6         jz      setupdisk       ;deblank input
+ 04D0 3C0D                      cmp     al,eol
+ 04D2 7413         04E7         jz      s1              ;can't be drive, decrement conptr to rescan
+ 04D4 E81AFF       03F1         call    conin
+ 04D7 3C3A                      cmp     al,':'
+ 04D9 7508         04E3         jnz     s0              ;not a drive, subtract 2 from conptr to rescan
+ 04DB A0AD12                    mov     al,lastchar     ;get drive char
+ 04DE 2C40                      sub     al,'A'-1
+ 04E0 4F                        dec     di              ;point to fcb (0)
+ 04E1 AA                        stos    al              ;store drive byte
+ 04E2 C3                        ret
+                        s0:
+ 04E3 FF0E0412                  dec     conptr
+                        s1:
+ 04E7 FF0E0412                  dec     conptr
+ 04EB C3                        ret
+                        ;
+                        pdelim:                         ;check char in [al] for delimiter; return ZF if so.
+ 04EC BFA212                    mov     di,offset delims
+ 04EF B90B00                    mov     cx,ndelims
+ 04F2 F2AE              repnz   scas    al              ;look in table
+ 04F4 C3                        ret
+                        ;
+                        fillfield:                      ;count in [cx], dest ptr in [di]
+ 04F5 E8F9FE       03F1         call    conin
+ 04F8 A2AD12                    mov     lastchar,al     ;save last char scanned
+ 04FB 3C2A                      cmp     al,'*'
+ 04FD 7505         0504         jnz     notast
+ 04FF E81100       0513         call    fillq           ;fill with '?'
+ 0502 EBF1         04F5         jmps    fillfield       ;continue till delimiter
+                        notast:
+ 0504 57                        push    di
+ 0505 51                        push    cx
+ 0506 E8E3FF       04EC         call    pdelim
+ 0509 59                        pop     cx
+ 050A 5F                        pop     di
+ 050B 740A         0517         jz      fillbl          ;if delimiter, fill field with ' '
+ 050D E3B4         04C3         jcxz    parseerr        ;error if count exceeded
+ 050F AA                        stos    al              ;store char in fcb
+ 0510 49                        dec     cx              ;decrement count
+ 0511 EBE2         04F5         jmps    fillfield
+                        fillq:
+ 0513 B03F                      mov     al,'?'
+ 0515 EB02         0519         jmps    fillx
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  16
+
+
+                        fillbl:
+ 0517 B020                      mov     al,' '
+                        fillx:
+ 0519 E302         051D         jcxz    filldone
+ 051B F3AA              rep     stos    al              ;store '?' or ' '
+                        filldone:
+ 051D C3                        ret
+                        ;
+                        scanq:                          ;count '?'s in fcb, return ZF set if found
+ 051E 8B3EAE12                  mov     di,fcbadr
+ 0522 47                        inc     di              ;point to first char of filename
+ 0523 B90B00                    mov     cx,11           ;11 chars to check
+ 0526 B03F                      mov     al,'?'
+ 0528 F2AE              repnz   scas    al
+ 052A C3                        ret
+                        ;
+                        ;       ***********************************
+                        ;       *                                 *
+                        ;       *     user CPU state routines     *
+                        ;       *                                 *
+                        ;       ***********************************
+                        ;
+                        chkreg:                         ;if reg name in [ax] is valid, return with 
+                                                        ;register number in regnum
+                                                        ;else go to error processor
+ 052B B90E00                    mov     cx,totreg+1     ;number of names to check + 1
+ 052E BF4D01                    mov     di,offset regname
+ 0531 0E                        push    cs
+ 0532 07                        pop     es
+ 0533 F2AF              repnz   scas    ax
+ 0535 E320         0557         jcxz    checkerr        ;not a valid reg name
+ 0537 BA0D00                    mov     dx,totreg
+ 053A 2BD1                      sub     dx,cx
+ 053C 89165512                  mov     regnum,dx       ;save reg number
+ 0540 C3                        ret
+                        ;
+                        checkflag:                      ;check for valid flag name
+ 0541 B90A00                    mov     cx,nflag+1      ;number of names to check + 1
+ 0544 BF6701                    mov     di,offset flagname
+ 0547 0E                        push    cs
+ 0548 07                        pop     es
+ 0549 F2AE              repnz   scas    al
+ 054B E30A         0557         jcxz    checkerr        ;not a valid flag name
+ 054D BA0900                    mov     dx,nflag
+ 0550 2BD1                      sub     dx,cx
+ 0552 89165512                  mov     regnum,dx       ;save flag number
+ 0556 C3                        ret
+                        ;
+                        checkerr:
+ 0557 E985FD       02DF         jmp     err
+                        ;
+                        setreg:                         ;set reg whose number is in [cx] to value in [ax]
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  17
+
+
+ 055A BE9C11                    mov     si,offset userreg
+ 055D 03F1                      add     si,cx
+ 055F 03F1                      add     si,cx
+ 0561 8904                      mov     [si],ax
+ 0563 C3                        ret
+                        ;
+                        printflags:                     ;print values of flags
+ 0564 B90000                    mov     cx,0
+                        pf0:
+ 0567 51                        push    cx              ;save count
+ 0568 E84B00       05B6         call    printflag
+ 056B 59                        pop     cx
+ 056C 41                        inc     cx
+ 056D 83F909                    cmp     cx,9
+ 0570 72F5         0567         jb      pf0
+ 0572 C3                        ret
+                        ;
+                        setflag:                        ;set flag whose # is in [cx] to value in [bx]
+ 0573 BE7001                    mov     si,offset flagbits
+ 0576 03F1                      add     si,cx
+ 0578 AC                        lods    al
+ 0579 8AC8                      mov     cl,al
+ 057B B8FEFF                    mov     ax,0fffeh
+ 057E D3C8                      ror     ax,cl
+ 0580 D3CB                      ror     bx,cl
+ 0582 2E2106B611                and     userfl,ax
+ 0587 2E091EB611                or      userfl,bx
+ 058C C3                        ret
+                        ;
+                        printflagname:                  ;print flag name whose # is in [cx]
+ 058D BE6701                    mov     si,offset flagname
+ 0590 03F1                      add     si,cx
+ 0592 AC                        lods    al              ;get flag name
+ 0593 E890FD       0326         call    conout
+ 0596 C3                        ret
+                        ;
+                        getflag:                        ;check flag whose # is in [cx]
+                                                        ;return with ZF set if flag is set
+ 0597 B80100                    mov     ax,1
+ 059A BE7001                    mov     si,offset flagbits
+ 059D 03F1                      add     si,cx
+ 059F 8A0C                      mov     cl,[si]         ;get flagbits (flagnum)
+ 05A1 D3C8                      ror     ax,cl           ;get mask into position
+ 05A3 2E2306B611                and     ax,userfl       ;see if bit set in CPU state
+ 05A8 C3                        ret
+                        ;
+                        printflagval:                   ;print value of flag (as 0 or 1) whose # is in [cx]
+ 05A9 E8EBFF       0597         call    getflag
+ 05AC B030                      mov     al,'0'
+ 05AE 7402         05B2         jz      pf2             ;if flag not set, print '0'
+ 05B0 B031                      mov     al,'1'          ;else print '1'
+                        pf2:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  18
+
+
+ 05B2 E871FD       0326         call    conout
+ 05B5 C3                        ret
+                        ;
+                        printflag:                      ;print flag (as flagname of '-') whose # is in [cx]
+ 05B6 BE6701                    mov     si,offset flagname
+ 05B9 03F1                      add     si,cx           ;point to flag name
+ 05BB FF34                      push    word ptr [si]   ;save flag char
+ 05BD E8D7FF       0597         call    getflag
+ 05C0 58                        pop     ax              ;get flag char
+ 05C1 7502         05C5         jnz     pname           ;if flag set, use flag char
+ 05C3 B02D                      mov     al,'-'          ;else print hyphen
+                        pname:
+ 05C5 E85EFD       0326         call    conout
+ 05C8 C3                        ret
+                        ;
+                        PREG1:                          ;PRINT FIRST 6 REGISTER NAMES (FOR 40 COLUMNS)
+ 05C9 B90000                    MOV     CX,0
+ 05CC C606531206                MOV     NREG,6
+ 05D1 EB0D         05E0         JMPS    PR0
+                        PREG2:                          ;PRINT NEXT 7 REGISTER NAMES (FOR 40 COLUMNS)
+ 05D3 B90600                    MOV     CX,6
+ 05D6 EB03         05DB         JMPS    PR00
+                        printregs:                      ;print register values
+ 05D8 B90000                    mov     cx,0
+                        PR00:
+ 05DB C60653120D                MOV     NREG,13
+                        pr0:
+ 05E0 E82900       060C         call    testregcl       ;see if reg should be printed
+ 05E3 7308         05ED         jnb     pr2             ;don't print if carry not set
+ 05E5 51                        push    cx
+ 05E6 E80C00       05F5         call    printregval
+ 05E9 E843FE       042F         call    blank
+ 05EC 59                        pop     cx
+                        pr2:
+ 05ED 41                        inc     cx
+ 05EE 3A0E5312                  CMP     CL,NREG
+ 05F2 72EC         05E0         jb      pr0
+ 05F4 C3                        ret
+                        ;
+                        printregval:                    ;print value of reg whose # is in [cx]
+ 05F5 BE9C11                    mov     si,offset userreg
+ 05F8 03F1                      add     si,cx
+ 05FA 03F1                      add     si,cx
+ 05FC AD                        lods    ax
+ 05FD E875FE       0475         call    printword
+ 0600 C3                        ret
+                        ;
+                        printregname:                   ;print name of reg whose # is in [cx]
+ 0601 BE4D01                    mov     si,offset regname
+ 0604 03F1                      add     si,cx
+ 0606 03F1                      add     si,cx
+ 0608 E832FE       043D         call    printm
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  19
+
+
+ 060B C3                        ret
+                        ;
+                        testregcl:                      ;see if reg whose # is in [cl] should be printed
+                                                        ;return with carry set if so
+ 060C F6065412FF                test    segflag,0ffh
+ 0611 7509         061C         jnz     printit         ;print all reg's if segflag set
+ 0613 80F90B                    cmp     cl,11           ;otherwise, see if [cl] has seg reg #
+ 0616 7704         061C         ja      printit
+ 0618 80F908                    cmp     cl,8
+ 061B C3                        ret
+                        printit:
+ 061C F9                        stc
+ 061D C3                        ret
+                        ;
+                        SETUPHDR:
+ 061E E8FCFD       041D         call    crlf
+ 0621 B90B00                    mov     cx,11
+ 0624 E80EFE       0435         call    tabs            ;leave space for flags
+ 0627 B90000                    mov     cx,0
+ 062A C3                        RET
+                        ;
+                        PREGHDR1:                       ;PRINT HEADER FOR FIRST 6 REGS (FOR 40 COL)
+ 062B E8F0FF       061E         CALL    SETUPHDR
+ 062E C606531206                MOV     NREG,6
+ 0633 EB10         0645         JMPS    PRH0
+                        PREGHDR2:                       ;PRINT HEADER FOR NEXT 7 REGISTERS
+ 0635 E8F7FD       042F         CALL    BLANK
+ 0638 B90600                    MOV     CX,6
+ 063B EB03         0640         JMPS    PRH00
+                        printregheader:                 ;print header for registers
+ 063D E8DEFF       061E         CALL    SETUPHDR
+                        PRH00:
+ 0640 C60653120D                MOV     NREG,13
+                        prh0:
+ 0645 E8C4FF       060C         call    testregcl       ;see if reg should be printed
+ 0648 730B         0655         jnb     prh1            ;don't print if carry not set
+ 064A 51                        push    cx
+ 064B E8B3FF       0601         call    printregname
+ 064E B90300                    mov     cx,3
+ 0651 E8E1FD       0435         call    tabs
+ 0654 59                        pop     cx
+                        prh1:
+ 0655 41                        inc     cx
+ 0656 3A0E5312                  CMP     CL,NREG
+ 065A 72E9         0645         jb      prh0
+ 065C C3                        ret
+                        ;
+                        printinstr:                     ;disassemble instruction at [cs:ip]
+ 065D 2E8E06AC11                mov     es,usercs
+ 0662 2E8B36B411                mov     si,userip
+ 0667 F6063912FF                test    disempresent,0ffh
+ 066C 7410         067E         jz      pi1
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  20
+
+
+ 066E 06                        push    es
+ 066F 56                        push    si
+ 0670 F6065412FF                test    segflag,0ffh
+ 0675 7403         067A         jz      pi0
+ 0677 E8A3FD       041D         call    crlf
+                        pi0:
+ 067A E8830D       1400         call    disem
+ 067D C3                        ret
+                        pi1:
+ 067E 268A04                    mov     al,es:[si]
+ 0681 E8F8FD       047C         call    printbyte
+ 0684 C3                        ret
+                        ;
+                        printseginfo:                   ;print name, start and end address of segment whose
+                                                        ;number is in [al] if length is non-zero.
+ 0685 8AC8                      mov     cl,al           ;save seg number
+ 0687 B306                      mov     bl,6
+ 0689 F6E3                      mul     bl              ;6 bytes per segment in base page
+ 068B 057212                    add     ax,offset basepagesave
+ 068E 8BF0                      mov     si,ax           ;si now points to entry in base page
+ 0690 AD                        lods    ax              ;get low 16 bits of length
+ 0691 8BD8                      mov     bx,ax           ;save in bx
+ 0693 AC                        lods    al              ;get high nibble of length
+ 0694 8AD0                      mov     dl,al           ;save it
+ 0696 B400                      mov     ah,0
+ 0698 0BC3                      or      ax,bx           ;test for zero length
+ 069A 7430         06CC         jz      psiret          ;if zero, no display
+ 069C AD                        lods    ax              ;get base
+ 069D 53                        push    bx              ;save low (length)
+ 069E 52                        push    dx              ;save high (length)
+ 069F 50                        push    ax              ;save base
+ 06A0 B500                      mov     ch,0            ;zero high byte of segment #
+ 06A2 D1E1                      shl     cx,1            ;* 2 (2 bytes per segment name)
+ 06A4 81C17901                  add     cx,offset segnames      ;cx now points to segment name
+ 06A8 51                        push    cx              ;save it
+ 06A9 E871FD       041D         call    crlf
+ 06AC 5E                        pop     si
+ 06AD E88DFD       043D         call    printm          ;print segment name
+ 06B0 E87CFD       042F         call    blank
+ 06B3 07                        pop     es              ;get base
+ 06B4 06                        push    es              ;save base
+ 06B5 BF0000                    mov     di,0
+ 06B8 E8AEFD       0469         call    printdword      ;print start address
+ 06BB E871FD       042F         call    blank
+ 06BE 5B                        pop     bx              ;get base
+ 06BF 58                        pop     ax              ;get high (len)
+ 06C0 B10C                      mov     cl,12
+ 06C2 D3E0                      shl     ax,cl           ;move ls nibble of al to ms nibble of ah
+ 06C4 03C3                      add     ax,bx           ;add ms nibble of length to base
+ 06C6 8EC0                      mov     es,ax
+ 06C8 5F                        pop     di              ;get low (len)
+ 06C9 E89DFD       0469         call    printdword      ;print end address
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  21
+
+
+                        psiret:
+ 06CC C3                        ret
+                        ;
+                        setcpustate:                    ;set users regs after E command
+ 06CD A1BD11                    MOV     AX,CCPSS
+ 06D0 2EA3B011                  MOV     USERSS,AX
+ 06D4 A1BF11                    MOV     AX,CCPSP
+ 06D7 2EA3A411                  MOV     USERSP,AX       ;RESET USER STACK POINTER TO CCP STACK
+ 06DB 8BC3                      mov     ax,bx           ;get ds base in [ax] (returned from bdos load)
+ 06DD 2EA3AE11                  mov     userds,ax       ;set user's ds
+ 06E1 2EA3AC11                  mov     usercs,ax
+ 06E5 2EA3B211                  mov     useres,ax
+ 06E9 A35A12                    mov     type1seg,ax
+ 06EC A35E12                    mov     type2seg,ax
+ 06EF 8EC0                      mov     es,ax
+ 06F1 26F606050001              test    es:byte ptr .5, 1       ;test 8080 flag
+ 06F7 7405         06FE         jz      not8080
+ 06F9 B80001                    mov     ax,100h         ;default for userip, lasloc, disloc
+ 06FC EB2D         072B         jmps    setdone
+                        not8080:
+ 06FE 26A10300                  mov     ax,es:.3        ;get cs base
+ 0702 2EA3AC11                  mov     usercs,ax
+ 0706 A35A12                    mov     type1seg,ax
+ 0709 26A10F00                  mov     ax,es:.15       ;get es base
+ 070D 0BC0                      or      ax,ax
+ 070F 7404         0715         jz      sc1
+ 0711 2EA3B211                  mov     useres,ax       ;set it if there was one
+                        sc1:
+ 0715 26A11500                  mov     ax,es:.21       ;get ss base
+ 0719 0BC0                      or      ax,ax
+ 071B 740E         072B         jz      setdone
+ 071D 2EA3B011                  mov     userss,ax       ;set it if there was one
+ 0721 26A11200                  mov     ax,es:.18       ;get stack length
+ 0725 2EA3A411                  mov     usersp,ax       ;set user's sp
+ 0729 2BC0                      sub     ax,ax           ;userip, lasloc, disloc = 0 for non-8080 model
+                        setdone:
+ 072B 2EA3B411                  mov     userip,ax
+ 072F A33112                    mov     lasloc,ax
+ 0732 C3                        ret
+                        ;
+                        ;       *********************************************
+                        ;       *                                           *
+                        ;       *     breakpoint/single step procedures     *
+                        ;       *                                           *
+                        ;       *********************************************
+                        ;
+                        setbp:                          ;set breakpoint at address stored in dword at [di]
+ 0733 C435                      les     si,[di]         ;point [es]:[si] to breakpoint location
+ 0735 B0CC                      mov     al,0cch         ;int 3 instruction
+ 0737 268604                    xchg    al,es:[si]      ;set breakpoint and fetch instruction
+ 073A 884504                    mov     4[di],al        ;save user instruction in breakpoint table
+ 073D FE062612                  inc     bpcnt           ;increment breakpoint count
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  22
+
+
+ 0741 C3                        ret
+                        ;
+                        bpclear:                        ;clear breakpoint table
+ 0742 2BC9                      sub     cx,cx
+ 0744 8A0E2612                  mov     cl,bpcnt        ;get # of bp's to clear
+ 0748 BE2712                    mov     si,offset brk1loc       ;point to bp table
+                        bpcloop:
+ 074B E30F         075C         jcxz    bpend           ;0..quit
+ 074D AD                        lods    ax              ;get bp offset
+ 074E 50                        push    ax              ;save it
+ 074F AD                        lods    ax              ;get bp segment
+ 0750 8EC0                      mov     es,ax
+ 0752 AC                        lods    al              ;get inst byte
+ 0753 5F                        pop     di              ;get bp offset
+ 0754 AA                        stos    al              ;store user instruction back
+ 0755 E2F4         074B         loop    bpcloop
+ 0757 C606261200                mov     bpcnt,0         ;zero bp counter
+ 075C C3                bpend:  ret
+                        ;
+                        BPV:
+ 075D F6066F12FF                TEST    SAVEVECFLAG,0FFH
+ 0762 741C         0780         JZ      BPVECTRET
+                        bpvect:                         ;set up breakpoint/single step vectors
+ 0764 E81A00       0781         call    savevect
+ 0767 BA0000                    mov     dx,0
+ 076A 8EC2                      mov     es,dx           ;make sure dest is absolute 0
+ 076C BF0400                    mov     di,4            ;set up single step vector
+ 076F B8DF07                    mov     ax,offset ssentry       ;single step entry point
+ 0772 AB                        stos    ax              ;save at ss vector
+ 0773 8CC8                      mov     ax,cs
+ 0775 AB                        stos    ax              ;save cs
+ 0776 BF0C00                    mov     di,12           ;set up breakpoint vector
+ 0779 B8D707                    mov     ax,offset breakentry    ;set up bp vector
+ 077C AB                        stos    ax              ;save at bp vector
+ 077D 8CC8                      mov     ax,cs
+ 077F AB                        stos    ax              ;save cs
+                        BPVECTRET:
+ 0780 C3                        ret
+                        ;
+                        savevect:                       ;save previous contents of 0:4 thru 0:f
+ 0781 BE0400                    mov     si,4
+ 0784 BF1A12                    mov     di,offset vectorsave
+ 0787 1E                        push    ds
+ 0788 07                        pop     es              ;point to ddt segment
+ 0789 B90C00                    mov     cx,12
+ 078C 1E                        push    ds
+ 078D BA0000                    mov     dx,0
+ 0790 8EDA                      mov     ds,dx
+ 0792 F3A4              rep     movs    al,al
+ 0794 1F                        pop     ds
+                        svret:
+ 0795 C3                        ret
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  23
+
+
+                        ;
+                        restorevect:                    ;restore previous contents of 0:4 thru 0:f
+ 0796 F6066F12FF                test    savevecflag,0ffh
+ 079B 7410         07AD         jz      rvret
+ 079D BE1A12                    mov     si,offset vectorsave
+ 07A0 BF0400                    mov     di,4
+ 07A3 B90C00                    mov     cx,12
+ 07A6 BA0000                    mov     dx,0
+ 07A9 8EC2                      mov     es,dx
+ 07AB F3A4              rep     movs    al,al
+                        rvret:
+ 07AD C3                        ret
+                        ;
+                        SETDEFSEG:                      ;SET DEFAULT TYPE1SEG, LASLOC
+ 07AE 2E8B3EB411                mov     di,userip
+ 07B3 893E3112                  mov     lasloc,di       ;set disassembler offset
+ 07B7 2E8E06AC11                mov     es,usercs
+ 07BC 8C065A12                  mov     type1seg,es     ;set type1seg segment
+ 07C0 C3                        RET
+                        ;
+                        breakaddr:                      ;print address where break occurred
+ 07C1 E859FC       041D         call    crlf
+ 07C4 B02A                      mov     al,'*'
+ 07C6 E85DFB       0326         call    conout
+ 07C9 2EA1AE11                  mov     ax,userds
+ 07CD A35E12                    mov     type2seg,ax     ;set type2 segment to userds
+ 07D0 E8DBFF       07AE         CALL    SETDEFSEG
+ 07D3 E893FC       0469         call    printdword      ;print break address
+ 07D6 C3                        ret
+                        ;
+                        breakentry:                     ;breakpoint entry
+ 07D7 2EC606BC1101              mov     breakfl,1
+ 07DD EB06         07E5         jmps    savecpu         ;common code for break and single step
+                        ssentry:                        ;single step entry
+ 07DF 2EC606BC1100              mov     breakfl,0
+                        savecpu:
+ 07E5 2EA39C11                  mov     userax,ax
+ 07E9 2E891E9E11                mov     userbx,bx
+ 07EE 2E890EA011                mov     usercx,cx
+ 07F3 2E8916A211                mov     userdx,dx
+ 07F8 2E8936A811                mov     usersi,si
+ 07FD 2E893EAA11                mov     userdi,di
+ 0802 2E892EA611                mov     userbp,bp
+ 0807 2E8926A411                mov     usersp,sp
+ 080C 2E8C06B211                mov     useres,es
+ 0811 2E8C1EAE11                mov     userds,ds
+ 0816 2E8C16B011                mov     userss,ss
+ 081B 8BEC                      mov     bp,sp
+ 081D 8B4600                    mov     ax,[bp]
+ 0820 2EA3B411                  mov     userip,ax
+ 0824 8B4602                    mov     ax,2[bp]
+ 0827 2EA3AC11                  mov     usercs,ax
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  24
+
+
+ 082B 8B4604                    mov     ax,4[bp]
+ 082E 2EA3B611                  mov     userfl,ax
+                        ;
+ 0832 8CC8                      mov     ax,cs
+ 0834 8ED8                      mov     ds,ax
+ 0836 8ED0                      mov     ss,ax
+ 0838 BC1013                    mov     sp,offset stackp
+                        ;
+ 083B F6066B1202                test    sysif,ifmask8   ;see whether interrupts should be enabled
+ 0840 7401         0843         jz      sav0
+ 0842 FB                        sti
+                        sav0:
+ 0843 2E8306A41106              add     usersp,6        ;to make up for stacked cs, ip, and fl
+ 0849 FC                        cld
+ 084A E849FF       0796         call    restorevect
+ 084D 2EF606BC11FF              test    breakfl,0ffh
+ 0853 741A         086F         jz      sst0
+                        ;
+                        break0:                         ;continuation of break processing
+ 0855 2EFF0EB411                dec     userip          ;adjust user ip for breakpoint instr
+ 085A E8E5FE       0742         call    bpclear         ;clear all breakpoints
+ 085D F6064912FF                test    skipbdos,0ffh   ;were we originally in trace mode?
+ 0862 7506         086A         jnz     sst00           ;if so, continue tracing
+                        ;
+                        tracedone:
+ 0864 E85AFF       07C1         call    breakaddr
+ 0867 E93DFA       02A7         jmp     start
+                        ;
+                        sst00:                          ;get here on breakpoint on return from bdos
+ 086A C606491200                mov     skipbdos,0      ;no longer tracing thru bdos
+                        sst0:                           ;continuation of single step processing
+ 086F 2E8126B611FF              and     userfl,0feffh   ;clear user trap flag
+      FE
+ 0876 F6064A1201                TEST    USERIFOFF,1
+ 087B 740C         0889         JZ      SST1
+ 087D C6064A1200                MOV     USERIFOFF,0
+ 0882 2E810EB61100              OR      USERFL,200H     ;RESTORE USER IF
+      02
+                        SST1:
+ 0889 FF0E4612                  dec     tracecount
+ 088D 74D5         0864         jz      tracedone
+ 088F E876FB       0408         CALL    CTLCHEK         ;CHECK FOR ABORT
+ 0892 F6064812FF                test    traceprint,0ffh
+ 0897 7403         089C         jz      tracerestore
+ 0899 E80608       10A2         call    xnohdr          ;display regs without header
+                        ;
+                        tracerestore:                   ;enter here when in trace mode
+ 089C 2E8E06AC11                mov     es,usercs
+ 08A1 2E8B36B411                mov     si,userip
+ 08A6 A11201                    mov     ax,word ptr .bdosintloc ;get bdos interrupt instruction
+ 08A9 263B04                    cmp     ax,es:[si]      ;see if instruction to be traced is bdos int
+ 08AC 7518         08C6         jnz     tr00
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  25
+
+
+ 08AE 8C062912                  mov     brk1seg,es
+ 08B2 83C602                    add     si,2            ;point to instruction after bdos int
+ 08B5 89362712                  mov     brk1loc,si
+ 08B9 BF2712                    mov     di,offset brk1loc
+ 08BC E874FE       0733         call    setbp           ;set breakpoint at return from bdos
+ 08BF C606491201                mov     skipbdos,1      ;so we know we were in trace mode when we hit bp
+ 08C4 EB39         08FF         jmps    rstore          ;without setting single step flag
+                        tr00:
+ 08C6 2EA1B611                  MOV     AX,USERFL
+ 08CA 0D0001                    OR      AX,100H         ;SET TRACE FLAG
+ 08CD A90002                    TEST    AX,200H         ;IS USER IF SET?
+ 08D0 7429         08FB         JZ      TR01
+ 08D2 25FFFD                    AND     AX,NOT 200H     ;CLEAR IT (SO WE DON'T END UP IN INT HANDLER)
+ 08D5 2E8E06AC11                MOV     ES,USERCS
+ 08DA 2E8B36B411                MOV     SI,USERIP
+ 08DF 268A1C                    MOV     BL,ES:[SI]      ;GET INSTRUCTION TO EXECUTE
+ 08E2 80FBFA                    CMP     BL,0FAH         ;IS IT CLI?
+ 08E5 7414         08FB         JZ      TR01
+ 08E7 80FBCF                    CMP     BL,0CFH         ;IRET?
+ 08EA 740F         08FB         JZ      TR01
+ 08EC 80FB9D                    CMP     BL,09DH         ;POPF?
+ 08EF 740A         08FB         JZ      TR01
+ 08F1 80FBCD                    CMP     BL,0CDH         ;INT?
+ 08F4 7405         08FB         JZ      TR01
+ 08F6 C6064A1201                MOV     USERIFOFF,1     ;SET FLAG SO DDT86 WILL TURN IF BACK ON
+                        TR01:
+ 08FB 2EA3B611                  MOV     USERFL,AX
+                        rstore:                         ;enter here when in G mode
+ 08FF E85BFE       075D         CALL    BPV
+ 0902 FA                        cli
+ 0903 BC9C11                    mov     sp,offset userreg       ;point to reg save area
+ 0906 58                        pop     ax
+ 0907 5B                        pop     bx
+ 0908 59                        pop     cx
+ 0909 5A                        pop     dx
+ 090A 2E8F06BA11                pop     savesp
+ 090F 5D                        pop     bp
+ 0910 5E                        pop     si
+ 0911 5F                        pop     di
+ 0912 1F                        pop     ds              ;throw away cs
+ 0913 1F                        pop     ds
+ 0914 2E8F06B811                pop     savess
+ 0919 07                        pop     es
+ 091A 2E8E16B811                mov     ss,savess       ;restore stack
+ 091F 2E8B26BA11                mov     sp,savesp
+ 0924 2EFF36B611                push    userfl          ;flags
+ 0929 2EFF36AC11                push    usercs          ;cs
+ 092E 2EFF36B411                push    userip          ;ip
+ 0933 CF                        iret                    ;transfer to user program
+                        ;
+                        ;       **********************************
+                        ;       *                                *
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  26
+
+
+                        ;       *     miscellaneous routines     *
+                        ;       *                                *
+                        ;       **********************************
+                        ;
+                        delim:
+ 0934 3C0D                      cmp     al,eol
+ 0936 740A         0942         jz      delret
+ 0938 3C2C                      cmp     al,','
+ 093A 7406         0942         jz      delret
+ 093C 3C20                      cmp     al,' '
+ 093E 7402         0942         jz      delret
+ 0940 3C3A                      cmp     al,':'
+                        delret:
+ 0942 C3                        ret
+                        ;
+                        hexcon:
+ 0943 2C30                      sub     al,'0'
+ 0945 3C0A                      cmp     al,10
+ 0947 720A         0953         jb      hexret
+ 0949 04F9                      add     al,('0' - 'A' + 10) and 0ffh
+ 094B 3C10                      cmp     al,16
+ 094D 7305         0954         jnb     hexerr
+ 094F 3C0A                      cmp     al,10
+ 0951 7201         0954         jb      hexerr
+                        hexret:
+ 0953 C3                        ret
+                        hexerr:
+ 0954 E988F9       02DF         jmp     err
+                        ;
+                        plmset:                         ;get here when assembler wants to set memory
+ 0957 8BEC                      mov     bp,sp           ;for parameter fetching
+ 0959 8B4602                    mov     ax,2[bp]        ;get value in [al]
+ 095C 8E065A12                  mov     es,type1seg     ;segment used in A command is in type1 seg
+ 0960 8B7E04                    mov     di,4[bp]        ;get offset from stack
+ 0963 E81A00       0980         call    setbyte         ;set and verify
+ 0966 47                        inc     di              ;increment offset
+ 0967 7503         096C         jnz     psret           ;if incremented offset is non-zero, return
+ 0969 E93BF9       02A7         jmp     start           ;otherwise exit A command, since wrap occurred
+                        psret:
+ 096C C20400                    ret     4               ;remove 2 parameters
+                        ;
+                        set8or16:                       ;set byte or word at es:[di] depending on wmode
+ 096F F6066D1201                test    wmode,1
+ 0974 740A         0980         jz      setbyte
+                                                        ;fall through to setword
+                        ;
+                        setword:                        ;set word at es:[di] to [ax] and verify
+                        ;
+                        ;       NOTE:  THIS CODE COULD BE REPLACED BY THE FOLLOWING 4 INSTRUCTIONS
+                        ;              FOR SYSTEMS IN WHICH MEMORY CAN ONLY BE ADDRESSED BY WORDS.
+                        ;              HOWEVER, THIS WILL WRAP AROUND AND MODIFY LOCATIONS 0 IF
+                        ;              [DI] CONTAINS 0FFFEH.
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  27
+
+
+                        ;
+                        ;       MOV     ES:[DI],AX
+                        ;       CMP     ES:[DI],AX
+                        ;       JNZ     BADVER
+                        ;       RET
+                        ;
+ 0976 50                        push    ax              ;save hi byte
+ 0977 E80600       0980         call    setbyte         ;set low byte
+ 097A 58                        pop     ax
+ 097B 8AC4                      mov     al,ah
+ 097D 47                        inc     di              ;point to next location
+ 097E 7408         0988         jz      sret            ;don't set byte if wraparound occurred
+                                                        ;fall thru to setbyte
+                        ;
+                        setbyte:                        ;set byte at es:[di] to [al] and verify
+ 0980 268805                    mov     es:[di],al      ;store byte
+ 0983 263805                    cmp     es:[di],al      ;see if it got stored
+ 0986 7501         0989         jnz     badver
+                        sret:
+ 0988 C3                        ret
+                        ;
+                        badver:
+ 0989 57                        push    di
+ 098A 06                        push    es
+ 098B BEE601                    mov     si,offset verm
+ 098E E8ACFA       043D         call    printm          ;print verify error message
+ 0991 07                        pop     es
+ 0992 5F                        pop     di
+ 0993 E8D3FA       0469         call    printdword
+ 0996 E90EF9       02A7         jmp     start
+                        ;
+                        inc1or2:                        ;inc pointer at [si] by 1 or 2, depending on wmode
+                                                        ;return with carry flag set if wrap occurred
+ 0999 A06D12                    mov     al,wmode
+ 099C 250100                    and     ax,1            ;mask to 0 or 1
+ 099F 40                        inc     ax              ;increment value is now 1 or 2
+ 09A0 0104                      add     [si],ax         ;increment pointer
+ 09A2 3904                      cmp     [si],ax         ;test for wraparound
+ 09A4 C3                        ret
+                        ;
+                        getnumber:                      ;get number from input buffer
+                                                        ;returns:
+                                                        ;bx = value of number from input
+                                                        ;al = last character scanned (delimiter)
+                                                        ;ah = blank flag (0 = blank, 1 = non-blank)
+ 09A5 2BDB                      sub     bx,bx           ;initialize value to 0
+ 09A7 8AE7                      mov     ah,bh           ;initialize blank flag to blank
+                        getn0:
+ 09A9 E845FA       03F1         call    conin
+ 09AC E885FF       0934         call    delim           ;check for delimiter
+ 09AF 740D         09BE         jz      getnret         ;delimiter found, exit
+ 09B1 B104                      mov     cl,4
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  28
+
+
+ 09B3 D3E3                      shl     bx,cl           ;make room for new nibble
+ 09B5 E88BFF       0943         call    hexcon          ;convert ascii to binary
+ 09B8 02D8                      add     bl,al           ;add nibble
+ 09BA B401                      mov     ah,1            ;blank flag = non-blank
+ 09BC EBEB         09A9         jmps    getn0
+                        getnret:
+ 09BE C3                        ret
+                        ;
+                        getoffset:                      ;get offset from input line
+                                                        ;offset is a non-blank number not followed by ':'
+                                                        ;returns:
+                                                        ;al = last char scanned (delimiter)
+                                                        ;bx = value
+ 09BF E8E3FF       09A5         call    getnumber       ;get value to bx
+ 09C2 0AE4                      or      ah,ah           ;check for blank entry
+ 09C4 740D         09D3         jz      geterr          ;don't allow blank entry
+ 09C6 3C3A                      cmp     al,':'          ;check delimiter for ':'
+ 09C8 7409         09D3         jz      geterr          ;don't allow ':' delimiter
+ 09CA C3                        ret
+                        ;
+                        getlastoffset:                  ;same as getoffset but delimiter must be a cr
+ 09CB E8F1FF       09BF         call    getoffset
+ 09CE 3C0D                      cmp     al,eol
+ 09D0 7501         09D3         jnz     geterr
+ 09D2 C3                        ret
+                        geterr:
+ 09D3 E909F9       02DF         jmp     err
+                        ;
+                        checkword:                      ;check for 'W' following command letter
+ 09D6 E818FA       03F1         call    conin
+ 09D9 3C57                      cmp     al,'W'
+ 09DB 7506         09E3         jnz     chret
+ 09DD C6066D1201                mov     wmode,1
+ 09E2 C3                        ret
+ 09E3 FF0E0412          chret:  dec     conptr          ;to rescan character
+ 09E7 C3                        ret
+                        ;
+                        checkreg:                       ;check for valid segment register prefix - <sr>:
+                                                        ;called with:
+                                                        ;bl = first char
+                                                        ;bh = second char
+                                                        ;returns:
+                                                        ;si = offset to register, if found
+                                                        ;zf = found flag (1 = found, 0 = not found)
+ 09E8 80CF80                    or      bh,80h          ;since they are defined like that
+ 09EB BD5D01                    mov     bp,offset segreg        ;point to seg reg names
+ 09EE 2BF6                      sub     si,si           ;initialize index to 0
+                        check0:
+ 09F0 3B1A                      cmp     bx,[bp+si]      ;is it a seg reg name
+ 09F2 740A         09FE         jz      checkret
+ 09F4 83C602                    add     si,2            ;point to next name
+ 09F7 83FE08                    cmp     si,8            ;check for done (4 seg reg names)
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  29
+
+
+ 09FA 75F4         09F0         jnz     check0
+ 09FC 0BF6                      or      si,si           ;unset zero flag
+                        checkret:
+ 09FE C3                        ret
+                        ;
+                        checksegreg:                    ;check for valid seg reg name
+                                                        ;if found, return contents of seg reg
+                                                        ;else reset input pointer for rescan
+                                                        ;returns:
+                                                        ;dx = seg reg value
+                                                        ;zf = valid seg reg (1 = valid, 0 = not valid)
+ 09FF FF360412                  push    conptr          ;save input pointer for possible rescan
+ 0A03 E8EBF9       03F1         call    conin
+ 0A06 50                        push    ax
+ 0A07 E8E7F9       03F1         call    conin
+ 0A0A 50                        push    ax
+ 0A0B E8E3F9       03F1         call    conin
+ 0A0E 3C3A                      cmp     al,':'          ;valid seg reg must have colon
+ 0A10 5B                        pop     bx
+ 0A11 59                        pop     cx
+ 0A12 8AF9                      mov     bh,cl
+ 0A14 86DF                      xchg    bl,bh
+ 0A16 750C         0A24         jnz     notsr
+ 0A18 E8CDFF       09E8         call    checkreg        ;see if it's a valid name
+ 0A1B 7507         0A24         jnz     notsr
+ 0A1D BDAC11                    mov     bp,offset usercs        ;point to saved user seg reg's
+ 0A20 8B12                      mov     dx,[bp+si]      ;get value of user seg reg
+ 0A22 59                        pop     cx              ;throw away saved input pointer
+ 0A23 C3                        ret
+                        notsr:
+ 0A24 8F060412                  pop     conptr          ;reset for rescan
+ 0A28 C3                        ret
+                        ;
+                        getsegandoff:                   ;get user location specification
+                                                        ;may be one of the following forms:
+                                                        ;<empty>
+                                                        ;nnnn
+                                                        ;sr:nnnn
+                                                        ;mmmm:nnnn
+                                                        ;if numreq set, <empty> is invalid
+                                                        ;called with:
+                                                        ;di = offset of 4 byte area containing <offset><segment>
+                                                        ;numreq must have been initialized by calling routine
+ 0A29 E8D3FF       09FF         call    checksegreg     ;see if there is a segment prefix
+ 0A2C 740D         0A3B         jz      gets0
+ 0A2E E874FF       09A5         call    getnumber       ;no segment prefix, check for number
+ 0A31 0AE4                      or      ah,ah           ;was there one?
+ 0A33 7412         0A47         jz      gets3
+ 0A35 8BD3                      mov     dx,bx           ;move number to dx
+ 0A37 3C3A                      cmp     al,':'          ;was delimiter a ':'
+ 0A39 7509         0A44         jnz     gets2
+                        gets0:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  30
+
+
+ 0A3B E881FF       09BF         call    getoffset       ;segment prefix present, must have number
+ 0A3E 891D                      mov     [di],bx         ;number goes to <offset>
+ 0A40 895502                    mov     2[di],dx        ;first number (or sr) goes to <segment>
+ 0A43 C3                        ret
+                        gets2:
+ 0A44 8915                      mov     [di],dx         ;only one number, put it in <offset>
+                        getsret:
+ 0A46 C3                        ret
+                        gets3:
+ 0A47 F6066C12FF                test    numreq,0ffh     ;blank field, see if ok
+ 0A4C 74F8         0A46         jz      getsret         ;ok, return with no change at [di]
+ 0A4E E98EF8       02DF         jmp     err             ;number was required
+                        ;
+                        ;       *****************************
+                        ;       *                           *
+                        ;       *     disk i/o routines     *
+                        ;       *                           *
+                        ;       *****************************
+                        ;
+                        readfile:                       ;read file in fcb into memory described in mcb
+                                                        ;when done, mcb will have base and length of block to free
+ 0A51 A16612                    mov     ax,mcbbase
+ 0A54 A33C12                    mov     startreadseg,ax
+ 0A57 A34012                    mov     endreadseg,ax
+ 0A5A A34412                    mov     dmaseg,ax
+ 0A5D 2BC0                      sub     ax,ax
+ 0A5F A33A12                    mov     startreadoff,ax
+ 0A62 A33E12                    mov     endreadoff,ax
+                        rf0:
+ 0A65 8B164412                  mov     dx,dmaseg
+ 0A69 E823F9       038F         call    setdmab         ;set dma base
+ 0A6C C70642120000              mov     dmaoff,0
+                        rf1:
+ 0A72 8B164212                  mov     dx,dmaoff
+ 0A76 E80CF9       0385         call    setdma          ;set dma offset
+ 0A79 833E681208                cmp     mcblen,8        ;8 paragraphs per sector
+ 0A7E 7239         0AB9         jb      readerr         ;if less than 8 pp's left, not enough memory
+ 0A80 BA5C00                    mov     dx,offset fcb
+ 0A83 E8DCF8       0362         call    readsec
+ 0A86 0AC0                      or      al,al           ;test value returned from bdos
+ 0A88 7528         0AB2         jnz     readdone
+ 0A8A 8306661208                add     mcbbase,8       ;point mcb to next available paragraph
+ 0A8F 832E681208                sub     mcblen,8        ;decrement # of available paragraphs
+ 0A94 A14212                    mov     ax,dmaoff
+ 0A97 047F                      add     al,7fh          ;add sector size - 1
+ 0A99 A33E12                    mov     endreadoff,ax
+ 0A9C A14412                    MOV     AX,DMASEG
+ 0A9F A34012                    MOV     ENDREADSEG,AX
+ 0AA2 810642128000              add     dmaoff,80h      ;increment dma offset
+ 0AA8 75C8         0A72         jnz     rf1             ;if no wrap occurred, simply continue
+ 0AAA 810644120010              add     dmaseg,1000h    ;else increment dma segment
+ 0AB0 EBB3         0A65         jmps    rf0
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAG                ret
+                        asmerr:
+ 0B57 E985F7       02DF         jmp     err
+                        asment:                         ;arrive here on input error in pl/m
+ 0B5A 8B260712                  mov     sp,asmspsav     ;reset stack to where it was
+ 0B5E EBE0         0B40         jmps    asm0            ;go back for more input
+                        ;
+                        ;       *****************************
+                        ;       *                           *
+4
+ 0AC1 D3E8                      shr     ax,cl           ;divide offset by 16 - truncate ls nibble
+ 0AC3 03064D12                  add     ax,startwriteseg        ;compute absolute paragraph number
+ 0AC7 A36612                    mov     mcbbase,ax
+ 0ACA A34412                    mov     dmaseg,ax
+ 0ACD 8BD8                      mov     bx,ax           ;store start paragraph # in [bx]
+ 0ACF A14F12                    mov     ax,endwriteoff
+ 0AD2 D3E8                      shr     ax,cl
+ 0AD4 03065112                  add     ax,endwriteseg  ;calculate absolute paragraph number of end
+ 0AD8 2BC3                      sub     ax,bx           ;compute # of paragraphs to write
+ 0ADA 7250         0B2C         jb      wferr           ;start can't be > end
+ 0ADC A36812                    mov     mcblen,ax       ;store # paragraphs to write
+ 0ADF BA5C00                    mov     dx,offset fcb
+ 0AE2 E878F8       035D         call    delete
+ 0AE5 F6067112FF                TEST    ERRMODE,0FFH
+ 0AEA 7408         0AF4         JZ      WF00
+ 0AEC FEC0                      INC     AL              ;DID DELETE RETURN 0FFH?
+ 0AEE 7504         0AF4         JNZ     WF00            ;IF NOT, OK
+ 0AF0 0AE4                      OR      AH,AH           ;SEE IF EXTENDED OR PHYSICAL ERROR
+ 0AF2 7538         0B2C         JNZ     WFERR           ;IF SO, DON'T CONTINUE
+                        WF00:
+ 0AF4 BA5C00                    mov     dx,offset fcb
+ 0AF7 E87CF8       0376         call    make
+                        wf0:
+ 0AFA 8B164412                  mov     dx,dmaseg
+ 0AFE E88EF8       038F         call    setdmab
+ 0B01 C70642120000              mov     dmaoff,0        ;clear dma offset
+                        wf1:
+ 0B07 8B164212                  mov     dx,dmaoff
+ 0B0B E877F8       0385         call    setdma
+ 0B0E BA5C00                    mov     dx,offset fcb
+ 0B11 E853F8       0367         call    writesec
+ 0B14 832E681208                sub     mcblen,8        ;8 paragraphs per sector
+ 0B19 7210         0B2B         jb      writedone
+ 0B1B 810642128000              add     dmaoff,80h      ;increment dma pointer
+ 0B21 75E4         0B07         jnz     wf1             ;loop if no wrap occurred
+ 0B23 810644120010              add     dmaseg,1000h    ;if wrap occurred, increment dma segment
+ 0B29 EBCF         0AFA         jmps    wf0
+                        writedone:
+ 0B2B C3                        ret
+                        wferr:
+ 0B2C E9B0F7       02DF         jmp     err
+                        ;
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  32
+
+
+                        eject
+                        ;
+                        ;       **********************************
+                        ;       *                                *
+                        ;       *     a - assemble mnemonics     *
+                        ;       *                                *
+                        ;       **********************************
+                        ;
+                        assm:
+ 0B2F F6060612FF                test    assempresent,0ffh
+ 0B34 7421         0B57         jz      asmerr
+ 0B36 89260712                  mov     asmspsav,sp     ;save in case of error in pl/m
+ 0B3A BF5812                    mov     di,offset type1loc
+ 0B3D E8E9FE       0A29         call    getsegandoff    ;get start address
+                        asm0:
+ 0B40 FF365A12                  push    type1seg        ;for pl/m call
+ 0B44 FF365812                  push    type1loc        ;for pl/m call
+ 0B48 E8B517       2300         call    assem           ;returns offset of next available byte
+ 0B4B 3B065812                  cmp     ax,type1loc     ;test for no input
+ 0B4F 7605         0B56         jna     asmret          ;done unless greater than original type1loc
+ 0B51 A35812                    mov     type1loc,ax     ;update type1loc
+ 0B54 EBEA         0B40         jmps    asm0
+                        asmret:
+ 0B56 C3                        ret
+                        asmerr:
+ 0B57 E985F7       02DF         jmp     err
+                        asment:                         ;arrive here on input error in pl/m
+ 0B5A 8B260712                  mov     sp,asmspsav     ;reset stack to where it was
+ 0B5E EBE0         0B40         jmps    asm0            ;go back for more input
+                        ;
+                        ;       *****************************
+                        ;       *                           *
+                        ;       *     B - BLOCK COMPARE     *
+                        ;       *                           *
+                        ;       *****************************
+                        ;
+                        BLOCKCOMPARE:
+ 0B60 BF5C12                    mov     di,offset type2loc
+ 0B63 E8C3FE       0A29         call    getsegandoff
+ 0B66 E856FE       09BF         call    getoffset       ;get end offset
+ 0B69 891E6012                  mov     usermax,bx
+ 0B6D 3C0D                      cmp     al,eol
+ 0B6F 7451         0BC2         jz      cmperr          ;need 3 arguments
+ 0B71 2B1E5C12                  sub     bx,type2loc
+ 0B75 724B         0BC2         jb      cmperr          ;error if start > end
+ 0B77 A15E12                    mov     ax,type2seg
+ 0B7A A36412                    mov     userseg2,ax     ;default to same seg as source
+ 0B7D BF6212                    mov     di,offset userloc2
+ 0B80 E8A6FE       0A29         call    getsegandoff    ;get destination address
+ 0B83 3C0D                      cmp     al,eol
+ 0B85 753B         0BC2         jnz     cmperr          ;error if more than 3 arguments
+                        CMP0:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  33
+
+
+ 0B87 C4365C12                  LES     SI,DWORD PTR TYPE2LOC
+ 0B8B 268A04                    MOV     AL,ES:[SI]
+ 0B8E C4366212                  LES     SI,DWORD PTR USERLOC2
+ 0B92 263A04                    CMP     AL,ES:[SI]
+ 0B95 7415         0BAC         JZ      CMPCONT
+ 0B97 E88EF8       0428         CALL    CRLFCHK
+ 0B9A BF5C12                    MOV     DI,OFFSET TYPE2LOC
+ 0B9D E82500       0BC5         CALL    PRINTERROR
+ 0BA0 E88CF8       042F         CALL    BLANK
+ 0BA3 E889F8       042F         CALL    BLANK
+ 0BA6 BF6212                    MOV     DI,OFFSET USERLOC2
+ 0BA9 E81900       0BC5         CALL    PRINTERROR
+                        CMPCONT:
+ 0BAC FF065C12                  INC     TYPE2LOC
+ 0BB0 A15C12                    MOV     AX,TYPE2LOC
+ 0BB3 39066012                  CMP     USERMAX,AX
+ 0BB7 7208         0BC1         JC      CMPDONE
+ 0BB9 FF066212                  INC     USERLOC2
+ 0BBD 7402         0BC1         JZ      CMPDONE         ;PREVENT WRAPAROUND
+ 0BBF EBC6         0B87         JMPS    CMP0
+                        ;
+                        CMPDONE:
+ 0BC1 C3                        RET
+                        CMPERR:
+ 0BC2 E91AF7       02DF         JMP     ERR
+                        ;
+                        PRINTERROR:                     ;PRINT DWORD AT [DI], BYTE POINTED TO BY DWORD
+ 0BC5 C43D                      LES     DI,[DI]
+ 0BC7 268A05                    MOV     AL,ES:[DI]
+ 0BCA 50                        PUSH    AX              ;SAVE BYTE AT ES:DI
+ 0BCB E89BF8       0469         CALL    PRINTDWORD
+ 0BCE E85EF8       042F         CALL    BLANK
+ 0BD1 58                        POP     AX
+ 0BD2 E8A7F8       047C         CALL    PRINTBYTE
+ 0BD5 C3                        RET
+                        ;
+                        ;       ******************************
+                        ;       *                            *
+                        ;       *     d - display memory     *
+                        ;       *                            *
+                        ;       ******************************
+                        ;
+                        display:
+ 0BD6 C6066C1200                mov     numreq,0        ;ok to have no entries
+ 0BDB A15E12                    mov     ax,type2seg
+ 0BDE A30B12                    mov     disseg,ax       ;default to type2 seg
+ 0BE1 E8F2FD       09D6         call    checkword
+ 0BE4 F6067012FF                TEST    COL40,0FFH
+ 0BE9 7411         0BFC         JZ      DIS01
+ 0BEB F6066D1201                TEST    WMODE,1
+ 0BF0 7505         0BF7         JNZ     DIS00
+ 0BF2 A01312                    MOV     AL,ND40
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  34
+
+
+ 0BF5 EB08         0BFF         JMPS    DIS02
+                        DIS00:
+ 0BF7 A01412                    MOV     AL,NDW40        ;CHARS PER LINE FOR DW IN 40 COL MODE
+ 0BFA EB03         0BFF         JMPS    DIS02
+                        DIS01:
+ 0BFC A01212                    MOV     AL,ND80         ;16 BYTES PER LINE IN NORMAL MODE
+                        DIS02:
+ 0BFF A21112                    MOV     LINEMAX,AL
+ 0C02 BF0912                    mov     di,offset disloc
+ 0C05 E821FE       0A29         call    getsegandoff
+ 0C08 3C2C                      cmp     al, ','
+ 0C0A A10B12                    mov     ax,disseg
+ 0C0D A35E12                    mov     type2seg,ax     ;update default type2 seg
+ 0C10 7505         0C17         jnz     dis0            ;must be cr, no dismax entered
+ 0C12 E8B6FD       09CB         call    getlastoffset   ;get dismax
+ 0C15 EB1A         0C31         jmps    dis1
+                        dis0:
+ 0C17 8B1E0912                  mov     bx,disloc       ;no dismax entered, calculate default
+ 0C1B A01112                    MOV     AL,LINEMAX
+ 0C1E 8A0E1512                  MOV     CL,NLINES
+ 0C22 F6E1                      MUL     CL
+ 0C24 FEC8                      DEC     AL
+ 0C26 03D8                      ADD     BX,AX
+ 0C28 3B1E0912                  cmp     bx,disloc       ;see if we went over ffff
+ 0C2C 7303         0C31         jnb     dis1
+ 0C2E BBFFFF                    mov     bx,0ffffh       ;set dismax if we wrapped around
+                        dis1:
+ 0C31 891E0D12                  mov     dismax,bx
+                        disp3:
+ 0C35 E8F0F7       0428         CALL    CRLFCHK
+ 0C38 C43E0912                  les     di,dword ptr disloc
+ 0C3C 893E0F12                  mov     tdisp,di
+ 0C40 E826F8       0469         call    printdword
+                        disp4:
+ 0C43 E8E9F7       042F         call    blank
+ 0C46 C4360912                  les     si,dword ptr disloc
+ 0C4A E810F8       045D         call    print8or16
+ 0C4D BE0912                    mov     si,offset disloc
+ 0C50 E846FD       0999         call    inc1or2
+ 0C53 7216         0C6B         jb      disp6           ;stop if wrap occurred
+ 0C55 A10912                    mov     ax,disloc
+ 0C58 2B060F12                  sub     ax,tdisp        ;calculate # bytes printed on line
+ 0C5C 3A061112                  CMP     AL,LINEMAX      ;SEE IF LINE FULL
+ 0C60 7409         0C6B         jz      disp6
+ 0C62 A10912                    mov     ax,disloc
+ 0C65 3B060D12                  cmp     ax,dismax       ;check for done
+ 0C69 76D8         0C43         jna     disp4
+                        disp6:
+ 0C6B E8C1F7       042F         call    blank
+                        disp7:
+ 0C6E 8E060B12                  mov     es,disseg
+ 0C72 8B360F12                  mov     si,tdisp
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  35
+
+
+ 0C76 268A04                    mov     al,es:[si]
+ 0C79 E8D3F7       044F         call    ascout
+ 0C7C FF060F12                  inc     tdisp
+ 0C80 7411         0C93         jz      disp8           ;stop if wrap occurred
+ 0C82 A10F12                    mov     ax,tdisp
+ 0C85 3B060912                  cmp     ax,disloc
+ 0C89 75E3         0C6E         jnz     disp7
+ 0C8B 3B060D12                  cmp     ax,dismax
+ 0C8F 7702         0C93         ja      disp8
+ 0C91 EBA2         0C35         jmps    disp3
+                        disp8:
+ 0C93 C3                        ret
+                        ;
+                        ;       ******************************************
+                        ;       *                                        *
+                        ;       *     e - load program for execution     *
+                        ;       *                                        *
+                        ;       ******************************************
+                        ;
+ 0C94 434D44            cmd             db      'CMD'
+                        ;
+                        execute:
+ 0C97 E857F7       03F1         call    conin
+ 0C9A 3C0D                      cmp     al,eol          ;check for no filename
+ 0C9C 7474         0D12         jz      eerr            ;don't allow no filename
+ 0C9E FF0E0412                  dec     conptr          ;to rescan character
+ 0CA2 BF5C00                    mov     di,offset fcb
+ 0CA5 E8E9F7       0491         call    parse
+ 0CA8 7468         0D12         jz      eerr            ;no '?' or '*' allowed
+ 0CAA 3C0D                      cmp     al,eol
+ 0CAC 7564         0D12         jnz     eerr            ;eol must follow filename
+ 0CAE 0E                        push    cs
+ 0CAF 07                        pop     es              ;set es = cs
+ 0CB0 26803E650020              cmp     es:fcb+9, ' '   ;see if filetype blank
+ 0CB6 750B         0CC3         jnz     ex0
+ 0CB8 BE940C                    mov     si,offset cmd
+ 0CBB BF6500                    mov     di,offset fcb+9
+ 0CBE B90300                    mov     cx,3
+ 0CC1 F3A4              rep     movs    al,al           ;set filetype to 'CMD' if empty
+                        ex0:
+ 0CC3 BA5C00                    mov     dx,offset fcb
+ 0CC6 E876F6       033F         call    open            ;see if file exists
+ 0CC9 C6066A12FF                mov     mcbext,0ffh     ;free all allocations below DDT86
+ 0CCE BA6612                    mov     dx,offset mcb
+ 0CD1 E8D9F6       03AD         call    freemem         ;free all memory previously allocated under DDT
+ 0CD4 BA5C00                    mov     dx,offset fcb
+ 0CD7 E8D8F6       03B2         call    load            ;load user program
+ 0CDA 53                        push    bx              ;save ds base
+ 0CDB E8EFF9       06CD         call    setcpustate
+ 0CDE 5A                        pop     dx              ;get ds base back
+ 0CDF E8ADF6       038F         call    setdmab         ;set dma base
+ 0CE2 BA8000                    mov     dx,80h
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  36
+
+
+ 0CE5 E89DF6       0385         call    setdma          ;default to 80h in user's DS
+ 0CE8 BA5C00                    MOV     DX,OFFSET FCB
+ 0CEB E860F6       034E         CALL    CLOSE
+ 0CEE C6066E1245                mov     mode,'E'
+ 0CF3 BE0000                    mov     si,0
+ 0CF6 BF7212                    mov     di,offset basepagesave
+ 0CF9 1E                        push    ds
+ 0CFA 07                        pop     es              ;set es to ddt's segment
+ 0CFB 2EA1AE11                  mov     ax,userds
+ 0CFF 1E                        push    ds              ;save it
+ 0D00 8ED8                      mov     ds,ax
+ 0D02 B93000                    mov     cx,48
+ 0D05 F3A4              rep     movs    al,al           ;copy user's base page into ddt save area
+ 0D07 1F                        pop     ds              ;restore ds
+ 0D08 E8D302       0FDE         call    verify          ;display load info
+ 0D0B FF0E0412                  DEC     CONPTR          ;TO RESCAN CR
+ 0D0F E9CC00       0DDE         JMP     IFCB            ;TO CLEAR FCB
+                        eerr:
+ 0D12 E9CAF5       02DF         jmp     err
+                        ;
+                        ;       ***************************
+                        ;       *                         *
+                        ;       *     f - fill memory     *
+                        ;       *                         *
+                        ;       ***************************
+                        ;
+                        fill:
+ 0D15 E8BEFC       09D6         call    checkword       ;check for 'FW'
+ 0D18 BF5C12                    mov     di,offset type2loc
+ 0D1B E80BFD       0A29         call    getsegandoff
+ 0D1E E89EFC       09BF         call    getoffset       ;get end address
+ 0D21 891E6012                  mov     usermax,bx      ;save end address
+ 0D25 E8A3FC       09CB         call    getlastoffset   ;get fill constant
+ 0D28 F6066D1201                test    wmode,1
+ 0D2D 7504         0D33         jnz     fil0
+ 0D2F 0AFF                      or      bh,bh           ;if not wmode, high byte must be 0
+ 0D31 7525         0D58         jnz     filerr
+                        fil0:
+ 0D33 8B0E6012                  mov     cx,usermax      ;get end address
+ 0D37 2B0E5C12                  sub     cx,type2loc     ;compare for valid range
+ 0D3B 721B         0D58         jb      filerr          ;error if start > end
+                        fil1:
+ 0D3D C43E5C12                  les     di,dword ptr type2loc
+ 0D41 8BC3                      mov     ax,bx           ;get fill constant
+ 0D43 E829FC       096F         call    set8or16
+ 0D46 BE5C12                    mov     si,offset type2loc
+ 0D49 E84DFC       0999         call    inc1or2
+ 0D4C 7209         0D57         jb      filret          ;stop if wrap occurred
+ 0D4E A15C12                    mov     ax,type2loc
+ 0D51 3B066012                  cmp     ax,usermax
+ 0D55 76E6         0D3D         jbe     fil1
+                        filret:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  37
+
+
+ 0D57 C3                        ret
+                        filerr:
+ 0D58 E984F5       02DF         jmp     err
+                        ;
+                        ;       **********************************
+                        ;       *                                *
+                        ;       *     g - go to user program     *
+                        ;       *                                *
+                        ;       **********************************
+                        ;
+                        gouser:
+ 0D5B 2EA1AC11                  mov     ax,usercs
+ 0D5F A31812                    mov     goseg,ax        ;default goseg = usercs
+ 0D62 2EA1B411                  mov     ax,userip
+ 0D66 A31612                    mov     goloc,ax        ;default goloc = userip
+ 0D69 C6066C1200                mov     numreq,0        ;number not required in G command
+ 0D6E BF1612                    mov     di,offset goloc
+ 0D71 E8B5FC       0A29         call    getsegandoff    ;get start address
+ 0D74 3C0D                      cmp     al,eol
+ 0D76 742B         0DA3         jz      gorestore       ;if eol, no breakpoints set
+ 0D78 A11812                    mov     ax,goseg
+ 0D7B A32912                    mov     brk1seg,ax
+ 0D7E A32E12                    mov     brk2seg,ax      ;defaults for breakpoint segments = goseg
+ 0D81 BF2712                    mov     di,offset brk1loc
+ 0D84 E8A2FC       0A29         call    getsegandoff    ;get first breakpoint
+ 0D87 50                        push    ax              ;save terminating char
+ 0D88 BF2712                    mov     di,offset brk1loc
+ 0D8B E8A5F9       0733         call    setbp           ;save breakpoint in table
+ 0D8E 58                        pop     ax              ;get char
+ 0D8F 3C0D                      cmp     al,eol
+ 0D91 7410         0DA3         jz      gorestore       ;only one breakpoint
+ 0D93 BF2C12                    mov     di,offset brk2loc
+ 0D96 E890FC       0A29         call    getsegandoff    ;get second breakpoint
+ 0D99 3C0D                      cmp     al,eol
+ 0D9B 751C         0DB9         jnz     goerr           ;only 2 breakpoints allowed
+ 0D9D BF2C12                    mov     di,offset brk2loc
+ 0DA0 E890F9       0733         call    setbp           ;set second breakpoint
+                        gorestore:
+ 0DA3 C606491200                mov     skipbdos,0      ;make sure it's 0 since we aren't in T/U mode
+ 0DA8 A11812                    mov     ax,goseg
+ 0DAB 2EA3AC11                  mov     usercs,ax       ;usercs = goseg
+ 0DAF A11612                    mov     ax,goloc
+ 0DB2 2EA3B411                  mov     userip,ax       ;userip = goloc
+ 0DB6 E946FB       08FF         jmp     rstore          ;restore user CPU state
+                        goerr:
+ 0DB9 E886F9       0742         call    bpclear         ;in case any were set
+ 0DBC E920F5       02DF         jmp     err
+                        ;
+                        ;
+                        ;       ************************
+                        ;       *                      *
+                        ;       *     h - hex math     *
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  38
+
+
+                        ;       *                      *
+                        ;       ************************
+                        ;
+                        hexmath:
+ 0DBF E8FDFB       09BF         call    getoffset
+ 0DC2 53                        push    bx              ;save first value
+ 0DC3 E805FC       09CB         call    getlastoffset
+ 0DC6 58                        pop     ax              ;get first value
+ 0DC7 50                        push    ax              ;save a copy
+ 0DC8 03C3                      add     ax,bx
+ 0DCA 53                        push    bx              ;save second value
+ 0DCB 50                        push    ax              ;save sum
+ 0DCC E84EF6       041D         call    crlf
+ 0DCF 58                        pop     ax              ;get sum
+ 0DD0 E8A2F6       0475         call    printword       ;print sum
+ 0DD3 E859F6       042F         call    blank
+ 0DD6 5B                        pop     bx              ;get second value
+ 0DD7 58                        pop     ax              ;get first value
+ 0DD8 2BC3                      sub     ax,bx
+ 0DDA E898F6       0475         call    printword       ;print difference
+ 0DDD C3                        ret
+                        ;
+                        ;       ****************************************
+                        ;       *                                      *
+                        ;       *     i - input file control block     *
+                        ;       *                                      *
+                        ;       ****************************************
+                        ;
+                        ifcb:
+ 0DDE FF360412                  push    conptr          ;save input pointer
+ 0DE2 BF5C00                    mov     di,offset fcb
+ 0DE5 E8A9F6       0491         call    parse
+ 0DE8 3C0D                      cmp     al,eol
+ 0DEA 7504         0DF0         jnz     i0              ;only one filename
+ 0DEC FF0E0412                  dec     conptr          ;to rescan eol and blank second filename in fcb
+                        i0:
+ 0DF0 BF6C00                    mov     di,offset fcb2
+ 0DF3 E8A6F6       049C         call    parse2          ;parse second filename
+ 0DF6 1E                        push    ds
+ 0DF7 07                        pop     es              ;point to DDT's ds
+ 0DF8 8F060412                  pop     conptr          ;restore input pointer
+ 0DFC BF8100                    mov     di,81h          ;move command tail to [es]:[di]
+ 0DFF 2BC9                      sub     cx,cx           ;zero count
+                        i1:
+ 0E01 E8EDF5       03F1         call    conin           ;get char from command tail
+ 0E04 3C0D                      cmp     al,eol          ;end of command tail?
+ 0E06 7404         0E0C         jz      i2
+ 0E08 AA                        stos    al              ;store in user's base page
+ 0E09 41                        inc     cx              ;increment count
+ 0E0A EBF5         0E01         jmps    i1              ;loop until eol
+                        i2:
+ 0E0C B000                      mov     al,0
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  39
+
+
+ 0E0E AA                        stos    al              ;store 0 at end of string
+ 0E0F 26880E8000                mov     es:.80h,cl      ;store count at start of buffer
+ 0E14 803E6E1245                cmp     mode,'E'
+ 0E19 750F         0E2A         jnz     idone           ;if no file loaded with E command, we're done
+ 0E1B BE5C00                    mov     si,offset fcb
+ 0E1E 8BFE                      mov     di,si
+ 0E20 2E8E06AE11                mov     es,userds
+ 0E25 83C126                    add     cx,38           ;total bytes to move = # in command + 36 (fcb)
+                                                        ; +2 (0 at end of command and count byte)
+ 0E28 F3A4              rep     movs    al,al           ;move fcb from ddt86 basepage to user's basepage
+                        idone:
+ 0E2A C3                        ret
+                        ierr:
+ 0E2B E9B1F4       02DF         jmp     err
+                        ;
+                        ;       **********************************
+                        ;       *                                *
+                        ;       *     l - list assembly code     *
+                        ;       *                                *
+                        ;       **********************************
+                        ;
+                        lassm:
+ 0E2E F6063912FF                test    disempresent,0ffh
+ 0E33 746C         0EA1         jz      laserr
+ 0E35 C606371200                mov     lascntsw,0      ;don't use count if end addr specified
+ 0E3A C6066C1200                mov     numreq,0        ;ok if no entries
+ 0E3F A15A12                    mov     ax,type1seg
+ 0E42 A33312                    mov     lasseg,ax       ;default to type1 seg
+ 0E45 BF3112                    mov     di,offset lasloc
+ 0E48 E8DEFB       0A29         call    getsegandoff
+ 0E4B 3C0D                      cmp     al,eol
+ 0E4D A13312                    mov     ax,lasseg
+ 0E50 A35A12                    mov     type1seg,ax     ;update default type1 seg
+ 0E53 7405         0E5A         jz      las0
+ 0E55 E873FB       09CB         call    getlastoffset   ;if ',', get end address
+ 0E58 EB0E         0E68         jmps    las1
+                        las0:
+ 0E5A C606371201                mov     lascntsw,1      ;disassemble fixed # of instructions
+ 0E5F A01512                    MOV     AL,NLINES
+ 0E62 A23812                    MOV     LASCNT,AL
+ 0E65 BBFFFF                    mov     bx,0ffffh       ;set lasmax to big number
+                        las1:
+ 0E68 891E3512                  mov     lasmax,bx
+                        las2:
+ 0E6C 8B3E3112                  mov     di,lasloc
+ 0E70 3B3E3512                  cmp     di,lasmax
+ 0E74 772A         0EA0         ja      lasret
+ 0E76 57                        push    di
+ 0E77 E8AEF5       0428         CALL    CRLFCHK
+ 0E7A 5F                        pop     di
+ 0E7B 8E063312                  mov     es,lasseg
+ 0E7F 06                        push    es
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  40
+
+
+ 0E80 57                        push    di              ;for disem call (PL/M)
+ 0E81 E8E5F5       0469         call    printdword
+ 0E84 E8A8F5       042F         call    blank
+ 0E87 E87605       1400         call    disem
+ 0E8A 3B063112                  cmp     ax,lasloc
+ 0E8E 7210         0EA0         jb      lasret          ;stop if wrap occurred
+ 0E90 A33112                    mov     lasloc, ax
+ 0E93 F6063712FF                test    lascntsw,0ffh
+ 0E98 74D2         0E6C         jz      las2
+ 0E9A FE0E3812                  dec     lascnt
+ 0E9E 75CC         0E6C         jnz     las2
+                        lasret:
+ 0EA0 C3                        ret
+                        laserr:
+ 0EA1 E93BF4       02DF         jmp     err
+                        ;
+                        ;       **************************
+                        ;       *                        *
+                        ;       *     m - move block     *
+                        ;       *                        *
+                        ;       **************************
+                        ;
+                        move:
+ 0EA4 BF5C12                    mov     di,offset type2loc
+ 0EA7 E87FFB       0A29         call    getsegandoff
+ 0EAA E812FB       09BF         call    getoffset       ;get end offset
+ 0EAD 891E6012                  mov     usermax,bx
+ 0EB1 3C0D                      cmp     al,eol
+ 0EB3 743A         0EEF         jz      moverr          ;need 3 arguments
+ 0EB5 2B1E5C12                  sub     bx,type2loc
+ 0EB9 7234         0EEF         jb      moverr          ;error if start > end
+ 0EBB A15E12                    mov     ax,type2seg
+ 0EBE A36412                    mov     userseg2,ax     ;default to same seg as source
+ 0EC1 BF6212                    mov     di,offset userloc2
+ 0EC4 E862FB       0A29         call    getsegandoff    ;get destination address
+ 0EC7 3C0D                      cmp     al,eol
+ 0EC9 7524         0EEF         jnz     moverr          ;error if more than 3 arguments
+                        mov0:
+ 0ECB C4365C12                  les     si,dword ptr type2loc
+ 0ECF 268A04                    mov     al,es:[si]      ;get source byte
+ 0ED2 C43E6212                  les     di,dword ptr userloc2
+ 0ED6 E8A7FA       0980         call    setbyte         ;put destination byte
+ 0ED9 FF065C12                  inc     type2loc
+ 0EDD 740F         0EEE         jz      movret          ;don't allow wraparound
+ 0EDF FF066212                  inc     userloc2
+ 0EE3 7409         0EEE         jz      movret          ;don't allow wraparound in destination segment
+ 0EE5 A15C12                    mov     ax,type2loc
+ 0EE8 3B066012                  cmp     ax,usermax      ;check for done
+ 0EEC 76DD         0ECB         jna     mov0
+                        movret:
+ 0EEE C3                        ret
+                        moverr:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  41
+
+
+ 0EEF E9EDF3       02DF         jmp     err
+                        ;
+                        ;       *************************
+                        ;       *                       *
+                        ;       *     r - read file     *
+                        ;       *                       *
+                        ;       *************************
+                        ;
+                        read:
+ 0EF2 E8FCF4       03F1         call    conin           ;get first command char
+ 0EF5 3C0D                      cmp     al,eol          ;check for no input
+ 0EF7 7450         0F49         jz      rerr            ;filename must be included in command
+ 0EF9 FF0E0412                  dec     conptr          ;to rescan first char
+ 0EFD BF5C00                    mov     di,offset fcb
+ 0F00 E88EF5       0491         call    parse
+ 0F03 7444         0F49         jz      rerr            ;no '?' or '*' allowed
+ 0F05 3C0D                      cmp     al,eol
+ 0F07 7540         0F49         jnz     rerr            ;no parameters after filename
+ 0F09 BA5C00                    mov     dx,offset fcb
+ 0F0C E830F4       033F         call    open
+ 0F0F C7066812FFFF              mov     mcblen,0ffffh   ;largest memory request
+ 0F15 BA6612                    mov     dx,offset mcb
+ 0F18 E879F4       0394         call    getmaxmem       ;get size of largest chuck of memory
+ 0F1B BA6612                    mov     dx,offset mcb
+ 0F1E E87DF4       039E         call    allocabsmem     ;allocate block returned from getmaxmem
+ 0F21 E82DFB       0A51         call    readfile        ;read file into memory block
+ 0F24 C6066A1200                mov     mcbext,0        ;only free memory at mbase
+ 0F29 BA6612                    mov     dx,offset mcb
+ 0F2C E87EF4       03AD         call    freemem         ;free memory not used in read (read updated mcb)
+ 0F2F A13C12                    mov     ax,startreadseg
+ 0F32 A35E12                    mov     type2seg,ax     ;set default type2 segment to file just read
+ 0F35 A35A12                    mov     type1seg,ax     ;also type1 segment
+ 0F38 2BC0                      sub     ax,ax
+ 0F3A A30912                    mov     disloc,ax       ;display pointer offset = 0
+ 0F3D A33112                    mov     lasloc,ax       ;list pointer offset = 0
+ 0F40 C6066E1252                mov     mode,'R'        ;last disk input was read (not execute)
+ 0F45 E89600       0FDE         call    verify
+ 0F48 C3                        ret
+                        rerr:
+ 0F49 E993F3       02DF         jmp     err
+                        ;
+                        ;       **************************
+                        ;       *                        *
+                        ;       *     s - set memory     *
+                        ;       *                        *
+                        ;       **************************
+                        ;
+                        setmem:
+ 0F4C E887FA       09D6         call    checkword       ;check for 'SW'
+ 0F4F BF5C12                    mov     di,offset type2loc
+ 0F52 E8D4FA       0A29         call    getsegandoff
+                        set0:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  42
+
+
+ 0F55 E8C5F4       041D         call    crlf
+ 0F58 C43E5C12                  les     di,dword ptr type2loc
+ 0F5C E80AF5       0469         call    printdword
+ 0F5F E8CDF4       042F         call    blank
+ 0F62 C4365C12                  les     si,dword ptr type2loc
+ 0F66 E8F4F4       045D         call    print8or16
+ 0F69 E8C3F4       042F         call    blank
+ 0F6C E868F4       03D7         call    getline
+ 0F6F E87FF4       03F1         call    conin
+ 0F72 3C0D                      cmp     al,eol
+ 0F74 741F         0F95         jz      set2
+ 0F76 3C2E                      cmp     al,'.'
+ 0F78 7423         0F9D         jz      setret
+ 0F7A FF0E0412                  dec     conptr          ;to rescan first character
+ 0F7E E84AFA       09CB         call    getlastoffset
+ 0F81 8BC3                      mov     ax,bx           ;get new value to ax
+ 0F83 F6066D1201                test    wmode,1
+ 0F88 7504         0F8E         jnz     set1
+ 0F8A 0AFF                      or      bh,bh
+ 0F8C 7510         0F9E         jnz     seterr          ;must be < 256 if not SW
+                        set1:
+ 0F8E C43E5C12                  les     di,dword ptr type2loc
+ 0F92 E8DAF9       096F         call    set8or16
+                        set2:
+ 0F95 BE5C12                    mov     si,offset type2loc
+ 0F98 E8FEF9       0999         call    inc1or2
+ 0F9B 73B8         0F55         jnb     set0
+                        setret:
+ 0F9D C3                        ret
+                        seterr:
+ 0F9E E93EF3       02DF         jmp     err
+                        ;
+                        ;       ***************************************
+                        ;       *                                     *
+                        ;       *     t - trace program execution     *
+                        ;       *                                     *
+                        ;       ***************************************
+                        ;
+                        trace:
+ 0FA1 C606481201                mov     traceprint,1
+                        trace0:                         ;untrace enters here with traceprint = 0
+ 0FA6 E848F4       03F1         call    conin
+ 0FA9 3C53                      cmp     al,'S'          ;check for TS
+ 0FAB B401                      mov     ah,1
+ 0FAD 7406         0FB5         jz      tr0             ;if TS, set segflag to 1
+ 0FAF FECC                      dec     ah              ;else set segflag to 0, and
+ 0FB1 FF0E0412                  dec     conptr          ;decrement pointer to rescan character
+                        tr0:
+ 0FB5 88265412                  mov     segflag,ah      ;print segment registers or not
+ 0FB9 C70646120100              mov     tracecount,1    ;default to 1 instruction trace
+ 0FBF E8E3F9       09A5         call    getnumber
+ 0FC2 3C0D                      cmp     al,eol
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  43
+
+
+ 0FC4 750E         0FD4         jnz     traceerr        ;only 1 parameter allowed
+ 0FC6 0AE4                      or      ah,ah           ;see if a number was entered
+ 0FC8 7404         0FCE         jz      trace1          ;skip if no number typed
+ 0FCA 891E4612                  mov     tracecount,bx   ;store number of instructions to trace
+                        trace1:
+ 0FCE E8C400       1095         call    xdisp           ;display CPU state
+ 0FD1 E9C8F8       089C         jmp     tracerestore    ;restore user's CPU state and return
+                        traceerr:
+ 0FD4 E908F3       02DF         jmp     err
+                        ;
+                        ;       ******************************************
+                        ;       *                                        *
+                        ;       *     u - untraced program execution     *
+                        ;       *                                        *
+                        ;       ******************************************
+                        ;
+                        untrace:
+ 0FD7 C606481200                mov     traceprint,0
+ 0FDC EBC8         0FA6         jmps    trace0          ;common code with trace command
+                        ;
+                        ;       *********************************
+                        ;       *                               *
+                        ;       *     v - display file info     *
+                        ;       *                               *
+                        ;       *********************************
+                        ;
+                        verify:
+ 0FDE A06E12                    mov     al,mode
+ 0FE1 3C52                      cmp     al,'R'
+ 0FE3 7407         0FEC         jz      verifyr
+ 0FE5 3C45                      cmp     al,'E'
+ 0FE7 7421         100A         jz      verifye
+ 0FE9 E9F3F2       02DF         jmp     err     ;neither R nor E command done
+                        verifyr:
+ 0FEC E82EF4       041D         call    crlf
+ 0FEF BED601                    mov     si,offset readm
+ 0FF2 E848F4       043D         call    printm
+ 0FF5 E825F4       041D         call    crlf
+ 0FF8 C43E3A12                  les     di,dword ptr startreadoff
+ 0FFC E86AF4       0469         call    printdword
+ 0FFF E82DF4       042F         call    blank
+ 1002 C43E3E12                  les     di,dword ptr endreadoff
+ 1006 E860F4       0469         call    printdword
+ 1009 C3                        ret
+                        ;
+                        verifye:
+ 100A E810F4       041D         call    crlf
+ 100D B90300                    mov     cx,3
+ 1010 E822F4       0435         call    tabs
+ 1013 BED601                    mov     si,offset readm
+ 1016 E824F4       043D         call    printm          ;print header
+ 1019 B000                      mov     al,0            ;initialize count to 0
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  44
+
+
+                        v0:
+ 101B 50                        push    ax              ;save it
+ 101C 58                        pop     ax              ;get count
+ 101D 50                        push    ax              ;save it
+ 101E E864F6       0685         call    printseginfo    ;print name, start, end of segment if non-zero
+ 1021 58                        pop     ax              ;get count
+ 1022 FEC0                      inc     al              ;increment it
+ 1024 803E771201                cmp     byte ptr basepagesave+5,1       ;check for 8080 model
+ 1029 7404         102F         jz      verret          ;no more segments if 8080 model
+ 102B 3C08                      cmp     al,8            ;max of 8 segments described in base page
+ 102D 72EC         101B         jb      v0              ;done when count = 8
+                        verret:
+ 102F C3                        ret
+                        ;
+                        ;       ******************************************
+                        ;       *                                        *
+                        ;       *     w - write memory block to disk     *
+                        ;       *                                        *
+                        ;       ******************************************
+                        ;
+                        write:
+ 1030 A13C12                    mov     ax,startreadseg
+ 1033 A34D12                    mov     startwriteseg,ax
+ 1036 A13A12                    mov     ax,startreadoff
+ 1039 A34B12                    mov     startwriteoff,ax
+ 103C A14012                    mov     ax,endreadseg
+ 103F A35112                    mov     endwriteseg,ax
+ 1042 A13E12                    mov     ax,endreadoff
+ 1045 A34F12                    mov     endwriteoff,ax
+ 1048 E8A6F3       03F1         call    conin
+ 104B 3C0D                      cmp     al,eol          ;check for no parameters
+ 104D 7443         1092         jz      werr            ;must have a filename
+ 104F FF0E0412                  dec     conptr          ;to rescan first char
+ 1053 BF5C00                    mov     di,offset fcb
+ 1056 E838F4       0491         call    parse           ;get filename
+ 1059 7437         1092         jz      werr            ;don't allow '?' or '*'
+ 105B 3C0D                      cmp     al,eol
+ 105D 7509         1068         jnz     w0              ;not end of input - must be 2 parameters
+ 105F 803E6E1252                cmp     mode,'R'        ;see if a file was read in
+ 1064 752C         1092         jnz     werr            ;no file read - must have start, end addresses
+ 1066 EB20         1088         jmps    w1              ;continue with write
+                        w0:
+ 1068 A15A12                    mov     ax,type1seg
+ 106B A34D12                    mov     startwriteseg,ax        ;set default to userds
+ 106E BF4B12                    mov     di,offset startwriteoff
+ 1071 E8B5F9       0A29         call    getsegandoff    ;get start address
+ 1074 3C0D                      cmp     al,eol
+ 1076 741A         1092         jz      werr            ;need 2 parameters
+ 1078 A14D12                    mov     ax,startwriteseg
+ 107B A35112                    mov     endwriteseg,ax  ;end defaults to start
+ 107E BF4F12                    mov     di,offset endwriteoff
+ 1081 E8A5F9       0A29         call    getsegandoff    ;get end address
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  45
+
+
+ 1084 3C0D                      cmp     al,eol
+ 1086 750A         1092         jnz     werr            ;no more than 2 parameters
+                        w1:
+ 1088 E831FA       0ABC         call    writefile
+ 108B BA5C00                    mov     dx,offset fcb
+ 108E E8BDF2       034E         call    close
+ 1091 C3                        ret
+                        werr:
+ 1092 E94AF2       02DF         jmp     err
+                        ;
+                        ;       ***************************************
+                        ;       *                                     *
+                        ;       *     x - display/alter CPU state     *
+                        ;       *                                     *
+                        ;       ***************************************
+                        ;
+                        xdisp:                          ;display CPU state
+ 1095 E816F7       07AE         CALL    SETDEFSEG       ;SET TYPE1SEG, LASLOC TO CS:IP
+ 1098 F6067012FF                TEST    COL40,0FFH
+ 109D 751A         10B9         JNZ     XD40
+ 109F E89BF5       063D         call    printregheader
+                        xnohdr:                         ;entry point to display CPU state without header
+ 10A2 F6067012FF                TEST    COL40,0FFH
+ 10A7 7517         10C0         JNZ     XNH40
+ 10A9 E871F3       041D         call    crlf
+ 10AC E8B5F4       0564         call    printflags
+ 10AF E87DF3       042F         call    blank
+ 10B2 E823F5       05D8         call    printregs
+ 10B5 E8A5F5       065D         call    printinstr      ;disassemble instruction at [cs:ip]
+ 10B8 C3                        ret
+                        ;
+                        XD40:
+ 10B9 E86FF5       062B         CALL    PREGHDR1
+ 10BC B001                      MOV     AL,1
+ 10BE EB02         10C2         JMPS    XD0
+                        XNH40:
+ 10C0 B000                      MOV     AL,0
+                        XD0:
+ 10C2 50                        PUSH    AX              ;SAVE HEADER/NO HEADER FLAG
+ 10C3 E857F3       041D         CALL    CRLF
+ 10C6 E89BF4       0564         CALL    PRINTFLAGS
+ 10C9 E863F3       042F         CALL    BLANK
+ 10CC E8FAF4       05C9         CALL    PREG1
+ 10CF E84BF3       041D         CALL    CRLF
+ 10D2 58                        POP     AX
+ 10D3 FEC8                      DEC     AL
+ 10D5 7506         10DD         JNZ     XD1
+ 10D7 E85BF5       0635         CALL    PREGHDR2
+ 10DA E840F3       041D         CALL    CRLF
+                        XD1:
+ 10DD E8F3F4       05D3         CALL    PREG2
+ 10E0 E87AF5       065D         CALL    PRINTINSTR
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  46
+
+
+ 10E3 C3                        RET
+                        xcom:
+ 10E4 C606541201                mov     segflag,1       ;display seg reg's in x command
+ 10E9 E805F3       03F1         call    conin
+ 10EC 3C0D                      cmp     al,eol          ;check for command by itself
+ 10EE 74A5         1095         jz      xdisp           ;if so, simply display CPU state
+ 10F0 A25712                    mov     xtemp,al        ;else save char
+ 10F3 E8FBF2       03F1         call    conin
+ 10F6 3C0D                      cmp     al,eol          ;check for single character after X
+ 10F8 746A         1164         jz      xflag           ;if so, must be a flag name
+ 10FA 8A265712                  mov     ah,xtemp        ;else it's a reg name
+ 10FE 0C80                      or      al,80h          ;since names are declared that way
+ 1100 86C4                      xchg    al,ah           ;since that's how it is in memory
+ 1102 E826F4       052B         call    chkreg          ;check for valid reg name + store number in regnum
+ 1105 E8E9F2       03F1         call    conin
+ 1108 3C0D                      cmp     al,eol
+ 110A 7555         1161         jnz     xerr            ;eol must follow reg name
+                        x0:
+ 110C E80EF3       041D         call    crlf
+ 110F 8B0E5512                  mov     cx,regnum
+ 1113 E8EBF4       0601         call    printregname
+ 1116 E816F3       042F         call    blank
+ 1119 8B0E5512                  mov     cx,regnum
+ 111D E8D5F4       05F5         call    printregval
+ 1120 E80CF3       042F         call    blank
+ 1123 E8B1F2       03D7         call    getline
+ 1126 E8C8F2       03F1         call    conin
+ 1129 3C2E                      cmp     al,'.'
+ 112B 746E         119B         jz      xret            ;done when '.' entered
+ 112D FF0E0412                  dec     conptr          ;else rescan character
+ 1131 E871F8       09A5         call    getnumber
+ 1134 3C0D                      cmp     al,eol
+ 1136 7529         1161         jnz     xerr            ;eol must follow number
+ 1138 0AE4                      or      ah,ah           ;see if non-blank entry
+ 113A 7419         1155         jz      xnext           ;if blank, go to next reg
+ 113C 8B0E5512                  mov     cx,regnum
+ 1140 8BC3                      mov     ax,bx           ;get new value
+ 1142 80F908                    cmp     cl,8            ;are we updating cs?
+ 1145 7503         114A         jnz     x1
+ 1147 A35A12                    mov     type1seg,ax     ;if so, update default type1 segment
+                        x1:
+ 114A 80F909                    cmp     cl,9            ;are we updating ds?
+ 114D 7503         1152         jnz     x2
+ 114F A35E12                    mov     type2seg,ax     ;if so, update default type2 segment
+                        x2:
+ 1152 E805F4       055A         call    setreg
+                        xnext:
+ 1155 FF065512                  inc     regnum
+ 1159 833E55120D                cmp     regnum,totreg
+ 115E 72AC         110C         jb      x0
+ 1160 C3                        ret
+                        xerr:
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  47
+
+
+ 1161 E97BF1       02DF         jmp     err
+                        ;
+                        xflag:
+ 1164 A05712                    mov     al,xtemp        ;get flag name
+ 1167 E8D7F3       0541         call    checkflag       ;check for valid flag name
+ 116A E8B0F2       041D         call    crlf
+ 116D 8B0E5512                  mov     cx,regnum       ;restore flag number
+ 1171 E819F4       058D         call    printflagname
+ 1174 E8B8F2       042F         call    blank
+ 1177 8B0E5512                  mov     cx,regnum
+ 117B E82BF4       05A9         call    printflagval
+ 117E E8AEF2       042F         call    blank
+ 1181 E853F2       03D7         call    getline
+ 1184 E81EF8       09A5         call    getnumber
+ 1187 3C0D                      cmp     al,eol
+ 1189 75D6         1161         jnz     xerr            ;eol must follow number
+ 118B 0AE4                      or      ah,ah           ;see if non-blank entry
+ 118D 740C         119B         jz      xret            ;if blank, done
+ 118F 83FB01                    cmp     bx,1
+ 1192 77CD         1161         ja      xerr            ;flag value must be 0 or 1
+ 1194 8B0E5512                  mov     cx,regnum
+ 1198 E8D8F3       0573         call    setflag
+                        xret:
+ 119B C3                        ret
+                        ;
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  48
+
+
+                                eject
+                        ;       *********************************
+                        ;       *                               *
+                        ;       *       d a t a   a r e a       *
+                        ;       *                               *
+                        ;       *********************************
+                        ;
+                        ;       user regs must be in cseg, others may be in dseg
+                        ;
+ 119C 0000              userax  dw      0
+ 119E 0000              userbx  dw      0
+ 11A0 0000              usercx  dw      0
+ 11A2 0000              userdx  dw      0
+ 11A4 0000              usersp  dw      0
+ 11A6 0000              userbp  dw      0
+ 11A8 0000              usersi  dw      0
+ 11AA 0000              userdi  dw      0
+ 11AC 0000              usercs  dw      0
+ 11AE 0000              userds  dw      0
+ 11B0 0000              userss  dw      0
+ 11B2 0000              useres  dw      0
+ 11B4 0000              userip  dw      0
+ 11B6 0000              userfl  dw      0
+   119C                 userreg equ     userax
+                        ;
+ 11B8 0000              savess  dw      0               ;temp holder for sp
+ 11BA 0000              savesp  dw      0               ;temp holder for sp
+                        ;
+ 11BC                   breakfl rs      1               ;break/single step flag (must be in CS)
+                        ;
+   11BD                 endcs   equ     $
+                        ;
+                                dseg
+                                org     offset endcs
+                        ;
+                        ;       CCP STACK LOCATION
+                        ;
+ 11BD 0000              CCPSS           DW      0
+ 11BF 0000              CCPSP           DW      0
+                        ;
+                        ;       console buffer declarations
+                        ;
+   0040                 conbuffmax      equ     64
+ 11C1 40                conbuffhdr      db      conbuffmax
+ 11C2 00                conbuffcnt      db      0
+ 11C3                   conbuff         rs      conbuffmax+1    ;leave room for eol 
+ 1204 0000              conptr          dw      0
+                        ;
+                        ;       a command declarations
+                        ;
+ 1206 01                assempresent    db      1       ;assembler in memory flag
+ 1207                   asmspsav        rw      1       ;temporary save for stack pointer
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  49
+
+
+                        ;
+                        ;       d command declarations
+                        ;
+ 1209 0000              disloc          dw      0       ;offset for display
+ 120B 0000              disseg          dw      0       ;segment for display
+ 120D                   dismax          rw      1       ;end offset of display
+ 120F                   tdisp           rw      1       ;temporary storage for disloc
+ 1211 00                LINEMAX         DB      0       ;# OF BYTES PER LINE
+ 1212 10                ND80            DB      16      ;16 BYTES PER LINE IN 80 COL MODE
+ 1213 06                ND40            DB      6       ;6 BYTES PER LINE IN 40 COL MODE
+ 1214 08                NDW40           DB      8       ;8 BYTES (4 WORDS) FOR DW IN 40 COL MODE
+ 1215 0C                NLINES          DB      12      ;DEFAULT NUMBER OF LINES FOR L, D COMMANDS
+                        ;
+                        ;       g command declarations
+                        ;
+ 1216 0000              goloc           dw      0
+ 1218 0000              goseg           dw      0
+ 121A                   vectorsave      rs      12      ;save area for bytes at 0004h to 000fh
+ 1226 00                bpcnt           db      0       ;breakpoint count
+ 1227 0000              brk1loc         dw      0
+ 1229 0000              brk1seg         dw      0
+ 122B 00                brk1byt         db      0
+ 122C 0000              brk2loc         dw      0
+ 122E 0000              brk2seg         dw      0
+ 1230 00                brk2byt         db      0
+                        ;
+                        ;       l command declarations
+                        ;
+ 1231 0000              lasloc          dw      0
+ 1233 0000              lasseg          dw      0
+ 1235 0000              lasmax          dw      0
+ 1237                   lascntsw        rb      1       ;# instructions specified or not
+ 1238                   lascnt          rb      1       ;number of instructions to disassemble
+ 1239 01                disempresent    db      1       ;disassembler in memory flag
+                        ;
+                        ;       r command declarations
+                        ;
+ 123A                   startreadoff    rw      1       ;offset where file read starts
+ 123C                   startreadseg    rw      1       ;segment where file read starts
+ 123E                   endreadoff      rw      1       ;offset where file read ends
+ 1240                   endreadseg      rw      1       ;segment where file read ends
+ 1242                   dmaoff          rw      1       ;offset of 20-bit dma address
+ 1244                   dmaseg          rw      1       ;segment of 20-bit dma address
+                        ;
+                        ;       t/u command declarations
+                        ;
+ 1246                   tracecount      rw      1       ;number of instructions to trace
+ 1248                   traceprint      rb      1       ;display CPU state on each step flag
+ 1249 00                skipbdos        db      0       ;set when trace suspended during BDOS call
+ 124A 00                USERIFOFF       DB      0       ;SET WHEN DDT86 MUST REENABLE USER IF
+                        ;
+                        ;       w command declarations
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  50
+
+
+                        ;
+ 124B                   startwriteoff   rw      1       ;offset where file write starts
+ 124D                   startwriteseg   rw      1       ;segment where file write starts
+ 124F                   endwriteoff     rw      1       ;offset where file write ends
+ 1251                   endwriteseg     rw      1       ;segment where file write ends
+                        ;
+                        ;       x command declarations
+                        ;
+ 1253 00                NREG            DB      0       ;CURRENT NUMBER OF REGISTER NAMES TO DISPLAY
+                                                        ;(MAY DIFFER FOR 40 COLUMN MODE)
+   000D                 TOTREG          EQU     13      ;TOTAL NUMBER OF REGISTER NAMES
+   0009                 nflag           equ     9       ;number of flag names
+ 1254 01                segflag         db      1       ;print segment register flag
+ 1255                   regnum          rw      1       ;temp for reg/flag number
+ 1257                   xtemp           rb      1       ;temp for first char of reg name
+                        ;
+ 1258 0000              type1loc        dw      0       ;offset for type 1 commands
+ 125A 0000              type1seg        dw      0       ;segment for type 1 commands
+ 125C 0000              type2loc        dw      0       ;offset for type 2 commands
+ 125E 0000              type2seg        dw      0       ;segment for type 2 commands
+ 1260                   usermax         rw      1
+ 1262                   userloc2        rw      1
+ 1264                   userseg2        rw      1
+                        ;
+                        ;       memory control block declarations
+                        ;
+ 1266                   mcb             rs      0       ;used in reading/writing file
+ 1266 0000              mcbbase         dw      0       ;segment of memory block
+ 1268 0000              mcblen          dw      0       ;length of memory block
+ 126A 00                mcbext          db      0       ;returned value from bdos memory functions
+                        ;
+ 126B                   sysif           rb      1       ;system interrupt flag
+ 126C                   numreq          rb      1       ;number required or optional
+ 126D                   wmode           rb      1       ;set for DW, FW and SW commands
+ 126E 49                mode            db      'I'     ;last disk access with 'R' or 'E' command
+ 126F 00                savevecflag     db      0       ;save/restore bp and ss vectors, or not
+ 1270 00                COL40           DB      0       ;PATCHED TO 1 FOR 40 COLUMN CONSOLE
+ 1271 00                ERRMODE         DB      0       ;SET IF BDOS RETURN ERR MODE SET (V3.0)
+                        ;
+ 1272                   basepagesave    rb      48      ;copy of user's base page
+                        ;
+                        ;       parsing declarations
+                        ;
+ 12A2 203D2E2C3A3B      delims          db      ' ', '=', '.', ',', ':', ';', '[', ']', '<', '>', eol
+      5B5D3C3E0D
+   000B                 ndelims         equ     offset $ - offset delims
+ 12AD 00                lastchar        db      0
+ 12AE 0000              fcbadr          dw      0       ;temp storage for fcb address
+                        ;
+ 12B0                                   rs      stsize  ;stack size
+ 1310                   stackp          rs      0       ;top of stack
+                        ;
+CP/M ASM86 1.1  SOURCE: DDT86.A86     DDT86 1.1  10/2/81                                                     PAGE  51
+
+
+                                if      debug
+                        ;
+                        biosentryoff    dw      0a00h   ;empty part of ccp (hopefully)
+                        biosentryseg    dw      0       ;same as bdos segment
+                        ;
+                                endif
+                        ;
+                                end
+
+
+END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR: 32%

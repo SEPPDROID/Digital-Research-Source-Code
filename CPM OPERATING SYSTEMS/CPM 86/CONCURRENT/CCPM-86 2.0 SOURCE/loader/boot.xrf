@@ -1,0 +1,129 @@
+CP/M ASM86 1.1  SOURCE: BOOT.A86                                                                             PAGE   1
+
+     1  
+     2                          ;****************************************************************
+     3                          ;*                                                              *
+     4                          ;*              BOOT SECTOR FOR IBM PC                          *
+     5                          ;*                                                              *
+     6                          ;****************************************************************
+     7  
+     8     00A0                 min_mem                 equ     160     ;minimum memory in K
+     9     2600                 load_track_segment      equ     2600H   ;at 152K mark
+    10  
+    11                          ;Check for at least 160K being present in the IBM PC.
+    12                          ;Use last 8K of 160K minimum memory for loader.
+    13                          ;Since track is 4K we have 4K extra past the Loader for
+    14                          ;disk buffer space and other unitialized storage
+    15                          ;used by the Loader.
+    16  
+    17                          ;Note: that wherever it is decided to place the loader, the IBM PC
+    18                          ;cannot read over a 64K page boundary.
+    19  
+    20                          ;the command:
+    21                          ;GENCMD BOOT 8080
+    22                          ;is used for this module
+    23  
+    24     B000                 bw_video_ram            equ     0b000h  ;where to print an
+    25     B800                 color_video_ram         equ     0b800h  ;error message
+    26  
+    27     2620                 cseg    load_track_segment + 20H        ;add 20H to get to sector 2
+    28                          loader:                                 ;where the Loader starts
+    29  
+    30     0000                 cseg    0
+    31                          org     0                       ;The IBM ROM sets up
+    32                                                          ;SS=30H and SP is 80H: stack is in
+    33                                                          ;the interrupt vectors.
+    34   0000 CD12                      int 12H                 ;get memory size
+    35   0002 3DA000                    cmp ax,min_mem
+    36   0005 7302         0009         jnb get_track_0
+    37   0007 EB1B         0024           jmps mem_error
+    38  
+    39                          get_track_0:
+    40   0009 33DB                      xor bx,bx               ;set up call to ROM diskette read
+    41   000B B80026                    mov ax,load_track_segment
+    42   000E 8EC0                      mov es,ax               ;ES:BX transfer location
+    43   0010 B80802                    mov ax,0208h            ;AH=2=read,AL=8=sectors to read
+    44   0013 B90100                    mov cx,0001h            ;CH=0=track,CL=1=sector
+    45   0016 BA0000                    mov dx,0000h            ;DH=0=head #,DL=0=drive #
+    46   0019 CD13                      int 13H                 ;call ROM diskette entry
+    47   001B 7302         001F         jnc track_ok
+    48   001D EB0D         002C           jmps track_error
+    49  
+    50                          track_ok:
+    51   001F EA00002026                jmpf loader
+    52  
+    53                          mem_error:
+CP/M ASM86 1.1  SOURCE: BOOT.A86                                                                             PAGE   2
+
+    54  
+    55   0024 B92400                    mov cx,length mem_msg
+    56   0027 BE5000                    mov si,offset mem_msg
+    57   002A EB06         0032         jmps prt_msg
+    58  
+    59                          track_error:
+    60   002C B91500                    mov cx,length trk_msg
+    61   002F BE7400                    mov si,offset trk_msg
+    62                                  ;jmps prt_msg
+    63  
+    64                          prt_msg:
+    65   0032 B800B0                    mov ax,bw_video_ram
+    66   0035 CD11                      int 11H                 ;get equipment information
+    67   0037 2430                      and al,00110000b        ;get video bits
+    68   0039 3C30                      cmp al,30H
+    69   003B 7403         0040         je do_msg
+    70   003D B800B8                      mov ax,color_video_ram
+    71                          do_msg:
+    72   0040 8EC0                      mov es,ax
+    73   0042 8CC8                      mov ax,cs
+    74   0044 8ED8                      mov ds,ax
+    75   0046 33FF                      xor di,di
+    76   0048 B407                      mov ah,07H              ;normal display attribute
+    77                          prt_loop:
+    78   004A AC                        lodsb
+    79   004B AB                        stosw
+    80   004C E2FC         004A         loop prt_loop
+    81   004E FA                        cli
+    82   004F F4                        hlt
+    83  
+    84  
+    85     0050                 last_code_offset        equ     offset $
+    86                          dseg
+    87                          org     last_code_offset
+    88  
+    89   0050 4E6F7420656E      mem_msg         db      'Not enough memory present for loader'
+    90        6F756768206D
+    91        656D6F727920
+    92        70726573656E
+    93        7420666F7220
+    94        6C6F61646572
+    95   0074 43616E277420      trk_msg         db      'Can''t read boot track'
+    96        726561642062
+    97        6F6F74207472
+    98        61636B
+    99  
+   100                          org     512 - 1                 ;force even sector size
+   101   01FF 00                                db      0
+   102  
+   103  
+   104  END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  1%
+CP/M ASM86 1.1  SOURCE: BOOT.A86                                                                             PAGE 003
+
+BWVIDEORAM       B000 N    24#   65 
+COLORVIDEORAM    B800 N    25#   70 
+CS               SREG V    73 
+DOMSG            0040 L    69    71#
+DS               SREG V    74 
+ES               SREG V    42    72 
+GETTRACK0        0009 L    36    39#
+LASTCODEOFFSET   0050 N    85#   87 
+LOADER           0000 L    28#   51 
+LOADTRACKSEGMENT 2600 N     9#   27    41 
+MEMERROR         0024 L    37    53#
+MEMMSG           0050 V    55    56    89#
+MINMEM           00A0 N     8#   35 
+PRTLOOP          004A L    77#   80 
+PRTMSG           0032 L    57    64#
+SS               SREG V 
+TRACKERROR       002C L    48    59#
+TRACKOK          001F L    47    50#
+TRKMSG           0074 V    60    61    95#

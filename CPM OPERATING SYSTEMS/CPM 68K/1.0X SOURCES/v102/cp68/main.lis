@@ -1,0 +1,144 @@
+1File: MAIN.C                                                              Page       1
+     1   #
+     2   /*
+     3   	Copyright 1981
+     4   	Alcyon Corporation
+     5   	8474 Commerce Av.
+     6   	San Diego, Ca.  92121
+     7   */
+     8   #include "preproc.h"
+     9   int status = 0;
+    10   char *stdincl;		/* Include prefix for macro processor	*/
+    11   /* cexit - exit from C compiler driver*/
+    12   /*		This deletes any existing temps and exits with the error status.*/
+    13   cexit()									/* returns - none*/
+    14   {
+    15    
+    16   	exit(status);
+    17   }
+    18    
+    19   /* main - main routine for C68 Compiler system*/
+    20   /*		Handles the C68 arguments.  For each C file given, the macro*/
+    21   /*		pre-processor is called, then the parser, code generator and*/
+    22   /*		assember are fexec'd.  The loader arguments are collected and*/
+    23   /*		the loader is fexec'd.*/
+    24   main(argc,argv)
+    25   int argc;
+    26   char **argv;
+    27   {
+    28    
+    29   	if(argc < 3)
+    30   		usage();
+    31    
+    32   	if (*argv[1] == '-')
+    33   	{
+    34   		if(argc != 5 || argv[1][1] != 'i')
+    35   			usage();
+    36    
+    37   		stdincl = argv[2];
+    38   		domacro(argv[3],argv[4],0,0L);
+    39   		cexit();
+    40   	}
+    41   	if(argc != 3)
+    42   		usage();
+    43   	domacro(argv[1],argv[2],0,0L);
+    44   	cexit();
+    45   }
+    46   usage()
+    47   {
+    48   		error("usage: c68 [-i x:] inputfile outputfile\n");
+    49   		exit();
+    50   }
+    51    
+    52   /* strcmp - string comparison*/
+    53   /*		Compares two strings for equality, less or greater.*/
+    54   strcmp(s,t)								/* returns 0 for equality,*/
+    55   										/* neg for < and pos for >.*/
+    56   char *s;								/* first string*/
+    57   char *t;								/* second string*/
+    58   {
+    59   	for( ; *s == *t; s++, t++ )
+1File: MAIN.C                                                              Page       2
+    60   		if( *s == '\0' )
+    61   			return(0);
+    62   	return( *s - *t );
+    63   }
+    64    
+    65   /* strlen - string length*/
+    66   /*		Computes number of bytes in string.*/
+    67   strlen(s)								/* returns string length*/
+    68   char *s;								/* string to compute length*/
+    69   {
+    70   	register int n;
+    71    
+    72   	for( n = 0; *s++ != '\0'; )
+    73   		n++;
+    74   	return(n);
+    75   }
+    76    
+    77   /* itoa - integer to ASCII conversion*/
+    78   /*		Converts integer to ASCII string, handles '-'.*/
+    79   itoa(n,s,w)								/* returns - none*/
+    80   int n;									/* number to convert*/
+    81   char *s;								/* resulting string*/
+    82   int w;									/* minimum width of string*/
+    83   {
+    84   	register int sign, i;
+    85   	char temp[6];
+    86    
+    87   	if( (sign=n) < 0 )
+    88   		n = -n;
+    89   	i = 0;
+    90   	do {
+    91   		temp[i++] = n % 10 + '0';
+    92   	} while( (n =/ 10) > 0 );
+    93   	if( sign < 0 )
+    94   		temp[i++] = '-';
+    95   	while( --w >= i )					/*pad on left with blanks*/
+    96   		*s++ = ' ';
+    97   	while( --i >= 0 )					/*move chars reversed*/
+    98   		*s++ = temp[i];
+    99   	*s = '\0';
+   100   }
+   101    
+   102   /* strend - set string end*/
+   103   /*		This is used to compare the endings of file names for ".c", etc.*/
+   104   strend(s,t)								/* returns 1 if match, 0 otherwise*/
+   105   char *s;								/* string to compare*/
+   106   char *t;								/* string ending*/
+   107   {
+   108   	int ls, lt;
+   109    
+   110   	if( (ls=strlen(s)) < (lt=strlen(t)) )
+   111   		return(0);
+   112   	if( strcmp(&s[ls-lt],t) == 0 )
+   113   		return(1);
+   114   	return(0);
+   115   }
+   116   /* index - find the index of a character in a string*/
+   117   /*		This is identical to Software Tools index.*/
+   118   index(str,chr)						/* returns index of c in str or -1*/
+1File: MAIN.C                                                              Page       3
+   119   char *str;							/* pointer to string to search*/
+   120   char chr;							/* character to search for*/
+   121   {
+   122   	register char *s;
+   123   	register int i;
+   124    
+   125   	for( s = str, i = 0; *s != '\0'; i++ )
+   126   		if( *s++ == chr )
+   127   			return(i);
+   128   	return(-1);
+   129   }
+   130   v6flush(v6buf)
+   131   struct iobuf *v6buf;
+   132   {
+   133   	register i;
+   134    
+   135   	i = BLEN - v6buf->nunused;
+   136   	v6buf->nunused = BLEN;
+   137   	v6buf->xfree = &(v6buf->buff[0]);
+   138   	if(write(v6buf->fildes,v6buf->xfree,i) != i)
+   139   		return(-1);
+   140   	return(0);
+   141   }

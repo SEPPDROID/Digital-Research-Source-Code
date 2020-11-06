@@ -1,0 +1,13 @@
+$ xer DECL.LIS
+$ xer EXPR.LIS
+$ xer ICODE.LIS
+$ xer INIT.LIS
+$ xer INTERF.LIS
+$ xer LEX.LIS
+$ xer MAIN.LIS
+$ xer STMT.LIS
+$ xer TABL.LIS
+$ xer VERSION.LIS
+$ xer ICODE.LST
+$ xer MACHINE.LST
+$ xer PARSER.LST

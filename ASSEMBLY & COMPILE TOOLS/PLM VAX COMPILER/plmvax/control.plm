@@ -1,0 +1,1093 @@
+$LARGE
+$TITLE ('PL/M-VAX CONTROL LANGUAGE HANDLER')
+
+CONTROL_MODULE: do;     /* Module to handle PLM control lines. */
+
+/*************************************************************************/
+/*									 */
+/*				CONTROL.PLM				 */
+/*                                                                       */
+/*               D I S C L A I M E R   N O T I C E                       */
+/*               -------------------   -----------                       */
+/*                                                                       */
+/*  This document and/or portions of the material and data furnished     */
+/*  herewith, was developed under sponsorship of the U. S. Government.   */
+/*  Neither the U.S. nor the U.S.D.O.E., nor the Leland Stanford Junior  */
+/*  University, nor their employees, nor their respective contractors,   */
+/*  subcontractors, or their employees, makes any warranty, express or   */
+/*  implied, or assumes any liability or responsibility for accuracy,    */
+/*  completeness or usefulness of any information, apparatus, product    */
+/*  or process disclosed, or represents that its use will not infringe   */
+/*  privately-owned rights.  Mention of any product, its manufacturer,   */
+/*  or suppliers shall not, nor is it intended to, imply approval, dis-  */
+/*  approval, or fitness for any particular use.  The U. S. and the      */
+/*  University at all times retain the right to use and disseminate same */
+/*  for any purpose whatsoever.  Such distribution shall be made by the  */
+/*  National Energy Software Center at the Argonne National Laboratory   */
+/*  and only subject to the distributee furnishing satisfactory proof    */
+/*  that he has a valid license from the Intel Corporation in effect.    */
+/*                                                                       */
+/*-----------------------------------------------------------------------*/
+/*									 */
+/*    This module of the PL/M-VAX compiler processes the invocation	 */
+/*    line and all control statements within the source text.		 */
+/*									 */
+/*-----------------------------------------------------------------------*/
+/*									 */
+/*		R E V I S I O N   H I S T O R Y				 */
+/*									 */
+/*    14OCT81  Alex Hunter  1. Added disclaimer notice.			 */
+/*    09NOV81  Alex Hunter  1. Added ASSUME control. (V5.8)              */
+/*    10NOV81  Alex Hunter  1. Added DBG assumption. (V6.0)		 */
+/*    10JAN82  Alex Hunter  1. Call DQ$SET$DELIMITERS. (V6.4)            */
+/*    14JAN82  Alex Hunter  1. Ignore $-signs in switch names. (V6.5)    */
+/*									 */
+/*-----------------------------------------------------------------------*/
+$INCLUDE (PLM$UDI:CUSTOMARY.LIT)
+$INCLUDE (PLM$UDI:UDI.DEF)
+$INCLUDE (PLM$UDI:DESCRIPT.LIT)
+$INCLUDE (PLM$UDI:ASCII.LIT)
+$INCLUDE (PLM$UDI:EXCEPT.LIT)
+ 
+declare t literally 'TRUE',
+	f literally 'FALSE';
+
+/***********************************************************************
+
+         Switch-Name Symbol Table Declarations.
+
+***********************************************************************/
+
+declare max_switch literally '50';   /* maximum # of switch names */
+
+declare switch (1:max_switch) structure (name(32) byte, value byte);
+
+declare last_switch integer initial (0);
+
+/**********************************************************************/
+
+declare tokn byte,
+        delimiter byte initial (' '),
+        argument (81) byte,
+        arg_length byte initial (0);
+
+declare C_AND literally '201',
+        C_OR  literally '202',
+        C_XOR literally '203',
+        C_NOT literally '204';
+
+$SUBTITLE ("ERROR MESSAGE STUFF")
+/***********************************************************************
+
+         Error Message Stuff.
+
+***********************************************************************/
+
+declare msg0 (*) byte initial ('INVALID CONTROL'),
+        msg1 (*) byte initial ('ILLEGAL LIMITED EXPRESSION'),
+        msg2 (*) byte initial ('CONTROL CARD SYNTAX ERROR'),
+        msg3 (*) byte initial ('TOO MANY SWITCHES'),
+        msg4 (*) byte initial ('ATTEMPT TO DIVIDE BY ZERO'),
+        msg5 (*) byte initial ('BAD DIGIT IN WHOLE-NUMBER'),
+        msg6 (*) byte initial ('ILLEGAL VALUE FOR PARAMETER'),
+        msg7 (*) byte initial ('PATH NAME ERROR'),
+        msg8 (*) byte initial
+         ('ILLEGAL USE OF PRIMARY CONTROL AFTER NON-CONTROL LINE'),
+        msg9 (*) byte initial ('INCLUDE FILES NESTED TOO DEEPLY'),
+        msg10 (*) byte initial ('INCLUDE MUST BE LAST CONTROL ON LINE'),
+        msg11 (*) byte initial ('TOO MANY SAVES/RESTORES'),
+        msg12 (*) byte initial
+          ('IF/ELSEIF/ELSE/ENDIF in illegal context'),
+        msg13 (*) byte initial ('IF/ENDIF nested too deeply'),
+	msg14 (*) byte initial ('Unrecognized ASSUME code');
+
+declare error_msg$d (0:14) descriptor initial (
+                size(msg0),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg0,
+                size(msg1),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg1,
+                size(msg2),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg2,
+                size(msg3),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg3,
+                size(msg4),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg4,
+                size(msg5),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg5,
+                size(msg6),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg6,
+                size(msg7),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg7,
+                size(msg8),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg8,
+                size(msg9),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg9,
+                size(msg10),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg10,
+                size(msg11),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg11,
+                size(msg12),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg12,
+                size(msg13),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg13,
+		size(msg14),DSC$K_DTYPE_T,DSC$K_CLASS_S,@msg14);
+
+
+FATAL: procedure (msg$d) external;
+        declare msg$d pointer;
+        end FATAL;
+
+
+control_error: procedure (error$number);
+        declare error$number byte;
+        call FATAL(@error_msg$d(error$number));
+        end control_error;
+
+
+$SUBTITLE ("SYNTAX ANALYSIS PROCEDURES")
+match: procedure (string1$p,string2$p) byte;
+        declare (string1$p,string2$p) pointer;
+        declare (string1 based string1$p, string2 based string2$p)
+                 (32) byte;
+        declare i integer;
+
+        do i=0 to string1(0);
+           if string1(i)<>string2(i) then return FALSE;
+        end;
+        return TRUE;
+        end match;
+
+
+get_control_token: procedure;
+        declare i integer, status word;
+
+        do while arg_length=0 and delimiter=' ';
+           delimiter=DQ$GET$ARGUMENT(@argument,@status);
+           arg_length=argument(0);
+           end;
+
+        if arg_length <> 0 then do;
+           arg_length=0;
+           if match(@argument,@(3,'AND')) then
+              tokn=C_AND;
+           else if match(@argument,@(2,'OR')) then
+              tokn=C_OR;
+           else if match(@argument,@(3,'XOR')) then
+              tokn=C_XOR;
+           else if match(@argument,@(3,'NOT')) then
+              tokn=C_NOT;
+           else
+              tokn=0;
+           end;
+
+        else do;
+           tokn=delimiter;
+           delimiter=' ';
+           end;
+
+        end get_control_token;
+
+
+must_match: procedure (test_token);
+        declare test_token byte;
+
+        if test_token <> tokn then
+           call control_error(2);
+        else
+           call get_control_token;
+        end must_match;
+
+
+whole_number: procedure byte;
+        declare (value,digit) byte, i integer;
+
+        value=0;
+
+        do i=1 to argument(0);
+           if argument(i)<'0' or argument(i)>'9' then do;
+              call control_error(5);
+              digit=0;
+              end;
+           else
+              digit=argument(i)-'0';
+           value=value*10+digit;
+           end;
+
+        call get_control_token;
+        return value;
+        end whole_number;
+
+
+whole_number_parameter: procedure (min,max,default) byte;
+        declare (min,max,default) byte;
+        declare value byte;
+
+        call must_match('(');
+        value=whole_number;
+        call must_match(')');
+
+        if value<min or value>max then do;
+           call control_error(6);
+           value=default;
+           end;
+
+        return value;
+        end whole_number_parameter;
+
+
+path_name_parameter: procedure (path$p,extension$p);
+        declare (path$p,extension$p) pointer;
+        declare (path based path$p) (46) byte;
+        declare (explicit_extension,inside_directory) byte,
+                i integer, status word;
+
+        if argument(0)>45 then do;
+           call control_error(7);
+           argument(0)=45;
+           end;
+
+        explicit_extension,inside_directory=FALSE;
+
+        path(0)=argument(0);
+        do i=1 to argument(0);
+           path(i)=argument(i);
+           if path(i)='[' then
+              inside_directory=TRUE;
+           else if path(i)='[' then
+              inside_directory=FALSE;
+           else if not inside_directory and path(i)='.' then
+              explicit_extension=TRUE;
+           end;
+
+        if not explicit_extension then do;
+           call DQ$CHANGE$EXTENSION(path$p,extension$p,@status);
+           if status<>E$OK then call control_error(7);
+           end;
+
+        end path_name_parameter;
+ 
+ 
+purge_dollar_signs: procedure (string$p);
+	declare string$p pointer;
+	declare (string based string$p) (1) byte;
+	declare (i,j) byte;
+ 
+	do i=1 to string(0);
+	   if string(i)='$' then
+	      do;
+                 string(0)=string(0)-1;
+                 do j=i to string(0);
+                    string(j)=string(j+1);
+                 end;
+              end;
+	end;
+end purge_dollar_signs;
+ 
+switch_value: procedure byte;
+        declare sw integer;
+
+	call purge_dollar_signs(@argument);
+        if argument(0) > 31 then argument(0)=31;
+
+        sw=1;
+
+        do while sw <= last_switch and
+                 not match(@argument,@switch(sw).name);
+           sw=sw+1;
+           end;
+
+        if sw > last_switch then
+           return FALSE;
+        else
+           return switch(sw).value;
+        end switch_value;
+
+
+define_switch_value: procedure (lhs$p,value);
+        declare lhs$p pointer, value byte;
+        declare (lhs based lhs$p) (32) byte, (sw,i) integer;
+
+	call purge_dollar_signs(@lhs);
+        if lhs(0) > 31 then lhs(0)=31;
+
+        sw=1;
+
+        do while sw <= last_switch and not match(@lhs,@switch(sw).name);
+           sw=sw+1;
+           end;
+
+        if sw > last_switch then do;
+           if sw > max_switch then
+              call control_error(3);
+           else do;
+              last_switch=sw;
+              do i=0 to lhs(0); switch(sw).name(i)=lhs(i); end;
+              switch(sw).value=value;
+              end;
+           end;
+        else
+           switch(sw).value=value;
+        end define_switch_value;
+
+
+limited_expression: procedure byte reentrant forward;
+        end;
+
+
+primary: procedure byte reentrant;
+        declare value byte;
+
+        if tokn='(' then do;
+           call get_control_token;
+           value=limited_expression;
+           call must_match(')');
+           end;
+        else if tokn <> 0 then
+           call control_error(1);
+        else if argument(1)>='0' and argument(1)<='9' then
+           value=whole_number;
+        else do;
+           value=switch_value; call get_control_token; end;
+
+        return value;
+        end primary;
+
+
+secondary: procedure byte reentrant;
+
+        if tokn='+' then do;
+           call get_control_token; return primary; end;
+        else if tokn='-' then do;
+           call get_control_token; return -primary; end;
+        else
+           return primary;
+        end secondary;
+
+
+term: procedure byte reentrant;
+        declare (value,divisor) byte;
+
+        value=secondary;
+
+        do while tokn='*' or tokn='/';
+           if tokn='*' then do;
+              call get_control_token; value=value*secondary; end;
+           else do;
+              call get_control_token;
+              divisor=secondary;
+              if divisor=0 then call control_error(4);
+              else value=value/divisor;
+              end;
+           end;
+
+        return value;
+        end term;
+
+
+arithmetic_expression: procedure byte reentrant;
+        declare value byte;
+
+        value=term;
+
+        do while tokn='+' or tokn='-';
+           if tokn='+' then do;
+              call get_control_token; value=value+term; end;
+           else do;
+              call get_control_token; value=value-term; end;
+           end;
+
+        return value;
+        end arithmetic_expression;
+
+
+logical_primary: procedure byte reentrant;
+        declare value byte;
+
+        value=arithmetic_expression;
+
+        if tokn='<' then do;
+           call get_control_token;
+           if tokn='>' then do;
+              call get_control_token;
+              value = (value <> arithmetic_expression);
+              end;
+           else if tokn='=' then do;
+              call get_control_token;
+              value = (value <= arithmetic_expression);
+              end;
+           else
+              value = (value < arithmetic_expression);
+           end;
+        else if tokn='>' then do;
+           call get_control_token;
+           if tokn='=' then do;
+              call get_control_token;
+              value = (value >= arithmetic_expression);
+              end;
+           else
+              value = (value > arithmetic_expression);
+           end;
+        else if tokn='=' then do;
+           call get_control_token;
+           value = (value = arithmetic_expression);
+           end;
+
+        return value;
+        end logical_primary;
+
+
+logical_secondary: procedure byte reentrant;
+
+        if tokn=C_NOT then do;
+           call get_control_token; return not logical_primary; end;
+        else
+           return logical_primary;
+        end logical_secondary;
+
+
+logical_factor: procedure byte reentrant;
+        declare value byte;
+
+        value=logical_secondary;
+
+        do while tokn=C_AND;
+           call get_control_token; value=value and logical_secondary;
+           end;
+
+        return value;
+        end logical_factor;
+
+
+limited_expression: procedure byte reentrant;
+        declare value byte;
+
+        value=logical_factor;
+
+        do while tokn=C_OR or tokn=C_XOR;
+           if tokn=C_OR then do;
+              call get_control_token;
+              value = value or logical_factor;
+              end;
+           else do;
+              call get_control_token;
+              value = value xor logical_factor;
+              end;
+           end;
+
+        return value;
+        end limited_expression;
+
+
+get_string_parameter: procedure (string$p);
+        declare string$p pointer;
+        declare (string based string$p) (81) byte,
+                i integer;
+
+        call must_match('(');
+
+        do i=0 to argument(0);
+           string(i)=argument(i);
+           end;
+
+        call get_control_token;
+        call must_match(')');
+
+        end get_string_parameter;
+
+
+optional_path_name: procedure (path$p,extension$p);
+        declare (path$p,extension$p) pointer;
+
+        if tokn='(' then do;
+           call get_control_token;
+           call path_name_parameter(path$p,extension$p);
+           call get_control_token;
+           call must_match(')');
+           end;
+
+        end optional_path_name;
+
+
+$SUBTITLE ("CONTROL WORD TABLES")
+/***********************************************************************
+
+                Table of Controls.
+
+***********************************************************************/
+
+declare max_cmd literally '71';
+
+declare control(max_cmd+1) structure (name(12) byte, primary byte)
+        initial(
+
+        5,'PRINT      ',TRUE,   /*0*/
+        7,'NOPRINT    ',TRUE,   /*1*/
+        4,'LIST       ',FALSE,  /*2*/
+        6,'NOLIST     ',FALSE,  /*3*/
+        4,'CODE       ',FALSE,  /*4*/
+        6,'NOCODE     ',FALSE,  /*5*/
+        4,'XREF       ',TRUE,   /*6*/
+        6,'NOXREF     ',TRUE,   /*7*/
+        5,'IXREF      ',TRUE,   /*8*/
+        7,'NOIXREF    ',TRUE,   /*9*/
+        7,'SYMBOLS    ',TRUE,   /*10*/
+        9,'NOSYMBOLS  ',TRUE,   /*11*/
+        6,'PAGING     ',TRUE,   /*12*/
+        8,'NOPAGING   ',TRUE,   /*13*/
+       10,'PAGELENGTH ',TRUE,   /*14*/
+        9,'PAGEWIDTH  ',TRUE,   /*15*/
+        4,'DATE       ',TRUE,   /*16*/
+        5,'TITLE      ',TRUE,   /*17*/
+        8,'SUBTITLE   ',FALSE,  /*18*/
+        5,'EJECT      ',FALSE,  /*19*/
+       10,'LEFTMARGIN ',FALSE,  /*20*/
+        9,'INTVECTOR  ',TRUE,   /*21*/
+       11,'NOINTVECTOR',TRUE,   /*22*/
+        8,'OPTIMIZE   ',TRUE,   /*23*/
+        6,'OBJECT     ',TRUE,   /*24*/
+        8,'NOOBJECT   ',TRUE,   /*25*/
+        8,'OVERFLOW   ',FALSE,  /*26*/
+       10,'NOOVERFLOW ',FALSE,  /*27*/
+        5,'DEBUG      ',TRUE,   /*28*/
+        7,'NODEBUG    ',TRUE,   /*29*/
+        4,'TYPE       ',TRUE,   /*30*/
+        6,'NOTYPE     ',TRUE,   /*31*/
+        9,'WORKFILES  ',TRUE,   /*32*/
+        7,'INCLUDE    ',FALSE,  /*33*/
+        4,'SAVE       ',FALSE,  /*34*/
+        7,'RESTORE    ',FALSE,  /*35*/
+        3,'RAM        ',TRUE,   /*36*/
+        3,'ROM        ',TRUE,   /*37*/
+        5,'SMALL      ',TRUE,   /*38*/
+        7,'COMPACT    ',TRUE,   /*39*/
+        6,'MEDIUM     ',TRUE,   /*40*/
+        5,'LARGE      ',TRUE,   /*41*/
+        4,'COND       ',FALSE,  /*42*/
+        6,'NOCOND     ',FALSE,  /*43*/
+        3,'SET        ',FALSE,  /*44*/
+        5,'RESET      ',FALSE,  /*45*/
+        2,'IF         ',FALSE,  /*46*/
+        6,'ELSEIF     ',FALSE,  /*47*/
+        4,'ELSE       ',FALSE,  /*48*/
+        5,'ENDIF      ',FALSE,  /*49*/
+        6,'OPRINT     ',TRUE,   /*50*/
+        8,'NOOPRINT   ',TRUE,   /*51*/
+	4,'TABS       ',TRUE,   /*52*/
+	6,'NOTABS     ',TRUE,   /*53*/
+	4,'WARN       ',TRUE,   /*54*/
+        6,'NOWARN     ',TRUE,   /*55*/
+        5,'PLM80      ',TRUE,   /*56*/
+        7,'GLOBALS    ',TRUE,   /*57*/
+	9,'NOGLOBALS  ',TRUE,	/*58*/
+	7,'PUBLICS    ',TRUE,   /*59*/
+	9,'NOPUBLICS  ',TRUE,   /*60*/
+	7,'OVERLAY    ',TRUE,   /*61*/
+	9,'NOOVERLAY  ',TRUE,   /*62*/
+	4,'ROOT       ',TRUE,   /*63*/
+	6,'NOROOT     ',TRUE,   /*64*/
+  	5,'ALIGN      ',TRUE,   /*65*/
+	7,'NOALIGN    ',TRUE,   /*66*/
+       11,'FREQUENCIES',TRUE,   /*67*/
+        6,'VECTOR     ',TRUE,   /*68*/
+        8,'NOVECTOR   ',TRUE,   /*69*/
+	6,'ASSUME     ',TRUE,   /*70*/
+        0,'           ',FALSE); /*71 -- DUMMY */
+
+$SUBTITLE ("COMMON INTERFACE TO FORTRAN ROUTINES")
+declare max_in literally '20';
+
+common /controls/
+        (leftmargin,rightmargin) integer,
+        (list_flag,large_flag,non_control_line_read) byte,
+        (skip_state,pagelength,pagewidth,optimize,model)
+            integer,
+
+        (print_flag,code_flag,xref_flag,ixref_flag,
+         symbols_flag,paging_flag,eject_flag,intvector_flag,
+         object_flag,overflow_flag,debug_flag,type_flag,rom_flag,
+         cond_flag) byte,
+
+        (print_file_string,ixref_file_string,work_file_string,
+         object_file_string) (46) byte,
+
+        (date_string,title_string,subtitle_string) (81) byte,
+
+        in_file_string (8:max_in+1) structure (string(46) byte),
+
+        oprint_file_string (46) byte, oprint_flag byte,
+ 
+        tabs integer, (warn_flag,plm80_flag) byte,
+	(globals_flag,publics_flag,overlay_flag,root_flag) byte,
+	(globals_file_string,publics_file_string) (46) byte,
+        overlay_prefix (81) byte,
+ 
+        (align_flag,freq_flag,vector_flag) byte;
+
+common /io/ (in,out,lst,ixi,gbl,pub) integer;
+
+$SUBTITLE ("SAVE/RESTORE STACK")
+/***********************************************************************
+
+        Save/Restore Stack for Controls.
+
+***********************************************************************/
+
+declare save_level_max literally '16';
+
+declare save_level integer initial (0);
+
+declare CS(save_level_max) structure (list byte,
+                                      code byte,
+                                      overflow byte,
+                                      leftmargin integer,
+                                      cond byte);
+
+declare this_switch (81) byte;
+
+declare CR literally 'ASC$CR';
+
+
+$SUBTITLE ("IF/ELSEIF/ELSE/ENDIF Stack and Procedures")
+declare skip_level_max literally '20';
+
+declare skip_state_stack (skip_level_max) integer,
+        skip_level integer initial(0);
+
+push_skip_state: procedure (new_state);
+        declare new_state integer;
+
+        skip_state_stack(skip_level)=skip_state;
+        skip_state=new_state;
+        skip_level=skip_level+1;
+        if skip_level >= skip_level_max then
+           call control_error(13);
+        end push_skip_state;
+
+
+pop_skip_state: procedure;
+        skip_level=skip_level-1;
+        skip_state=skip_state_stack(skip_level);
+        end;
+
+
+force_list_source: procedure external;
+        end;
+$SUBTITLE ("ASSUME CONTROL PROCESSOR")
+/*****************************************************************/
+/*                                                               */
+/*		ASSUME CONTROLS.				 */
+/*								 */
+/*****************************************************************/
+ 
+declare nbr_assumptions literally '15';
+ 
+common /assumptions/ assumption_flag(nbr_assumptions) byte;
+ 
+declare assumption (nbr_assumptions) structure (
+		name(3) byte, optimize_setting(4) byte)
+	data(	'SCE',f,t,t,t,	/* Short Circuit evaluation of boolean expressions */
+		'CSE',f,t,t,t,	/* Common Subexpression Elimination */
+		'EEQ',t,t,t,t,	/* Externals might be EQuivalenced */
+		'PSE',t,t,t,t,  /* Procedures have Side Effects */
+		'BRO',t,t,t,f,  /* Based References Overlay other vars */
+		'BBA',f,t,t,t,  /* Basic Block Analysis */
+		'CTE',t,t,t,t,	/* Compile-Time Evaluation of constant exprs */
+		'MCO',f,t,t,t,	/* Machine Code Optimization */
+		'CFA',f,f,t,t,	/* Control Flow Analysis */
+		'SWB',f,t,t,t,  /* Subscripts are Within Bounds */
+		'OSR',f,t,t,t,  /* Operator Strength Reduction */
+		'SVE',f,f,f,t,  /* only Single Variables are Equivalenced */
+                'S64',t,t,t,t,  /* String operations are < 64K bytes */
+		'C7F',f,f,f,t,  /* shift counts are <= 07FH */
+		'DBG',f,f,f,f,  /* DeBuG the compiler */
+                );
+ 
+ 
+process_assumptions: procedure;
+    declare set_flag_sense byte;
+    declare i byte;
+ 
+    if tokn <> '(' then call control_error (2);
+ 
+    tokn = ',';
+    do while tokn = ',';
+	call get_control_token;
+  	if tokn <> 0 then call control_error (2);
+	if CMPB(@argument,@(5,'NO'),3) = 0FFFFH then
+	    do;
+	    set_flag_sense = FALSE;
+	    call MOVB (@argument(3),@argument(1),3);
+	    end;
+	else if argument(0) = 3 then
+	    set_flag_sense = TRUE;
+	else
+	    call control_error (14);
+ 
+	i = 0;
+	do while i < nbr_assumptions and
+		 CMPB(@argument(1),@assumption(i).name,3) <> 0FFFFH;
+	    i = i+1;
+	end;
+	if i = nbr_assumptions then call control_error (14);
+	assumption_flag(i) = set_flag_sense;
+	call get_control_token;
+    end;
+    call must_match (')');
+end process_assumptions;
+$SUBTITLE ("FILE OPENING PROCEDURES")
+open_sos_file: procedure (unit$p,file_string$p) external;
+        declare (unit$p,file_string$p) pointer;
+        end;
+
+
+open_output_file: procedure (unit$p,file_string$p) external;
+        declare (unit$p,file_string$p) pointer;
+        end;
+
+
+open_output_files: procedure public;
+        if print_flag then
+           call open_output_file(@lst,@print_file_string);
+        if object_flag then
+           call open_output_file(@out,@work_file_string);
+        if ixref_flag then
+           call open_output_file(@ixi,@ixref_file_string);
+	if globals_flag then
+	   call open_sos_file(@gbl,@globals_file_string);
+	if publics_flag then
+	   call open_output_file(@pub,@publics_file_string);
+        end open_output_files;
+
+
+$SUBTITLE ("CONTROL_LINE PROCEDURE")
+        /*************************************
+        *                                    *
+        *       Control_Line procedure.      *
+        *                                    *
+        *************************************/
+
+control_line: procedure public;
+     declare (cmd, i, old_skip_state) integer,
+             (conditional_control,first_control) byte;
+
+     call get_control_token;
+     first_control=TRUE;
+
+control_loop:
+     do forever;
+
+        do while tokn<>0;
+           if tokn=CR then return;
+           call control_error(0);
+           call get_control_token;
+           end;
+
+        cmd=0;
+        do while cmd < max_cmd and
+           not match(@argument,@control(cmd).name);
+           cmd=cmd+1;
+           end;
+
+        call get_control_token;
+
+        if control(cmd).primary and non_control_line_read then
+           call control_error(8);
+
+        conditional_control = cmd>=46 and cmd<=49;
+        if conditional_control and not first_control then
+           call control_error(12);
+
+        do case skip_state;
+           /* 0 - invocation line */
+           ;
+           /* 1 - reading at level > 0 */
+           ;
+           /* 2 - skipping to ENDIF */
+           if not conditional_control then go to premature_exit;
+           /* 3 - skipping to ENDIF/ELSE/ELSEIF-true */
+           if not conditional_control then go to premature_exit;
+           /* 4 - reading at level 0 */
+           ;
+           end;
+
+        old_skip_state=skip_state;
+
+command_case:
+        do case cmd;
+
+/* 0 - PRINT */         do;
+                        call optional_path_name(@print_file_string,
+                                                @('LIS'));
+                        print_flag=TRUE;
+                        end;
+/* 1 - NOPRINT */       print_flag=FALSE;
+/* 2 - LIST */          list_flag=TRUE;
+/* 3 - NOLIST */        list_flag=FALSE;
+/* 4 - CODE */          code_flag=TRUE;
+/* 5 - NOCODE */        code_flag=FALSE;
+/* 6 - XREF */          xref_flag=TRUE;
+/* 7 - NOXREF */        xref_flag=FALSE;
+/* 8 - IXREF */         do;
+                        call optional_path_name(@ixref_file_string,
+                                                @('IXI'));
+                        ixref_flag=TRUE;
+                        end;
+/* 9 - NOIXREF */       ixref_flag=FALSE;
+/* 10 - SYMBOLS */      symbols_flag=TRUE;
+/* 11 - NOSYMBOLS */    symbols_flag=FALSE;
+/* 12 - PAGING */       paging_flag=TRUE;
+/* 13 - NOPAGING */     paging_flag=FALSE;
+/* 14 - PAGELENGTH */   pagelength=whole_number_parameter(5,200,60);
+/* 15 - PAGEWIDTH */    pagewidth=whole_number_parameter(60,132,120);
+/* 16 - DATE */         call get_string_parameter(@date_string);
+/* 17 - TITLE */        call get_string_parameter(@title_string);
+/* 18 - SUBTITLE */     do;
+                        call get_string_parameter(@subtitle_string);
+                        eject_flag=TRUE;
+                        end;
+/* 19 - EJECT */        eject_flag=TRUE;
+/* 20 - LEFTMARGIN */   leftmargin=whole_number_parameter(1,72,1);
+/* 21 - INTVECTOR */    intvector_flag=TRUE;
+/* 22 - NOINTVECTOR */  intvector_flag=FALSE;
+/* 23 - OPTIMIZE */     do;
+			optimize=whole_number_parameter(0,3,1);
+			do i=0 to nbr_assumptions-1;
+			    assumption_flag(i)=
+				assumption(i).optimize_setting(optimize);
+			end;
+			end;
+/* 24 - OBJECT */       do;
+                        call optional_path_name(@object_file_string,
+                                                @('OBJ'));
+                        object_flag=TRUE;
+                        end;
+/* 25 - NOOBJECT */     object_flag=FALSE;
+/* 26 - OVERFLOW */     overflow_flag=TRUE;
+/* 27 - NOOVERFLOW */   overflow_flag=TRUE;
+/* 28 - DEBUG */        debug_flag=TRUE;
+/* 29 - NODEBUG */      debug_flag=FALSE;
+/* 30 - TYPE */         type_flag=TRUE;
+/* 31 - NOTYPE */       type_flag=FALSE;
+/* 32 - WORKFILES */    do;
+                        if tokn<>'(' then call control_error(2);
+                        tokn=',';
+                        do while tokn=',';
+                           call get_control_token;
+                           call path_name_parameter(@work_file_string,
+                                                    @('TMP'));
+                           call get_control_token;
+                           end;
+                        call must_match(')');
+                        end;
+/* 33 - INCLUDE */      do;
+                        call must_match('(');
+                        call path_name_parameter(@in_file_string(in+1),
+                                                 @('SRC'));
+                        call get_control_token;
+                        call must_match(')');
+                        if tokn<>CR then call control_error(10);
+
+                        if in >= max_in then
+                           call control_error(9);
+                        else do;
+                           in=in+1;
+                           call open_sos_file(@in,@in_file_string(in));
+                           end;
+                        end;
+/* 34 - SAVE */         do;
+                        if save_level >= save_level_max then
+                           call control_error(11);
+                        else do;
+                           CS(save_level).list=list_flag;
+                           CS(save_level).code=code_flag;
+                           CS(save_level).overflow=overflow_flag;
+                           CS(save_level).leftmargin=leftmargin;
+                           CS(save_level).cond=cond_flag;
+                           save_level=save_level+1;
+                           end;
+                        end;
+/* 35 - RESTORE */      do;
+                        if save_level <= 0 then
+                           call control_error(11);
+                        else do;
+                           save_level=save_level-1;
+                           list_flag=CS(save_level).list;
+                           code_flag=CS(save_level).code;
+                           overflow_flag=CS(save_level).overflow;
+                           leftmargin=CS(save_level).leftmargin;
+                           cond_flag=CS(save_level).cond;
+                           end;
+                        end;
+/* 36 - RAM */          rom_flag=FALSE;
+/* 37 - ROM */          rom_flag=TRUE;
+/* 38 - SMALL */        model=1;
+/* 39 - COMPACT */      do; model=2; large_flag=TRUE; end;
+/* 40 - MEDIUM */       model=3;
+/* 41 - LARGE */        do; model=4; large_flag=TRUE; end;
+/* 42 - COND */         cond_flag=TRUE;
+/* 43 - NOCOND */       cond_flag=FALSE;
+/* 44 - SET */          do;
+                        if tokn<>'(' then call control_error(2);
+                        tokn=',';
+                        do while tokn=',';
+                           call get_control_token;
+                           do i=0 to argument(0);
+                              this_switch(i)=argument(i);
+                              end;
+                           call get_control_token;
+                           if tokn='=' then do;
+                              call get_control_token;
+                              call define_switch_value(@this_switch,
+                                                 limited_expression);
+                              end;
+                           else
+                              call define_switch_value(@this_switch,
+                                                       TRUE);
+                           end;
+                        call must_match(')');
+                        end;
+/* 45 - RESET */        do;
+                        if tokn<>'(' then call control_error(2);
+                        tokn=',';
+                        do while tokn=',';
+                           call get_control_token;
+                           call define_switch_value(@argument,FALSE);
+                           call get_control_token;
+                           end;
+			call must_match(')');
+                        end;
+/* 46 - IF */           if_case: do case skip_state;
+                        /* 0 - invocation line */
+                           call control_error(12);
+                        /* 1 - reading at level > 0 */
+                           if limited_expression then
+                              call push_skip_state(1);
+                           else
+                              call push_skip_state(3);
+                        /* 2 - skipping to ENDIF */
+                           call push_skip_state(2);
+                        /* 3 - skipping to ENDIF/ELSE/ELSEIF-true */
+                           call push_skip_state(2);
+                        /* 4 - reading at level 0 */
+                           if limited_expression then
+                              call push_skip_state(1);
+                           else
+                              call push_skip_state(3);
+                        end if_case;
+/* 47 - ELSEIF */       elseif_case: do case skip_state;
+                        /* 0 - invocation line */
+                           call control_error(12);
+                        /* 1 - reading at level > 0 */
+                           skip_state=2;
+                        /* 2 - skipping to ENDIF */
+                           ;
+                        /* 3 - skipping to ENDIF/ELSE/ELSEIF-true */
+                           if limited_expression then skip_state=1;
+                        /* 4 - reading at level 0 */
+                           call control_error(12);
+                        end elseif_case;
+/* 48 - ELSE */         else_case: do case skip_state;
+                        /* 0 - invocation line */
+                           call control_error(12);
+                        /* 1 - reading at level > 0 */
+                           skip_state=2;
+                        /* 2 - skipping to ENDIF */
+                           ;
+                        /* 3 -skipping to ENDIF/ELSE/ELSEIF-true */
+                           skip_state=1;
+                        /* 4 reading at level 0 */
+                           call control_error(12);
+                        end else_case;
+/* 49 - ENDIF */        endif_case: do case skip_state;
+                        /* 0 - invocation line */
+                           call control_error(12);
+                        /* 1 - reading at level > 0 */
+                           call pop_skip_state;
+                        /* 2 - skipping to ENDIF */
+                           call pop_skip_state;
+                        /* 3 - skipping to ENDIF/ELSE/ELSEIF-true */
+                           call pop_skip_state;
+                        /* 4 - reading at level 0 */
+                           call control_error(12);
+                        end endif_case;
+/* 50 - OPRINT */       do;
+                        call optional_path_name(@oprint_file_string,
+                                                        @('LST'));
+                        oprint_flag=TRUE;
+                        end;
+/* 51 - NOOPRINT */     oprint_flag=FALSE;
+/* 52 - TABS */		tabs=whole_number_parameter(0,99,8);
+/* 53 - NOTABS */	tabs=0;
+/* 54 - WARN */		warn_flag=TRUE;
+/* 55 - NOWARN */	warn_flag=FALSE;
+/* 56 - PLM80 */	plm80_flag=TRUE;
+/* 57 - GLOBALS */      do; globals_flag=TRUE;
+			call optional_path_name(@globals_file_string,
+                                                        @('GBL'));
+			end;
+/* 58 - NOGLOBALS */	globals_flag=FALSE;
+/* 59 - PUBLICS */	do; publics_flag=TRUE;
+			call optional_path_name(@publics_file_string,
+                                                        @('PBL'));
+			end;
+/* 60 - NOPUBLICS */	publics_flag=FALSE;
+/* 61 - OVERLAY */	do; overlay_flag=TRUE;
+			call get_string_parameter(@overlay_prefix);
+			end;
+/* 62 - NOOVERLAY */	overlay_flag=FALSE;
+/* 63 - ROOT */		root_flag=TRUE;
+/* 64 - NOROOT */	root_flag=FALSE;
+/* 65 - ALIGN */	align_flag=TRUE;
+/* 66 - NOALIGN */	align_flag=FALSE;
+/* 67 - FREQUENCIES */	freq_flag=TRUE;
+/* 68 - VECTOR */       vector_flag=TRUE;
+/* 69 - NOVECTOR */     vector_flag=FALSE;
+/* 70 - ASSUME */	call process_assumptions;
+/* 71 - no match */     call control_error(0);
+
+                  end command_case;
+
+        first_control=FALSE;
+
+        if skip_state=2 or skip_state=3 then go to premature_exit;
+        else if old_skip_state=2 or old_skip_state=3 then
+                call force_list_source;
+
+        end control_loop;
+ 
+premature_exit:
+        /* Clean up for next invocation of control line. */
+	arg_length=0;  delimiter=' ';
+
+     end control_line;
+
+
+$SUBTITLE ("INVOCATION_LINE PROCEDURE")
+                /************************************
+                *                                   *
+                *   Invocation_Line Procedure       *
+                *                                   *
+                ************************************/
+ 
+declare VMS$delimiter$set (*) byte data (
+        17, ',()=#!%\~+-*/&|<>');
+
+invocation_line: procedure public;
+        declare status word, i integer;
+ 
+	call DQ$SET$DELIMITERS(@VMS$delimiter$set,@status);
+
+        call get_control_token;
+
+        call path_name_parameter(@in_file_string(in),@('PLM'));
+        call open_sos_file(@in,@in_file_string(in));
+
+        do i=0 to in_file_string(in).string(0);
+           print_file_string(i),
+           work_file_string(i),
+           ixref_file_string(i),
+           oprint_file_string(i),
+	   globals_file_string(i),
+	   publics_file_string(i),
+           object_file_string(i)=in_file_string(in).string(i);
+           end;
+
+        call DQ$CHANGE$EXTENSION(@print_file_string,@('LIS'),@status);
+        call DQ$CHANGE$EXTENSION(@work_file_string,@('TMP'),@status);
+        call DQ$CHANGE$EXTENSION(@ixref_file_string,@('IXI'),@status);
+        call DQ$CHANGE$EXTENSION(@oprint_file_string,@('LST'),@status);
+        call DQ$CHANGE$EXTENSION(@object_file_string,@('OBJ'),@status);
+        call DQ$CHANGE$EXTENSION(@globals_file_string,@('GBL'),@status);
+        call DQ$CHANGE$EXTENSION(@publics_file_string,@('PBL'),@status);
+
+        call control_line;
+
+        end invocation_line;
+
+end CONTROL_MODULE;

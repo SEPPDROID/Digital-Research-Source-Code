@@ -1,0 +1,586 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 17
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp 2
+2.  MP/M INTERFACE GUIDE
+.sp
+.pp
+This section describes MP/M system organization including
+the structure of memory and system call functions.  The intention
+is to provide the necessary information required to write
+page relocatable programs and resident system processes
+which operate under MP/M, and which use the real-time, multi-tasking,
+peripheral, and disk I/O facilities of the system.
+.sp
+.pp
+2.1  Introduction
+.pp
+MP/M is logically divided into several modules.  The three primary
+modules are named the Basic and Extended I/O
+System (XIOS), the Basic Disk Operating System
+(BDOS), and the Extended Disk Operating System (XDOS).
+The XIOS is a hardware-dependent module which defines the
+exact low level interface to a particular computer system which
+is necessary for peripheral device I/O.  Although a standard
+XIOS is supplied by Digital Research, explicit instructions
+are provided for field reconfiguration of the XIOS to match
+nearly any hardware environment.
+.pp
+MP/M memory structure is shown below:
+.sp
+.cp 40
+.li
+                    --------------------------- --+
+              high  |                         |   |
+                    |       SYSTEM.DAT        |   |
+                    |                         |   |
+                    ---------------------------   |
+                    |                         |   |
+                    |      CONSOLE.DAT        |   |
+                    |                         |   |
+                    ---------------------------   |
+                    |                         |   |
+                    |      USERSYS.STK        |   |
+                    |                         |   |
+                    ---------------------------   |
+                    |                         |   |   These segments
+                    |          XIOS           |   +-- must reside in
+                    |                         |   |   common memory:
+                    ---------------------------   |
+                    |                         |   |   memory always
+                    |      BDOS or ODOS       |   |   accessible no
+                    |                         |   |   matter which
+                    ---------------------------   |   bank is
+                    |                         |   |   switched in.
+                    |          XDOS           |   |
+                    |                         |   |
+                    ---------------------------   |
+                    |                         |   |
+                    |          RSPs           |   |
+                    |                         |   |
+                    --------------------------- --+
+                    |                         |
+                    |    BNKBDOS (Optional)   |
+                    |                         |
+                    ---------------------------
+                    |                         |
+                    |        MEMSEG.USR       |
+                    |                         |
+                                ...
+                    |                         |
+                    |        MEMSEG.USR       |
+                    |                         |
+                    ---------------------------
+                    |                         |
+                    |      ABSOLUTE TPA       |
+              low   |                         |
+                    ---------------------------
+.sp
+.pp
+The exact memory addresses for each of the memory segments shown
+above will vary with MP/M version and depend on the
+operator specifications made during the system generation process.
+.bp
+The memory segments are described as follows:
+.sp
+.in 16
+.ti -8
+SYSTEM.DAT    The SYSTEM.DAT segment contains 256 bytes used by the
+loader to dynamically configure the system.  After loading, the
+segment is used for storage of system data such as submit flags.
+See section 3.4 under SYSTEM DATA for a detailed description of
+the byte allocation.
+.sp
+.ti -8
+CONSOLE.DAT   The CONSOLE.DAT segment varies in length with the
+number of consoles.  Each console requires 256 bytes which contains
+the TMP's process descriptor, stack and buffers.
+.sp
+.ti -8
+USERSYS.STK   The USERSYS.STK segment is optional depending upon
+whether or not the user intends to run CP/M *.COM files.  This
+segment contains 64 bytes of stack space per user memory segment
+and is used as a temporary stack when user programs make
+BDOS calls.  Specification of the option to include this segment
+is made during system generation.
+The size of the USERSYS.STK segment varies as follows:
+.ti +3
+000H - No user system stacks
+.ti +3
+100H - 1 to 4 memory segments
+.ti +3
+200H - 5 to 8 memory segments
+.sp
+.ti -8
+XIOS          The XIOS segment contains the user customized
+basic and extended I/O system in page relocatable format.
+.sp
+.ti -8
+BDOS/ODOS     The BDOS segment contains the disk file and multiple
+console management functions.  The segment is about 1400H bytes
+in length.
+.sp
+The ODOS segment contains the resident portion of the banked BDOS
+file and console management functions.  The segment is about 800H bytes
+in length.
+.sp
+.ti -8
+XDOS          The XDOS segment contains the MP/M nucleus and
+the extended disk operating system. The segment is about 2000H bytes
+in length.
+.sp
+.ti -8
+RSPs          The operator makes a selection of Resident System
+Processes during system generation.  The RSPs require varying amounts
+of memory.
+.sp
+.ti -8
+BNKBDOS (Optional)  The BNKBDOS segment is present only in systems with
+a bank switched BDOS.  It contains the non-resident portion of the
+banked BDOS disk file management.  This segment is about E00H bytes in
+length.
+.sp
+.ti -8
+MEMSEG.USR    The user can specifiy 1 to 8 user memory segments during
+the system generation process.  These memory segments may be in the
+same address space with different bank numbers.
+.sp
+.ti -8
+TPA           The ABSOLUTE TPA is a user memory segment which is based
+at 0000H.  In systems with bank switched memory there may be more
+than one ABSOLUTE TPA.
+.in 0
+.pp
+Each user memory segment, including the TPA, is further divided
+into two regions.  The first is called the system parameter area.
+The system parameter area occupies the first 100H bytes of the
+memory segment and is defined similarily to that of CP/M.
+See APPENDIX E for
+a detailed description of the system parameter area.  This area is
+also called the memory segment base page.
+.pp
+The second region of the user memory segment is the user code area.
+This area begins at 0100H relative to the base of the memory segment.
+When a program is loaded, code is placed into the user memory segment
+beginning at the start of the user code area.
+.pp
+Transient programs are loaded into memory by the Command Line
+Interpreter (CLI).  CLI receives commands from the Terminal Message
+Process (TMP) which accepts the operator console input.
+The TMP is a reentrant program which is executed by as many processes
+as there are system consoles.
+The operator communicates with the TMP by typing command lines
+following each prompt.  Each command line generally takes one of the
+forms:
+.sp
+.cp 4
+.li
+                          command
+                          command file1
+                          command file1 file2
+.sp
+where "command" is either a queue such as SPOOL or ATTACH,
+or the name of a transient command or program.
+.pp
+A brief discussion of CLI operation will describe the loading of
+transient programs.
+.pp
+When CLI receives a command line it parses the first entry on the
+command line and then tries to open a queue using the parsed name.
+If the open queue succeeds the command tail is written to the queue
+and the CLI operation is finished.  If the open queue fails, a file
+type of PRL is entered for the parsed file name and a file open is
+attempted.  If the file open succeeds then the header of the PRL
+file is read to determine the memory requirements.
+A relocatable memory request is made to obtain a memory segment in
+which to load and run the program.  If this request is satisfied
+the PRL file is read into the memory segment, relocated, and it is
+executed, completing the CLI operation.
+.PP
+If the PRL file type open fails then the file type of COM is entered
+for the parsed file name and a file open is attempted.  If the open
+succeeds then a memory request is made for an absolute TPA, memory
+segment based at 0000H.  If this request is satisfied the COM file is
+read into the absolute TPA and it is executed, completing the CLI
+operation.
+.pp
+If the command is followed by one or two file specifications, the CLI
+prepares one or two file control block (FCB) names in the system
+parameter area.  These optional FCB's are in the form necessary
+to access files through MP/M BDOS calls, and are described in
+the next section.
+.pp
+The CLI creates a process descriptor for each program which is
+loaded, setting up a 20 level stack which forces a branch to the base
+of the user code area of the memory segment.  The default stack is
+set up so that a return from the loaded program causes a branch
+to the MP/M facility which terminates the process.
+This stack has 19 levels available which can generally be used by the transient
+program since it is sufficiently large to handle system calls.
+.pp
+The transient program then begins execution,
+perhaps using the I/O facilities of MP/M to communicate
+with the operator's console and peripheral devices, including
+the disk subsystem.  The I/O system is accessed by passing a
+"function number" and an "information address" to MP/M through
+the entry point at the memory segment base +0005H.  In the case of a
+disk
+read, for example, the transient program sends the number corresponding
+to a disk read, along with the address of an FCB to MP/M.
+MP/M, in turn, performs the operation and returns with either
+a disk read completion indication or an error number indicating
+that the disk read was unsuccessful.  The function numbers and
+error indicators are given in sections 2.2 and 2.4.
+.sp 2
+.ce
+OPERATING SYSTEM CALL CONVENTIONS
+.sp
+.pp
+The purpose of this section is to provide detailed information
+for performing direct operating system calls from user programs.
+Many of the functions listed below, however, are more simply
+accessed through the I/O macro library provided with the MAC
+macro assembler, and listed in the Digital Research manual
+entitled "MAC Macro Assembler: Language Manual and Applications
+Guide."
+.pp
+MP/M facilities which are available for access by transient
+programs fall into two general categories:  simple device
+I/O, disk file I/O, and the XDOS functions.
+.bp
+.ti +6
+The simple device operations include:
+.sp
+.cp 8
+.li
+               Read/Write a Console Character
+               Write a List Device Character
+               Print Console Buffer
+               Read Console Buffer
+               Interrogate Console Ready
+.pp
+The BDOS operations which perform disk Input/Output are
+.sp
+.cp 16
+.li
+               Disk System Reset
+               Drive Selection
+               File Creation
+               File Open
+               File Close
+               Directory Search
+               File Delete
+               File Rename
+               Random or Sequential Read
+               Random or Sequential Write
+               Interrogate Available Disks
+               Interrogate Selected Disk
+               Set DMA Address
+               Set/Reset File Indicators
+               Reset Drive
+               Access/Free Drive
+               Random Write With Zero Fill
+.pp
+The XDOS functions are
+.sp
+.cp 21
+.li
+	       Absolute and Relocatable Memory Request
+	       Memory Free
+	       Device Poll
+	       Flag Waiting and Setting
+	       Make Queue
+	       Open Queue
+	       Delete Queue
+	       Read and Conditional Read Queue
+	       Write and Conditional Write Queue
+	       Delay
+	       Dispatch
+	       Terminate and Create Process
+	       Set Priority
+	       Attach and Detach Console
+	       Set and Assign Console
+	       Send CLI Command
+	       Call Resident System Procedure
+	       Parse Filename
+	       Get Console Number
+	       System Data Address
+	       Get Date and Time
+	       Return Process Descriptor Address
+	       Abort Specified Process
+.pp
+As mentioned above, access to the MP/M functions is accomplished
+by passing a function number and information address through the
+primary entry point at location memory segment base +0005H.
+In general, the function number is passed in register C with
+the information address in the double byte pair DE.
+Single byte values are returned in register A, with
+double byte values returned in HL
+(a zero value is returned when the function number is
+out of range).
+For reasons of compatibility,
+register A = L and register B = H upon return in all cases.
+Note that the register passing conventions of MP/M agree with
+those of Intel's PL/M systems programming language.
+.pp
+The list of MP/M BDOS function numbers is given below.
+.sp
+.cp 20
+.li
+      0  System Reset           21  Write Sequential
+      1  Console Input          22  Make File
+      2  Console Output         23  Rename File
+      3  Raw Console Input      24  Return Login Vector
+      4  Raw Console Output     25  Return Current Disk
+      5  List Output            26  Set DMA Address
+      6  Direct Console I/O     27  Get Addr(Alloc)
+      7  Get I/O Byte           28  Write Protect Disk
+      8  Set I/O Byte           29  Get R/O Vector
+      9  Print String           30  Set File Attributes
+     10  Read Console Buffer    31  Get Addr(Disk Parms)
+     11  Get Console Status     32  Set/Get User Code
+     12  Return Version Number  33  Read Random
+     13  Reset Disk System      34  Write Random
+     14  Select Disk            35  Compute File Size
+     15  Open File              36  Set Random Record
+     16  Close File             35  Compute File Size
+     17  Search for First       36  Set Random Record
+     18  Search for Next        37  Reset Drive
+     19  Delete File            38  Access Drive
+     20  Read Sequential        39  Free Drive
+                                40  Write Random With Zero Fill
+.bp
+The list of MP/M XDOS function numbers is given below.
+.sp
+.cp 14
+.li
+    128  Absolute Memory Rqst  143  Terminate Process
+    129  Relocatable Mem. Rqst 144  Create Process
+    130  Memory Free           145  Set Priority
+    131  Poll                  146  Attach Console
+    132  Flag Wait             147  Detach Console
+    133  Flag Set              148  Set Console
+    134  Make Queue            149  Assign Console
+    135  Open Queue            150  Send CLI Command
+    136  Delete Queue          151  Call Resident Sys. Proc.
+    137  Read Queue            152  Parse Filename
+    138  Cond. Read Queue      153  Get Console Number
+    139  Write Queue           154  System Data Address
+    140  Cond. Write Queue     155  Get Date and Time
+    141  Delay                 156  Return Proc. Descr. Adr.
+    142  Dispatch              157  Abort Specified Process
+.sp
+.ce
+DISK FILE STRUCTURE
+.pp
+MP/M implements a named file structure on each disk, providing
+a logical organization which allows any particular file to
+contain any number of records from completely empty, to the
+full capacity of the drive.  Each drive is logically distinct
+with a disk directory and file data area.  The disk file names
+are in three parts:  the drive select code, the file name
+consisting of one to eight non-blank characters, and the file
+type consisting of zero to three non-blank characters.
+The file type names the generic category of a particular
+file, while the file name distinguishes individual files
+in each category.  The file types listed below name a few
+generic categories which have been established, although
+they are generally arbitrary:
+.sp
+.cp 10
+.li
+    ASM  Assembler Source     PLI  PL/I Source File
+    PRN  Printer Listing      REL  Relocatable Module
+    HEX  Hex Machine Code     TEX  TEX Formatter Source
+    BAS  Basic Source File    BAK  ED Source Backup
+    INT  Intermediate Code    SYM  SID Symbol File
+    COM  CCP Command File     $$$  Temporary File
+    PRL  Page Relocatable     RSP  Resident Sys. Process
+    SPR  Sys. Page Reloc.     SYS  System File
+.sp
+Source files are treated as a sequence of ASCII characters,
+where each "line" of the source file is followed by
+a carriage-return line-feed sequence (0DH followed by 0AH).
+Thus one 128 byte MP/M record could contain several lines
+of source text.
+The end of an ASCII file is denoted by a control-Z character
+(1AH) or a real end of file (i.e. no more sectors), returned by the
+MP/M read operation.
+Control-Z characters embedded within machine code files
+(e.g., COM files) are ignored, however, and the end of
+file condition returned by MP/M is used to terminate
+read operations.
+.pp
+Files in MP/M can be thought of as a sequence of up to 65536
+records of 128 bytes each, numbered from 0 through 65535,
+thus allowing a maximum of 8 megabytes per file.
+Note, however, that although the records may be considered
+logically contiguous, they are not necessarily physically contiguous
+in the disk data area.
+Internally, all files are broken into 16K byte segments called
+logical extents, so that counters are easily maintained as
+8-bit values.
+Although the decomposition into extents is discussed in
+the paragraphs which follow, they are
+of no particular consequence to the programmer
+since each extent is automatically accessed in both sequential
+and random access modes.
+.pp
+In the file operations
+starting with function number 15, DE usually addresses a
+file control block (FCB).
+Transient programs often use the default file control block area
+reserved by MP/M at location memory segment base +005CH for
+simple file operations.
+The basic unit of file information
+is a 128 byte record used for all file operations, thus a
+default location for disk I/O is provided by MP/M at location
+memory segment base +0080H which is the initial default
+DMA address (see function 26).
+All directory
+operations take place in a reserved area which does
+not affect write buffers as was the case in CP/M release
+1, with the exception of Search First and Search Next,
+where compatibility is required.
+.pp
+The File Control Block (FCB) data area consists of a sequence
+of 33 bytes for sequential access and a series of 36 bytes
+in the case that the file is accessed randomly.  The default
+file control block normally located at memory segment base +005CH can
+be used for random access files, since the three bytes starting
+at memory segment base +007DH
+are available for this purpose.
+.bp
+.li
+The FCB format is shown with the following fields:
+
+  ------------------------------------------------------------
+  |dr|f1|f2|/ /|f8|t1|t2|t3|ex|s1|s2|rc|d0|/ /|dn|cr|r0|r1|r2|
+  ------------------------------------------------------------
+   00 01 02 ... 08 09 10 11 12 13 14 15 16 ... 31 32 33 34 35
+
+where
+
+   dr        drive code (0 - 16)
+             0 => use default drive for file
+             1 => auto disk select drive A,
+             2 => auto disk select drive B,
+             ...
+             16=> auto disk select drive P.
+
+   f1...f8   contain the file name in ASCII
+             upper case, with high bit = 0
+
+   t1,t2,t3  contain the file type in ASCII
+             upper case, with high bit = 0
+             t1', t2', and t3' denote the
+             bit of these positions,
+             t1' = 1 => Read/Only file,
+             t2' = 1 => SYS file, no DIR list
+             t3' = 0 => File has been updated
+
+    ex       contains the current extent number,
+             normally set to 00 by the user, but
+             in range 0 - 31 during file I/O
+
+    s1       reserved for internal system use
+
+    s2       reserved for internal system use, set
+             to zero on call to OPEN, MAKE, SEARCH
+
+    rc       record count for extent "ex,"
+             takes on values from 0 - 128
+
+    d0...dn  filled-in by MP/M, reserved for
+             system use
+
+    cr       current record to read or write in
+             a sequential file operation, normally
+             set to zero by user
+
+    r0,r1,r2 optional random record number in the
+             range 0-65535, with overflow to r2,
+             r0,r1 constitute a 16-bit value with
+             low byte r0, and high byte r1
+.pp
+Each file being accessed through MP/M must have a corresponding
+FCB which provides the name and allocation information for all
+subsequent file operations.  When accessing files, it is the
+programmer's responsibility to fill the lower sixteen bytes
+of the FCB and initialize the "cr" field.  Normally,
+bytes 1 through 11 are set to the ASCII character
+values for the file name and file type, while all other
+fields are zero.
+.pp
+FCB's are stored in a directory area of the disk, and are
+brought into central memory before proceeding with file
+operations (see the OPEN and MAKE functions).  The memory
+copy of the FCB is updated as file operations take place
+and later recorded permanently on disk at the termination
+of the file operation (see the CLOSE command).
+.pp
+The CLI constructs the first sixteen bytes of two optional
+FCB's for a transient by scanning the remainder of the line
+following the transient name, denoted by "file1" and "file2"
+in the prototype command line described above,
+with unspecified fields set to ASCII blanks.  The first
+FCB is constructed at location memory segment base +005CH, and can
+be used as-is for subsequent file operations.  The second
+FCB occupies the d0 ... dn portion of the first FCB,
+and must be moved to another area of memory before use.
+If, for example, the operator types
+.sp
+.ce
+PROGNAME B:X.ZOT Y.ZAP
+.sp
+the file PROGNAME.PRL is loaded into a user memory segment or if
+it is not on the disk,
+the file PROGNAME.COM is loaded into the TPA, and the default
+FCB at memory segment base +005CH is initialized to drive code 2, file
+name "X" and file type "ZOT".  The second drive code takes
+the default value 0, which is placed at memory segment base +006CH,
+with the file name "Y" placed into location memory segment base +006DH
+and file type "ZAP" located 8 bytes later at memory segment base +0075H.
+All remaining fields through "cr" are set to zero.  Note again
+that it is the programmer's responsibility to move this second
+file name and type to another area, usually a separate file
+control block, before opening the file which begins at
+memory segment base +005CH, due to the fact that the open operation
+will overwrite the second name and type.
+.pp
+If no file names are specified in the original command,
+then the fields beginning at memory segment base +005DH and +006DH
+contain blanks.  In all cases, the CLI translates lower
+case alphabetics to upper case to be consistent with
+the MP/M file naming conventions.
+.pp
+As an added convenience, the default buffer area at location
+memory segment base +0080H is initialized to the command line tail
+typed by the operator following the program name.  The first
+position contains the number of characters, with the characters
+themselves following the character count.
+.bp
+Given the above
+command line, the area beginning at memory segment base +0080H is
+initialized as follows:
+.sp
+.cp 4
+.li
+   Memory Segment Base +0080H:
+   +00 +01 +02 +03 +04 +05 +06 +07 +08 +09 +10 +11 +12 +13 +14
+    14 " " "B" ":" "X" "." "Z" "O" "T" " " "Y" "." "Z" "A" "P"
+.sp
+where the characters are translated to upper case ASCII with
+uninitialized memory following the last valid character.
+Again, it is the responsibility of the programmer to extract
+the information from this buffer before any file operations
+are performed, unless the default DMA address is explicitly
+changed.
+.pp
+The individual functions are described in detail in the sections
+which follow.
+.br
+

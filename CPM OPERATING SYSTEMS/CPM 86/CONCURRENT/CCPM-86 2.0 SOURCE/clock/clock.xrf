@@ -1,0 +1,298 @@
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE   1
+
+     1  
+     2                          title 'Clock process'
+     3  
+     4                          ;*****************************************************
+     5                          ;*
+     6                          ;*      CLOCK RSP
+     7                          ;*
+     8                          ;* The clock process will update the CCP/M-86 Time of
+     9                          ;* Day structure each time it returns from waiting for
+    10                          ;* the 'Second' System Flag (Flag 2).  When the minute
+    11                          ;* is updated, the 'minute' flag is set (Flag 3).
+    12                          ;*
+    13                          ;*****************************************************
+    14  
+    15                                  ; ccpm functions
+    16  
+    17     00E0                 ccpmint         equ     224     ; ccpm entry interrupt
+    18     0084                 dev_flagwait    equ     132     ; flagwait
+    19     0085                 dev_flagset     equ     133     ; flagset
+    20  
+    21     0068                 rlr             equ     68H     ; Ready List Root
+    22  
+    23     0028                 xiosentry       equ     28H     ; offset of double word pointer in
+    24                                                          ; the system data segment of XIOS entry
+    25     0008                 io_statline     equ     8       ; update XIOS status line
+    26  
+    27     007E                 tod_offset      equ     07Eh
+    28     0002                 sec_flag        equ     2
+    29     0003                 min_flag        equ     3
+    30  
+    31                                  ; TOD format
+    32  
+    33     0000                 tod_day         equ     word ptr 0
+    34     0002                 tod_hour        equ     byte ptr 2
+    35     0003                 tod_min         equ     byte ptr 3
+    36     0004                 tod_sec         equ     byte ptr 4
+    37  
+    38                                  ; PD fields
+    39  
+    40     0010                 p_uda   equ     10h     ; offset of UDA segment in PD
+    41     0030                 pdlen   equ     48      ; length of process descriptor
+    42  
+    43     0000                 ps_run  equ     0       ; PD run status
+    44     0002                 pf_keep equ     2       ; PD nokill flag
+    45  
+    46                                  ; RSP format
+    47  
+    48     0000                 rsp_top equ     0       ; rsp offset
+    49     0010                 rsp_pd  equ     010h    ; PD offset
+    50     0040                 rsp_uda equ     040h    ; UDA offset
+    51     0140                 rsp_bottom equ  140h    ; end rsp header
+    52  
+    53                          ;*****************************************************
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE   2
+
+    54  
+    55                          ;*
+    56                          ;*      CLOCK CODE SEGMENT
+    57                          ;*
+    58                          ;*****************************************************
+    59  
+    60                                  cseg
+    61                                  org     0
+    62  
+    63  
+    64   0000 CDE0C3            ccpm:   int ccpmint ! ret
+    65  
+    66                          clock:          ; Clock process starts here
+    67  
+    68   0003 8E1E0000                  mov ds,sysdat
+    69   0007 8B3668008E44              mov si,.rlr ! mov es,p_uda[si]  ; ES is never saved.
+    70        10
+    71                                                                  ; Note if other ccpm system calls
+    72                                                                  ; are added to this program, ES
+    73                                                                  ; may be changed.
+    74   000E BB7E00                    mov bx,tod_offset
+    75  
+    76                                          ; Loop forever
+    77                          clockloop:
+    78                                          ; BX -> TOD structure in SYSDAT
+    79                                          ; Wait for Seconds Flag
+    80   0011 B98400BA0200              mov cx,dev_flagwait ! mov dx,sec_flag
+    81   0017 53                        push bx
+    82   0018 E8E5FF       0000         call ccpm
+    83  
+    84                                          ; Call XIOS status line update.
+    85                                          ; ES=UDA, DS=system data segment
+    86   001B B80800                    mov ax,io_statline
+    87   001E 33C98BD1                  xor cx,cx ! mov dx,cx
+    88   0022 FF1E2800                  callf dword ptr .xiosentry
+    89  
+    90   0026 5B                        pop bx
+    91  
+    92                                          ; increment seconds
+    93   0027 F8                        clc
+    94   0028 8A4704                    mov al,tod_sec[bx]
+    95   002B FEC027884704              inc al ! daa ! mov tod_sec[bx],al
+    96  
+    97                                          ; check for minute mark
+    98  
+    99   0031 3C607303     0038         cmp al,60h ! jae update_min
+   100   0035 E9D9FF       0011             jmp clock_loop
+   101  
+   102                          update_min:
+   103                                          ; set minute flag
+   104  
+   105   0038 C6470400                  mov tod_sec[bx],0
+   106                          ;       mov cx,dev_flagset ! mov dx,min_flag
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE   3
+
+   107  
+   108                          ;       push bx ! call ccpm ! pop bx
+   109  
+   110                                          ; increment minute field of TOD
+   111  
+   112   003C F88A4703                  clc ! mov al,tod_min[bx]
+   113   0040 FEC027884703              inc al ! daa ! mov tod_min[bx],al
+   114  
+   115                                          ; check if hour
+   116  
+   117   0046 3C607303     004D         cmp al,60h ! jae update_hour
+   118   004A E9C4FF       0011             jmp clock_loop
+   119  
+   120                          update_hour:
+   121                                          ;update hour field
+   122  
+   123   004D C6470300                  mov tod_min[bx],0
+   124   0051 F88A4702                  clc ! mov al,tod_hour[bx]
+   125   0055 FEC027884702              inc al ! daa ! mov tod_hour[bx],al
+   126  
+   127                                          ; check for day
+   128  
+   129   005B 3C247303     0062         cmp al,24h ! jae update_day
+   130   005F E9AFFF       0011             jmp clock_loop
+   131  
+   132                          update_day:
+   133                                          ; update Day field
+   134  
+   135   0062 C6470200                  mov tod_hour[bx],0
+   136   0066 FF07                      inc tod_day[bx]
+   137   0068 E9A6FF       0011         jmp clock_loop           ; loop forever
+   138  
+   139                          ;*****************************************************
+   140                          ;*
+   141                          ;*      Data Segment
+   142                          ;*
+   143                          ;*****************************************************
+   144  
+   145                                  dseg
+   146                                  org     0
+   147  
+   148   0000 000000000000      sysdat  dw      0,0,0
+   149   0006 000000000000              dw      0,0,0
+   150   000C 00000000                  dw      0,0
+   151  
+   152                                  org     rsp_pd
+   153  
+   154   0010 00000000                  dw      0,0             ; link,thread
+   155   0014 00                        db      ps_run          ; status
+   156   0015 BE                        db      190             ; priority
+   157   0016 0200                      dw      pf_keep         ; flags
+   158   0018 434C4F434B20              db      'CLOCK   '      ; name
+   159        2020
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE   4
+
+   160  
+   161   0020 0400                      dw      offset uda/10h  ; uda seg
+   162   0022 00000000                  db      0,0,0,0         ; dsk,usr,ldsk,luser
+   163   0026 0000                      dw      0               ; mem partitions
+   164   0028 00000000                  dw      0,0             ; dvract,wait
+   165   002C 0000                      db      0,0             ; org,net
+   166   002E 0000                      dw      0               ; parent
+   167   0030 00000000                  db      0,0,0,0         ; cns,abort,cin,cout
+   168   0034 00000000                  db      0,0,0,0         ; lst,sf3,sf4,sf5
+   169   0038 000000000000              dw      0,0,0,0         ; reserved,pret,scratch
+   170        0000
+   171  
+   172                                  org     rsp_uda
+   173  
+   174   0040 000000000000      uda             dw      0,0,0,0                 ;0-7 note: no default DMA
+   175        0000
+   176   0048 000000000000                      dw      0,0,0,0                 ;8-fh
+   177        0000
+   178   0050 000000000000                      dw      0,0,0,0                 ;10-17
+   179        0000
+   180   0058 000000000000                      dw      0,0,0,0                 ;18-1f
+   181        0000
+   182   0060 000000000000                      dw      0,0,0,0                 ;20-27
+   183        0000
+   184   0068 000000000000                      dw      0,0,0,0                 ;28-2f
+   185        0000
+   186   0070 000000003A01                      dw      0,0,offset stack_top,0  ;30-37
+   187        0000
+   188   0078 000000000000                      dw      0,0,0,0                 ;38-3f
+   189        0000
+   190   0080 000000000000                      dw      0,0,0,0                 ;40-47
+   191        0000
+   192   0088 000000000000                      dw      0,0,0,0                 ;48-4f
+   193        0000
+   194   0090 000000000000                      dw      0,0,0,0                 ;50-57
+   195        0000
+   196   0098 000000000000                      dw      0,0,0,0                 ;58-5f
+   197        0000
+   198   00A0 01                                db      1                       ;60 INSYS <> 0
+   199                                                                          ;don't switch from
+   200                                                                          ;from UDA stack
+   201                                                                          ;on entry to SUP
+   202   00A1 00                                db      0
+   203  
+   204   00A2 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch            ;62-67
+   205   00A8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;68-6F
+   206        CCCC
+   207   00B0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;70
+   208        CCCC
+   209   00B8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   210        CCCC
+   211   00C0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;80
+   212        CCCC
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE   5
+
+   213  
+   214   00C8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   215        CCCC
+   216   00D0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;90
+   217        CCCC
+   218   00D8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   219        CCCC
+   220   00E0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;A0
+   221        CCCC
+   222   00E8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   223        CCCC
+   224   00F0 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;B0
+   225        CCCC
+   226   00F8 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   227        CCCC
+   228   0100 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;C0
+   229        CCCC
+   230   0108 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   231        CCCC
+   232   0110 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;D0
+   233        CCCC
+   234   0118 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   235        CCCC
+   236   0120 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;E0
+   237        CCCC
+   238   0128 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch
+   239        CCCC
+   240   0130 CCCCCCCCCCCC              dw      0cccch,0cccch,0cccch,0cccch     ;F0
+   241        CCCC
+   242   0138 CCCC                      dw      0cccch
+   243  
+   244   013A 0300              stack_top       dw      offset clock    ; code starting point
+   245   013C 0000                              dw      0               ; code seg - set by GENSYS
+   246   013E 0000                              dw      0               ; init. flags - set by GENSYS
+   247  
+   248                                                                  ; UDA is 100H bytes long
+   249                                  end
+   250  
+   251  
+   252  END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  2%
+CP/M ASM86 1.1  SOURCE: CLOCK.A86     Clock process                                                          PAGE 006
+
+CCPM             0000 L    64#   82 
+CCPMINT          00E0 N    17#   64 
+CLOCK            0003 L    66#  244 
+CLOCKLOOP        0011 L    77#  100   118   130   137 
+CS               SREG V 
+DEVFLAGSET       0085 N    19#
+DEVFLAGWAIT      0084 N    18#   80 
+DS               SREG V    68 
+ES               SREG V    69 
+IOSTATLINE       0008 N    25#   86 
+MINFLAG          0003 N    29#
+PDLEN            0030 N    41#
+PFKEEP           0002 N    44#  157 
+PSRUN            0000 N    43#  155 
+PUDA             0010 N    40#   69 
+RLR              0068 N    21#   69 
+RSPBOTTOM        0140 N    51#
+RSPPD            0010 N    49#  152 
+RSPTOP           0000 N    48#
+RSPUDA           0040 N    50#  172 
+SECFLAG          0002 N    28#   80 
+SS               SREG V 
+STACKTOP         013A V   186   244#
+SYSDAT           0000 V    68   148#
+TODDAY           0000 N    33#  136 
+TODHOUR          0002 N    34#  124   125   135 
+TODMIN           0003 N    35#  112   113   123 
+TODOFFSET        007E N    27#   74 
+TODSEC           0004 N    36#   94    95   105 
+UDA              0040 V   161   174#
+UPDATEDAY        0062 L   129   132#
+UPDATEHOUR       004D L   117   120#
+UPDATEMIN        0038 L    99   102#
+XIOSENTRY        0028 N    23#   88 

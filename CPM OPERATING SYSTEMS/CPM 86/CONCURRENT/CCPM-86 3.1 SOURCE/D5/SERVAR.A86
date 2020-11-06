@@ -1,0 +1,281 @@
+title	'Interrupt Driven Serial Variant'
+
+;****************************************
+;					*
+;      SERIAL VARIANT MODULE            *
+;      Last changed: 2/10/84            *
+;					*
+;****************************************
+
+include	ssboard.equ
+include i3board.equ
+include u2651.equ
+
+eject
+
+	dseg
+
+public	i3_xmit_int_vec
+public	bit_mask_tbl
+extrn	ocdesctbl:word
+
+	cseg
+
+public	char_init
+public	usart_on
+public	usart_off
+public	usart_select
+public	xmit_on
+public	xmit_off
+public	set_bit
+public	clear_bit
+
+
+;=========
+char_init:                                ;; Init consoles on the System Support
+;=========                                   and the Interfacer 3 board.
+
+                                          ;; do the System Support board
+	MOV	AL,01101110b	          ;; async, 16x, 8 bits, no parity, 
+                                          ;; even, 1 stop
+	OUT	ssmode,AL	          ;; set up mode register 1
+	MOV	AL,01111110b	          ;; 9600 baud
+	OUT	ssmode,AL	          ;; set up mode register 2
+	MOV	AL,00100111b	          ;; trans. on, dtr low, rec. on, 
+                                          ;; no break, no reset, rts low
+	OUT	sscmd,AL	          ;; set up command port
+
+	mov dl, 0                         ;; Do the Interfacer 3 board
+	mov cx, 8
+i3_init_loop:
+	mov al, dl
+	inc dl
+	call i3_init
+	loop i3_init_loop
+
+	mov al, i3_int_enable             ;; turn on all I3 recv interrupts
+	out I3_RCV_INT_MASK, al
+
+	not al                            ;; turn off all I3 Xmit interrupts
+	out I3_XMIT_INT_MASK, al
+
+	mov i3_xmit_int_vec, al           ;; initialize the bit vector
+
+i3_init:                                  ;; al = uart on I3 board to init
+                                          ;; async, 16x, 8 bits, no parity, 
+             				  ;; even, 1 stop, 9600 baud.
+	out	i3_select_reg, al
+	MOV	AL,01101110b
+	OUT	i3_uart_mode,AL	          ;; set up mode register 1
+	MOV	AL,01111110b		  ;; 9600 baud
+	OUT	i3_uart_mode,AL	          ;; set up mode register 2
+	MOV	AL,00100111b		  ;; Xmit on, dtr low, recv on, 
+                                          ;; no break, no reset, rts low
+	OUT	i3_uart_cmd,AL	          ;; set up command port
+
+	ret
+
+
+
+;========
+usart_on:
+;========
+;
+;	ENTRY:	bx -> Xmit Q control structure
+;
+
+	mov al, OUSART[bx]		;; Is the usart on the i3 board ?
+	cmp al, NO_SELECT 
+          je usrt_on1                   ;; No, must be on system support board.
+	mov al, 0			;; Yes, we must first select one of the
+	out I3_SELECT_REG, al	        ;; USARTS to get to int mask register.
+        mov al, O_BIT_MASK[bx]	        ;; Get the USART'S mask bit
+	or i3_xmit_int_vec, al	        ;; set our bit vector
+	mov al, i3_xmit_int_vec	        ;; set the interfacer 3's
+	out I3_XMIT_INT_MASK, al	;; interrupt mask register
+	  jmps usrt_on2
+
+usrt_on1:	                        ;; usart is on the SS board
+	in al, SLAVE_PIC_PORT + 1	;; get the PIC mask
+	and al, 0bfh			;; turn on the SS USART Xmit IR line
+	out SLAVE_PIC_PORT + 1, al	;; write to the PIC 
+usrt_on2:
+	ret
+
+
+
+;=========
+usart_off:
+;=========
+;
+;	ENTRY:	bx -> Xmit Q control structure
+;
+
+	  cmp OUSART[bx], NO_SELECT     ;; Is this the System Support board ?
+	    jne usrt_off1               ;; no, must be interfacer 3
+	                                ;; Turn off the Xmit interrupt at the PIC
+	    in al, SLAVE_PIC_PORT + 1	;; read the PIC's mask
+	    or al, 40h			;; turn off the SS USART Xmit int
+	    out SLAVE_PIC_PORT + 1, al	;; write the mask back to the PIC
+	    jmps usrt_off2	        ;; and exit
+
+usrt_off1:	                        ;; the Xmit Q is empty and the USART 
+                                        ;; is on the interfacer 3.
+	mov ah, O_BIT_MASK[bx]		;; get the interfacer 3's interrupt
+					;; mask register bit for this USART
+	not ah				;; we need to AND off the bit
+	mov al, i3_xmit_int_vec	        ;; get the interfacer 3's Xmit bit vector
+	and al,ah			;; turn off this USART in our bit vector
+	out I3_XMIT_INT_MASK, al	;; turn off the USART on the I3
+	mov i3_xmit_int_vec, al	        ;; save our new bit vector
+usrt_off2:
+	ret
+
+
+eject
+
+;============
+usart_select:
+;============
+;
+;	ENTRY:	al = usart number
+;
+
+	out I3_SELECT_REG, al
+	ret
+
+
+;============
+xmit_on:
+;============
+;;
+;;	ENTRY:	bx -> Recv Q control structure
+;;
+;;	EXIT:	The Interfacer 3's USART transmit intvec is enabled.
+;;              The USART number (U_NUMB) in the Q control structure is set.
+
+	pushf ! cli			;; interrupts off 
+
+	mov al, 0			;; We have to select a USART on the
+	out I3_SELECT_REG, al		;; interfacer 3 before we can query
+					;; the interrupt status register.
+	mov al, i3_xmit_int_vec	        ;; get the Xmit interrupt vector
+	or al, XINT_MASK[bx]		;; set this Usart's interrupt bit
+	mov i3_xmit_int_vec, al	        ;; in the Xmit interrupt vector
+	out I3_XMIT_INT_MASK, al	;;   and the interfacer 3's
+					;;    interrupt mask port
+
+	push bx				;; save the input Q control addr
+	mov bl, U_NUMB[bx]		;; get the usarts i3 number
+	xor bh, bh			;; clear the upper byte
+	inc bx				;; index above the SS usart
+	shl bx, 1			
+	mov bx, ocdesctbl[bx]		;; get the output Q control addr
+	and OFLAG[bx], not XOFF_PENDING	;; turn off the Xoff pending flag
+	pop bx				;; restore the input Q control addr
+	popf				;; turn the interrrupts back on
+
+	ret
+
+;============
+xmit_off:
+;============
+;;
+;;	ENTRY:	bx -> Recv Q control structure
+;;
+;;	EXIT:	The Interfacer 3's USART transmit intvec is disabled.
+;;              The USART number (U_NUMB) in the Q control structure is reset.
+;;		The Xoff pending flag is set in the output Q control
+;;		structure.
+
+	pushf ! cli			;; interrupts off 
+
+	mov al, 0			;; We have to select a USART on the
+	out I3_SELECT_REG, al		;; interfacer 3 before we can query
+					;; the interrupt status register.
+	mov al, i3_xmit_int_vec	        ;; get the Xmit interrupt vector
+	mov ah, XINT_MASK[bx]		;; get the Usarts interrupt bit
+	not ah				;; reset this Usart's interrupt bit
+	and al, ah			;;   in the Xmit interrupt vector
+	mov i3_xmit_int_vec, al	        ;;   and the interfacer 3's
+	out I3_XMIT_INT_MASK, al	;;    interrupt mask port
+
+	push bx				;; save the input Q control addr
+	mov bl, U_NUMB[bx]		;; get the usarts i3 number
+	xor bh, bh			;; clear the upper byte
+	inc bx				;; index above the SS usart
+	shl bx, 1			
+	mov bx, ocdesctbl[bx]		;; get the output Q control addr
+	or OFLAG[bx], XOFF_PENDING	;; turn on the Xoff pending flag
+	pop bx				;; restore the input Q control addr
+	popf				;; turn the interrrupts back on
+
+	ret
+
+
+;============
+set_bit:
+;============
+;;	ENTRY:	ah = Bit to set in the Q state word
+;;		bx -> Recv Q control structure
+;;
+;;	EXIT:	CMD_REG[bx] and the Usart's command register 
+;;		have the bits specified in ah set
+
+	push dx
+	pushf ! cli			;; synchronize command register images
+	mov al, U_NUMB[bx]		;; get the USART's number on the I3 bd
+	cmp al, SS_U                    ;; select the usart if it's on the 
+          je set_bit1                   ;; interfacer 3 board
+	out I3_SELECT_REG, al	        ;; do the select
+set_bit1:
+	mov al, CMD_REG[bx]		;; get the command resgisters image
+	or al, ah			;; or in the bit(s) 
+	mov CMD_REG[bx], al		;; put back the new image
+	xor dh,dh
+	mov dl, U_PORTC[bx]		;; get the command port address
+	out dx, al			;; send this image to the usart
+	popf
+	pop dx
+	ret
+
+
+;=========
+clear_bit:
+;;========
+;;
+;;	ENTRY:	ah = Bit to clear in the Q state word
+;;		bx -> Recv Q control structure
+;;
+;;	EXIT:	Q_STATE[bx] and the Usart's command register 
+;;		have the bits specified in ah cleared.
+
+	push dx
+	pushf ! cli			;; synchronize command register images
+	mov al, U_NUMB[bx]		;; get the USART's number on the I3 bd
+	cmp al, SS_U                    ;; select the usart if it's on the 
+	 je clr_bit1                    ;; interfacer 3 board
+	out I3_SELECT_REG, al	        ;; do the select
+clr_bit1:
+	mov al, CMD_REG[bx]		;; get the command resgisters image
+	not ah				;; create the AND mask
+	and al, ah			;; AND off the bits specfied
+	mov CMD_REG[bx], al		;; put back the new image
+	xor dh,dh
+	mov dl, U_PORTC[bx]		;; get the command port address
+	out dx, al			;; send this image to the usart
+	popf
+	pop dx
+	ret
+
+
+	dseg
+
+i3_xmit_int_vec	db	0
+
+bit_mask_tbl	db	80h, 40h, 20h, 10h, 08h, 04h, 02h, 01h
+
+
+	end
+
+

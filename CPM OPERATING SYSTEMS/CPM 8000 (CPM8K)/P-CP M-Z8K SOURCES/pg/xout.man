@@ -1,0 +1,273 @@
+.de pp
+.fi
+.sp1
+.ne2
+..
+.th x.out 5 "Object Module Format"
+.na
+.sh NAME
+
+x.out - Z8000 C Compiler, assembler, and link editor output
+.sh SYNOPSIS
+
+#include <x.out.h>
+.sh
+DESCRIPTION
+
+.ul
+x.out
+is the output file of the Z8000 C Compiler
+.ul
+c8k,
+assembler
+.ul
+a8k,
+and the link
+editor
+.ul
+l8k.
+The same format is used as input to the link editor.  It is capable
+of describing object modules both for the Z8001 and the Z8002.  The
+layout of the file is the folllowing:
+
+.in+15
+.nf
++----------------------+
+|       header         |
++----------------------+
+|       segment        |
+|     description      |
++----------------------+
+|      code and        |
+|        data          |
+|      segments        |
++----------------------+
+|     relocation       |
+|        data          |
+|    (if present)      |
++----------------------+
+|       symbol         |
+|       table          |
+|    (if present)      |
++----------------------+
+.fi
+.in-15
+
+There can be a multiplicity of code and data segments which will appear
+in the file in the order that they are described in the header.  The
+normal output of the linker will have all the code segments preceding
+the data segments,  but this may not necessarily be the case for output
+of the compiler and the assembler.
+.sp3
+Each of these sections will now be described.
+.bp
+.ul
+Header
+.nf
+
+struct x_hdr {
+	short	x_magic;   /* magic number */
+	short	x_nseg;    /* number of segments in file */
+	long	x_init;    /* length of initialized part of file */
+	long	x_reloc;   /* length of relocation part of file */
+	long	x_symb;    /* length of symbol table part of file */
+};
+
+
+.ul
+Segment Descriptions
+
+
+struct x_sg {
+	char	x_sg_no;	/* assigned number of segment */
+	char	x_sg_typ;	/* type of segment */
+	unsigned x_sg_len;	/* length of segment */
+}	x_sg[];			/* array of size x_nseg */
+
+
+
+
+
+Valid magic numbers:
+
+#define X_SU_MAGIC	0xEE00	/* segmented, non executable */
+#define	X_SX_MAGIC	0xEE01	/* segmented, executable */
+#define X_NU_MAGIC	0xEE02	/* non-seg, non executable */
+#define X_NXN_MAGIC	0xEE03	/* non-seg, executable, non-shared */
+#define X_NXS_MAGIC	0xEE07	/* non-seg, executable, shared */
+#define X_NXI_MAGIC	0xEE0B	/* non-seg, executable, split ID */
+
+.pp
+The number of segments in the file is a count of the number of entries in
+the array of segment information that immediately following the base
+portion of the header.
+The length of the initialized portion of the file is the byte count (which
+is always even) of the code, constant pool, and initialized data in the
+file.
+.pp
+The length of the relocation portion of the file is the byte count (always
+even) of the size of the relocation data.  If the file has been finally
+linked, this will normally be zero.
+The length of the symbol table portion of the file is the byte count (always
+even) of the size of the symbol table.  If the file has been stripped,
+this will be zero.
+.pp
+The segment number in the segment information array is either a
+pre-assigned segment number in the range of 0-127, or the number 255.
+A segment number of 255 indicates that it
+may be assigned any segment desired by the linker or the loader.
+.bp
+.pp
+The segment type indicates the content of the associated segments in
+the file in accordance with the following keys:
+
+.nf
+#define X_SG_BSS	1	/* non-initialized data segment,
+				   the corresponding portion of
+				   the file is not present */
+#define X_SG_STK	2	/* stack segment, no data in file */
+#define X_SG_COD	3	/* code segment */
+#define X_SG_CON	4	/* constant pool */
+#define X_SG_DAT	5	/* initialized data */
+#define X_SG_MXU	6	/* mixed code-data, not protectable */
+#define X_SG_MXP	7	/* mixed code-data, protectable */
+
+.pp
+The bss and stack types have no associated data in the file.
+The execution length is given by s_sg_len.
+.pp
+The mixed types are for convenience in "romming" code and data.
+Clearly no mixed segment is allowed if the Z8000 is being operated as a split
+I and D space machine.  A mixed type that is not protectable indicates
+that the code may need to store into the data items.  A mixed type that
+is protectable may be safely put into ROM.
+
+.ul
+Relocation Section
+.pp
+The relocation section of the file consists of a series of structures
+each describing some item to be relocated.  The relocation items are
+in the following form:
+
+.nf
+struct x_rel {		    /* relocation item */
+	char	x_rl_sgn;   /* segment with item to be relocated */
+	char	x_rl_flg;   /* relocation type (see below) */
+	unsigned x_rl_loc;  /* location of item to be relocated */
+	unsigned x_rl_bas;  /* number of (external) element in symbol table
+			       or (internal) segment by which to relocate */
+};
+
+.pp
+The segment number referred to in the preceding is the ordinal (starting
+with 0) of the segment, in this file, containing the item to be relocated.
+This number must be less than x_segn in the header.
+.pp
+The relocation flags are interpreted as follows:
+
+.nf
+#define X_RL_OFF	1   /* adjust a 16 bit offset value only */
+#define X_RL_SSG	2   /* adjust a short form seg plus offset */
+#define X_RL_LSG	3   /* adjust a long form (32 bit) seg plus off */
+#define X_RL_XOF	5   /* adjust a 16 bit offset by an external */
+#define X_RL_XSSG	6   /* adjust a short seg ref by an external */
+#define X_RL_XLSG	7   /* adjust a long seg ref by an external */
+
+.pp
+The first three cases above are references between segments in the current
+file, hence the relocation value is that of the relevant segment number
+where the segment number is that by which the segment is known in this file.
+The last three cases reference some item not defined in this file
+and must be made by reference to the symbol table.
+Note particularly that while provision is made for
+constructing a short external segment reference, there is no way that
+the C compiler can generate such.
+
+.ul
+Symbol Table
+
+.nf
+#define XNAMELN	8		/* length of a symbol */
+
+struct x_sym {
+	char	x_sy_sg;	/* the segment number */
+	char	x_sy_fl;	/* the type of entry */
+	unsigned x_sy_val;	/* the value of this entry */
+	char	x_sy_name[XNAMELN]; /* the symbol name, null padded */
+};
+
+
+.pp
+The segment number is the segment number (in this file) containing the
+symbol if it is defined in this file.  Tt is 255 if either the value is
+absolute, or the value is an external reference.
+.pp
+The type of entry is defined by the following flags:
+
+.nf
+#define X_SY_LOC	1	/* local symbol (for debug only) */
+#define X_SY_UNX	2	/* undefined external entry */
+#define X_SY_GLB	3	/* global definition */
+#define X_SY_SEG	4	/* segment name */
+
+.fi
+Interpretation of the flags:
+
+.in+20
+.ti-16
+local symbol -- this merely makes a symbol table entry for the use of
+the debugging system, and does not influence linking.
+
+.ti-16
+und external -- this represents a reference to an external symbol that
+should be present in some other module.  If the associated
+value field is not zero, however, the linker is requested
+to allocate space for it.
+
+.ti-16
+global       -- this represents a symbol (either absolute or relocatable)
+that is defined in the current module.
+
+.in-20
+The value field is either the amount of space to be allocated (for
+undefined external) or the offset in the segment where the symbol is
+located.
+
+
+.ul
+Segment Names
+
+.pp
+The default names for the standard sections are
+
+.in+10
+.nf
+__text         first (or only) text segment
+__text[1..]    subsequent text segments
+__data         first data segment
+__data[1..]    subsequent data segments
+__bss          first uninitialized data (bss) segment
+__bss[1...]    subsequent bss segments
+
+.in-10
+.fi
+.pp
+Of course, the assembler makes provision for naming segments.  This is
+for the purpose of prescribing to the loader which segments are to be
+jointly loaded.  However, the segment numbers that are assigned to the
+segments during assembly are not necessarily the final segment numbers
+that are produced by the loader.  There will be a loader provision for
+forcing the correspondence between segment names and numbers.
+
+.ul
+File Size
+
+.pp
+The size of the object file (in bytes) is given by
+
+.nf
+         sizeof( struct x_hdr )
+               + x_nseg * sizeof( struct x_sg )
+               + x_init
+               + x_reloc
+               + x_symb

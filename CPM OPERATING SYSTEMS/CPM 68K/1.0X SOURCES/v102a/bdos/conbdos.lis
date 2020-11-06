@@ -1,0 +1,352 @@
+1File: CONBDOS.C                                                           Page       1
+     1    
+     2   /********************************************************
+     3   *							*
+     4   *	CP/M-68K BDOS Character I/O Routines		*
+     5   *							*
+     6   *	This module does BDOS functions 1 thru 11	*
+     7   *							*
+     8   *	It contains the following functions which	*
+     9   *	are called from the BDOS main routine:		*
+    10   *		constat();				*
+    11   *		conin();				*
+    12   *		tabout();				*
+    13   *		rawconio();				*
+    14   *		prt_line();				*
+    15   *		readline();				*
+    16   *							*
+    17   *	Copyright (c) 1982 Digital Research, Inc.	*
+    18   *							*
+    19   ********************************************************/
+    20    
+    21   #include "bdosinc.h"
+    22    
+    23   #include "bdosdef.h"
+    24    
+    25   #include "biosdef.h"
+    26    
+    27    
+    28   #define   ctrlc  0x03
+    29   #define   ctrle  0x05
+    30   #define   ctrlp  0x10
+    31   #define   ctrlq  0x11
+    32   #define   ctrlr  0x12
+    33   #define   ctrls  0x13
+    34   #define   ctrlu  0x15
+    35   #define   ctrlx  0x18
+    36    
+    37   #define   cr      0x0d
+    38   #define   lf      0x0a
+    39   #define   tab     0x09
+    40   #define   rub     0x7f
+    41   #define   bs      0x08
+    42   #define   space   0x20
+    43    
+    44    
+    45   EXTERN	warmboot();		/* External function definition */
+    46    
+    47    
+    48   /******************/
+    49   /* console status */
+    50   /******************/
+    51    
+    52   BOOLEAN constat()
+    53   {
+    54       BSETUP
+    55    
+    56       return( GBL.kbchar ? TRUE : bconstat() );
+    57   }
+    58    
+    59   /********************/
+1File: CONBDOS.C                                                           Page       2
+    60   /* check for ctrl/s */
+    61   /* used internally  */
+    62   /********************/
+    63   conbrk()
+    64   {
+    65       REG UBYTE ch;
+    66       REG BOOLEAN stop;
+    67       BSETUP
+    68    
+    69       stop = FALSE;
+    70       if ( bconstat() ) do
+    71       {
+    72   	if ( (ch = bconin()) == ctrlc ) warmboot(1);
+    73   	if ( ch == ctrls ) stop = TRUE;
+    74   	else if (ch == ctrlq) stop = FALSE;
+    75   	else if (ch == ctrlp) GBL.lstecho = !GBL.lstecho;
+    76   	else 				/* Insert character in ring buffer  */
+    77   	{				/*				    */
+    78   	  if(GBL.kbchar < TBUFSIZ)	/* Room?			    */
+    79   	  {				/************************************/
+    80   	    *GBL.insptr++ = ch;		/* Yes, insert the character in buff*/
+    81   	     GBL.kbchar++;		/* Up count			    */
+    82   	  }				/************************************/
+    83   	}				/* Note if no room, character is    */
+    84   					/* Ignomiously discarded (!)	    */
+    85   					/************************************/
+    86       } while (stop);
+    87   }
+    88    
+    89    
+    90   /******************/
+    91   /* console output */
+    92   /* used internally*/
+    93   /******************/
+    94    
+    95   conout(ch)
+    96   REG UBYTE ch;
+    97   {
+    98       BSETUP
+    99    
+   100       conbrk();			/* check for control-s break */
+   101       bconout(ch);		/* output character to console */
+   102       if (GBL.lstecho) blstout(ch);	/* if ctrl-p on, echo to list dev */
+   103       if (ch >= ' ') GBL.column++;	/* keep track of screen column */
+   104       else if (ch == cr) GBL.column = 0;
+   105       else if (ch == bs) GBL.column--;
+   106   }
+   107    
+   108    
+   109   /*************************************/
+   110   /* console output with tab expansion */
+   111   /*************************************/
+   112    
+   113   tabout(ch)
+   114   REG UBYTE ch;		/* character to output to console	*/
+   115   {
+   116       BSETUP
+   117    
+   118       if (ch == tab) do
+1File: CONBDOS.C                                                           Page       3
+   119   	conout(' ');
+   120       while (GBL.column & 7);
+   121       else conout(ch);
+   122   }
+   123    
+   124   /*******************************/
+   125   /* console output with tab and */
+   126   /* control character expansion */
+   127   /*******************************/
+   128    
+   129   cookdout(ch)
+   130   REG UBYTE ch;		/* character to output to console	*/
+   131   {
+   132       if (ch == tab) tabout(ch);	/* if tab, expand it	*/
+   133       else
+   134       {
+   135   	if ( (UWORD)ch < (UWORD)' ' )
+   136   	{
+   137               conout( '^' );
+   138   	    ch |= 0x40;
+   139   	}
+   140       conout(ch);			/* output the character */
+   141       }
+   142   }
+   143    
+   144    
+   145   /*****************/
+   146   /* console input */
+   147   /*****************/
+   148    
+   149   UBYTE getch()		/* Get char from buffer or bios */
+   150   			/* For internal use only	*/
+   151   {
+   152       REG UBYTE temp;
+   153       BSETUP
+   154   
+   155       if(GBL.kbchar)
+   156       {
+   157   	temp = *GBL.remptr++;		/* Fetch the character    */
+   158   	GBL.kbchar--;			/* Decrement the count	  */
+   159   	if(!GBL.kbchar)			/* Gone to zero?	  */
+   160   		GBL.remptr = GBL.insptr = &(GBL.t_buff[0]);
+   161   	return(temp);
+   162       }
+   163       return( bconin() );			/* else get char from bios */
+   164   }
+   165    
+   166   UBYTE conin()		/* BDOS console input function */
+   167   {
+   168       REG UBYTE ch;
+   169       BSETUP
+   170    
+   171       conout( ch = getch() );
+   172       if (ch == ctrlp) GBL.lstecho = !GBL.lstecho;
+   173       return(ch);
+   174   }
+   175    
+   176   /******************
+   177   * raw console i/o *
+1File: CONBDOS.C                                                           Page       4
+   178   ******************/
+   179    
+   180   UBYTE rawconio(parm)	/* BDOS raw console I/O function */
+   181    
+   182   REG UWORD parm;
+   183   {
+   184       BSETUP
+   185    
+   186       if (parm == 0xff) return(getch());
+   187       else if (parm == 0xfe) return(constat());
+   188       else bconout(parm & 0xff);
+   189   }
+   190    
+   191    
+   192   /****************************************************/
+   193   /* print line up to delimiter($) with tab expansion */
+   194   /****************************************************/
+   195    
+   196   prt_line(p)
+   197   REG UBYTE *p;
+   198   {
+   199       BSETUP
+   200    
+   201       while( *p != GBL.delim ) tabout( *p++ );
+   202   }
+   203    
+   204    
+   205   /**********************************************/
+   206   /* read line with editing and bounds checking */
+   207   /**********************************************/
+   208    
+   209   /* Two subroutines first */
+   210    
+   211   newline(startcol)
+   212   REG UWORD startcol;
+   213   {
+   214       BSETUP
+   215    
+   216       conout(cr);			/* go to new line */
+   217       conout(lf);
+   218       while(startcol)
+   219       {
+   220   	conout(' ');
+   221   	startcol -= 1;		/* start output at starting column */
+   222       }
+   223   }
+   224    
+   225    
+   226   backsp(bufp, col)
+   227   /* backspace one character position 	*/
+   228   REG struct conbuf *bufp;	/* pointer to console buffer	*/
+   229   REG WORD col;			/* starting console column	*/
+   230   {
+   231       REG UBYTE	ch;		/* current character		*/
+   232       REG WORD 	i;
+   233       REG UBYTE	*p;		/* character pointer		*/
+   234       BSETUP
+   235    
+   236       if (bufp->retlen) --(bufp->retlen);
+1File: CONBDOS.C                                                           Page       5
+   237   				/* if buffer non-empty, decrease it by 1 */
+   238       i = UBWORD(bufp->retlen);	/* get new character count	*/
+   239       p = &(bufp->cbuf[0]);	/* point to character buffer	*/
+   240       while (i--)			/* calculate column position 	*/
+   241       {				/*  across entire char buffer	*/
+   242   	ch = *p++;		/* get next char		*/
+   243   	if ( ch == tab )
+   244   	{
+   245   	    col += 8;
+   246   	    col &= ~7;		/* for tab, go to multiple of 8 */
+   247   	}
+   248   	else if ( (UWORD)ch < (UWORD)' ' ) col += 2;
+   249   				/* control chars put out 2 printable chars */
+   250   	else col += 1;
+   251       }
+   252       while (GBL.column > col)
+   253       {
+   254   	conout(bs);		/* backspace until we get to proper column */
+   255   	conout(' ');
+   256   	conout(bs);
+   257       }
+   258   }
+   259    
+   260    
+   261   readline(p)			/* BDOS function 10 */
+   262   REG struct conbuf *p;
+   263   	
+   264   {
+   265       REG UBYTE ch;
+   266       REG UWORD i;
+   267       REG UWORD j;
+   268       REG UBYTE *q;
+   269       UWORD stcol;
+   270    
+   271       BSETUP
+   272    
+   273       stcol = GBL.column;		/* set up starting column */
+   274       if (GBL.chainp != NULL)	/* chain to program code  */
+   275       {
+   276   	i = UBWORD(*(GBL.chainp++));
+   277   	j = UBWORD(p->maxlen);
+   278   	if (j < i) i = j;		/* don't overflow console buffer! */
+   279   	p->retlen = (UBYTE)i;
+   280   	q = p->cbuf;
+   281   	while (i)
+   282   	{
+   283   	    cookdout( *q++ = *(GBL.chainp++) );
+   284   	    i -= 1;
+   285   	}
+   286   	GBL.chainp = NULL;
+   287   	return;
+   288       }
+   289    
+   290       p->retlen = 0;		/* start out with empty buffer */
+   291       while ( UBWORD(p->retlen) < UBWORD(p->maxlen) )
+   292       {				/* main loop for read console buffer */
+   293    
+   294   	if ( ((ch=getch()) == ctrlc) && !(p->retlen) )
+   295   	{
+1File: CONBDOS.C                                                           Page       6
+   296   	    cookdout(ctrlc);
+   297   	    warmboot(1);
+   298   	}
+   299    
+   300   	else if ( (ch == cr) || (ch == lf) )
+   301   	{				/* if cr or lf, exit */
+   302   	    conout(cr);
+   303   	    break;
+   304   	}
+   305    
+   306   	else if (ch == bs) backsp(p, stcol);	/* backspace */
+   307    
+   308   	else if (ch == rub)			/* delete character */
+   309   	{
+   310   	    if (GBL.echodel)
+   311   	    {
+   312   		if (p->retlen)
+   313   		{
+   314   		    i = UBWORD(--(p->retlen));
+   315   		    conout( p->cbuf[i] );
+   316   		}
+   317   	    }
+   318   	    else backsp(p, stcol);
+   319   	}
+   320    
+   321   	else if (ch == ctrlp) GBL.lstecho = !GBL.lstecho;
+   322   						/* control-p */
+   323   	else if (ch == ctrlx)			/* control-x */
+   324   	    do backsp(p,stcol); while (p->retlen);
+   325    
+   326   	else if (ch == ctrle) newline(stcol);	/* control-e */
+   327    
+   328   	else if (ch == ctrlu)			/* control-u */
+   329   	{
+   330   	    conout('#');
+   331   	    newline(stcol);
+   332   	    p->retlen = 0;
+   333   	}
+   334    
+   335   	else if (ch == ctrlr)			/* control-r */
+   336   	{
+   337   	    conout('#');
+   338   	    newline(stcol);
+   339   	    for (i=0; i < UBWORD(p->retlen); i++)
+   340   		    cookdout( p->cbuf[i] );
+   341   	}
+   342    
+   343   	else					/* normal character */
+   344   	    cookdout( p->cbuf[UBWORD((p->retlen)++)] = ch );
+   345       }
+   346   }

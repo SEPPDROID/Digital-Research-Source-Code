@@ -1,0 +1,950 @@
+1File: DIR.C                                                               Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /*	Pass 1 and pass 2 directive handling routines */
+     9   /*	code to handle conditional assembly directives */
+    10    
+    11   #include "as68.h"
+    12   #include "cout.h"
+    13    
+    14   long lseek();
+    15   int p1gi();
+    16   int p2gi();
+    17   int igrst();
+    18    
+    19   /*directive to define an opcode*/
+    20   hopd()
+    21   {
+    22    
+    23   	if(!lbt[0]) {
+    24   		xerr(4);		/*no label*/
+    25   		return;
+    26   	}
+    27   	setname();					/*move label into main table*/
+    28   	if((lblpt=lemt(oirt,TRUE))!=lmte) {
+    29   		xerr(5);				/*opcode redefined*/
+    30   		return;
+    31   	}
+    32   	mmte();						/*make main table entry*/
+    33   	expr(&p1gi);				/*get instruction format*/
+    34   	if(itype!=ITCN || ival<0 || ival>OPFF) {
+    35   		xerr(18);			/*illegal format specifier*/
+    36   		return;
+    37   	}
+    38   	lblpt->flags =| ival|SYIN;		/*remember format*/
+    39   	if(fchr != ',') {			/*field separator*/
+    40   		xerr(10);
+    41   		return;
+    42   	}
+    43   	expr(&p1gi);				/*get opcode value*/
+    44   	if(itype != ITCN) {
+    45   		xerr(17);		/*not a constant*/
+    46   		return;
+    47   	}
+    48   	lblpt->vl1 = ival;			/*put value in main table*/
+    49   	igrst();					/*ignore rest of statement-comment*/
+    50   }
+    51    
+    52   /* equate directive*/
+    53   hequ()
+    54   {
+    55   	if(lbt[0] == 0) {
+    56   		xerr(4);		/*no label*/
+    57   		return;
+    58   	}
+    59   	setname();
+1File: DIR.C                                                               Page       2
+    60   	if((lblpt=lemt(sirt,FALSE))!=lmte) {	/*aready there*/
+    61   		if(lbt[0] == '~') {	/*local symbol*/
+    62   			lblpt = lmte;
+    63   			mmte();
+    64   		}
+    65   	}
+    66   	else
+    67   		mmte();
+    68   	if(lblpt->flags&SYXR) {
+    69   		xerr(29);
+    70   		return;
+    71   	}
+    72   	lblpt->flags =| SYDF|SYEQ;	/*defined & equate*/
+    73   	equflg = 1;
+    74   	modelen = 4;
+    75   	expr(&p1gi);
+    76   	equflg = 0;
+    77   	if(itype == ITSY && ival.ptrw2->flags&SYER) {
+    78   		lblpt->flags =| SYER;	/*equated register*/
+    79   		ival = ival.ptrw2->vl1;
+    80   	}
+    81   	else if(itype != ITCN) {
+    82   		xerr(7);				/*not a constant*/
+    83   		return;
+    84   	}
+    85   	if (inoffset && reloc != ABS) {	/* [vlh] */
+    86   		xerr(11);
+    87   		return;
+    88   	}
+    89   	if(initflg)					/*doing symbol table initialization*/
+    90   		lblpt->flags =| SYIN;	/*internal symbol*/
+    91   	lblpt->vl1 = ival;
+    92   	if(reloc == DATA)			/*check relocation*/
+    93   	{
+    94   		lblpt->flags =| SYRA;	/*DATA relocatable*/
+    95   	}
+    96   	else if(reloc == TEXT)
+    97   		lblpt->flags =| SYRO;	/*TEXT relocatable*/
+    98   	else if(reloc == BSS)
+    99   		lblpt->flags =| SYBS;	/*BSS relocatable*/
+   100   	else if(fchr==',' && (fchr=gchr())=='r')
+   101   		lblpt->flags =| SYER;	/*equated register*/
+   102   	if (refpc)		/*[vlh] flag directive is pc relative */
+   103   		lblpt->flags =| SYPC;
+   104   	igrst();
+   105   }
+   106    
+   107   /* process dsect directive*/
+   108   hdsect()
+   109   {
+   110   	dorlst(DATA);
+   111   }
+   112    
+   113   dorlst(xrtyp)
+   114   {
+   115   	inoffset = 0;	/* [vlh] offset mode terminated my sect directive */
+   116   	chkeven();		/* May need to make pc even		  */
+   117   	dlabl();		/*define label on old base if there is one*/
+   118   	savelc[rlflg] = loctr;	/*save old base relocation*/
+1File: DIR.C                                                               Page       3
+   119   	rlflg = xrtyp;
+   120   	loctr = savelc[xrtyp];	/*set new base relocation ctr*/
+   121   	opitb();
+   122   	stbuf[0].itrl = itwc;
+   123   	wostb();
+   124   	igrst();
+   125   }
+   126    
+   127   /*process psect directive*/
+   128   hpsect()
+   129   {
+   130   	dorlst(TEXT);
+   131   }
+   132    
+   133   hbss()
+   134   {
+   135   	dorlst(BSS);
+   136   }
+   137    
+   138   /*make pc even*/
+   139   heven()
+   140   {
+   141   	modelen = 2;		/*Try to figure this one out...*/
+   142   	if(loctr&1) {		/*have to make it even*/
+   143   		dorlst(rlflg);
+   144   	}
+   145   	else {
+   146   		igrst();
+   147   	}
+   148   }
+   149    
+   150   /*process globl directive*/
+   151   hent()
+   152   {
+   153   	while(1) {
+   154   		gterm(TRUE);			/*get entry symbol*/
+   155   		if(itype!=ITSY) {		/*error if not symbol*/
+   156   			xerr(28);
+   157   			return;
+   158   		}
+   159   		if((lblpt=lemt(sirt,FALSE)) == lmte)	/*look up in main table*/
+   160   			mmte();						/*not there, make new entry*/
+   161   		else
+   162   			if(lblpt->flags&SYER)		/*already there*/
+   163   				uerr(29);
+   164   		lblpt->flags =| SYGL;			/*symbol is an entry*/
+   165   		if(lblpt->flags&SYXR) {			/*been thru hext code*/
+   166   			lblpt->flags =& ~(SYXR|SYDF);	/*reset for init of .comm*/
+   167   		}
+   168   		if (inoffset && reloc != ABS) {	/* [vlh] */
+   169   			xerr(11);
+   170   			return;
+   171   		}
+   172   		if(fchr == ',')					/*skip ',' between entries*/
+   173   			fchr = gchr();
+   174   		else {
+   175   			igrst();					/*statement finished*/
+   176   			return;
+   177   		}
+1File: DIR.C                                                               Page       4
+   178   	}
+   179   }
+   180    
+   181   /*process comm directive*/
+   182   hext()
+   183   {
+   184   	gterm(TRUE);					/*get external symbol*/
+   185   	if(itype!=ITSY) {				/*error if not symbol*/
+   186   		xerr(28);
+   187   		return;
+   188   	}
+   189   	if((lblpt=lemt(sirt,FALSE)) == lmte)	/*look up in main table*/
+   190   		mmte();						/*not there, make new entry*/
+   191   	else
+   192   		if(lblpt->flags&SYDF && (lblpt->flags&SYXR)==0)	/*already there*/
+   193   			uerr(29);
+   194   	lblpt->flags =| SYXR | SYDF;	/*symbol is an external*/
+   195   	mkextidx(lblpt);	/*put into external table*/
+   196   	if(fchr == ',') {				/*skip ',' between operands*/
+   197   		fchr = gchr();
+   198   		gterm(TRUE);
+   199   		if(itype != ITCN) {
+   200   			xerr(17);
+   201   			return;
+   202   		}
+   203   		lblpt->vl1.wd1 = ival;		/* # bytes of storage required*/
+   204   	}
+   205   	else
+   206   		lblpt->vl1.wd1 = 1;			/* default # bytes*/
+   207   	igrst();
+   208   }
+   209    
+   210   mkextidx(p)
+   211   struct symtab *p;
+   212   {
+   213    
+   214   	if(extindx >= EXTSZ) {	/*check for overflow of external symbol tbl*/
+   215   		rpterr("overflow of external table\n");
+   216   		endit();
+   217   	}
+   218   	p->vl1.wd2 = pexti - extbl;	/* external symbol index #*/
+   219   	*pexti++ = p;		/*save external in external table*/
+   220   	extindx++;
+   221   }
+   222    
+   223   /* end statement*/
+   224   hend()
+   225   {
+   226   	register short i;
+   227   	register int   j;
+   228    
+   229   	inoffset = 0;	/*[vlh] turn off inoffset mode*/
+   230   	lblpt = 0;	/*no label*/
+   231   	opitb();	/*output beginning of statement*/
+   232   	igrst();	/* [vlh] ignore operands */
+   233   	stbuf[0].itrl = itwc;	/*number of it entries*/
+   234   	wostb();	/*write out statement buffer*/
+   235   	for(i=0; i<ITBSZ; i++)
+   236   		doitwr(0);
+1File: DIR.C                                                               Page       5
+   237   	if(initflg) {
+   238   		putsymtab();
+   239   		printf("68000 assembler initialized\n");
+   240   		endit();
+   241   	}
+   242   	if((fchr=gchr())!=EOF) {
+   243   		rpterr("end statement not at end of source\n");
+   244   	}
+   245   	savelc[rlflg] = loctr;	/*last location on current reloc base*/
+   246   	fixunds();				/*make golbals and maybe undefineds external*/
+   247   	if(!didorg)				/*did not assign to location counter*/
+   248   		pass1a();			/*resolve short branches*/
+   249   	pass2();				/*assembler pass 2*/
+   250   }
+   251    
+   252   /* define storage given number of bytes*/
+   253   hds()
+   254   {
+   255   	dlabl();			/*define label maybe*/
+   256   	if (!inoffset)	/* [vlh] */
+   257   		opitb();		/*output it for beginning of statement*/
+   258   	refpc = 0;
+   259   	expr(&p1gi);
+   260   	if(itype!=ITCN) {
+   261   		xerr(17);		/*must be constant*/
+   262   		return;
+   263   	}
+   264   	if(reloc != ABS)  {
+   265   		xerr(9);		/*must be absolute*/
+   266   		return;
+   267   	}
+   268   	if (!inoffset) {	/* [vlh] don't generate it if in offset */
+   269   		opitoo();			/*output one operand*/
+   270   		stbuf[0].itrl = itwc;
+   271   		wostb();			/*write out statement buffer*/
+   272   		loctr =+ (ival*modelen);
+   273   	}
+   274   	igrst();
+   275   }
+   276    
+   277   /* make pc even if necessary for .dc and .ds */
+   278   chkeven()
+   279   {
+   280   	register char *pi;
+   281    
+   282   	if(modelen>1 && loctr&1) {
+   283   		pi = opcpt;
+   284   		opcpt = evenptr;
+   285   		opitb();
+   286   		stbuf[0].itrl = itwc;
+   287   		wostb();
+   288   		opcpt = pi;
+   289   		loctr++;
+   290   	}
+   291   }
+   292    
+   293   /* define byte directive*/
+   294   hdc()
+   295   {
+1File: DIR.C                                                               Page       6
+   296   	chkeven();
+   297   	hdata(modelen);
+   298   }
+   299    
+   300   /*
+   301    * define bytes or words of data
+   302    *	call with:
+   303    *		1 => defining bytes
+   304    *		2 => defining words
+   305    *		4 => defining long words
+   306    */
+   307   hdata(mul)
+   308   {
+   309   	dlabl();		/*define label*/
+   310   	opitb();		/*beginning of statement*/
+   311   	numops = 0;		/*initialize count for number of operands*/
+   312   	opito();		/*output it for operands*/
+   313   	stbuf[0].itrl = itwc;	/* # of it entries*/
+   314   	wostb();		/*write out statement buffer*/
+   315   	loctr =+ numops*mul;	/* count by bytes or words*/
+   316   }
+   317    
+   318   /* handle org statement*/
+   319   horg()
+   320   {
+   321   	register i;
+   322    
+   323   	if(rlflg==TEXT && loctr!=0)
+   324   		didorg++;	/*can't do branch optimization as separate pass now*/
+   325   	expr(&p1gi);	/*value of new relocation counter*/
+   326   	if(reloc != rlflg && reloc != ABS) {
+   327   		xerr(27);
+   328   		return;
+   329   	}
+   330   	if(ival < loctr) {
+   331   		xerr(40);		/*trying to go backwards*/
+   332   		return;
+   333   	}
+   334   	opcpt = orgptr;		/*org directive for pass 2*/
+   335   	opitb();
+   336   	opitoo();
+   337   	stbuf[0].itrl = itwc;
+   338   	wostb();
+   339   	loctr = ival;
+   340   	dlabl();		/*define label*/
+   341   }
+   342    
+   343   /* Assemble for mask2 (R9M), ignore... */
+   344   hmask2()	/* [vlh] */
+   345   {
+   346   	igrst();
+   347   }
+   348    
+   349   /* Define register list */
+   350   hreg()		/* [vlh] */
+   351   {
+   352   	int mask;
+   353   	if(lbt[0]==0) {
+   354   		xerr(4);		/*no label*/
+1File: DIR.C                                                               Page       7
+   355   		return;
+   356   	}
+   357   	setname();					/*move label into main table*/
+   358   	if((lblpt=lemt(sirt,FALSE))!=lmte) {
+   359   		xerr(5);				/*opcode redefined*/
+   360   		return;
+   361   	}
+   362   	if (inoffset)
+   363   		if (reloc != ABS) {
+   364   			xerr(11);
+   365   			return;
+   366   		}
+   367   	mmte();						/*make main table entry*/
+   368   	if ((mask = mkmask()) == -1) {
+   369   		xerr(6);
+   370   		return;
+   371   	}
+   372   	lblpt->flags =| SYDF|SYEQ|SYRM;	/* register mask, defined & equated */
+   373   	lblpt->vl1 = mask;
+   374   	igrst();
+   375   }
+   376    
+   377   int regmsk[] {0100000,040000,020000,010000,04000,02000,01000,0400,0200,
+   378   				0100,040,020,010,4,2,1};
+   379   /* make a register mask for the reg routine */
+   380   mkmask()	/* [vlh] */
+   381   {
+   382   	register int *p, i, j, mask;
+   383    
+   384   	p = &regmsk;	mask = 0;
+   385   	while ((i = chkreg()) != -1) {
+   386   		if (fchr == '-') {
+   387   			fchr = gchr();
+   388   			if ((j = chkreg()) == -1) {
+   389   				xerr(40);
+   390   				return(-1);
+   391   			}
+   392   			while (i <= j)
+   393   				mask =| p[i++];
+   394   		}
+   395   		else mask =| p[i];
+   396   		if (fchr != '/' && fchr != ',') break; /*[vlh] Signetics fix*/
+   397   		fchr = gchr();
+   398   	}
+   399   	return(mask);
+   400   }
+   401    
+   402   /* get a register # from file, return -1 if none or illegal */
+   403   chkreg()	/* [vlh] */
+   404   {
+   405   	register int i, j;
+   406    
+   407   	i = j = 0;
+   408   	if (fchr == 'a' || fchr == 'A')
+   409   		i = 8;
+   410   	else if (fchr != 'd' && fchr != 'r' && fchr != 'D' && fchr != 'R')
+   411   		return(-1);
+   412   	fchr = gchr();
+   413   	do {
+1File: DIR.C                                                               Page       8
+   414   		j = (j*10) + (fchr - '0');
+   415   		fchr = gchr();
+   416   	} while (isdigit(fchr));
+   417   	if (j < 0 || j > AREGHI) return(-1);
+   418   	i =+ j;
+   419   	if (i >= 0 && i <= AREGHI) return(i);
+   420   	else return(-1);
+   421   }
+   422    
+   423   /* Define constant block */
+   424   hdcb()		/* [vlh] */
+   425   {
+   426   	chkeven();	/* on even boundary if not byte block. */
+   427   	dlabl();		/* define label... */
+   428   	opitb();
+   429   	opito();
+   430   	stbuf[0].itrl = itwc;
+   431   	numops = stbuf[ITOP1].itop;
+   432   	loctr =+ numops * modelen;
+   433   	wostb();		/* write out statement buffer */
+   434   }
+   435    
+   436   /* Command line, similar to ds.b */
+   437   hcomline()	/* [vlh] */
+   438   {
+   439   	dlabl();			/*define label maybe*/
+   440   	modelen = 1;		/* byte store... */
+   441   	opitb();			/*output it for beginning of statement*/
+   442   	refpc = 0;
+   443   	expr(&p1gi);
+   444   	if(itype!=ITCN) {
+   445   		xerr(17);		/*must be constant*/
+   446   		return;
+   447   	}
+   448   	if(reloc != ABS)  {
+   449   		xerr(9);		/*must be absolute*/
+   450   		return;
+   451   	}
+   452   	opitoo();			/*output one operand*/
+   453   	stbuf[0].itrl = itwc;
+   454   	wostb();			/*write out statement buffer*/
+   455   	loctr =+ ival;
+   456   	igrst();
+   457   }
+   458    
+   459   /* Relocateable id record, ignore */
+   460   hidnt()	/* [vlh] */
+   461   {
+   462   	igrst();
+   463   }
+   464    
+   465   /* Define offsets */
+   466   hoffset()	/* [vlh] */
+   467   {
+   468   	inoffset = 1;
+   469   	expr(&p1gi);	/* get new location counter */
+   470   	if (itype != ITCN) {
+   471   		xerr(17);	/* constant required */
+   472   		return;
+1File: DIR.C                                                               Page       9
+   473   	}
+   474   	if (reloc != ABS) {
+   475   		xerr(9);	/* must be absolute */
+   476   		return;
+   477   	}
+   478   	loctr = ival;
+   479   	igrst();
+   480   }
+   481    
+   482   /* define sections: map to bss, text and data */
+   483   hsection()	/* [vlh] */
+   484   {
+   485   	inoffset = 0;	/* reseting section turns off offset mode */
+   486   	dlabl();		/* define label on old base if there is one */
+   487   	savelc[rlflg] = loctr;	/* save old base relocation */
+   488   	opitb();		/* intermediate table... */
+   489   	expr(&p1gi);	/* get section # */
+   490   	if (itype != ITCN) {
+   491   		xerr(17);	/* must be a constant */
+   492   		return;
+   493   	}
+   494   	if (ival > 15 || ival < 0) {
+   495   		xerr(9);	/* proper range 0..15 */
+   496   		return;
+   497   	}
+   498   	if (ival==14) rlflg = DATA;
+   499   	else if (ival==15) rlflg = BSS;
+   500   	else rlflg = TEXT;
+   501   	loctr = savelc[rlflg];
+   502   	stbuf[3].itop = loctr;		/* pass 1 location counter */
+   503   	stbuf[3].itrl = rlflg;		/* relocation base */
+   504   	stbuf[0].itrl = itwc;
+   505   	wostb();
+   506   	igrst();
+   507   }
+   508    
+   509   /* hopt -- ignore, set up assembler options */
+   510   hopt()	/* vlh */
+   511   {
+   512   	igrst();
+   513   }
+   514    
+   515   /****	Second pass directive handling routines ****/
+   516    
+   517   /* second pass end statement*/
+   518   send()
+   519   {
+   520   	register int i;
+   521    
+   522   	savelc[rlflg] = loctr;
+   523   	if(savelc[TEXT]&1) {
+   524   		rlflg = TEXT;
+   525   		outbyte(0,DABS);
+   526   		savelc[TEXT]++;
+   527   	}
+   528   	if(savelc[DATA]&1) {
+   529   		rlflg = DATA;
+   530   		outbyte(0,DABS);
+   531   		savelc[DATA]++;
+1File: DIR.C                                                               Page      10
+   532   	}
+   533   	if(savelc[BSS]&1) {
+   534   		savelc[BSS]++;
+   535   	}
+   536    
+   537   	ival = 0;
+   538   	reloc = ABS;
+   539   	ckeop(9);
+   540   	print(0);
+   541   	cpdata();			/*copy data to loader file*/
+   542   	osymt();			/*output symbol table*/
+   543   	myfflush(&tbuf);	/*flush text relocation bits*/
+   544   	cprlbits();			/*copy relocation bits*/
+   545   	myfflush(&lbuf);
+   546   	i = (sizeof couthd.ch_magic) + 3*(sizeof couthd.ch_tsize);
+   547   	if((lseek(lfn,(long)i,0) == -1) || write(lfn,&stlen,4) != 4)
+   548   		rpterr("I/O error on loader output file\n");
+   549   	endit();			/*end*/
+   550   }
+   551    
+   552   /*second pass define storage - ds*/
+   553   sds()
+   554   {
+   555   	print(0);
+   556   	if(rlflg == TEXT || rlflg==DATA) {
+   557   		expr(&p2gi);
+   558   		if(itype != ITCN) {
+   559   			uerr(13);
+   560   			return;
+   561   		}
+   562   		ival =* modelen;
+   563   		while(ival) {
+   564   			outbyte(0,DABS);
+   565   			loctr++;
+   566   			ival--;
+   567   		}
+   568   	}
+   569   	else
+   570   		loctr =+ stbuf[ITOP1].itop*modelen;		/*reserve storage*/
+   571   }
+   572    
+   573   /* second pass - define block storage, initialized */
+   574   sdcb()	/* [vlh] */
+   575   {
+   576   	register int pfg, i, hflg, len;
+   577    
+   578   	expr(&p2gi);
+   579   	if (itype != ITCN || reloc != ABS) {
+   580   		uerr(13);	/* must be absolute constant */
+   581   		return;
+   582   	}
+   583   	len = ival;
+   584   	expr(&p2gi);
+   585   	if (modelen==1 && (ival<-128 || ival>=256 || reloc != ABS)) {
+   586   		uerr(20);
+   587   		ival = 0;
+   588   		reloc = ABS;
+   589   	}
+   590   	while (len--) {
+1File: DIR.C                                                               Page      11
+   591   		if (modelen==1) {
+   592   			if (!hflg) {
+   593   				ins[i].hibyte = ival;
+   594   				outbyte(ival.wd2,DABS);
+   595   				hflg++;
+   596   			}
+   597   			else {
+   598   				ins[i++].lobyte = ival;
+   599   				outbyte(ival.wd2,DABS);
+   600   				hflg=0;
+   601   			}
+   602   			goto sdbl2;
+   603   		}
+   604   		else if (modelen==2) {
+   605   sdbl1:
+   606   			ins[i++] = ival.wd2;
+   607   			outword(ival.wd2, reloc);
+   608   sdbl2:
+   609   			if (i>3) {
+   610   				instrlen = i*2;
+   611   				print ((pfg++) ? 2 : 1);
+   612   				loctr =+ instrlen;
+   613   				i=0;
+   614   			}
+   615   		}
+   616   		else {		/* long word... */
+   617   			ins[i++] = ival.wd1;
+   618   			outword(ival.wd1,LUPPER);
+   619   			goto sdbl1;
+   620   		}
+   621   	}
+   622   	if (i) {	/* more printing */
+   623   		instrlen = i*2 - hflg;
+   624   		print ((pfg) ? 2 : 1);
+   625   		loctr =+ instrlen;
+   626   	}
+   627   }
+   628    
+   629   /*second pass data*/
+   630   sdsect()
+   631   {
+   632   	savelc[rlflg] = loctr;
+   633   	rlflg = DATA;
+   634   	loctr = savelc[DATA];
+   635   	print(0);			/*print the new location counter*/
+   636   }
+   637    
+   638   /*second pass text*/
+   639   spsect()
+   640   {
+   641   	savelc[rlflg] = loctr;
+   642   	rlflg = TEXT;
+   643   	loctr = savelc[TEXT];
+   644   	print(0);			/*print the new location counter*/
+   645   }
+   646    
+   647   sbss()
+   648   {
+   649   	savelc[rlflg] = loctr;
+1File: DIR.C                                                               Page      12
+   650   	rlflg = BSS;
+   651   	loctr = savelc[BSS];
+   652   	print(0);			/*print the new location counter*/
+   653   }
+   654    
+   655   /* make loctr even*/
+   656   seven()
+   657   {
+   658   	if(loctr&1) {
+   659   		if(rlflg==TEXT || rlflg==DATA)
+   660   			outbyte(0,DABS);
+   661   		loctr++;
+   662   	}
+   663   	print(0);
+   664   }
+   665    
+   666   /* second pass org*/
+   667   sorg()
+   668   {
+   669   	long l;
+   670    
+   671   	if(rlflg==TEXT || rlflg==DATA) {	/*must put out zeros*/
+   672   		l = stbuf[ITOP1].itop - loctr;	/*# zeroes to output*/
+   673   		ins[0] = 0;
+   674   		print(1);
+   675   		while(l > 0) {
+   676   			outbyte(0,DABS);
+   677   			loctr++;
+   678   			l--;
+   679   		}
+   680   	}
+   681   	else {	/*BSS*/
+   682   		loctr = stbuf[ITOP1].itop;		/*new location counter*/
+   683   		print(0);
+   684   	}
+   685   }
+   686    
+   687   /*
+   688    *second pass define data (words or bytes)
+   689    * call with
+   690    *	2 => defining words
+   691    *	1 => defining bytes
+   692    *	4 => defining long words
+   693    */
+   694   sdata(dtyp)
+   695   {
+   696   	register pfg,i;
+   697   	register hflg;
+   698    
+   699   	hflg = i = pfg = 0;
+   700   	while(1) {
+   701   		expr(&p2gi);			/*evaluate expression*/
+   702   		if(pitw < pnite)
+   703   			pitw--;		/*expr passed a token*/
+   704   		if(itype!=ITCN && reloc != EXTRN) {	/*must be constant*/
+   705   			uerr(13);
+   706   			ival=0;
+   707   			reloc = ABS;
+   708   		}
+1File: DIR.C                                                               Page      13
+   709   		if(reloc == EXTRN)
+   710   			reloc = (extref<<3)|EXTVAR;	/*gen extern reference*/
+   711   		if(dtyp==1) {			/*defining a byte*/
+   712   			if(ival<-128 || ival>=256 || reloc!=ABS) {		/*not a byte*/
+   713   				uerr(20);
+   714   				ival=0;
+   715   				reloc = ABS;
+   716   			}
+   717   			if(!hflg) {
+   718   				ins[i].hibyte = ival;
+   719   				outbyte(ival.wd2,DABS);
+   720   				hflg++;
+   721   			}
+   722   			else {
+   723   				ins[i++].lobyte = ival;
+   724   				hflg = 0;
+   725   				outbyte(ival.wd2,DABS);
+   726   			}
+   727   			goto sdal2;
+   728   		}
+   729   		else if(dtyp == 2) {	/*defining a word*/
+   730   sdal1:
+   731   			ins[i++] = ival.wd2;
+   732   			outword(ival.wd2, reloc);
+   733   sdal2:
+   734   			if(i>3) {
+   735   				instrlen = i*2;
+   736   				print ((pfg++) ? 2 : 1);
+   737   				loctr =+ instrlen;
+   738   				i=0;
+   739   			}
+   740   		}
+   741   		else {	/*long words*/
+   742   			ins[i++] = ival.wd1;
+   743   			outword(ival.wd1,LUPPER);
+   744   			goto sdal1;
+   745   		}
+   746   		if(!ckeop(15))	/*should be end of operand*/
+   747   			return;
+   748   		pitw++;
+   749   		if(ckein()) {
+   750   			if(hflg) {
+   751   				ins[i++].lobyte = 0;
+   752   			}
+   753   			if(i) {		/*more printing*/
+   754   				instrlen = i*2 - hflg;
+   755   				print ((pfg) ? 2 : 1);
+   756   				loctr =+ instrlen;
+   757   			}
+   758   			return;
+   759   		}
+   760   	}
+   761   }
+   762    
+   763   sdc()
+   764   {
+   765   	sdata(modelen);
+   766   }
+   767    
+1File: DIR.C                                                               Page      14
+   768   ssection()	/* [vlh] */
+   769   {
+   770   	int sect;
+   771    
+   772   	sect = stbuf[3].itrl;
+   773   	if (sect==DATA) sdsect();
+   774   	else if (sect==BSS) sbss();
+   775   	else spsect();
+   776   }
+   777    
+   778   /*define word statement*/
+   779   sdw()
+   780   {
+   781   	sdata(0);	/*defining words*/
+   782   }
+   783   /****	Conditional assembly directives ****/
+   784    
+   785   hifeq()	/* [vlh] */
+   786   {
+   787   	if (!acok()) return;
+   788   	if (ival) {
+   789   		if (ca_true) ca_level = ca;
+   790   		ca_true = 0;
+   791   	}
+   792   	ca++;
+   793   }
+   794    
+   795   hifne()	/* [vlh] */
+   796   {
+   797   	if (!acok()) return;
+   798   	if (!ival) {
+   799   		if (ca_true) ca_level = ca;
+   800   		ca_true = 0;
+   801   	}
+   802   	ca++;
+   803   }
+   804    
+   805   hiflt()	/* [vlh] */
+   806   {
+   807   	if (!acok()) return;
+   808   	if (ival >= 0) {
+   809   		if (ca_true) ca_level = ca;
+   810   		ca_true = 0;
+   811   	}
+   812   	ca++;
+   813   }
+   814    
+   815   hifle()	/* [vlh] */
+   816   {
+   817   	if (!acok()) return;
+   818   	if (ival > 0) {
+   819   		if (ca_true) ca_level = ca;
+   820   		ca_true = 0;
+   821   	}
+   822   	ca++;
+   823   }
+   824    
+   825   hifgt()	/* [vlh] */
+   826   {
+1File: DIR.C                                                               Page      15
+   827   	if (!acok()) return;
+   828   	if (ival <= 0) {
+   829   		if (ca_true) ca_level = ca;
+   830   		ca_true = 0;
+   831   	}
+   832   	ca++;
+   833   }
+   834    
+   835   hifge()	/* [vlh] */
+   836   {
+   837   	if (!acok()) return;
+   838   	if (ival < 0) {
+   839   		if (ca_true) ca_level = ca;
+   840   		ca_true = 0;
+   841   	}
+   842   	ca++;
+   843   }
+   844    
+   845   hifc()	/* [vlh] */
+   846   {
+   847   	if (!cmp_ops()) {
+   848   		if (ca_true) ca_level = ca;
+   849   		ca_true = 0;
+   850   	}
+   851   	ca++;
+   852   }
+   853    
+   854   hifnc()	/* [vlh] */
+   855   {
+   856   	if (cmp_ops()) {
+   857   		if (ca_true) ca_level = ca;
+   858   		ca_true = 0;
+   859   	}
+   860   	ca++;
+   861   }
+   862    
+   863   hendc()	/* [vlh] */
+   864   {
+   865   	if (!ca) {
+   866   		xerr(25);	/* unexpected endc */
+   867   		return;
+   868   	}
+   869   	ca--;
+   870   	if (!ca_true)
+   871   		if (ca_level == ca) ca_true = 1;
+   872   	igrst();
+   873   }
+   874   hpage()
+   875   {
+   876   	opitb();		/* Output beginning */
+   877   	wostb();		/* Write out buffer */
+   878   	igrst();		/* Ignore rest of line */
+   879   }
+   880   spage()
+   881   {
+   882   	print(0);		/* Print the directive */
+   883   	xline = LPP;		/* Force page on next print */
+   884   	page();
+   885   }
+1File: DIR.C                                                               Page      16
+   886   acok()
+   887   {
+   888   	expr(&p1gi);
+   889   	if (itype != ITCN) {
+   890   		xerr(7);	/* must be a constant */
+   891   		return(0);
+   892   	}
+   893   	if (reloc != ABS) {
+   894   		xerr(11);	/* must be absolute, no forward references */
+   895   		return(0);
+   896   	}
+   897   	igrst();
+   898   	return(1);
+   899   }
+   900    
+   901   cmp_ops()
+   902   {
+   903   	char str1[25], str2[25];
+   904   	register int len1, len2;
+   905    
+   906   	if (fchr != '\'') { xerr(9); return(0); }
+   907   	len1 = len2 = 0;
+   908   	while (fchr = gchr()) {
+   909   		if (fchr == '\'') break;
+   910   		if (fchr == EOLC) return(0);
+   911   		str1[len1++] = fchr;
+   912   	}
+   913   	if ((fchr=gchr()) != ',') {	xerr(9); return; }
+   914   	if ((fchr=gchr()) != '\'') { xerr(10); return;}
+   915   	while (fchr = gchr()) {
+   916   		if (fchr == '\'') break;
+   917   		if (fchr == EOLC) return(0);
+   918   		str2[len2++] = fchr;
+   919   	}
+   920   	igrst();
+   921   	if (len1 != len2) return(0);
+   922   	str1[len1] = str2[len2] = NULL;
+   923   	if (strcmp(str1,str2) == 0) return(1);
+   924   	return(0);
+   925   }
+   926    
+   927   strcmp(s,t)
+   928   register char *s, *t;
+   929   {
+   930   	for( ; *s == *t; s++, t++ )
+   931   		if( *s == '\0' )
+   932   			return(0);
+   933   	return( *s - *t );
+   934   }

@@ -1,0 +1,364 @@
+1File: UTIL.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #include "cskel.h"
+    10    
+    11   /* xnalloc - allocate address-indexed node*/
+    12   char *xnalloc(type,ar,off,xr,xt)	/* returns ptr to node alloced*/
+    13   int type;						/* data type*/
+    14   int ar;							/* address register*/
+    15   int off;						/* 8-bit offset*/
+    16   int xr;							/* index register*/
+    17   int xt;							/* index register type*/
+    18   {
+    19   	register struct indexnode *xp;
+    20    
+    21   	xp = talloc(sizeof(*xp));
+    22   	xp->t_op = SYMBOL;
+    23   	xp->t_type = type;
+    24   	xp->t_sc = INDEXED;
+    25   	xp->t_reg = ar;
+    26   	xp->t_su = SU_ADDR;
+    27   	xp->t_offset = off;
+    28   	xp->t_xreg = xr;
+    29   	xp->t_xtype = xt;
+    30   	return(xp);
+    31   }
+    32    
+    33   /* tcopy - expression tree copy*/
+    34   char *tcopy(tp)							/* returns ptr to copied tree*/
+    35   struct tnode *tp;
+    36   {
+    37   	register char *p;
+    38    
+    39   	switch( tp->t_op ) {
+    40    
+    41   	case SYMBOL:
+    42   		if( tp->t_sc == EXTERNAL || tp->t_sc == EXTOFF )
+    43   			p = cenalloc(tp->t_type,tp->t_sc,tp->t_symbol);
+    44   		else {
+    45   			p = snalloc(tp->t_type,tp->t_sc,tp->t_offset,0,0);
+    46   			p->t_label = tp->t_label;
+    47   		}
+    48   		p->t_offset = tp->t_offset;
+    49   		p->t_reg = tp->t_reg;
+    50   		return(p);
+    51    
+    52   	case CINT:
+    53   		return(cnalloc(tp->t_type,tp->t_value));
+    54    
+    55   	case CLONG:
+    56   		return(lcnalloc(tp->t_type,tp->t_lvalue));
+    57    
+    58   	case CFLOAT:		/*[vlh] 3.4 */
+    59   		return(fpcnalloc(tp->t_type,tp->t_lvalue));
+1File: UTIL.C                                                              Page       2
+    60    
+    61   	case DCLONG:
+    62   		p = lcnalloc(tp->t_type,tp->t_lvalue);
+    63   		p->t_op = DCLONG;
+    64   		return(p);
+    65    
+    66   	default:
+    67   		if( binop(tp->t_op) )
+    68   			return(tnalloc(tp->t_op,tp->t_type,0,0,tcopy(tp->t_left),
+    69   					tcopy(tp->t_right)));
+    70   		if( unaryop(tp->t_op) )
+    71   			return(tnalloc(tp->t_op,tp->t_type,0,0,tcopy(tp->t_left),
+    72   					null));
+    73   		error("tcopy op=%d",tp->t_op);
+    74   		return(tp);
+    75   	}
+    76   }
+    77    
+    78   /* outaexpr - output address expression*/
+    79   outaexpr(tp,flags)						/* returns - none*/
+    80   struct tnode *tp;						/* pointer to tree*/
+    81   int flags;								/* flags (IMMED,LOFFSET,...)*/
+    82   {
+    83   	register int off, reg, lab;
+    84   	long l;
+    85    
+    86   	if( tp->t_op == ADDR ) {
+    87   		tp = tp->t_left;
+    88   		putchar('#');
+    89   	}
+    90   	off = tp->t_offset;
+    91   	reg = tp->t_reg;
+    92   	lab = tp->t_label;
+    93   	switch( tp->t_op ) {
+    94   	
+    95   	case AUTOINC:
+    96   		printf("(R%d)+",reg);
+    97   		break;
+    98   	
+    99   	case AUTODEC:
+   100   		printf("-(R%d)",reg);
+   101   		break;
+   102   	
+   103   	case CINT:
+   104   		if( flags & IMMED )
+   105   			putchar('#');
+   106   		printf("%d",tp->t_value);
+   107   		break;
+   108   	
+   109   	case DCLONG:
+   110   	case CLONG:
+   111   	case CFLOAT:		/*[vlh] 3.4 */
+   112   		if( flags & IMMED )
+   113   			putchar('#');
+   114   		outlval(tp->t_lvalue);
+   115   		break;
+   116   	
+   117   	case SYMBOL:
+   118   		if( off ) {
+1File: UTIL.C                                                              Page       3
+   119   			switch( tp->t_sc ) {
+   120   	
+   121   			default:
+   122   				printf("%d+",off);
+   123   				break;
+   124    
+   125   			case REGOFF:
+   126   				printf("%d",off);
+   127   			case CINDR:
+   128   			case CLINDR:
+   129   			case CFINDR:	/* [vlh] 3.4 */
+   130   			case INDEXED:
+   131   				break;
+   132    
+   133   			case REGISTER:
+   134   				error("invalid register expression");
+   135   				break;
+   136   			}
+   137   		}
+   138   		switch( tp->t_sc ) {
+   139   	
+   140   		case REGISTER:
+   141   			printf("R%d",reg);
+   142   			break;
+   143   	
+   144   		case REGOFF:
+   145   			printf("(R%d)",reg);
+   146   			break;
+   147   	
+   148   		case EXTERNAL:
+   149   			printf("_%.8s",tp->t_symbol);
+   150   			break;
+   151   	
+   152   		case EXTOFF:
+   153   			printf("_%.8s(R%d)",tp->t_symbol,reg);
+   154   			break;
+   155   	
+   156   		case STATIC:
+   157   			printf("L%d",lab);
+   158   			break;
+   159   	
+   160   		case STATOFF:
+   161   			printf("L%d(R%d)",lab,reg);
+   162   			break;
+   163    
+   164   		case INDEXED:
+   165   			printf("%d(R%d,R%d",off,reg,tp->t_xreg);
+   166   			outatype(tp->t_xtype);
+   167   			putchar(')');
+   168   			break;
+   169    
+   170   		case CINDR:
+   171   			printf("%d",off);
+   172   			break;
+   173   	/*
+   174   	 * the following will work on: PDP-11, 68000, IBM-360, VAX, etc.
+   175   	 * it will not work on word machines or on machines where either
+   176   	 * longs two ints or two shorts.
+   177   	 */
+1File: UTIL.C                                                              Page       4
+   178   		case CLINDR:
+   179   		case CFINDR:	/* [vlh] 3.4 */
+   180   			l.hiword = tp->t_offset;
+   181   			l.loword = tp->t_ssp;
+   182   			outlval(l);
+   183   			break;
+   184   	
+   185   		default:
+   186   			error("invalid storage class %d\n",tp->t_sc);
+   187   			break;
+   188   		}
+   189   		break;
+   190    
+   191   	default:
+   192   		error("invalid operator %d\n",tp->t_op);
+   193   		break;
+   194   	}
+   195   }
+   196    
+   197   /* outlval - output long value*/
+   198   /*		This is a big pain because the PDP-11 doesn't do long divides*/
+   199   /*		in hardware.*/
+   200   outlval(lval)
+   201   long lval;
+   202   {
+   203   	char digs[8];
+   204   	register int i, c;
+   205    
+   206   	i = 0;
+   207   	do {
+   208   		digs[i++] = lval & 0xf;
+   209   		lval =>> 4;
+   210   		lval =& 0xfffffff;
+   211   	} while ( lval );
+   212   	putchar('$');
+   213   	while( --i >= 0 ) {
+   214   		c = digs[i];
+   215   		putchar(c>=10?c+('a'-10):c+'0');
+   216   	}
+   217   }
+   218    
+   219   /* outtype - output 68000 type (null, .b, .l) depending on data type*/
+   220   outtype(type)
+   221   int type;
+   222   {
+   223   	if( isfloat(type) )
+   224   		printf(".l");
+   225   	else if( longorptr(type) )
+   226   		printf(".l");
+   227   	else if( type == CHAR )
+   228   		printf(".b");
+   229   }
+   230    
+   231   /* outatype - output address type (.l or null) depending on data type*/
+   232   outatype(type)
+   233   int type;
+   234   {
+   235   	if( longorptr(type) || isfloat(type) )
+   236   		printf(".l");
+1File: UTIL.C                                                              Page       5
+   237   }
+   238    
+   239   /* outextend - output register extension to long depending on type*/
+   240   outextend(tp,type,reg)						/* returns - none*/
+   241   struct tnode *tp;							/* tree to convert from*/
+   242   int type;									/* type to convert to*/
+   243   int reg;									/* register to convert*/
+   244   {
+   245   	if( (isdreg(reg)) && !(longorptr(tp->t_type)) && (longorptr(type)) ) {
+   246   		if( unsign(tp->t_type) )
+   247   			outuext(reg);
+   248   		else
+   249   			outext(reg);
+   250   	}
+   251   }
+   252    
+   253   /* outrr - output register to register instruction*/
+   254   outrr(ins,r1,r2,tp)
+   255   char *ins;
+   256   int r1;
+   257   int r2;
+   258   struct tnode *tp;
+   259   {
+   260   	printf("%s",ins);
+   261   	if( isareg(r1) || isareg(r2) )
+   262   		outatype(tp->t_type);
+   263   	else
+   264   		outtype(tp->t_type);
+   265   	printf(" R%d,R%d\n",r1,r2);
+   266   }
+   267    
+   268   /* outmovr - output "move[type] R1,R2" instruction*/
+   269   outmovr(r1,r2,tp)
+   270   int r1;
+   271   int r2;
+   272   struct tnode *tp;
+   273   {
+   274   	if( r1 != r2 )
+   275   		outrr("move",r1,r2,tp);
+   276   }
+   277    
+   278   /* outcmpm - output "cmpm[type] (R1)+,(R2)+"*/
+   279   outcmpm(tp)
+   280   struct tnode *tp;
+   281   {
+   282   	printf("cmpm");
+   283   	outtype(tp->t_left->t_type);
+   284   	printf(" (R%d)+,(R%d)+\n",tp->t_left->t_reg,tp->t_right->t_reg);
+   285   }
+   286    
+   287   /* outcreg - output reference to compiler temp register*/
+   288   outcreg(reg)
+   289   int reg;
+   290   {
+   291   	if( (dreg(reg)) > HICREG )
+   292   		error("expression too complex");
+   293   	printf("R%d",reg);
+   294   }
+   295    
+1File: UTIL.C                                                              Page       6
+   296   /* outcmp0 - output a compare with 0, special for address register*/
+   297   outcmp0(reg,tp)
+   298   int reg;
+   299   struct tnode *tp;
+   300   {
+   301   	if( isareg(reg) ) {
+   302   		printf("cmp");
+   303   		outatype(tp->t_type);
+   304   		printf(" #0,R%d\n",reg);
+   305   	}
+   306   	else {
+   307   		printf("tst");
+   308   		outtype(tp->t_type);
+   309   		printf(" R%d\n",reg);
+   310   	}
+   311   }
+   312    
+   313   /* outrpush - output "move[type] R1,[-](sp)"*/
+   314   outrpush(reg,tp,pflag)
+   315   int reg;
+   316   struct tnode *tp;
+   317   int pflag;
+   318   {
+   319   	printf("move");
+   320   	outatype(tp->t_type);
+   321   	printf(" R%d,%c(sp)\n",reg,pflag?'-':'\0');
+   322   }
+   323    
+   324   outdbra(reg,lab)
+   325   int reg;
+   326   int lab;
+   327   {
+   328   	printf("dbra R%d,L%d\n",reg,lab);
+   329   }
+   330    
+   331   /* cenalloc - code generator external node allocation*/
+   332   /*		This may be coalesced into enalloc in parser.*/
+   333   char *cenalloc(type,sc,sym)		/* returns ptr to node alloced*/
+   334   int type;						/* type of symbol*/
+   335   int sc;							/* storage class*/
+   336   char *sym;						/* symbol name*/
+   337   {
+   338   	register struct extnode *ep;
+   339    
+   340   	ep = talloc(sizeof(*ep));
+   341   	ep->t_op = SYMBOL;
+   342   	ep->t_type = type;
+   343   	ep->t_sc = sc;
+   344   	ep->t_su = 0;
+   345   	ep->t_offset = 0;
+   346   	symcopy(sym,ep->t_symbol);
+   347   	return(ep);
+   348   }
+   349    
+   350   /*popstack - clear off the stack after a call if necessary */
+   351   popstack(nb)
+   352   {
+   353   	if (nb > 0 && nb <= 8)
+   354   		printf("addq.l #%d,sp\n",nb);
+1File: UTIL.C                                                              Page       7
+   355   	else if (nb > 0)
+   356   		printf("adda.l #%d,sp\n",nb);
+   357   }

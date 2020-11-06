@@ -1,0 +1,437 @@
+1File: MAIN.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   char *version "@(#) c168 code generator 4.0 - Feb 10, 1983";
+     9    
+    10   #include "cgen.h"
+    11   #include "cskel.h"
+    12   char *opap;
+    13   int errflg;
+    14   int nextlabel	10000;
+    15   char *readtree();
+    16   char *readsym();
+    17    
+    18    
+    19   /* main - main routine, handles arguments and files*/
+    20   main(argc,argv)						/* returns - none*/
+    21   int argc;							/* arg count*/
+    22   char **argv;						/* arg pointers*/
+    23   {
+    24   	register char *q;
+    25   	register int i;
+    26    
+    27   #ifdef VERSADOS
+    28   	lflag++;
+    29   #endif
+    30   	for( i = 3; i < argc; i++ ) {
+    31   		q = argv[i];
+    32   		if( *q++ != '-' )
+    33   			usage(argc,argv,1);
+    34   		while( 1 ) {
+    35   			switch( *q++ ) {
+    36    
+    37   			case 'D':
+    38   			case 'd':
+    39   				dflag++;
+    40   				continue;
+    41    
+    42   			case 'L':
+    43   			case 'l':
+    44   				lflag++;
+    45   				continue;
+    46    
+    47   			case 'E':
+    48   			case 'e':
+    49   				eflag++;
+    50   				continue;
+    51    
+    52   			case 'F':
+    53   			case 'f':
+    54   				fflag++;
+    55   				continue;
+    56    
+    57   			case 'M':
+    58   			case 'm':
+    59   				mflag++;
+1File: MAIN.C                                                              Page       2
+    60   				continue;
+    61    
+    62   			case 'O':
+    63   			case 'o':
+    64   				oflag++;
+    65   				continue;
+    66    
+    67   			case 'C':
+    68   			case 'c':
+    69   				cflag++;
+    70   				continue;
+    71    
+    72   			case '\0':
+    73   				break;
+    74    
+    75   			default:
+    76   				usage(argc,argv,2);
+    77   			}
+    78   			break;
+    79   		}
+    80   	}
+    81   	if( argc < 3 )
+    82   		usage(argc,argv,3);
+    83   	if( fopen(argv[1],&ibuf,0) < 0 )	/* 3rd arg for versados */
+    84   		ferror("can't open %s\n",argv[1]);
+    85   	if( fcreat(argv[2],&obuf,0) < 0 )	/* 3rd arg for versados */
+    86   		ferror("can't create %s\n",argv[2]);
+    87   	readicode();
+    88   	v6flush(&obuf);
+    89   	exit(errcnt!=0);
+    90   }
+    91    
+    92   /* readicode - read intermediate code and dispatch output*/
+    93   /*		This copies assembler lines beginning with '(' to assembler*/
+    94   /*		output and builds trees starting with '.' line.*/
+    95   readicode()								/*returns - none*/
+    96   {
+    97   	register int c;
+    98   	register struct tnode *tp;
+    99    
+   100   	while( (c=getc(&ibuf)) > 0 ) {
+   101   		switch(c) {
+   102    
+   103   		case '.':
+   104   			lineno = readint();
+   105   			opap = exprarea;
+   106   			if( tp = readtree() ) {
+   107   #ifndef	NODEBUG
+   108   				if( cflag )
+   109   					putexpr("readicode",tp);
+   110   #endif
+   111   				switch( tp->t_op ) {
+   112    
+   113   				case INIT:
+   114   					outinit(tp->t_left);
+   115   					break;
+   116    
+   117   				case CFORREG:
+   118   					outcforreg(tp->t_left);
+1File: MAIN.C                                                              Page       3
+   119   					break;
+   120    
+   121   				case IFGOTO:
+   122   					outifgoto(tp->t_left,tp->t_type,tp->t_su);
+   123   					break;
+   124    
+   125   				default:
+   126   					outexpr(tp);
+   127   					break;
+   128   				}
+   129   			}
+   130   			break;
+   131    
+   132   		case '(':
+   133   			while( (c=getc(&ibuf)) != '\n' )
+   134   				putchar(c);
+   135   			putchar(c);
+   136   			break;
+   137    
+   138   		default:
+   139   			error("intermediate code error %c,%d",c,c);
+   140   			break;
+   141   		}
+   142   	}
+   143   }
+   144    
+   145   /* readtree - recursive intermediate code tree read*/
+   146   char *readtree()						/* returns ptr to expression tree*/
+   147   {
+   148   	register int op, type, sc;
+   149   	register struct tnode *tp, *rtp;
+   150   	char sym[SSIZE];
+   151   	long l;
+   152    
+   153   	if( (op=readint()) <= 0 )
+   154   		return(0);
+   155   	type = readint();
+   156   	switch( op ) {
+   157    
+   158   	case SYMBOL:
+   159   		if( (sc=readint()) == EXTERNAL )
+   160   			tp = cenalloc(type,sc,readsym(sym));
+   161   		else
+   162   			tp = snalloc(type,sc,readint(),0,0);
+   163   		break;
+   164    
+   165   	case CINT:
+   166   		tp = cnalloc(type,readint());
+   167   		break;
+   168    
+   169   	case CLONG:
+   170   		l.hiword = readint();
+   171   		l.loword = readint();
+   172   		tp = lcnalloc(type,l);
+   173   		break;
+   174    
+   175   	case CFLOAT:	/* [vlh] 3.4 */
+   176   		l.hiword = readint();
+   177   		l.loword = readint();
+1File: MAIN.C                                                              Page       4
+   178   		tp = fpcnalloc(type,l);
+   179   		break;
+   180    
+   181   	case IFGOTO:
+   182   	case BFIELD:
+   183   		sc = readint();
+   184   		if( tp = readtree() )
+   185   			tp = tnalloc(op,type,sc,0,tp,null);
+   186   		break;
+   187    
+   188   	default:
+   189   		if( binop(op) ) {
+   190   			if( !(tp=readtree()) )
+   191   				return(0);
+   192   			if( !(rtp=readtree()) )
+   193   				return(0);
+   194   			tp = tnalloc(op,type,0,0,tp,rtp);
+   195   		}
+   196   		else if( tp = readtree() )
+   197   			tp = tnalloc(op,type,0,0,tp,null);
+   198   		break;
+   199   	}
+   200   	return(tp);
+   201   }
+   202    
+   203   /* readint - reads an integer value from intermediate code*/
+   204   readint()
+   205   {
+   206   	register int i, c;
+   207    
+   208   	i = 0;
+   209   	while(1) {
+   210   		switch( c = getc(&ibuf) ) {
+   211    
+   212   		case '.':
+   213   		case '\n':
+   214   			return(i);
+   215    
+   216   		case '0':
+   217   		case '1':
+   218   		case '2':
+   219   		case '3':
+   220   		case '4':
+   221   		case '5':
+   222   		case '6':
+   223   		case '7':
+   224   		case '8':
+   225   		case '9':
+   226   			i =<< 4;
+   227   			i =+ (c-'0');
+   228   			break;
+   229    
+   230   		case 'a':
+   231   		case 'b':
+   232   		case 'c':
+   233   		case 'd':
+   234   		case 'e':
+   235   		case 'f':
+   236   			i =<< 4;
+1File: MAIN.C                                                              Page       5
+   237   			i =+ (c-('a'-10));
+   238   			break;
+   239    
+   240   		case 'A':
+   241   		case 'B':
+   242   		case 'C':
+   243   		case 'D':
+   244   		case 'E':
+   245   		case 'F':
+   246   			i =<< 4;
+   247   			i =+ (c-('A'-10));
+   248   			break;
+   249    
+   250   		default:
+   251   			error("intermediate code error - %c,%d",c,c);
+   252   		}
+   253   	}
+   254   }
+   255    
+   256   /* readsym - read a symbol from intermediate code*/
+   257   char *readsym(sym)
+   258   char *sym;
+   259   {
+   260   	register int i, c;
+   261   	register char *s;
+   262    
+   263   	for( i = SSIZE, s = sym; (c=getc(&ibuf)) != '\n'; )
+   264   		if( --i >= 0 )
+   265   			*s++ = c;
+   266   	if( i > 0 )
+   267   		*s = '\0';
+   268   	return(sym);
+   269   }
+   270    
+   271   /* error - output an error message*/
+   272   error(s,x1,x2,x3,x4,x5,x6)
+   273   char *s;
+   274   int x1, x2, x3, x4, x5, x6;
+   275   {
+   276   	errcnt++;
+   277   	errflg++;
+   278   	if( lineno != 0 )
+   279   		printf("** %d: ",lineno);
+   280   	printf(s,x1,x2,x3,x4,x5,x6);
+   281   	putchar('\n');
+   282   	errflg--;
+   283   }
+   284    
+   285   /* ferror - output error message and die*/
+   286   ferror(s,x1,x2,x3,x4,x5,x6)
+   287   char *s;
+   288   int x1, x2, x3, x4, x5, x6;
+   289   {
+   290   	error(s,x1,x2,x3,x4,x5,x6);
+   291   	exit(1);
+   292   }
+   293    
+   294   /* tnalloc - allocate binary expression tree node*/
+   295   /*	returns ptr to node made.*/
+1File: MAIN.C                                                              Page       6
+   296   char *tnalloc(op,type,info,dummy,left,right)
+   297   int op;							/* operator*/
+   298   int type;						/* resultant node type*/
+   299   int info;						/* info field*/
+   300   int dummy;						/* dummy field - used to match pass1 args*/
+   301   struct tnode *left;				/* left sub-tree*/
+   302   struct tnode *right;			/* righst sub-tree*/
+   303   {
+   304   	register struct tnode *tp;
+   305    
+   306   	tp = talloc(sizeof(*tp));
+   307   	tp->t_op = op;
+   308   	tp->t_type = type;
+   309   	tp->t_su = info;			/* info for bit-field & condbr's*/
+   310   	tp->t_left = left;
+   311   	tp->t_right = right;
+   312   	return(tp);
+   313   }
+   314    
+   315   /* cnalloc - allocate constant expression tree node*/
+   316   char *cnalloc(type,value)	/* returns pointer to node alloced*/
+   317   int type;						/* type of constant*/
+   318   int value;						/* value of constant*/
+   319   {
+   320   	register struct conode *cp;
+   321    
+   322   	cp = talloc(sizeof(*cp));
+   323   	cp->t_op = CINT;
+   324   	cp->t_type = type;
+   325   	cp->t_value = value;
+   326   	return(cp);
+   327   }
+   328    
+   329   /* lcnalloc - allocate constant expression tree node*/
+   330   char *lcnalloc(type,value)	/* returns pointer to node alloced*/
+   331   int type;						/* type of constant*/
+   332   long value;						/* value of constant*/
+   333   {
+   334   	register struct lconode *cp;
+   335    
+   336   	cp = talloc(sizeof(*cp));
+   337   	cp->t_op = CLONG;
+   338   	cp->t_type = type;
+   339   	cp->t_lvalue = value;
+   340   	return(cp);
+   341   }
+   342    
+   343   /* fpcnalloc - allocate constant expression tree node*/
+   344   char *fpcnalloc(type,value)	/* returns pointer to node alloced*/
+   345   int type;						/* type of constant*/
+   346   long value;						/* value of constant*/
+   347   {								/* [vlh] 3.4 */
+   348   	register struct lconode *cp;
+   349    
+   350   	cp = talloc(sizeof(*cp));
+   351   	cp->t_op = CFLOAT;
+   352   	cp->t_type = type;
+   353   	cp->t_lvalue = value;
+   354   	return(cp);
+1File: MAIN.C                                                              Page       7
+   355   }
+   356    
+   357   /* talloc - allocate expression tree area*/
+   358   char *talloc(size)				/* returns pointer to area alloced*/
+   359   int size;						/* number of bytes to alloc*/
+   360   {
+   361   	register char *p;
+   362    
+   363   	p = opap;
+   364   	if( p + size >= &exprarea[EXPSIZE] )
+   365   		ferror("expression too complex");
+   366   	opap = p + size;
+   367   	return(p);
+   368   }
+   369    
+   370   /* symcopy - copy symbol*/
+   371   symcopy(sym1,sym2)					/* returns - none*/
+   372   char *sym1;						/* from symbol*/
+   373   char *sym2;						/* to symbol*/
+   374   {
+   375   	register char *p, *q;
+   376   	register int i;
+   377    
+   378   	for( p = sym1, q = sym2, i = SSIZE; --i >= 0; )
+   379   		*q++ = (*p ? *p++ : '\0');
+   380   }
+   381    
+   382   /* usage - ouput usage message*/
+   383   usage(argc,argv,n)
+   384      char *argv[];
+   385   {
+   386   	register int i;
+   387   	error("usage call #%d:\n",n);
+   388   	for (i=0; i<argc; i++) error("   argv[%d] = %s\n",i,argv[i]);
+   389   	ferror("usage: c168 icode asm [-DLmec]");
+   390   }
+   391    
+   392   /* putchar - special version*/
+   393   /*		This allows the use of printf for error messages, debugging*/
+   394   /*		output and normal output.*/
+   395   putchar(c)							/* returns - none*/
+   396   char c;								/* character to output*/
+   397   {
+   398   	if( errflg )					/*error message?*/
+   399   		write(1,&c,1);				/*write to standard output*/
+   400   	else {
+   401   		if( dflag > 1 )
+   402   			write(1,&c,1);			/*to standard output*/
+   403   		putc(c,&obuf);				/*put to assembler file*/
+   404   	}
+   405   }
+   406    
+   407   v6flush(v6b)
+   408   struct iobuf *v6b;
+   409   {
+   410   	register i;
+   411    
+   412   	i = BLEN - v6b->nunused;
+   413   	v6b->nunused = BLEN;
+1File: MAIN.C                                                              Page       8
+   414   	v6b->xfree = &(v6b->buff[0]);
+   415   	if(write(v6b->fildes,v6b->xfree,i) != i)
+   416   		return(-1);
+   417   	return(0);
+   418   }
+   419   printf(string,a,b,c,d,e,f,g)
+   420   char	*string;
+   421   int	 a,b,c,d,e,f,g;
+   422   {
+   423   char	area[256];
+   424   register char *p;
+   425    
+   426   	sprintf(area,string,a,b,c,d,e,f,g);
+   427   	for(p = &area[0]; *p; p++)
+   428   		putchar(*p);
+   429   }

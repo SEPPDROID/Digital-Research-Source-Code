@@ -1,0 +1,16 @@
+$ set noon
+$ vsend BDOS.S
+$ vsend BDOSFUNC.H
+$ vsend DDT1.C
+$ vsend DDT2.C
+$ vsend DDTINC.H
+$ vsend DDTLOAD.S
+$ vsend DDTUTIL.C
+$ vsend DISAS.H
+$ vsend DISASM.C
+$ vsend EXAMINE.C
+$ vsend MAKE.SUB
+$ vsend NEXT.SUB
+$ vsend OPTAB.H
+$ vsend STDIO.H
+$ vsend done

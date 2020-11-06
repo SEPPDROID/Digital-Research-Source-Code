@@ -1,0 +1,113 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                        CP/M 3 Cold Boot Loader                         *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; works for banked and non banked systems
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+;
+; v1.00 - 26 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+	.z80
+;
+	maclib	TPORTS.LIB
+;
+	public	rdrv
+;
+	extrn	dph, dpb, xlt
+;
+ver	equ	1		;loader version number
+;
+; Z80 Emulator starts executing here after loading 1st sector
+boot:	jp	start		;1st byte must be C3 hex
+;
+; information extracted by PUTLDR.COM utility (do not rearrange order)
+	dw	0aa55h		;checked by install utility
+	db	ver		;loader version number
+	dw	boot		;execute address used to calculate offsets
+	dw	dph		;disk parameter header
+	dw	dpb		;disk parameter block
+	dw	xlt		;sector translate table
+;
+; information placed here by PUTLDR.COM utility (do not rearrange order)
+seclen:	dw	0		;sector length
+sectrk:	db	0		;sectors per track
+rdrv:	db	0		;sides, type, density, drive select
+tracks:	db	0		;reserved tracks to load
+banked:	db	0		;0 = non banked, >0 = banked system
+;
+; load the remainder of the CPMLDR.SYS code
+start:	out	(gtboot),a	;what drive did boot come from
+	ld	e,a
+	cp	2		;floppy A: or B: drive ?
+	ld	a,rdhard
+	jp	nc,settyp
+	ld	a,rdflop
+settyp:	ld	(flphdd+1),a	;set floppy or HDD read port
+	ld	bc,0002h	;track #0, sector #2 (1st sector loaded)
+	ld	d,0		;side #0
+	ld	hl,boot
+load:	push	bc
+	ld	bc,(seclen)	;sector length
+	add	hl,bc		;next DMA address
+	pop	bc
+	ld	a,2		;sector size code for floppy driver (2=512)
+flphdd:	out	(0ffh),a	;read 1 sector
+	or      a
+	jp	z,nxtsec
+	out	(failed),a	;boot strap failure
+nxtsec:	inc	c		;next sector
+	ld	a,(sectrk)
+	cp	c
+	jp	nc,load
+	ld	a,(tracks)
+	dec	a
+	ld	(tracks),a
+	jp	z,setsys
+	ld	c,1		;sector #1
+	inc     d		;change side select
+	ld	a,d
+	and     00000001b	;keep the odd/even bit
+	ld      d,a
+	jp	nz,load
+	inc	b		;next track #
+	jp	load
+
+setsys:	ld	hl,0		;access user byte #0
+	ld	c,0		;get user byte function
+	out	(usrbyt),a	;get user byte
+	ld	hl,stdnme
+	cp	1		;non banked CP/M 3 system ?
+	jp	z,setnme
+	cp	2		;banked CP/M 3 system ?
+	jp	z,bnksys
+	ld	a,(banked)	;default banked or non banked flag
+	or	a		;banked CP/M 3 system ?
+	jp	z,setnme
+bnksys:	ld	bc,0f000h	;size of bank #0, bank #1
+	out	(bnkuse),a	;initialize for a banked system
+	ld	hl,bnknme
+setnme:	ld	bc,11		;bytes to be moved
+	ld	de,loader+172	;replace CPM3.SYS with new name
+	ldir
+	jp	loader
+
+bnknme:	db	'BNKCPM  SYS'
+stdnme:	db	'STDCPM  SYS'
+;
+	ds	128		;CPMLDR.SYS uses this area
+;
+loader	equ	$
+;
+	end

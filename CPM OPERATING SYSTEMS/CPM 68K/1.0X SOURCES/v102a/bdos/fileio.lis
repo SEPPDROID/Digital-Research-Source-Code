@@ -1,0 +1,671 @@
+1File: FILEIO.C                                                            Page       1
+     1    
+     2   /****************************************************************
+     3   *								*
+     4   *		CP/M-68K BDOS File I/O Module			*
+     5   *								*
+     6   *	This module contains all file handling BDOS functions	*
+     7   *	except for read and write for CP/M-68K.  Included are:	*
+     8   *								*
+     9   *		seldsk()    - select disk			*
+    10   *		openfile()  - open file				*
+    11   *		close_fi()  - close file			*
+    12   *		search()    - search for first/next file match	*
+    13   *		create()    - create file			*
+    14   *		delete()    - delete file			*
+    15   *		rename()    - rename file			*
+    16   *		set_attr()  - set file attributes		*
+    17   *		getsize()   - get file size			*
+    18   *		setran()    - set random record field		*
+    19   *		free_sp()   - get disk free space		*
+    20   *		move()	    - general purpose byte mover	*
+    21   *								*
+    22   *								*
+    23   *	Compiled with Alcyon C on the VAX			*
+    24   *								*
+    25   ****************************************************************/
+    26    
+    27   #include "bdosinc.h"		/* Standard I/O declarations */
+    28    
+    29   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    30    
+    31   #include "pktio.h"		/* Packet I/O definitions */
+    32    
+    33   /* declare external fucntions */
+    34   EXTERN UWORD 	dirscan();	/* directory scanning routine	*/
+    35   EXTERN UWORD	error();	/* disk error routine		*/
+    36   EXTERN UWORD	ro_err();	/* read-only file error routine	*/
+    37   EXTERN UWORD	do_phio();	/* packet disk i/o handler	*/
+    38   EXTERN		clraloc();	/* clear bit in allocation vector */
+    39   EXTERN		setaloc();	/* set bit in allocation vector */
+    40   EXTERN UWORD	swap();		/* assembly language byte swapper */
+    41   EXTERN UWORD	dir_wr();	/* directory write routine */
+    42   EXTERN		tmp_sel();	/* temporary select disk routine */
+    43   EXTERN UWORD	calcext();	/* calc max extent allocated for fcb */
+    44   EXTERN UWORD	udiv();		/* unsigned divide routine	*/
+    45    
+    46    
+    47   /* declare external variables */
+    48   EXTERN UWORD	log_dsk;	/* logged-on disk vector	*/
+    49   EXTERN UWORD	ro_dsk;		/* read-only disk vector	*/
+    50   EXTERN UWORD	crit_dsk;	/* vector of disks in critical state	*/
+    51    
+    52    
+    53   /************************************
+    54   *  This function passed to dirscan  *
+    55   *	from seldsk (below)	    *
+    56   ************************************/
+    57    
+    58   BOOLEAN alloc(fcbp, dirp, dirindx)
+    59   /* Set up allocation vector for directory entry pointed to by dirp */
+1File: FILEIO.C                                                            Page       2
+    60    
+    61   struct fcb	*fcbp;		/* not used in this function	*/
+    62   REG struct dirent *dirp;	/* pointer to directory entry	*/
+    63   WORD		dirindx;	/* index into directory for *dirp */
+    64   {
+    65       REG WORD	i;		/* loop counter	*/
+    66       BSETUP
+    67    
+    68       if ( UBWORD(dirp->entry) < 0x10 )	/* skip MP/M 2.x and CP/M 3.x XFCBs */
+    69       {
+    70   	(GBL.dphp)->hiwater = dirindx;	/* set up high water mark for disk */
+    71   	i = 0;
+    72   	if ((GBL.parmp)->dsm < 256)
+    73   	{
+    74   	    do setaloc( UBWORD(dirp->dskmap.small[i++]) );
+    75   		while (i <= 15);
+    76   	}
+    77   	else
+    78   	{
+    79   	    do setaloc(swap(dirp->dskmap.big[i++]));
+    80   		while (i <= 7);
+    81   	}
+    82       }
+    83   }
+    84    
+    85    
+    86   /************************
+    87   *  seldsk entry point	*
+    88   ************************/
+    89    
+    90   seldsk(dsknum)
+    91    
+    92   REG UBYTE dsknum;		/* disk number to select */
+    93    
+    94   {
+    95       struct iopb selpkt;
+    96       REG WORD	i;
+    97       UWORD	j;
+    98       REG UBYTE	logflag;
+    99       BSETUP
+   100    
+   101       logflag = ~(log_dsk >> dsknum) & 1;
+   102       if ((GBL.curdsk != dsknum) || logflag)
+   103       {				/* if not last used disk or not logged on */
+   104   	selpkt.iofcn = sel_info;
+   105   	GBL.curdsk = (selpkt.devnum = dsknum);
+   106   	if (UBWORD(dsknum) > 15) error(2);
+   107   	selpkt.ioflags = logflag ^ 1;
+   108   	do
+   109   	{
+   110   	    do_phio(&selpkt);	/* actually do the disk select	*/
+   111   	    if ( (GBL.dphp = selpkt.infop) != NULL ) break;
+   112   	} while ( ! error(3) );
+   113    
+   114   	GBL.dirbufp = (GBL.dphp)->dbufp;
+   115   			/* set up GBL copies of dir_buf and dpb ptrs */
+   116   	GBL.parmp = (GBL.dphp)->dpbp;
+   117       }
+   118       if (logflag)
+1File: FILEIO.C                                                            Page       3
+   119       {		/* if disk not previously logged on, do it now */
+   120   	LOCK	/* must lock the file system while messing with alloc vec */
+   121   	i = (GBL.parmp)->dsm;
+   122   	do clraloc(i); while (i--);	/* clear the allocation vector */
+   123   	i = udiv( (LONG)(((GBL.parmp)->drm) + 1),
+   124   		  4 * (((GBL.parmp)->blm) + 1), &j);
+   125   					/* calculate nmbr of directory blks */
+   126   	if (j) i++;			/* round up */
+   127   	do setaloc(--i); while (i);	/* alloc directory blocks */
+   128   	dirscan(alloc, NULL, 0x0e);	/* do directory scan & alloc blocks */
+   129   	log_dsk |= 1 << dsknum;		/* mark disk as logged in	*/
+   130       }
+   131   }
+   132    
+   133    
+   134   /*******************************
+   135   *  General purpose byte mover  *
+   136   *******************************/
+   137    
+   138   move(p1, p2, i)
+   139    
+   140   REG BYTE *p1;
+   141   REG BYTE *p2;
+   142   REG WORD  i;
+   143   {
+   144       while (i--)
+   145   	*p2++ = *p1++;
+   146   }
+   147    
+   148    
+   149   /*************************************
+   150   *  General purpose filename matcher  *
+   151   *************************************/
+   152    
+   153   BOOLEAN match(p1, p2, chk_ext)
+   154    
+   155   REG UBYTE *p1;
+   156   REG UBYTE *p2;
+   157   BOOLEAN  chk_ext;
+   158   {
+   159       REG WORD	i;
+   160       REG UBYTE temp;
+   161       BSETUP
+   162    
+   163       i = 12;
+   164       do
+   165       {
+   166   	temp = (*p1 ^ '?');
+   167   	if ( ((*p1++ ^ *p2++) & 0x7f) && temp )
+   168   	    return(FALSE);
+   169   	i -= 1;
+   170       } while (i);
+   171       if (chk_ext)
+   172       {
+   173   	if ( (*p1 != '?') && ((*p1 ^ *p2) & ~((GBL.parmp)->exm)) )
+   174   	    return(FALSE);
+   175   	p1 += 2;
+   176   	p2 += 2;
+   177   	if ((*p1 ^ *p2) & 0x3f) return(FALSE);
+1File: FILEIO.C                                                            Page       4
+   178       }
+   179       return(TRUE);
+   180   }
+   181    
+   182    
+   183   /************************
+   184   *  openfile entry point	*
+   185   ************************/
+   186    
+   187   BOOLEAN openfile(fcbp, dirp, dirindx)
+   188    
+   189   REG struct fcb *fcbp;		/* pointer to fcb for file to open */
+   190   struct dirent  *dirp;		/* pointer to directory entry	*/
+   191   WORD	dirindx;
+   192    
+   193   {
+   194       REG UBYTE fcb_ext;		/* extent field from fcb	*/
+   195       REG BOOLEAN rtn;
+   196       BSETUP
+   197    
+   198       if ( rtn = match(fcbp, dirp, TRUE) )
+   199       {
+   200   	fcb_ext = fcbp->extent;	 /* save extent number from user's fcb */
+   201   	move(dirp, fcbp, sizeof *dirp);
+   202   				/* copy dir entry into user's fcb  */
+   203   	fcbp->extent = fcb_ext;
+   204   	fcbp->s2 |= 0x80;	 /* set hi bit of S2 (write flag)	*/
+   205   	crit_dsk |= 1 << (GBL.curdsk);
+   206       }
+   207      return(rtn);
+   208   }
+   209    
+   210    
+   211   /*************************/
+   212   /* flush buffers routine */
+   213   /*************************/
+   214    
+   215   UWORD flushit()
+   216   {
+   217       REG UWORD	rtn;		/* return code from flush buffers call */
+   218       struct iopb flushpkt;	/* I/O packet for flush buffers call */
+   219    
+   220       flushpkt.iofcn = flush;
+   221       while ( rtn = do_phio(&flushpkt) )
+   222   	if ( error(1) ) break;
+   223       return(rtn);
+   224   }
+   225    
+   226    
+   227   /*********************************
+   228   * file close routine for dirscan *
+   229   *********************************/
+   230    
+   231   BOOLEAN close(fcbp, dirp, dirindx)
+   232    
+   233   REG struct fcb *fcbp;		/* pointer to fcb */
+   234   REG struct dirent *dirp;	/* pointer to directory entry */
+   235   WORD	dirindx;		/* index into directory	*/
+   236    
+1File: FILEIO.C                                                            Page       5
+   237   {
+   238       REG WORD  i;
+   239       REG UBYTE *fp;
+   240       REG UBYTE *dp;
+   241       REG UWORD fcb_ext;
+   242       REG UWORD dir_ext;
+   243       BSETUP
+   244    
+   245       if ( match(fcbp, dirp, TRUE) )
+   246       {			/* Note that FCB merging is done here as a final
+   247   			   confirmation that disks haven't been swapped */
+   248   	LOCK
+   249   	fp = &(fcbp->dskmap.small[0]);
+   250   	dp = &(dirp->dskmap.small[0]);
+   251   	if ((GBL.parmp)->dsm < 256)
+   252   	{		/* Small disk map merge routine  */
+   253   	    i = 16;
+   254   	    do
+   255   	    {
+   256   		if (*dp)
+   257   		{
+   258   		    if (*fp)
+   259   		    {
+   260   			if (*dp != *fp) goto badmerge;
+   261   		    }
+   262   		    else *fp = *dp;
+   263   		}
+   264   		else *dp = *fp;
+   265   		fp += 1;
+   266   		dp += 1;
+   267   		i -= 1;
+   268   	    } while (i);
+   269   	}
+   270   	else
+   271   	{		/* Large disk map merge routine */
+   272   	    i = 8;
+   273   	    do
+   274   	    {
+   275   		if (*(UWORD *)dp)
+   276   		{
+   277   		    if (*(UWORD *)fp)
+   278   		    {
+   279   			if (*(UWORD *)dp != *(UWORD *)fp) goto badmerge;
+   280   		    }
+   281   		    else *(UWORD *)fp = *(UWORD *)dp;
+   282   		}
+   283   		else *(UWORD *)dp = *(UWORD *)fp;
+   284   		(UWORD *)fp += 1;
+   285   		(UWORD *)dp += 1;
+   286   		i -= 1;
+   287   	    } while (i);
+   288   	}
+   289   	/* Disk map merging complete */
+   290   	fcb_ext = calcext(fcbp);	/* calc max extent for fcb */
+   291   	dir_ext = (UWORD)(dirp->extent) & 0x1f;
+   292   	if ( (fcb_ext > dir_ext) ||
+   293   	    ((fcb_ext == dir_ext) &&
+   294   		(UBWORD(fcbp->rcdcnt) > UBWORD(dirp->rcdcnt))) )
+   295   			/* if fcb points to larger file than dirp */
+1File: FILEIO.C                                                            Page       6
+   296   	{
+   297   	    dirp->rcdcnt = fcbp->rcdcnt;	/* set up rc, ext from fcb */
+   298   	    dirp->extent = (BYTE)fcb_ext;
+   299   	}
+   300   	dirp->s1 = fcbp->s1;
+   301   	if ( (dirp->ftype[robit]) & 0x80) ro_err(fcbp,dirindx);
+   302   						/* read-only file error */
+   303   	dirp->ftype[arbit] &= 0x7f;		/* clear archive bit	    */
+   304   	dir_wr(dirindx >> 2);
+   305   	UNLOCK
+   306   	return(TRUE);
+   307    
+   308   badmerge:
+   309   	UNLOCK
+   310   	ro_dsk |= (1 << GBL.curdsk);
+   311   	return(FALSE);
+   312       }
+   313       else return(FALSE);
+   314   }
+   315    
+   316    
+   317   /************************
+   318   *  close_fi entry point	*
+   319   ************************/
+   320    
+   321   UWORD close_fi(fcbp)
+   322    
+   323   struct fcb *fcbp;		/* pointer to fcb for file to close */
+   324   {
+   325       flushit();				/* first, flush the buffers	*/
+   326       if ((fcbp->s2) & 0x80) return(0);	/* if file write flag not on,
+   327   					   don't need to do physical close */
+   328       return( dirscan(close, fcbp, 0));	/* call dirscan with close function */
+   329   }
+   330    
+   331    
+   332   /************************
+   333   *  search entry point	*
+   334   ************************/
+   335    
+   336   /* First two functions for dirscan */
+   337    
+   338   BOOLEAN alltrue(p1, p2, i)
+   339   UBYTE	*p1;
+   340   UBYTE	*p2;
+   341   WORD	i;
+   342   {
+   343       return(TRUE);
+   344   }
+   345    
+   346   BOOLEAN matchit(p1, p2, i)
+   347   UBYTE	*p1;
+   348   UBYTE	*p2;
+   349   WORD	i;
+   350   {
+   351       return(match(p1, p2, TRUE));
+   352   }
+   353    
+   354    
+1File: FILEIO.C                                                            Page       7
+   355   /* search entry point */
+   356   UWORD search(fcbp, dsparm, p)
+   357    
+   358   REG struct fcb *fcbp;		/* pointer to fcb for file to search */
+   359   REG UWORD dsparm;		/* parameter to pass through to dirscan */
+   360   UBYTE	*p;			/* pointer to pass through to tmp_sel	*/
+   361    
+   362   {
+   363       REG UWORD	rtn;		/* return value */
+   364       BSETUP
+   365    
+   366       if (fcbp->drvcode == '?')
+   367       {
+   368   	seldsk(GBL.dfltdsk);
+   369   	rtn = dirscan(alltrue, fcbp, dsparm);
+   370       }
+   371       else
+   372       {
+   373   	tmp_sel(p);		/* temporarily select disk */
+   374   	if (fcbp->extent != '?') fcbp->extent = 0;
+   375   	fcbp->s2 = 0;
+   376   	rtn = dirscan(matchit, fcbp, dsparm);
+   377       }
+   378       move( GBL.dirbufp, GBL.dmaadr, SECLEN);
+   379       return(rtn);
+   380   }
+   381    
+   382    
+   383   /************************
+   384   *  create entry point	*
+   385   ************************/
+   386    
+   387   BOOLEAN create(fcbp, dirp, dirindx)
+   388    
+   389   REG struct fcb *fcbp;		/* pointer to fcb for file to create */
+   390   REG struct dirent *dirp;	/* pointer to directory entry	*/
+   391   REG WORD dirindx;		/* index into directory		*/
+   392    
+   393   {
+   394       REG BYTE *p;
+   395       REG WORD i;
+   396       REG BOOLEAN rtn;
+   397       BSETUP
+   398    
+   399       if ( rtn = ((dirp->entry) == 0xe5) )
+   400       {
+   401   	p = &(fcbp->rcdcnt);
+   402   	i = 17;
+   403   	do
+   404   	{			/* clear fcb rcdcnt and disk map */
+   405   	    *p++ = 0;
+   406   	    i -= 1;
+   407   	} while (i);
+   408   	move(fcbp, dirp, sizeof *dirp);	/* move the fcb to the directory */
+   409   	dir_wr(dirindx >> 2);		/* write the directory sector */
+   410   	if ( dirindx > (GBL.dphp)->hiwater )
+   411   	    (GBL.dphp)->hiwater = dirindx;
+   412   	crit_dsk |= 1 << (GBL.curdsk);
+   413       }
+1File: FILEIO.C                                                            Page       8
+   414       return(rtn);
+   415   }
+   416    
+   417    
+   418   /************************
+   419   *  delete entry point	*
+   420   ************************/
+   421    
+   422   BOOLEAN delete(fcbp, dirp, dirindx)
+   423    
+   424   REG struct fcb *fcbp;		/* pointer to fcb for file to delete */
+   425   REG struct dirent *dirp;	/* pointer to directory entry	*/
+   426   REG WORD dirindx;		/* index into directory		*/
+   427    
+   428   {
+   429       REG WORD i;
+   430       REG BOOLEAN rtn;
+   431       BSETUP
+   432    
+   433       if ( rtn = match(fcbp, dirp, FALSE) )
+   434       {
+   435   	if ( (dirp->ftype[robit]) & 0x80 ) ro_err(fcbp,dirindx);
+   436   				/* check for read-only file */
+   437   	dirp->entry = 0xe5;
+   438   	LOCK
+   439   	dir_wr(dirindx >> 2);
+   440   	/* Now free up the space in the allocation vector */
+   441   	if ((GBL.parmp)->dsm < 256)
+   442   	{
+   443   	    i = 16;
+   444   	    do clraloc(UBWORD(dirp->dskmap.small[--i]));
+   445   		while (i);
+   446   	}
+   447   	else
+   448   	{
+   449   	    i = 8;
+   450   	    do clraloc(swap(dirp->dskmap.big[--i]));
+   451   		while (i);
+   452   	}
+   453   	UNLOCK
+   454       }
+   455       return(rtn);
+   456   }
+   457    
+   458    
+   459   /************************
+   460   *  rename entry point	*
+   461   ************************/
+   462    
+   463   BOOLEAN rename(fcbp, dirp, dirindx)
+   464    
+   465   REG struct fcb *fcbp;		/* pointer to fcb for file to delete */
+   466   REG struct dirent *dirp;	/* pointer to directory entry	*/
+   467   REG WORD dirindx;		/* index into directory		*/
+   468    
+   469   {
+   470       REG UWORD i;
+   471       REG BYTE *p;		/* general purpose pointers */
+   472       REG BYTE *q;
+1File: FILEIO.C                                                            Page       9
+   473       REG BOOLEAN rtn;
+   474       BSETUP
+   475    
+   476       if ( rtn =  match(fcbp, dirp, FALSE) )
+   477       {
+   478   	if ( (dirp->ftype[robit]) & 0x80 ) ro_err(fcbp,dirindx);
+   479   				/* check for read-only file */
+   480   	p = &(fcbp->dskmap.small[1]);
+   481   	q = &(dirp->fname[0]);
+   482   	i = 11;
+   483   	do
+   484   	{
+   485   	    *q++ = *p++ & 0x7f;
+   486   	    i -= 1;
+   487   	} while (i);
+   488   	dir_wr(dirindx >> 2);
+   489       }
+   490       return(rtn);
+   491   }
+   492    
+   493    
+   494   /************************
+   495   *  set_attr entry point	*
+   496   ************************/
+   497    
+   498   BOOLEAN set_attr(fcbp, dirp, dirindx)
+   499    
+   500   REG struct fcb *fcbp;		/* pointer to fcb for file to delete */
+   501   REG struct dirent *dirp;	/* pointer to directory entry	*/
+   502   REG WORD dirindx;		/* index into directory		*/
+   503    
+   504   {
+   505       REG BOOLEAN rtn;
+   506       BSETUP
+   507    
+   508       if ( rtn = match(fcbp, dirp, FALSE) )
+   509       {
+   510   	move(&fcbp->fname[0], &dirp->fname[0], 11);
+   511   	dir_wr(dirindx >> 2);
+   512       }
+   513       return(rtn);
+   514   }
+   515    
+   516    
+   517   /****************************
+   518   *  utility routine used by  *
+   519   *  setran and getsize	    *
+   520   ****************************/
+   521    
+   522   LONG extsize(fcbp)
+   523   /* Return size of extent pointed to by fcbp */
+   524   REG struct fcb *fcbp;
+   525    
+   526   {
+   527       return( ((LONG)(fcbp->extent & 0x1f) << 7)
+   528   		| ((LONG)(fcbp->s2 & 0x3f) << 12) );
+   529   }
+   530    
+   531    
+1File: FILEIO.C                                                            Page      10
+   532   /************************
+   533   *  setran entry point	*
+   534   ************************/
+   535    
+   536   setran(fcbp)
+   537    
+   538   REG struct fcb *fcbp;		/* pointer to fcb for file to set ran rec */
+   539    
+   540   {
+   541       struct
+   542       {
+   543   	BYTE b3;
+   544   	BYTE b2;
+   545   	BYTE b1;
+   546   	BYTE b0;
+   547       };
+   548       LONG random;
+   549    
+   550       random = (LONG)UBWORD(fcbp->cur_rec) + extsize(fcbp);
+   551   				/* compute random record field	*/
+   552       fcbp->ran0 = random.b2;
+   553       fcbp->ran1 = random.b1;
+   554       fcbp->ran2 = random.b0;
+   555   }
+   556    
+   557    
+   558   /**********************************/
+   559   /* fsize is a funtion for dirscan */
+   560   /* passed from getsize		  */
+   561   /**********************************/
+   562    
+   563   BOOLEAN fsize(fcbp, dirp, dirindx)
+   564    
+   565   REG struct fcb *fcbp;		/* pointer to fcb for file to delete */
+   566   REG struct dirent *dirp;	/* pointer to directory entry	*/
+   567   WORD dirindx;			/* index into directory		*/
+   568    
+   569   {
+   570       REG BOOLEAN rtn;
+   571       struct
+   572       {
+   573   	BYTE b3;
+   574   	BYTE b2;
+   575   	BYTE b1;
+   576   	BYTE b0;
+   577       };
+   578       LONG temp;
+   579    
+   580       if ( rtn = match(fcbp, dirp, FALSE) )
+   581       {
+   582   	temp = (LONG)UBWORD(dirp->rcdcnt) + extsize(dirp);
+   583   				/* compute file size	*/
+   584   	fcbp->ran0 = temp.b2;
+   585   	fcbp->ran1 = temp.b1;
+   586   	fcbp->ran2 = temp.b0;
+   587       }
+   588       return(rtn);
+   589   }
+   590    
+1File: FILEIO.C                                                            Page      11
+   591   /************************
+   592   *  getsize entry point	*
+   593   ************************/
+   594    
+   595   getsize(fcbp)
+   596   /* get file size	*/
+   597   REG struct fcb *fcbp;		/* pointer to fcb to get file size for */
+   598    
+   599   {
+   600       LONG maxrcd;
+   601       LONG temp;
+   602       REG WORD dsparm;
+   603       struct
+   604       {
+   605   	BYTE b3;
+   606   	BYTE b2;
+   607   	BYTE b1;
+   608   	BYTE b0;
+   609       };
+   610    
+   611       maxrcd = 0;
+   612       dsparm = 0;
+   613       temp = 0;
+   614       while ( dirscan(fsize, fcbp, dsparm) < 255 )
+   615       {				/* loop until no more matches */
+   616   	temp.b2 = fcbp->ran0;
+   617   	temp.b1 = fcbp->ran1;
+   618   	temp.b0 = fcbp->ran2;
+   619   	if (temp > maxrcd) maxrcd = temp;
+   620   	dsparm = 1;
+   621       }
+   622       fcbp->ran0 = maxrcd.b2;
+   623       fcbp->ran1 = maxrcd.b1;
+   624       fcbp->ran2 = maxrcd.b0;
+   625   }
+   626    
+   627    
+   628   /************************
+   629   *  free_sp entry point	*
+   630   ************************/
+   631    
+   632   free_sp(dsknum)
+   633    
+   634   UBYTE dsknum;		/* disk number to get free space of */
+   635   {
+   636       REG LONG records;
+   637       REG UWORD   *alvec;
+   638       REG UWORD	bitmask;
+   639       REG UWORD	alvword;
+   640       REG WORD	i;
+   641       BSETUP
+   642    
+   643       seldsk(dsknum);		/* select the disk */
+   644       records = (LONG)0;		/* initialize the variables */
+   645       alvec = (GBL.dphp)->alv;
+   646       bitmask = 0;
+   647       for (i = 0; i <= (GBL.parmp)->dsm; i++)	/* for loop to compute */
+   648       {
+   649   	if ( ! bitmask)
+1File: FILEIO.C                                                            Page      12
+   650   	{
+   651   	    bitmask = 0x8000;
+   652   	    alvword = ~(*alvec++);
+   653   	}
+   654   	if ( alvword & bitmask)
+   655   	    records += (LONG)( ((GBL.parmp)->blm) + 1 );
+   656   	bitmask >>= 1;
+   657       }
+   658       *(LONG *)GBL.dmaadr = records;	/* move # records to DMA address */
+   659   }

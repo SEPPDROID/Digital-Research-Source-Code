@@ -1,0 +1,372 @@
+.he "C68 Code Generator"Change Log"Page %"
+.de bg
+.sp
+.in +5
+..
+.de eg
+.sp
+.in -5
+..
+1. 7/20/82 - Post fix operators
+.bg
+Post fix operators were being handled a la PDP-11, i.e. if( x++ ) ...
+would be true if the result of the post-increment were true rather than
+the original value of x.
+Also, if( --x ) ... would generate an unnecessary test instruction.
+Added scodegen (delay???) routine to pick off post-fix operators,
+call codegen to generate the code for the pruned tree, then generate code
+for the post-fix operators.
+This will generate horrendous code for something like: if( x[i]++ );
+but t.s.
+.eg
+2. 7/21/82 - divide by long constant
+.bg
+The construct: x / 10L did not generate a ldiv call because long constants
+Sethy-Ullman numbers are being calculated normally.
+Added DCLONG operator and check in canon to check for this case.
+This prevents sucomp from incorrectly computing the Sethy-Ullman number.
+.eg
+3. 7/23/82 - shifting long or byte address by 1
+.bg
+The construct: x =<< 1 generated an invalid assembly instruction if x
+was an automatic or static byte or long.
+This is because you may only shift words in memory (The 68000
+clone strikes again!!!).
+Changed code skeletons for eqshft to only match for addressable words.
+.eg
+4. 8/7/82 - complex long divide/modulus expressions
+.bg
+Complex expressions involving long over short divides or modulus would
+not work, not consistently sign extending word result.
+Changed test in expand to check for DIV or MOD operators in long tree
+and set extf flag.
+.eg
+5. 8/7/82 - add of quick negative did not generate subq
+.bg
+The expression: x = y - 1; with x & y registers generated an add #-1,Rx
+rather than suq #1,Rx.  This was because rcgen was turning ADD into EQADD.
+Added test in ucodegen for both ADD and EQADD.
+.eg
+6. 8/12/82 - multiply(divide) by -1
+.bg
+The expression: x =* -1; was being "optimized" to negate x, however it
+did not store the result in x.
+This is because of multiply/divide by -1 optimization in canon not
+checking for =* or =/.
+Added checks.
+.eg
+7. 8/27/82 - character array assigned function value
+.bg
+The expression: x[i] = f(i); did not generate correct code, the address
+register for x[i] was computed, but not saved on stack, then f was called.
+This resulted in all further function calls using the first argument
+push rather than a move.
+In ucodegen, when optimizing for address register shifted left by 1 or 2
+did not do fixresult call which would have saved register on stack.
+Added this call.
+Also added code skeleton to compile the function expression to the stack,
+then move that directly to the computed address.
+.eg
+8. 9/1/82 - address-indexed addressing mode used .b index
+.bg
+If the index register used in an address-indexed addressing mode
+operand was byte, the index register was given a .b extension even
+though it had correctly extended the register to a word.
+In outaexpr for INDEXED addressing mode an outatype of the index
+type should have been used rather than outtype.
+.eg
+9. 9/1/82 - x =* -1, x =/ -1, x=^ -1 optimizations
+.bg
+Added EQNEG and EQNOT operators and added checks in canon so that
+x =* -1 and x =/ -1 are changed to neg operations and x =^ -1 is
+changed to not operation.
+.eg
+10. 9/15/82 - function redeclaration bug
+.bg
+If an external function was redeclared in a function body, a
+redeclaration error occured.
+This was fixed in dodecl by checking for a function of AUTO type
+and changing it to a function of EXTERNAL type.
+.eg
+11. 9/15/82 - Hard long to register fix
+.bg
+The syntax: b =* x; where b was a long register would give an error
+"hard long to register".
+This was because the lamul function expected to do the assignment to
+a memory location.
+Changed canon so that hard =*, =/ and =% would be changed to use
+the normal long multiply and divide routines, and then do an assignment.
+.eg
+12. 9/15/82 - Casting Problems (Not fixed)
+.bg
+The syntax: i = (char) i; where i is not a register would result in
+i being assigned the high-order byte of i.
+This also is a problem for any cast where the cast type is smaller
+than the type being cast.
+Generally this should be solved by moving the expression into a data
+register, and then obtaining the result from there.
+Added DOCAST operator to handle these problems.
+However, this is all tightly interwined with conversions in the parser.
+.eg
+13. 11/24/82 - More than two constants couldn't be combined
+.bg
+Constant optimization failed to mathematically compute constant
+arithmetic fully (the results were lost) thus yielding the result
+as the computation of the last two constants in the expression
+only.
+.eg
+14. 12/13/82 - structure assignments
+.bg
+One structure may be assigned to another provided that the one on
+the right is smaller than or equal to the left one in size.
+.eg
+15. 1/10/83 - floating point
+.bg
+Floating point handling including constants, conversions and operations
+added.
+.eg
+16.	1/14/83 - pop stack instruction
+.bg
+The popstack instruction of 1..8 was turned into an addq.w which only
+affected half of the sp register.  The "add #d,sp" has been replaced
+by either "addq.l #d,sp" or "adda.l #d,sp".
+.eg
+17.	1/14/83 - optimization eqmult, eqdiv, eqmod
+.bg
+Generated a new code skeleton entry to deal with register integer mults,
+divs, and mods (eg. register int i; i =* 34;).
+.eg
+18.	1/17/83 - return of 0L
+.bg
+Code skeletons generated a clr R0 regardless of operand type.
+.eg
+19. 1/21/83 - prefix ++, -- problems with bytes
+.bg
+The code skeletons for fr_eqop were a total mess, particularly for
+the left hand side being a character.
+Rewrote all fr_eqop and fr_eqmult code skeletons to handle these cases.
+Unfortunately rcgen also gets into the act turning all =+, =-, =&, =| and
+pre++, pre-- compiled for register into compiled for effect then returning
+the left hand side symbol.
+This is probably OK for word and long LHS but for byte it results in
+lost precision.
+Changed rcgen to check for CHAR LHS and not to compile for effect if so.
+.eg
+20. 2/2/83 - long eq_shift int
+.bg
+Bad code was generated for long's left shifted by integer values.
+.eg
+21. 2/23/83 - longs divided by integers
+.bg
+Ext.l was not always done.
+.eg
+22.  3/1/83 - casting to char
+.bg
+Added the docast operator, forces the variable to be put into a register
+and an ext.w to be acted upon it.
+.eg
+23.  3/2/83 - casting register char * to int
+.bg
+Bad code was generated for casting a character to an integer if the 
+character was pointed to by a register character pointer.
+.eg
+24. 3/3/83 - Compiling complex indirect into A Reg.
+.bg
+The construct: *p->q->r generated an intermediate load into a D reg
+then move to A reg, rather than compiling directly into A reg.
+This was because of some hysterical PDP-11 code in expand checking
+for whether an A register is appropriate.
+.eg
+25. 3/3/83 - dbra instruction
+.bg
+The construct:  if( --i != -1 ) goto x; now generates a dbra i,x
+instruction.  This combined with the new for and while loops easily
+enables you to generate dbra instructions for loops.  This affected
+code in condbr to check for the specific expression tree above.
+.eg
+26. 3/3/83 - Bit field assigned to bit field
+.bg
+The construct:  x.bf1 = x.bf2 failed due to fixbfield not fixing up
+the RHS of the expression.  Added recursive call to fixbfield to
+fix up RHS's of equal operators.
+.eg
+27.  3/4/83 - Post increment with ?: op
+.bg
+Post increment and post decrement operations can not be delayed in the
+case of a ?: operation.  The post operation was taking place regardless
+of whether the case in question was executed.
+.eg
+28.  3/7/83 - long div/mod/mul/sub/add const 1L or const 0L
+.bg
+Added optimization handling for long constant zero and one handling.
+An error is now generated is a mod or div 0 is found.  Add/Sub of
+a consant 0 does not generate any code.  Mult/Div 1 does not generate
+any code
+.eg
+29.  3/8/83 - eqmod 1 and eqmult 0
+.bg
+Incorrect storage of simple expressions eqmod 1 and eqmult 0 which
+result in a zero store.  Also added for the long case.
+.eg
+30.  3/18/83 - reg ptr assign and character compare
+.bg
+The statement if (*(regptr = str)); did not do the test for the character
+pointed to but rather the result of the assignment.  This was caused
+by a codegen optimization which should not include a-registers.
+.eg
+31. 3/21/83 - Complex assignment to character array
+.bg
+The expression: ca[i] = f(); would move i to the stack as a word and pop
+it as a long.
+This was caused by the code skeleton macro (S_FORSTACK + S_INDR) assuming
+what was going on the stack will always be a long.
+Did quick and dirty fix in expand to extend an int sub-tree to a long
+if compiling subtree FORSTACK+INDR.
+.eg
+32.  4/4/83 - unary operations on address registers			[vlh] 4.1
+.bg
+Operations involving unary operations on addresses was not forcing the
+use of a temporary data register to do the actual operation.  This
+was causing bad code to be generated for certain expressions, eg.
+array[-i], or array[~i].
+.eg
+33.  5/23/83 - long constant optimizations						[vlh] 4.1
+.bg
+Changed all the constant optimizations to handle longs as well as
+ints.  This will make life more difficult on the pdp-11 but makes 
+for more optimal code (eg. l *= 2...).
+.eg
+34.  5/25/83 - pre-operators over &&, ||, ?						[vlh] 4.1
+.bg
+Preincrement/decrement were not working correctly over &&, || and ?
+operators.
+This was due to rcgen generating code for preinc/dec even if && or ||
+was seen in tree.
+Added test in rcodegen to stop trying for register optimizations over &&, ||
+and ?.
+.eg
+35. 5/25/83 - post-operators over &&, ||.						[vlh] 4.1
+.bg
+Postincrement/decrement operators were not working correctly over && and ||.
+This was due to scodegen/addptree pulling out all post-operators over && and
+|| operators.  Added check in addptree to stop at && and ||.
+Condbr then does an scodegen over the && and || to do the post-operators.
+.eg
+36. 5/25/83 - post-increments over assigns and autoinc/dec		[mc] 4.1
+.bg
+Postincrement/decrement over expressions involving assignment operators and
+autoinc/autodec did not work correctly. For example: c[i=+1]++ and c[*p++]++;
+This was because the sub-expression tree which is copied did not adjust for
+things which are being altered in the sub-expression.
+Fixed tcopy, addptree and fixbfield to fix this problem.
+This is not guaranteed to work in extremely complicated code involving
+assignment and post-op operators, for example, something like:
+c[c[i=+1]++]++;  And is especially not guaranteed to work with bit-fields
+in something like: (c[i=+1]++)->bitfield.
+.eg
+37. 6/1/83 - long multiplication/division as array subscripts	[vlh] 4.1
+.bg
+Array subscripts which involved long operations which required calls to function
+routines expected the results to be left in the first address register rather
+than the first data register.  This caused bad code to be generated.
+.eg
+38. 6/1/83 - allow long array indices							[vlh] 4.1
+.bg
+In order to generate arrays which are as big as memory the arrays must be larger
+than an int in side we need to also allow array indices to be longs.  This was
+tied in with the long constant evaluation.
+.eg
+39. 6/21/83 - link file                                         [vlh] 4.2
+.bg
+Added the link file as an input file, this is necessary for auto inits
+and block variables.
+Added the symbol "%" as a readicode symbol to signify the need to pull
+an entry out of the link file which is being created by the parser.
+.eg
+40. 7/6/83 - dbra instruction                                         4.2
+.bg
+Fixed the dbra conditional test to not be used in the case of a complex
+expression (eg. while(--regi != -1 && *l != '\n'); )..	
+.eg
+41. 7/11/83 - if test float 									[vlh] 4.2
+.bg
+The testing for float true was not being handled.  The construction
+if (fp); now does a test for the floating point value being a non zero
+32 bit value.  This is taking advantage of the fact that both floating
+point constructs denote the value zero as a zero.
+.eg
+42. 7/13/83 - short vs. long vs. int							[vlh] 4.2
+.bg
+For the sake of portability and the likelihood of generating the same
+code on the vax which supports a 16 bit short, a 32 bit int and a 32
+bit long versus Regulus which supports a 16 bit short, a 16 bit int and
+a 32 bit long the code generator has been changed to use only longs
+and shorts on the theory that most machines support 16 bit shorts and
+32 bit longs.
+.eg
+43. 7/20/83 - symbolic debugger flag							[vlh] 4.2
+.bg
+Added the '-g' flag.  Required a change to the outline routine to outline
+cdb type line number identifying lables rather than the standard sort.
+Also altered readicode to output a line number identifier on a null
+expression (allows a line number to be placed previous to asm() code
+as well as loops).
+.eg
+44. 7/22/83 - Suppress optimization	which gens bad code			[vlh] 4.2
+.bg
+Changed rcodegen to not do the rcgen call if the operator is less-than,
+or greater-than.  This keeps certain expressions from being evaluated
+in the wrong order.  In particular ((regi=f(3)) > f(1)).
+.eg
+45. 7/25/83 - unsigned char/long								[vlh] 4.2
+.bg
+Initial work required to generate code for unsigned char and unsigned
+long types.
+.eg
+46. 7/26/83 - preinc/dec, postinc/dec floats					[vlh] 4.2
+.bg
+Added OPCALL entries for preinc/predec and postinc/postdec.
+.eg
+47. 8/2/83 - bad optimizations									[vlh] 4.2
+.bg
+An expression anded (&) with a 0 or an expression multiplied (*) by a
+zero in which the expression has side effects (eg. function call which
+changes global variables) would cause bad code to be generated.  This
+has been a problem in a number of other compilers and was noted on the
+usenet by DMR himself.
+.eg
+48. 8/3/83 - 68010 changes										[vlh] 4.2
+.bg
+Added the 68010 flag (called m68010).  Code now generates a "move cc"
+instead of "move sr" in scodegen if the 68010 flag is specified.  An
+alternative routine fakecmpm has been added because the 68010 does not 
+properly handle the cmpm instruction.
+.eg
+49. 8/9/83 - source file										[vlh] 4.2
+.bg
+Fixed readicode to pick up a source filename as well as the current line
+number, for use in error reporting.
+.eg
+50. 8/10/83 - int cast pushed on stack as long					[vlh] 4.2
+.bg
+Fixed match() so that it would not optimize out conversion operators on 
+items destined to be put on the stack (eg. f(((int)l)&0xff);).  Required
+adding a test for cookie != FORSP.
+.eg
+51. 8/23/83 - long indexes										[vlh] 4.2
+.bg
+Fixed optim to not optimize long constant offsets into arrays into 16 bit
+displacements.
+.eg
+52. 8/26/83 - constant int/long assigned to char				[vlh] 4.2
+.bg
+Added code to optim to truncate Constant integers and longs which were
+being assigned to character values via ops: equal, eqadd, eqsub, eqand, 
+eqor, eqxor.
+.eg
+53. 8/30/83 - if (main)...										[vlh] 4.2
+.bg
+Altered outaexpr to not generate the '#' preceding a symbol expression
+which does not have an offset and is and external or static variable
+being generated for condition codes.
+.eg

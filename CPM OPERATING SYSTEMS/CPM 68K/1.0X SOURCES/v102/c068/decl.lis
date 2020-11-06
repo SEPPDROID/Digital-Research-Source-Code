@@ -1,0 +1,1091 @@
+1File: DECL.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "parser.h"
+     9   #define	DTSIZE	077					/*data size in bytes*/
+    10   #define	DREG	0100				/*data loadable into D-register?*/
+    11    
+    12   char dinfo[] {
+    13   	0,								/*TYPELESS=0*/
+    14   	1|DREG,							/*CHAR=1*/
+    15   	2|DREG,							/*SHORT=2*/
+    16   	2|DREG,							/*INT=3*/
+    17   	4|DREG,							/*LONG=4*/
+    18   	1|DREG,							/*UCHAR=5*/
+    19   	2|DREG,							/*USHORT=6*/
+    20   	2|DREG,							/*UNSIGNED=7*/
+    21   	4|DREG,							/*ULONG=8*/
+    22   	4|DREG,							/*FLOAT=9[vlh]*/
+    23   	4|DREG,							/*DOUBLE=10[vlh]*/
+    24   	0,								/*STRUCT=11*/
+    25   	0,								/*FRSTRUCT=12*/
+    26   	0,								/*LLABEL=13*/
+    27   	0,								/*INVALID=14*/
+    28   	0,								/*INVALID=15*/
+    29   };
+    30    
+    31   char aregtab[] { AREG5, AREG4, AREG3, 0 };
+    32   char dregtab[] { DREG7, DREG6, DREG5, DREG4, DREG3, 0 };
+    33   int inittype;
+    34    
+    35   /*
+    36    * doextdef - external definition syntax
+    37    *		This is fairly complicated since you do not know if you are
+    38    *		parsing a external function declaration or a real function
+    39    *		until after you've already scanned the argument list for the
+    40    *		function.  Basically you start off scanning an external declaration
+    41    *		or function in the same way by collecting attributes, scanning
+    42    *		the declarator, then scanning the function arguments if a function.
+    43    *		At that point you look at the next token and if its a '{', keyword
+    44    *		proceed accordingly.
+    45    *		The C Syntax handled by this routine is (roughly):
+    46    *			external_definition:
+    47    *					function_definition
+    48    *					data_definition
+    49    *			function_definition:
+    50    *					type_specifier function_declarator function_body
+    51    *			function_declarator:
+    52    *					declarator ( parameter_list )
+    53    *			data_definition:
+    54    *					EXTERNAL type_specifier init_declarator_list ;
+    55    *					STATIC type_specifier init_declarator_list ;
+    56    */
+    57   doextdef()							/* returns 0 for EOF or 1*/
+    58   {
+    59   	register struct symbol *sp;
+1File: DECL.C                                                              Page       2
+    60   	register int dflag;
+    61   	int sc, type;
+    62   	long size;
+    63    
+    64   	if(!next(SEMI)) {
+    65   		opap = exprp = exprarea;
+    66   		sc = EXTERNAL;
+    67   		type = (xflag?LONG:INT);
+    68   		dflag = gettype(&sc,&type,&size);
+    69   		if(type==STRUCT)	/* deal with forward ref structures */
+    70   			chksyms();
+    71   		while( dodecl(sc,type,0,size), (sp=dsp) != 0 ) {
+    72   			if( !dflag && notfunction(sp->s_type) ) {
+    73   				synerr("external definition syntax");
+    74   				return;
+    75   			}
+    76   			if( !stypedef(sp) && sc != STATIC )
+    77   				if (notfunction(sp->s_type))	/*[vlh] .globl ext. vars*/
+    78   					outextdef(sp->s_symbol);
+    79   			if( notfunction(sp->s_type) ) {	/*not function, check init*/
+    80   				if( !stypedef(sp) ) {
+    81   					doinit(sp);
+    82   					if (sc == STATIC)
+    83   						chksyms();
+    84   				}
+    85   			}
+    86   			else if( peek(RESWORD) || peek(LCURBR) ||
+    87   					(peek(SYMBOL) && stypedef(csp)) ) {
+    88   				if(!stypedef(sp) && sc!=STATIC)	/*[vlh] .globl local proc*/
+    89   					outextdef(sp->s_symbol);
+    90   				funcbody(sp);
+    91   				return;
+    92   			}
+    93   			dsp = 0;
+    94   			if( !next(COMMA) )
+    95   				break;
+    96   		}
+    97   		if( gettok() != SEMI )
+    98   			synerr("external definition syntax");
+    99   	}
+   100   }
+   101    
+   102   /*
+   103    * gettype - get attribute types in attribute list
+   104    *		Handles single word keywords, such as int, char, etc. and also
+   105    *		handles the declarations of structures and unions.
+   106    */
+   107   gettype(defsc,deftype,size)			/* returns 0 for no type, 1 otherwise*/
+   108   int *defsc;							/* default storage class*/
+   109   int *deftype;						/* default data type*/
+   110   long *size;							/* size of data element 3.4 int=>long*/
+   111   {
+   112   	register int dtype, sc;
+   113   	register int sflag, uflag, lflag, decflag;
+   114   	register int token, stdflag, sbits;
+   115   	long tsize;
+   116   	register struct symbol *sp, *parent;
+   117    
+   118   	tdp = 0; tdflag = uflag = decflag = lflag = sflag = 0; tsize = 0L;
+1File: DECL.C                                                              Page       3
+   119   	dtype = TYPELESS;
+   120   	sc = *defsc;
+   121   	for( ; ; decflag++ ) {
+   122   		if( (token=gettok()) == SYMBOL && stypedef(csp) ) {
+   123   			dtype = 0;
+   124   			tdp = csp;
+   125   			continue;
+   126   		}
+   127   		if( token != RESWORD )
+   128   			break;
+   129   		switch( cvalue ) {
+   130    
+   131   		case R_TYPEDEF:
+   132   			if( tdflag )
+   133   				error("invalid typedef statement");
+   134   			tdflag++;
+   135   			continue;
+   136    
+   137   		case R_STATIC:
+   138   			if( sc && sc != STATIC && sc != EXTERNAL )
+   139   				error("invalid storage class");
+   140   			sc = STATIC;
+   141   			continue;
+   142    
+   143   		case R_AUTO:
+   144   			if( sc && sc != AUTO )
+   145   				error("invalid storage class");
+   146   			sc = AUTO;
+   147   			continue;
+   148    
+   149   		case R_EXTERNAL:
+   150   			if( sc && sc != EXTERNAL )
+   151   				error("invalid storage class");
+   152   			sc = EXTERNAL;
+   153   			continue;
+   154   	
+   155   		case R_REGISTER:
+   156   			if( sc && sc != REGISTER && sc != PDECLIST )
+   157   				error("invalid register specification");
+   158   			sc = REGISTER;
+   159   			continue;
+   160   	
+   161   		case R_LONG:
+   162   			lflag++;
+   163   			continue;
+   164    
+   165   		case R_SHORT:
+   166   			sflag++;
+   167   			continue;
+   168    
+   169   		case R_UNSIGNED:
+   170   			uflag++;
+   171   			continue;
+   172    
+   173   		case R_STRUCT:
+   174   			cvalue = STRUCT;
+   175   		case R_UNION:
+   176   			stdflag = tdflag;
+   177   			tdflag = 0; sp = 0;
+1File: DECL.C                                                              Page       4
+   178   			token = cvalue;
+   179   			smember++;
+   180   			if( next(SYMBOL) ) {	/*struct [symbol] { ... }*/
+   181   				sp = csp;
+   182   				parent = csp;
+   183   				strucptr[smember+instruct] = sp;
+   184   				if( !sp->s_sc ) {
+   185   					sp->s_attrib =| SDEFINED;
+   186   					if(!infunc)
+   187   						sp->s_attrib =| SGLOBAL;
+   188   					sp->s_sc = STRPROTO;
+   189   					sp->s_type = STRUCT;
+   190   					sp->s_ssp = dalloc(0L);
+   191   				}
+   192   				if( sp->s_sc != STRPROTO )
+   193   					error("redeclaration: %.8s",sp->s_symbol);
+   194   			}
+   195   			else parent = 0;
+   196   			smember = 0;
+   197   			if( next(LCURBR) ) {
+   198   				instruct++;
+   199   				strucptr[smember+instruct] = sp;
+   200   				sbits = boffset;
+   201   				boffset = 0;
+   202   				tsize = dlist(token==STRUCT?STELCL:UNELCL);
+   203   				boffset = sbits;
+   204   				if(!next(RCURBR))
+   205   					synerr("structure declaration syntax");
+   206   				else if( sp ) {
+   207   					if( dtab[sp->s_ssp] )
+   208   						error("redeclaration: %.8s",sp->s_symbol);
+   209   					dtab[sp->s_ssp] = tsize;
+   210   				}
+   211   				instruct--;
+   212   			}
+   213   			else if( !sp )
+   214   				error("no structure name");
+   215   			else if( sp->s_sc != STRPROTO )
+   216   				error("invalid structure prototype: %.8s",sp->s_symbol);
+   217   			else if( !dtab[sp->s_ssp] ) {	/* FRSTRUCT */
+   218   				token = FRSTRUCT;
+   219   				if( ++frstp >= NFRSTR )
+   220   					ferror("structure table overflow");
+   221   				frstab[frstp] = sp;
+   222   			}
+   223   			else
+   224   				tsize = dtab[sp->s_ssp];
+   225   			tdflag = stdflag;
+   226   			if( dtype != TYPELESS )
+   227   				error("invalid type declaration");
+   228   			dtype = (token == R_UNION) ? STRUCT : token;
+   229   			continue;
+   230    
+   231   		case R_INT:
+   232   			if( dtype != TYPELESS )
+   233   				error("invalid type declaration");
+   234   			dtype = INT;
+   235   			continue;
+   236    
+1File: DECL.C                                                              Page       5
+   237   		case R_CHAR:
+   238   			if( dtype != TYPELESS )
+   239   				error("invalid type declaration");
+   240   			dtype = CHAR;
+   241   			continue;
+   242    
+   243   		case R_FLOAT:	/*[vlh] ver. 3.4*/
+   244   		case R_DOUBLE:
+   245   			if( dtype != TYPELESS )
+   246   				error("invalid type declaration");
+   247   			dtype = FLOAT;
+   248   			continue;
+   249   		}
+   250   		break;
+   251   	}
+   252   	pbtok(token);
+   253   	if( dtype == TYPELESS )
+   254   		dtype = INT;
+   255   	if(!sc)
+   256   		sc = AUTO;
+   257   	if( lflag ) {					/*allow: long float, long int*/
+   258   		if( dtype == INT )
+   259   			dtype = LONG;
+   260   /*		else if( dtype == FLOAT )	*/
+   261   /*			dtype = DOUBLE;			*/
+   262   		else
+   263   			error("invalid long declaration");
+   264   	}
+   265   	if( sflag ) {
+   266   		if( dtype != INT )
+   267   			error("invalid short declaration");
+   268   	}
+   269   	if( uflag ) {
+   270   		if( dtype != INT )			/*allow: unsigned int*/
+   271   			error("invalid unsigned declaration");
+   272   		else
+   273   			dtype = UNSIGNED;
+   274   	}
+   275   	if( !sflag && xflag && dtype == INT )
+   276   		dtype = LONG;
+   277   	*defsc = sc;
+   278   	*deftype = dtype;
+   279   	*size = tsize;
+   280   	if (dtype == STRUCT || dtype == FRSTRUCT)
+   281   		csp->s_struc = parent;
+   282   	return(decflag);
+   283   }
+   284    
+   285   /*
+   286    * dodecl - process a single declarator
+   287    *		This does all the grubby handling of a single declarator given
+   288    *		the attributes for the declarator.  Handles typedef attributes
+   289    *		adjusts offsets for structure elements, allocates register
+   290    *		variables, etc.
+   291    */
+   292   long								/* [vlh] 3.4 int => long */
+   293   dodecl(sc,type,offset,size)			/* returns size of declarator*/
+   294   int sc;								/* storage class*/
+   295   int type;							/* data type*/
+1File: DECL.C                                                              Page       6
+   296   int offset;							/* offset if in structure or union*/
+   297   long size;							/* size of single data item 3.4 i=> l*/
+   298   {
+   299   	register struct symbol *sp;
+   300   	register int redecf, stype, dtype, i, j;
+   301    
+   302   	if( peek(SEMI) || peek(RPAREN) )
+   303   		return(0);
+   304   	if( instruct && next(COLON) ) {	/*handle bit filler field*/
+   305   		if(!(i=cexpr()))
+   306   			size = salign(INT,offset);
+   307   		else
+   308   			size = falign(type,i);
+   309   	}
+   310   	else if( (type=|declarator(0)) >= 0 && (sp=dsp) != 0 ) {
+   311   		if( tdp )					/*typedef name in declaration*/
+   312   			type = addtdtype(tdp,type,sp->s_dp,&(sp->s_ssp));
+   313   		else if( btype(type) == STRUCT ) {
+   314   			if( size )
+   315   				sp->s_ssp = dalloc(size);
+   316   			else
+   317   				error("invalid structure declaration: %.8s",sp->s_symbol);
+   318   		}
+   319   		else if( btype(type) == FRSTRUCT )
+   320   			sp->s_ssp = frstp;
+   321   		redecf = 0;
+   322   		switch( sp->s_sc ) {		/*check for redeclarations.*/
+   323    
+   324   		case 0:
+   325   			break;
+   326    
+   327   		case PARMLIST:
+   328   			if( sc != PDECLIST && sc != REGISTER )
+   329   				goto redec;
+   330   			break;
+   331    
+   332   		case BFIELDCL:
+   333   			if( sc != STELCL && sc != UNELCL )
+   334   				goto redec;
+   335   			break;
+   336    
+   337   		case STELCL:
+   338   		case UNELCL:
+   339   			redecf++;
+   340   			break;	/* [vlh] get rid of redecf entirely ?? */
+   341    
+   342   		case EXTERNAL:
+   343   			if (sp->s_type == type) {
+   344   				if (sc == sp->s_sc) break;
+   345   				if (sc == AUTO && suptype(type) == FUNCTION) {
+   346   					sc = EXTERNAL;
+   347   					break;
+   348   				}
+   349   			}
+   350   		default:
+   351   redec:
+   352   			error("redeclaration: %.8s",sp->s_symbol);
+   353   			return(size);
+   354   		}
+1File: DECL.C                                                              Page       7
+   355   		sp->s_type = type;
+   356   		dtype = suptype(type);
+   357   		type = btype(type);
+   358   		if( tdflag )				/*we are declaring typedef?*/
+   359   			sp->s_attrib =| STYPEDEF;
+   360   		if( instruct ) {
+   361   			if( next(COLON) ) {		/*handle bit field*/
+   362   				sc = BFIELDCL;
+   363   				i = cexpr();
+   364   				j = (boffset<<8)|i;
+   365   				if( redecf && sp->s_dp != j )	/* ??? */
+   366   					goto redec;
+   367   				sp->s_dp = j;
+   368   				size = j = falign(type,i);
+   369   			}
+   370   			else
+   371   				size = dsize(sp->s_type,sp->s_dp,sp->s_ssp) +
+   372   						(j=salign(type,offset));
+   373   			offset =+ j;
+   374   /*			if( redecf && sp->s_offset != offset )
+   375   				goto redec;	*/	/* [vlh] */
+   376   			sp->s_offset = offset;
+   377   		}
+   378   		if( dtype == FUNCTION ) {
+   379   			if( sc != AUTO && sc != EXTERNAL && sc != STATIC )
+   380   				error("illegal function declaration");
+   381   			if( sc != STATIC )
+   382   				sc = EXTERNAL;
+   383   		}
+   384   		else if( sc == REGISTER ) {
+   385   			if( !dtype ) {
+   386   				if( !(dinfo[type]&DREG) ) {	/* ignore reg specification */
+   387   /*					error("illegal register specification"); */
+   388   					sc = AUTO;
+   389   				}
+   390   				else if( !dregtab[ndregs] )
+   391   					sc = AUTO;
+   392   				else
+   393   					sp->s_offset = dregtab[ndregs++];
+   394   			}
+   395   			else if( dtype != POINTER ) {
+   396   				error("illegal register specification");
+   397   				sc = AUTO;			/*no more regs, make it auto*/
+   398   			}
+   399   			else if( !aregtab[naregs] )
+   400   				sc = AUTO;
+   401   			else
+   402   				sp->s_offset = aregtab[naregs++];
+   403   		}
+   404   		if( sc == AUTO ) {
+   405   			localsize =+ walign(dsize(sp->s_type,sp->s_dp,sp->s_ssp));
+   406   			sp->s_offset = -localsize;
+   407   		}
+   408   		else if( sc == STATIC )
+   409   			sp->s_offset = nextlabel++;
+   410   		sp->s_sc = sc;
+   411   		sp->s_attrib =| SDEFINED;
+   412   		if(!infunc)
+   413   			sp->s_attrib =| SGLOBAL;
+1File: DECL.C                                                              Page       8
+   414   	}
+   415   	return(size);
+   416   }
+   417    
+   418   /*
+   419    * doinit - do external definition initialization
+   420    *		Handles following C syntax:
+   421    *			initializer:
+   422    *					= constant_expression
+   423    *					= { initializer_list }
+   424    *					= { initializer_list , }
+   425    *			initializer_list:
+   426    *					constant_expression
+   427    *					initializer_list , initializer_list
+   428    *					{ initializer_list }
+   429    */
+   430   doinit(sp)							/* returns number of elements init'ed*/
+   431   struct symbol *sp;					/* pointer to symbol to init*/
+   432   {
+   433   	register int type;
+   434   	long isize, datasize, elsize;
+   435    
+   436   	type = sp->s_type;
+   437   	datasize = dsize(type,sp->s_dp,sp->s_ssp);
+   438   	if( peek(COMMA) || peek(SEMI) ) {	/*no initialization*/
+   439   		isize = walign(datasize);
+   440   		if( sp->s_sc == EXTERNAL )
+   441   			outcommon(sp->s_symbol,isize);
+   442   		else {
+   443   			outbss();				/*bss segment*/
+   444   			outlab(sp->s_offset);
+   445   			outresmem(isize);
+   446   			outtext();				/*resume text segment*/
+   447   		}
+   448   	}
+   449   	else {
+   450   		next(ASSIGN);				/*ignore '=' if there*/
+   451   		if( type == LONG || pointer(type) )
+   452   			outldata();
+   453   		else if(type == DOUBLE || type == FLOAT)	/*[vlh] 3.4*/
+   454   			outfpdata();
+   455   		else
+   456   			outdata();
+   457   		if( sp->s_sc == EXTERNAL )
+   458   			outdlab(sp->s_symbol);
+   459   		else
+   460   			outlab(sp->s_offset);
+   461   		isize = initlist(sp->s_type,sp->s_dp,sp->s_ssp);
+   462   		if( isize < datasize ) {
+   463   			outresmem(datasize-isize);
+   464   			isize = datasize;
+   465   		}
+   466   		if( walign(isize) != isize )
+   467   			outpad();
+   468   		if( isize > datasize ) {
+   469   			if( array(sp->s_type) ) {
+   470   				for( type = sp->s_type; array(type); type = delsp(type) )
+   471   					;
+   472   				dtab[sp->s_dp] = isize / dsize(type,sp->s_dp,sp->s_ssp);
+1File: DECL.C                                                              Page       9
+   473   			}
+   474   			else
+   475   				error("too many initializers");
+   476   		}
+   477   		if( sp->s_sc == STATIC )
+   478   			outtext();
+   479   	}
+   480   }
+   481    
+   482   /*
+   483    * initlist - handles initializer lists
+   484    *		This handles multi-level braces, and a character pointer pointing
+   485    *		to a string.  Most of the work is in keeping track of how many
+   486    *		bytes are left on the current "row", and outputting padding if
+   487    *		necessary.
+   488    */
+   489   long
+   490   initlist(type,dp,sp)				/* returns size of initializers in*/
+   491   									/* bytes*/
+   492   int type;							/* type of data*/
+   493   int dp;								/* dimension pointer*/
+   494   int sp;								/* structure pointer*/
+   495   {
+   496   	register int nrows;
+   497   	long datasize, i, elsize, nbleft, nbout;	/* [vlh] 3.4 int=>long */
+   498   	register int onetype;
+   499    
+   500   	for( onetype = type; array(onetype); onetype = delsp(onetype) )
+   501   		;
+   502   	nbout = 0;
+   503   	datasize = dsize(type,dp,sp);
+   504   	nbleft = 0;						/*keep track of no. of bytes left*/
+   505   	if( type == (ARRAY|CHAR) && next(STRING) ) {
+   506   		nbout = cstrsize;
+   507   		outstr();
+   508   		if( datasize > nbout )
+   509   			nbleft = datasize - nbout;
+   510   	}
+   511   	else if( array(type) || (btype(type)==STRUCT && notpointer(type)) ) {
+   512   		elsize = datasize / dsize(delsp(type),dp+1,sp);
+   513   		elsize = datasize / elsize;
+   514   		if(!next(LCURBR))
+   515   			error("missing { in initialization");
+   516   		if( type == (ARRAY|CHAR) && next(STRING) ) {
+   517   			nbout = cstrsize;
+   518   			outstr();
+   519   			if( datasize > nbout )
+   520   				nbleft = datasize - nbout;
+   521   		}
+   522   		else {
+   523   			do {						/*in current row.*/
+   524   				if( peek(SEMI) || peek(EOF) )
+   525   					break;
+   526   				if( peek(LCURBR) ) {	/*recurse down one level?*/
+   527   					if( nbleft ) {
+   528   						outresmem(nbleft);	/*pad rest of current row*/
+   529   						nbout =+ nbleft;
+   530   						nbleft = 0;
+   531   					}
+1File: DECL.C                                                              Page      10
+   532   					i = initlist(delsp(type),dp+1,sp);
+   533   					if( i > elsize )
+   534   						error("initializer list too long");
+   535   					else if( i < elsize )
+   536   						outresmem(elsize-i);
+   537   					nbout =+ elsize;
+   538   				}
+   539   				else if( peek(RCURBR) )
+   540   					break;
+   541   				else {
+   542   					i = oneinit(onetype);
+   543   					nbout =+ i;
+   544   					if(!nbleft)
+   545   						nbleft = elsize;
+   546   					if( i > nbleft )
+   547   						error("initializer alignment");
+   548   					nbleft = (i >= nbleft) ? 0 : nbleft - i;
+   549   				}
+   550   			} while( next(COMMA) );
+   551   		}
+   552   		if(!next(RCURBR))
+   553   			synerr("missing }");
+   554   	}
+   555   	else {
+   556   		i = next(LCURBR);			/*pull of optional {*/
+   557   		nbout = oneinit(onetype);
+   558   		if( i && !next(RCURBR) )
+   559   			synerr("missing }");
+   560   	}
+   561   	if( nbleft ) {					/*pad current row*/
+   562   		outresmem(nbleft);
+   563   		nbout =+ nbleft;
+   564   	}
+   565   	return(nbout);
+   566   }
+   567    
+   568   /*
+   569    * oneinit - get one initializer expression or constant
+   570    *		This checks the type of the data item expected against the
+   571    *		type obtained from expr.  Note that there is no attempt to
+   572    *		match structure initializations against the elements of the
+   573    *		structure, hence, anything goes in a structure.
+   574    */
+   575   oneinit(type)						/* returns size of initializer*/
+   576   int type;							/* type of initializer*/
+   577   {
+   578   	register int op, value;
+   579   	register struct tnode *tp;
+   580    
+   581   	commastop++;
+   582   	tp = expr();
+   583   	commastop--;
+   584   	op = tp->t_op;
+   585   	value = tp->t_value;
+   586   	switch( alltype(type) ) {
+   587    
+   588   	case CHAR:
+   589   	case ARRAY|CHAR:
+   590   		if( op != CINT )
+1File: DECL.C                                                              Page      11
+   591   			break;
+   592   		outc(CHAR,value);
+   593   		return(1);
+   594    
+   595   	case INT:
+   596   	case ARRAY|INT:
+   597   	case UNSIGNED:
+   598   	case ARRAY|UNSIGNED:
+   599   		if( op == CLONG || op == ADDR )
+   600   			break;
+   601   		if( op == CINT )
+   602   			outc(INT,value);
+   603   		else
+   604   			outinit(tp,inittype);
+   605   		return(2);
+   606    
+   607   	case LONG:
+   608   	case ARRAY|LONG:
+   609   	case POINTER|CHAR:
+   610   	case POINTER|INT:
+   611   	case POINTER|LONG:
+   612   	case POINTER|STRUCT:
+   613   	case POINTER|UNSIGNED:
+   614   		if( op == CINT ) {
+   615   			clvalue = value;	/*[vlh] fix ??? MC ??? */
+   616   			outlong(clvalue);
+   617   		}
+   618   		else if( op == CLONG )
+   619   			outlong(clvalue);
+   620   		else
+   621   			outinit(tp,inittype);
+   622   		return(4);
+   623    
+   624   	case DOUBLE:	/* [vlh] 3.4 */
+   625   	case FLOAT:
+   626   		outfp(clvalue);
+   627   		return(4);
+   628    
+   629   	case STRUCT:
+   630   	case ARRAY|STRUCT:
+   631   		if( op == CINT ) {
+   632   			if( xflag ) {
+   633   				clvalue = value;
+   634   				outlong(clvalue);
+   635   				return(4);
+   636   			}
+   637   			outc(INT,value);
+   638   			return(2);
+   639   		}
+   640   		if( op == CLONG ) {
+   641   			outlong(clvalue);
+   642   			return(4);
+   643   		}
+   644   		outinit(tp,inittype);
+   645   		if (xflag || op==ADDR) return(4);
+   646   		if ((op=tp->t_right->t_op)==ADDR || op==CLONG) return(4); /*[vlh]*/
+   647   		if ((op=tp->t_left->t_op)==ADDR || op==CLONG) return(4); /*[vlh]*/
+   648   		return(2);
+   649   	}
+1File: DECL.C                                                              Page      12
+   650   	error("invalid initializer");
+   651   	return(0);
+   652   }
+   653    
+   654   /*
+   655    * funcbody - do function body declaration
+   656    *		Basically handles function after we have scanned the parameter
+   657    *		list, which is now set up in fargs array.  We now proceed to
+   658    *		look for any declarations for the function arguments, then the
+   659    *		function declaration list, followed by the function statement list.
+   660    *		The C syntax is:
+   661    *			function_body:
+   662    *					type_decl_list function_statement
+   663    *			function_statement:
+   664    *					{ declaration_list statement_list }
+   665    */
+   666   funcbody(fsp)
+   667   struct symbol *fsp;
+   668   {
+   669   	register int olddp;
+   670   	register struct symbol *sp;
+   671   	register struct farg *fp;
+   672   	register int offset, toff;
+   673    
+   674   	infunc++;
+   675   	sp = fsp;
+   676   	opap = exprp;
+   677   	frp = snalloc(delsp(sp->s_type),sp->s_sc,sp->s_type,sp->s_dp,
+   678   			sp->s_ssp);
+   679   	exprp = opap;
+   680   	outtext();
+   681   	outflab(sp->s_symbol);
+   682   	olddp = cdp;
+   683   	dlist(PDECLIST);
+   684   	rlabel = nextlabel++;
+   685   	if(!next(LCURBR))
+   686   		synerr("function body syntax");
+   687   	else {
+   688   		localsize = 0;			/*end of first auto offset from l.e.p.*/
+   689   		offset = 8;				/*first arg offset from l.e.p.*/
+   690   		for( fp = &fargtab[0]; sp = fp->f_sp; fp++ ) {
+   691   			toff = offset;
+   692   			if( sp->s_type == CHAR )	/*char argument*/
+   693   				toff++;			/*offset of lower byte in word*/
+   694   			if( sp->s_sc == REGISTER )
+   695   				fp->f_offset = toff;
+   696   			else {
+   697   				fp->f_offset = 0;	/*really is auto arg*/
+   698   				sp->s_offset = toff;
+   699   				sp->s_sc = AUTO;
+   700   			}
+   701   			if( array(sp->s_type) ) {	/*change array ref to pointer*/
+   702   				sp->s_type = addsp(delsp(sp->s_type),POINTER);
+   703   				sp->s_dp++;
+   704   			}
+   705   			offset =+ walign(dsize(sp->s_type,sp->s_dp,sp->s_ssp));
+   706   		}
+   707   		dlist(0);
+   708   		chksyms();
+1File: DECL.C                                                              Page      13
+   709   		outbentry(localsize,ndregs,naregs);
+   710   		copyargs();				/*copy args to registers where required*/
+   711   		while(!next(RCURBR)) {
+   712   			if( next(EOF) ) {
+   713   				error("{ not matched by }");
+   714   				break;
+   715   			}
+   716   			stmt();
+   717   		}
+   718   	}
+   719   	outlab(rlabel);
+   720   	outbexit(ndregs,naregs);
+   721   	cdp = olddp;
+   722   	infunc--;
+   723   	freesyms();
+   724   }
+   725    
+   726   /*
+   727    * copyargs - copy args to register where required
+   728    *		fargtab has been set so that args declared to be registers have a
+   729    *		non-zero offset value and the register number is in the symbol
+   730    *		table pointed to by symbol.
+   731    */
+   732   copyargs()							/* returns - none*/
+   733   {
+   734   	register struct symbol *sp;
+   735   	register struct farg *fp;
+   736    
+   737   	for( fp = &fargtab[0]; sp = fp->f_sp; fp++ ) {
+   738   		if( fp->f_offset )		/*was declared register*/
+   739   			outassign(snalloc(sp->s_type,sp->s_sc,sp->s_offset,0,0),
+   740   					snalloc(sp->s_type,AUTO,fp->f_offset,0,0));
+   741   	}
+   742   }
+   743    
+   744   /*
+   745    * dlist - declaration list
+   746    *		Handles declaration lists in the following places:
+   747    *		function parameter list declarations, structure or union member
+   748    *		declarations and local declarations in functions.
+   749    */
+   750   long
+   751   dlist(defsc)						/* returns length of declarators*/
+   752   int defsc;							/* default storage class*/
+   753   {
+   754   	register int offset;
+   755   	register struct symbol *sp;
+   756   	register long i, ddsize;
+   757   	long size;	/* [vlh] 3.4 int => long */
+   758   	int type, sc, isize;
+   759    
+   760   	offset = 0; ddsize = 0L;
+   761   	do {
+   762   		sc = defsc;
+   763   		type = INT;
+   764   		if( !gettype(&sc,&type,&size) )
+   765   			break;
+   766   		do {
+   767   			i = dodecl(sc,type,offset,size);
+1File: DECL.C                                                              Page      14
+   768   			if( defsc != UNELCL ) {
+   769   				isize = i;
+   770   				offset =+ isize;
+   771   				ddsize =+ i;
+   772   			}
+   773   			else if( i > ddsize )
+   774   				ddsize = i;
+   775   			if( sc == STATIC && dsp && !stypedef(dsp) )
+   776   				doinit(dsp);		/*process any initializer*/
+   777   			dsp = 0;
+   778   		} while ( next(COMMA) );
+   779   		if(!next(SEMI)) {
+   780   			synerr("declaration syntax");
+   781   			break;
+   782   		}
+   783   	} while( 1 );
+   784   	isize = ddsize;
+   785   	ddsize =+ salign(INT,isize);
+   786   	return(ddsize);
+   787   }
+   788    
+   789   /*
+   790    * declarator - get one declarator
+   791    *		Basically uses getdecl, which returns the declaration types
+   792    *		reversed in the type word.
+   793    */
+   794   declarator(castflg)							/* returns type or -1*/
+   795   int castflg;
+   796   {
+   797   	register int type, t;
+   798    
+   799   	dsp = 0;
+   800   	if( (type=getdecl(castflg)) >= 0 )
+   801   		return( revsp(type) );
+   802   	return(type);
+   803   }
+   804    
+   805   /*
+   806    * getdecl - get one declarator, handling *, (), etc.
+   807    *		The significance of the value returned by declarator is:  the
+   808    *		least significant two bits represent the values (POINTER,FUNCTION,
+   809    *		ARRAY), these values are repeated through the word.  For example,
+   810    *		the declarations result in the following values for declarator:
+   811    *				*x() => (POINTER,FUNCTION)
+   812    *				(*x)() => (FUNCTION,POINTER)
+   813    *				*(*x)() => (POINTER,FUNCTION,POINTER)
+   814    *		The following C syntax is handled here:
+   815    *			function_declarator:
+   816    *					declarator ( parameter_list )
+   817    *			declarator:
+   818    *					identifier
+   819    *					( declarator )
+   820    *					* declarator
+   821    *					declarator [ constant-expression ]
+   822    */
+   823   getdecl(castflg)				/* returns special type of declarator*/
+   824   int castflg;					/* casting flag, 1=>allow no declarator*/
+   825   {
+   826   	register int type, i, value, sdp;
+1File: DECL.C                                                              Page      15
+   827   	register struct symbol *sp, *tsp;
+   828   	register struct farg *fp;
+   829   	register char *p;
+   830   	long lvalue;
+   831    
+   832   	type = 0;
+   833   	if( next(LPAREN) ) {			/*( declarator ) ...*/
+   834   		type = getdecl(castflg);
+   835   		if(!next(RPAREN))
+   836   			goto baddec;
+   837   	}
+   838   	if( next(MULT) )
+   839   		return(addsp(getdecl(castflg),POINTER));
+   840   	sdp = cdp;
+   841   	if( next(SYMBOL) ) {
+   842   		sp = dsp = csp;
+   843   		type = 0;
+   844   		sp->s_dp = sdp;
+   845   	}
+   846   	while( 1 ) {
+   847   		if( next(LPAREN) ) {		/*declarator ( ... )*/
+   848   			if(!infunc) {
+   849   				ndregs = naregs = 0;
+   850   				for( fp = &fargtab[0]; next(SYMBOL); ) {
+   851   					p = csp;
+   852   					if( p->s_attrib & SDEFINED )
+   853   						error("redeclaration: %.8s",p->s_symbol);
+   854   					else if( fp >= &fargtab[NFARGS-1] ) {
+   855   						synerr("too many params");
+   856   						break;
+   857   					}
+   858   					else {
+   859   						p->s_attrib =| SDEFINED;
+   860   						p->s_sc = PARMLIST;
+   861   						p->s_type = INT;	/*default to int*/
+   862   						fp->f_sp = p;
+   863   						fp++;
+   864   					}
+   865   					if(!next(COMMA))
+   866   						break;
+   867   				}
+   868   				fp->f_sp = 0;
+   869   			}
+   870   			if(!next(RPAREN))
+   871   				break;
+   872   			type = addsp(type,FUNCTION);
+   873   			continue;
+   874   		}
+   875   		if( next(LBRACK) ) {	/*declarator [ cexpr ]*/
+   876   			if( next(RBRACK) )
+   877   				dalloc(1L);
+   878   			else {
+   879   				tsp = dsp;			/* [vlh] 3.4 save in case of reset */
+   880   				value = cexpr();	/* recurses on sizeof.... resets dsp */
+   881   				dsp = tsp;			/* [vlh] 3.4 */
+   882   				lvalue = value;		/* [vlh] 3.4 */
+   883   				for( i = sdp; i < cdp; )
+   884   					dtab[i++] =* lvalue;
+   885   				dalloc(lvalue);
+1File: DECL.C                                                              Page      16
+   886   				if( !next(RBRACK) )
+   887   					break;
+   888   			}
+   889   			type = addsp(type,ARRAY);
+   890   			continue;
+   891   		}
+   892   		if( castflg || dsp )
+   893   			return(type);
+   894   		break;
+   895   	}
+   896   baddec:
+   897   	synerr("invalid declarator");
+   898   	return(-1);
+   899   }
+   900    
+   901   /* dalloc - dimension table allocation*/
+   902   /*		Allocates an entry in the dimension table.*/
+   903   dalloc(dimsize)						/* returns ptr to dimension allocated*/
+   904   long dimsize;						/* dimension size [vlh] 3.4 i=>l*/
+   905   {
+   906   	register int i;
+   907    
+   908   	if( (i=cdp++) >= DSIZE-1 )
+   909   		ferror("dimension table overflow");
+   910   	dtab[i] = dimsize;
+   911   	return(i);
+   912   }
+   913    
+   914   /* addsp - add special type to special type info*/
+   915   /*		Takes given special type and adds it into the special type field.*/
+   916   addsp(type,nsptype)					/* returns resulting type*/
+   917   int type;							/* old type field*/
+   918   int nsptype;						/* special type to be added*/
+   919   {
+   920   	register int dtype;
+   921    
+   922   	dtype = btype(type);
+   923   	type =& (~TYPE);
+   924   	return( (type<<SUTYPLEN) | suptype(nsptype) | dtype );
+   925   }
+   926    
+   927   /* delsp - delete one special type info field from special type info*/
+   928   /*		Takes given special type field and deletes least sign.*/
+   929   delsp(type)							/* returns resulting type*/
+   930   int type;							/* old special type*/
+   931   {
+   932   	register int dtype;
+   933    
+   934   	dtype = btype(type);
+   935   	type =& (~(ALLTYPE));
+   936   	return( (type>>SUTYPLEN) | dtype );
+   937   }
+   938    
+   939   /*
+   940    * revsp - reverse special type info
+   941    *		This allows for the processing of the super-type info in
+   942    *		the reverse order, which is necessary for initializations.
+   943    */
+   944   revsp(type)							/* returns reversed type info*/
+1File: DECL.C                                                              Page      17
+   945   int type;							/* type to reverse*/
+   946   {
+   947   	register int t;
+   948    
+   949   	for( t = btype(type); suptype(type) != 0; type = delsp(type) )
+   950   		t = addsp(t,type);
+   951   	return(t);
+   952   }
+   953    
+   954   /* falign - handle bit field alignments*/
+   955   falign(type,flen)					/* returns number of bytes padded*/
+   956   int type;							/* data type*/
+   957   int flen;							/* field length*/
+   958   {
+   959   	register int off;
+   960    
+   961   	off = 0;
+   962   	if( flen <= 0 ) {
+   963   		error("invalid field size");
+   964   		flen = 0;
+   965   	}
+   966   	switch( type ) {
+   967    
+   968   	case INT:
+   969   	case UNSIGNED:
+   970   		if( flen > BITSPWORD )
+   971   			error("field overflows word");
+   972   		if( flen + boffset > BITSPWORD )
+   973   			off = CHRSPWORD;
+   974   		break;
+   975    
+   976   	case CHAR:
+   977   		if( flen > BITSPCHAR )
+   978   			error("field overflows byte");
+   979   		if( flen + boffset > BITSPCHAR )
+   980   			off = 1;
+   981   		break;
+   982    
+   983   	default:
+   984   		error("invalid field type description");
+   985   		return(0);
+   986    
+   987   	}
+   988   	if( off )
+   989   		boffset = 0;
+   990   	boffset =+ flen;
+   991   	return(off);
+   992   }
+   993    
+   994   /* salign - structure alignment*/
+   995   salign(type,offset)				/* returns bytes of padding*/
+   996   int type;							/* data type to align*/
+   997   int offset;							/* current structure offset*/
+   998   {
+   999   	register int off;
+  1000    
+  1001   	off = offset;
+  1002   	if( boffset ) {					/*remaining bit fields, flush 'em*/
+  1003   		off =+ (boffset+(BITSPCHAR-1))/BITSPCHAR;
+1File: DECL.C                                                              Page      18
+  1004   		boffset = 0;
+  1005   	}
+  1006   	while( array(type) )			/*get base type*/
+  1007   		type = delsp(type);
+  1008   	if( type != CHAR )				/*need word boundary*/
+  1009   		off = walign(off);
+  1010   	return( off - offset );
+  1011   }
+  1012    
+  1013   /* dsize - returns size of data object in bytes*/
+  1014   long								/* [vlh] 3.4 */
+  1015   dsize(type,dp,sp)					/* returns number of bytes*/
+  1016   int type;							/* type of node*/
+  1017   int dp;								/* dimension pointer*/
+  1018   int sp;								/* size pointer if structure*/
+  1019   {
+  1020   	register long nel, size;
+  1021    
+  1022   	nel = 1;
+  1023   	for( ; array(type); type = delsp(type) )
+  1024   		nel = dtab[dp];
+  1025   	if( function(type) )
+  1026   		return(0);
+  1027   	size = (pointer(type)) ? PTRSIZE : (type == STRUCT) ?
+  1028   			dtab[sp] : dinfo[type]&DTSIZE;
+  1029   	if(!size)
+  1030   		error("invalid data type");
+  1031   	return( size * nel );
+  1032   }
+  1033    
+  1034   /*
+  1035    * addtdtype - add typedef info into declarator
+  1036    *		here we very carefully add in the dimensions for an array typedef
+  1037    *		declaration.  Note that declarator has already allocated the
+  1038    *		declarator-specific dimensions, now we allocate the typedef
+  1039    *		dimensions and adjust the size of the declarator's dimensions.
+  1040    *		Note that this must be done before the dalloc for the structure,
+  1041    *		otherwise we would mix up array and structure sizes.
+  1042    */
+  1043   addtdtype(tddp,type,dp,ssp)			/* returns type*/
+  1044   struct symbol *tddp;
+  1045   int type;
+  1046   int dp;
+  1047   int *ssp;
+  1048   {
+  1049   	register int ntype, t, i, tdf;
+  1050    
+  1051   	for( tdf = 0, t = tddp->s_type; suptype(t); t = delsp(t) )
+  1052   		if( array(t) ) {
+  1053   			tdf++;
+  1054   			break;
+  1055   		}
+  1056   	ntype = 0;
+  1057   	for( t = type, i = dp; suptype(t); t = delsp(t) ) {
+  1058   		ntype = addsp(ntype,t);
+  1059   		if( tdf && array(t) )
+  1060   			dtab[i++] =* dtab[tddp->s_dp];
+  1061   	}
+  1062   	for( t = tddp->s_type, i = tddp->s_dp; suptype(t); t = delsp(t) )
+1File: DECL.C                                                              Page      19
+  1063   		if( array(t) )
+  1064   			dalloc(dtab[i++]);
+  1065   	for( t = tddp->s_type; suptype(ntype); ntype = delsp(ntype) )
+  1066   		t = addsp(t,ntype);
+  1067   	if( (ntype=btype(t)) == STRUCT )
+  1068   		*ssp = tddp->s_ssp;
+  1069   	else if( ntype == FRSTRUCT )
+  1070   		*ssp = frstp;
+  1071   	return(t);
+  1072   }

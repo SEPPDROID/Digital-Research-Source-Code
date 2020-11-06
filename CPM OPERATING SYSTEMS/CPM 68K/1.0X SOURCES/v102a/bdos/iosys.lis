@@ -1,0 +1,79 @@
+1File: IOSYS.C                                                             Page       1
+     1   /****************************************************************
+     2   *								*
+     3   *		CP/M-68K BDOS Disk I/O System Module		*
+     4   *								*
+     5   *	This module translates from the packet oriented I/O	*
+     6   *	passed from the other BDOS modules into BIOS calls.	*
+     7   *								*
+     8   *	It includes only one external entry point:
+     9   *		do_phio()   - do physical i/o			*
+    10   *								*
+    11   *								*
+    12   *	Configured for Alcyon C on the VAX			*
+    13   *								*
+    14   ****************************************************************/
+    15    
+    16   #include "bdosinc.h"		/* Standard I/O declarations */
+    17    
+    18   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    19    
+    20   #include "pktio.h"		/* Packet I/O definitions */
+    21    
+    22   #include "biosdef.h"		/* Declarations for BIOS entry points */
+    23    
+    24   EXTERN	udiv();			/* Assembly language unsigned divide routine */
+    25   				/* in bdosif.s.  It's used because Alcyon C  */
+    26   				/* can't do / or % without an external */
+    27    
+    28   /************************
+    29   *  do_phio entry point	*
+    30   ************************/
+    31    
+    32   UWORD do_phio(iop)
+    33    
+    34   REG struct iopb *iop;		/* iop is a pointer to a i/o parameter block */
+    35    
+    36   {
+    37       MLOCAL UBYTE last_dsk;  	/* static variable to tell which disk
+    38   				     was last used, to avoid disk selects */
+    39       REG struct dph *hdrp;	  /* pointer to disk parameter header	*/
+    40       REG struct dpb *dparmp;	  /* pointer to disk parameter block	*/
+    41       REG UWORD	rtn;		  /* return parameter			*/
+    42       UWORD	iosect;		  /* sector number returned from divide rtn */
+    43    
+    44       LOCK		/* lock the disk system while doing physical i/o */
+    45    
+    46       rtn = 0;
+    47       switch (iop->iofcn)
+    48       {
+    49   	case sel_info:	
+    50   		last_dsk = iop->devnum;
+    51   		iop->infop = bseldsk(last_dsk, iop->ioflags);
+    52   		break;
+    53    
+    54   	case read:
+    55   	case write:
+    56   		if (last_dsk != iop->devnum)
+    57   		    bseldsk((last_dsk = iop->devnum), 0);
+    58   		    /* guaranteed disk is logged on, because temp_sel in
+    59   			BDOSMAIN does it	*/
+1File: IOSYS.C                                                             Page       2
+    60   		hdrp = iop->infop;
+    61   		dparmp = hdrp->dpbp;
+    62    
+    63   		bsettrk( udiv( iop->devadr, dparmp->spt, &iosect )
+    64   			 + dparmp->trk_off );
+    65   		bsetsec( bsectrn( iosect, hdrp->xlt ) );
+    66   		bsetdma(iop->xferadr);
+    67   		if ((iop->iofcn) == read) rtn = bread();
+    68   		else rtn = bwrite(iop->ioflags);
+    69   		break;
+    70    
+    71   	case flush:
+    72   		rtn = bflush();
+    73       }
+    74    
+    75       UNLOCK
+    76       return(rtn);
+    77   }

@@ -1,0 +1,150 @@
+;
+;	timer routines for histogram
+;	1/9/83
+;
+
+cr	equ	0dh
+lf	equ	0ah
+
+	cseg
+
+	public	inittimer
+	public	starttimer
+	public	stoptimer
+
+	extrn	collecthist:near
+	extrn	printm:near
+	extrn	systemreset:near
+
+	extrn	histds:word
+
+port_base	equ	50h
+master_base	equ	port_base + 0
+slave_base	equ	port_base + 2
+
+Timer_control	equ	port_base + 7
+Timer_0		equ	port_base + 4
+
+int_base	equ	29h * 4
+timer_int_off	equ	word ptr .int_base
+timer_int_seg	equ	word ptr .int_base + 2
+
+tickint:
+;=======
+; Interrupt handler for tick interrupts
+
+	push ds
+	mov ds,histds
+	test	intick,1
+	jnz	overrun
+	mov	intick,1
+	mov userss,ss
+	mov usersp,sp
+	mov ss,histds
+	mov sp,offset tick_tos
+	push ax ! push bx
+	push cx ! push dx
+	push di ! push si
+	push bp ! push es
+
+	mov	es,userss
+	mov	si,usersp
+	mov	ax,es:2[si]		;get ip where int occurred
+	mov	bx,es:4[si]		;get cs where int occurred
+	call	collecthist
+
+	pop es ! pop bp			;restore context
+	pop si ! pop di
+	pop dx ! pop cx
+	pop bx ! pop ax
+	mov ss,userss
+	mov sp,usersp
+	pop ds
+
+	push	ax
+	mov al,20H
+	out master_base,al	; reset the master
+	out slave_base,al	; reset the slave
+	pop	ax
+
+	mov	intick,0
+	iret
+
+intick	db	0
+
+overrun:
+	mov	dx,offset overrunerr
+	call	printm
+	call	systemreset
+
+;
+;	initialize timer and interrupt vector
+;
+
+inittimer:
+
+; setup clock timer interrupt addr
+
+	sub	ax,ax
+	mov	es,ax
+	mov	es:word ptr .00a4h,offset tickint
+	mov	es:word ptr .00a6h,cs
+
+;
+; set up the master PIC
+
+	mov al,15h! out master_base, al
+	mov al,20h! out master_base + 1,al ; interupts start at interupt 20h
+
+	mov al,80h! out master_base + 1, al ; only IRQ 7 has a slave attached
+	mov al,01h! out master_base + 1, al ; Set for 8088 mode
+
+	mov al,0ffh! out master_base + 1, al ; turn off all interupts for now
+
+;
+; set up the slave PIC
+
+	mov al,015h! out slave_base, al
+	mov al,028h! out slave_base + 1,al ; base of the slave vectors
+
+	mov al,07h! out slave_base + 1, al  ; slave ID number
+	mov al,01h! out slave_base + 1, al  ; 8088 mode
+
+	mov al, 0ffh! out slave_base + 1, al ; off for now
+
+;
+; now set up the timer for 16.67 milliseconds
+; timer 0, two byte rl, mode 3
+
+	mov al,036h! out timer_control, al ; timer control word
+
+	mov al,03ch! out timer_0, al	   ; timer 0's count	
+	mov al,082h! out timer_0, al
+
+	ret
+
+
+starttimer:
+
+	mov al,7fh! out master_base + 1, al
+	mov al,0fdh! out slave_base + 1, al
+	sti
+	ret
+
+stoptimer:
+
+	mov al,0ffh! out master_base + 1, al ; turn off all interupts for now
+	mov al, 0ffh! out slave_base + 1, al ; off for now
+	ret
+
+	dseg
+
+		rw	128
+tick_tos	rw	0
+userss		rw	1
+usersp		rw	1
+
+overrunerr	db	cr,lf,'Timer interrupt overrun',cr,lf,'$'
+
+	end
+

@@ -1,0 +1,419 @@
+;---------------------------------------------------------------------
+; IBMCPM.A86 version 2.1 for LSI M-FOUR and CAL-PC computers
+; 23-MAR-88
+; Stephen Hunt
+;---------------------------------------------------------------------
+;
+; 
+;	configure drive C, D or E to IBM CP/M ss dd format.
+;
+;       Will be of no use if 8" floppy drives are fitted.
+;
+;
+;---------------------------------------------------------------------
+
+; prom related equates
+
+label_seg	equ	0ffffh		; label segment
+label_ofst	equ	05h		; label offset
+prom_seg	equ	0fc00h		; prom segment
+get_switch	equ	03055h		; get switch function (prom call)
+
+; character equates
+
+cr		equ	0dh		; carriage return
+lf		equ	0ah		; line feed
+eof		equ	01ah		; end of file
+esc		equ	01bh		; escape
+
+bit0		equ	00000001b
+bit1		equ	00000010b
+bit2		equ	00000100b
+bit3		equ	00001000b
+bit4		equ	00010000b
+bit5		equ	00100000b
+bit6		equ	01000000b
+bit7		equ	10000000b
+
+cpm		equ	0e0h
+
+; macro to CALLF to prom (asm86 does not understand 'CALLF SEG:OFST')
+
+codemacro call_prom func_call:dw
+	db	09ah
+	dw	func_call
+	dw	0fc00h
+endm
+
+;---------------------------------------------------------------------
+; CODE SEGMENT
+;---------------------------------------------------------------------
+
+	cseg
+	org	0000h
+
+;---------------------------------------------------------------------
+; jump past my copywrite message
+;---------------------------------------------------------------------
+
+start:
+;
+	jmp	check_os
+
+vers	db	'(C) STEPHEN HUNT 23-MAR-88, Disk Patch Version 2.1',eof
+
+;---------------------------------------------------------------------
+; check that the operating system is BDOS version 2.x
+;---------------------------------------------------------------------
+
+check_os:
+;
+	mov	cl,0ch		; get o/s version number
+	int	cpm
+	and	al,0f0h		; mask of lower nybble
+	cmp 	al,020h		; check version 2.x
+	jz	get_machine_type; if ok jump forward
+
+;---------------------------------------------------------------------
+; incorrect BDOS version, so print error & terminate
+;---------------------------------------------------------------------
+
+wrong_bdos_version:
+;
+	mov	dx,offset wrong_version
+	jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; check that the machine is a CAL-PC or LSI-M4
+;---------------------------------------------------------------------
+
+get_machine_type:
+;
+	mov	ax,label_seg
+	mov	es,ax
+	mov	si,offset m4_label
+	mov	di,label_ofst
+	mov	cx,06h
+	cld
+	rep	cmpsb
+	mov	bl,00h			; 0 = LSI-M4
+	jz	set_mc_type
+
+	mov	si,offset cal_label
+	mov	di,label_ofst
+	mov	cx,06h
+	rep	cmpsb
+	mov	bl,01h			; 1 = CAL-PC
+	jz	set_mc_type
+
+	mov	bl,02h			; 2 = UNKNOWN
+
+;---------------------------------------------------------------------
+; print machine type, and exit if not CAL-PC or LSI-M4
+;---------------------------------------------------------------------
+
+set_mc_type:
+;
+	mov	mc_type,bl
+	xor	bh,bh
+	add	bx,bx
+	add	bx,offset machines
+	mov	dx,[bx]
+	call	print_string
+	cmp	mc_type,02h
+	jb	valid_hware
+	jmp	reset
+
+;---------------------------------------------------------------------
+; print signon message
+;---------------------------------------------------------------------
+
+valid_hware:
+;
+	mov	dx,offset signon
+	call	print_string
+
+;---------------------------------------------------------------------
+; get system dip switch setting
+;---------------------------------------------------------------------
+; settings returned in AL as follows:
+;
+;	bit 0      -  double sided drives
+;	bit 1      -  quad density drives
+;	bit 2      -  8 inch drives
+;	bit 3      -  hard disk present
+;	bit 4      -  2 floppy drives present (else only 1)
+;	bit 5 & 6  -  hard disk type:
+;	      0 0  -  5  Mb  ST-412 (M4) or Rodime RO201 (CAL)
+;	      0 1  -  10 Mb  Rodime RO202
+;	      1 0  -  15 Mb  Rodime RO203
+;	      1 1  -  20 Mb  Rodime RO204
+;	bit 7      -  half height 5 inch floppy drives fitted
+;---------------------------------------------------------------------
+
+get_system_type_switch:
+;
+	call_prom	get_switch
+	mov	dip_sw,al
+
+;---------------------------------------------------------------------
+; if 8 inch floppy drives fitted print message & exit
+;---------------------------------------------------------------------
+
+test_drive_size:
+;
+	test	al,bit2		; test for 8" drives
+	jz	test_number_drives
+	mov	dx,offset eight_inch ; error message
+	jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; test if 1 or 2 floppies, if only 1 drive test also for hard disk
+; if 2 drives set drive C, right hand drive
+;---------------------------------------------------------------------
+
+test_number_drives:
+;
+	test	al,bit4		; test for 1 or 2 floppy drives
+	jz	test_winchester ; if 1 drive, test for winchester
+	mov	drive,02h	; set initially to drive C:
+	mov	drvpos,01h	; set to right hand drive
+	jmp	test_number_sides
+
+;---------------------------------------------------------------------
+; test for hard disk, if no hard disk print message & exit
+;---------------------------------------------------------------------
+
+test_winchester:
+;
+	test	al,bit3		; test for winchester
+	jnz	winchester_exists ; if there is a winchester jump forward
+	mov	dx,offset one_drive
+	jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; hard disk present so set to drive D, left hand drive
+;---------------------------------------------------------------------
+
+winchester_exists:
+;
+	mov	drive,03h	; set initially to drive D:
+	mov	drvpos,0h	; set to left hand drive
+
+;---------------------------------------------------------------------
+; if single sided floppy drives, abort with error (see below)
+;---------------------------------------------------------------------
+; NOTE: There should never be single sided 5.25" drives on the CAL-PC
+;       or LSI-M4. If the machine is booted from a single sided disk
+;       with the appropriate dip switch set to single sided drives the
+;       operating system always display the message:
+;
+;		System not recognised
+;
+;	The machine then halts and has to be reset.
+;
+;	I have encountered the above when using the following versions
+;	of CP/M :
+;
+;		CP/M-86/80                     level 17
+;		    "	                       level 21
+;		    "                          level 22
+;		Concurrent CP/M-86/80 vers 2.0 level 1
+;
+;	The program will therefore stop with an error message, simply
+;	because I don't know how single sided drives are configured.
+;
+;  23-03-88  only single sided 8" drives may exists on this system !
+;
+;---------------------------------------------------------------------
+
+test_number_sides:
+ 
+ 	test	al,bit0		; test for single or double sided
+ 	jnz	test_density	; if double sided jump forward
+ 	mov	dx,offset single_sided
+	jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; if quad density floppy drive, increment the drive reference letter
+;---------------------------------------------------------------------
+; NOTE: If the disk drive is quad density, the disk is treated as read
+;	only by the BIOS.
+;---------------------------------------------------------------------
+; 
+
+test_density:
+;
+	test	al,bit2		; test for double or quad density drives
+	jz	select_drive	; if double, jump forward
+	inc	drive		; quad density, so change patch drive
+
+;---------------------------------------------------------------------
+; select required drive via a direct bios call,
+; returns the following in this configuration:
+;	ax = dpb offset
+;	bx = dpe offset
+;	es = segment address
+;---------------------------------------------------------------------
+
+select_drive:
+;
+	mov	dx,offset bios_code
+	mov	cl,032h
+	int	cpm
+
+;---------------------------------------------------------------------
+; if invalid drive (dpb or dpe = 0), print message and exit
+;---------------------------------------------------------------------
+
+test_valid_dpb:
+;
+	test	ax,ax
+	jz	drive_select_error
+	test	bx,bx
+	jnz	set_new_format
+
+drive_select_error:
+;
+	mov	dx,offset select_error
+	jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; overwrite the old disk parameters with the new parameters
+;---------------------------------------------------------------------
+
+set_new_format:
+;
+	mov	si,offset new_dpb
+	mov	di,ax
+	mov	cx,24
+	cld
+	rep	movsb
+
+;---------------------------------------------------------------------
+; get & display the drive that has been patched, and to what format
+; before terminating
+;---------------------------------------------------------------------
+
+finished_message:
+;
+	mov	ax,drive
+	add	al,'A'
+	mov	drv_letter,al
+	mov	dx,offset complete
+	;jmp	exit_msg	; print message & exit
+
+;---------------------------------------------------------------------
+; print message at DX, reset all drives, and exit back to CP/M-86
+;---------------------------------------------------------------------
+
+exit_msg:
+;
+	call	print_string
+
+reset:		; reset drives even if errors occur
+;
+	mov	cl,0dh
+	int	cpm
+
+exit:
+;
+	xor	cl,cl
+	xor	dl,dl
+	int	cpm
+
+;---------------------------------------------------------------------
+; subroutine: print string at offset DX
+;---------------------------------------------------------------------
+
+print_string:
+;
+	mov	cl,09h
+	int	cpm
+	ret
+;---------------------------------------------------------------------
+; END OF CODE SEGMENT
+;---------------------------------------------------------------------
+;---------------------------------------------------------------------
+; DATA SEGMENT
+;---------------------------------------------------------------------
+
+	dseg
+	org	0100h
+
+signon		db	' Disk Patch  Version 2.1  (C) S.Hunt 23-Mar-88',cr,lf,'$'
+
+complete	db	cr,lf,'Drive '
+drv_letter	db	'X'
+		db	': set to IBM CP/M SS DD format',cr,lf,'$'
+
+machines	dw	offset m_four
+		dw	offset cal_pc
+		dw	offset unknown
+
+m_four		db	cr,lf,'LSI M-FOUR$'
+cal_pc		db	cr,lf,'CAL-PC$'
+unknown		db	cr,lf,'Disk Patch only runs on the LSI M-FOUR or CAL-PC$'
+
+wrong_version	db	cr,lf,'Disk Patch Requires CP/M-86 version 2.x$'
+
+eight_inch	db	cr,lf,'Aborting - not configured for 8" drives$'
+one_drive	db	cr,lf,'Aborting - not configured for single drive machine$'
+single_sided	db	cr,lf,'Aborting - configuration not known for single sided drives$'
+select_error	db	cr,lf,'Aborting - Unable to access disk parameters$'
+
+dip_sw		db	00h	; dip switch setting
+mc_type		db	02h	; machine type
+
+m4_label	db	'Lsi_M4' ; machine label in prom at FFFF:0005
+cal_label	db	'Cal_PC' ;    "      "   "   "   "   "    "
+
+bios_code	db	09h	; select drive function
+drive		dw	00h	; drive code [CX]
+		dw	00h	;   "   "    [DX]
+
+;---------------------------------------------------------------------
+; parameters for IBM CP/M single sided double density format.
+;
+; NOTE: each track has 8 x 512 byte sectors. However, this system
+; expects each sector to be 128 bytes long. So as far as this system
+; is concerned, each track has 32 x 128 byte sectors per track.
+; (i.e  8 x 512  =  32 x 128)
+;---------------------------------------------------------------------
+
+new_dpb		dw	020h	; spt
+		db	03h	; bsh
+		db	07h	; blm
+		db	0h	; exm
+		dw	09bh	; dsm
+		dw	03fh	; drm
+		db	0c0h	; al0
+		db	0h	; al1
+		dw	010h	; cks
+		dw	01h	; off
+
+;---------------------------------------------------------------------
+; parameters used by the firmware when accessing the disk controller.
+; MUST follow on directly after the Disk Parameter Block.
+;---------------------------------------------------------------------
+
+flags		db	00h	; parameter flags (initially SS DD)
+		db	0ah	; number of retries
+		db	08h	; physical sectors per track
+drvpos		db	01h	; right hand drive
+		db	00h	; ? don't know ?
+		dw	320	; total sectors per disk
+		dw	512	; bytes per sector
+
+		db	0	; just padding !!
+
+;---------------------------------------------------------------------
+; END OF DATA SEGMENT
+;---------------------------------------------------------------------
+
+		end
+
+;---------------------------------------------------------------------
+; end of Disk Patch v2.10
+;---------------------------------------------------------------------
+

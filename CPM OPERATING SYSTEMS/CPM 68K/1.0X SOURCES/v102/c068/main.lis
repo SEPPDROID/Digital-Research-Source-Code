@@ -1,0 +1,176 @@
+1File: MAIN.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   char *version "@(#) c068 parser 4.0 - Feb 11, 1983";
+     9   /*
+    10   	ALCYON C Compiler for the Motorola 68000 - Parser
+    11    
+    12   	Called from c68:
+    13    
+    14   		c068 source icode strings
+    15    
+    16   	source:		input source code, preprocessed with comments stripped
+    17    
+    18   	icode:		contains the intermediate code for the code generator,
+    19   				for a detailed explanaion see ../doc/icode.
+    20    
+    21   	strings:	contains all the string constants.
+    22    
+    23   	The basic structure of the parser is as follows:
+    24    
+    25   	main							main driver for parser
+    26   		syminit						initializes symbol table
+    27   		doextdef					external definition syntax
+    28   			getatt					get type attributes
+    29   				dlist				declaration list for structures/unions
+    30   					getatt			recursive gettype call
+    31   					dodecl			do one declaration
+    32   						declarator	handle declarator syntax
+    33   			dodecl					do one external declaraion
+    34   			initlist				external initialization list
+    35   				cexpr				constant expressions
+    36   					expr			arithmetic expressions
+    37   						maketree	build operator tree
+    38   			funcbody				function body
+    39   				dlist				declaration list
+    40   				stmt				function statements
+    41   					stmt			recursive stmt call
+    42   					expr			arithmetic expressions
+    43    
+    44    */
+    45    
+    46   #include "parser.h"
+    47    
+    48   int nextlabel	1;
+    49   int lineno;
+    50   char *exprp		&exprarea[0];
+    51    
+    52   /*
+    53    * main - main routine for parser
+    54    *		Checks arguments, opens input and output files, does main loop
+    55    *		for external declarations and blocks.
+    56    */
+    57   main(argc,argv)							/* returns - none*/
+    58   int argc;								/* argument count*/
+    59   char *argv[];							/* argument pointers*/
+1File: MAIN.C                                                              Page       2
+    60   {
+    61   	register char *q;
+    62   	register int i;
+    63    
+    64   	for( i = 4; i < argc; i++ ) {
+    65   		q = argv[i];
+    66   		if( *q++ != '-' )
+    67   			usage();
+    68   		while( 1 ) {
+    69   			switch( *q++ ) {
+    70    
+    71   			case 'F':
+    72   			case 'f':
+    73   				fflag++;
+    74   				continue;
+    75    
+    76   			case 'E':
+    77   			case 'e':
+    78   				eflag++;
+    79   				continue;
+    80    
+    81   			case 'W':
+    82   			case 'w':
+    83   				wflag++;
+    84   				continue;
+    85    
+    86   			case '\0':
+    87   				break;
+    88    
+    89   			default:
+    90   				usage();
+    91   			}
+    92   			break;
+    93   		}
+    94   	}
+    95   	if( argc < 4 )
+    96   		usage();
+    97   	if( fopen(argv[1],&ibuf,0) < 0 )	/* 3rd arg for versados */
+    98   		ferror("can't open %s",argv[i]);
+    99   	if( fcreat(argv[2],&obuf,0) < 0 || fcreat(argv[3],&sbuf,0) < 0 )
+   100   		ferror("temp creation error");
+   101   	obp = &obuf;
+   102   	lineno++;
+   103   	frstp = -1;		/* [vlh] 3.4 - initialize only once */
+   104   	syminit();
+   105   	while( !peek(EOF) )
+   106   		doextdef();
+   107   	outeof();
+   108   	outdata();
+   109   	copysfile(argv[3]);
+   110   	exit(errcnt!=0);
+   111   }
+   112    
+   113   /* usage - output usage error message and die*/
+   114   usage()
+   115   {
+   116   	ferror("usage: c068 source icode str [-e] [-f] [-w]");
+   117   }
+   118    
+1File: MAIN.C                                                              Page       3
+   119   /* error - report an error message*/
+   120   /*		outputs current line number and error message*/
+   121   error(s,x1,x2,x3,x4,x5,x6)			/* returns - none*/
+   122   char *s;							/* error message*/
+   123   int x1, x2, x3, x4, x5, x6;			/* args for printf*/
+   124   {
+   125   	register char *savep;
+   126    
+   127   	savep = obp;
+   128   	obp = 0;
+   129   	errcnt++;
+   130   	if (!inclflag) {
+   131   		if( lineno )
+   132   			printf("* %d: ",lineno);
+   133   	}
+   134   	else	/*[vlh] generate filename and approp line #*/
+   135   		printf("%s: * %d: ",inclfile,inclline);
+   136   	printf(s,x1,x2,x3,x4,x5,x6);
+   137   	printf("\n");
+   138   	obp = savep;
+   139   }
+   140    
+   141   /* ferror - fatal error*/
+   142   /*		Outputs error message and exits*/
+   143   ferror(s,x1,x2,x3,x4,x5,x6)			/* returns - none*/
+   144   char *s;							/* error message*/
+   145   int x1, x2, x3, x4, x5, x6;			/* args for printf*/
+   146   {
+   147   	error(s,x1,x2,x3,x4,x5,x6);
+   148   	exit(1);
+   149   }
+   150    
+   151   v6flush(v6buf)
+   152   struct iobuf *v6buf;
+   153   {
+   154   	register i;
+   155    
+   156   	i = BLEN - v6buf->nunused;
+   157   	v6buf->nunused = BLEN;
+   158   	v6buf->xfree = &(v6buf->buff[0]);
+   159   	if(write(v6buf->fildes,v6buf->xfree,i) != i)
+   160   		return(-1);
+   161   	return(0);
+   162   }
+   163   printf(string,a,b,c,d,e,f,g)
+   164   char	*string;
+   165   int	 a,b,c,d,e,f,g;
+   166   {
+   167   char	area[256];
+   168   register char *p;
+   169    
+   170   	sprintf(area,string,a,b,c,d,e,f,g);
+   171   	for(p = &area[0]; *p; p++)
+   172   		putchar(*p);
+   173   }

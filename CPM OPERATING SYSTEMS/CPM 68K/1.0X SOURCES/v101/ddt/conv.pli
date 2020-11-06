@@ -1,0 +1,101 @@
+
+conv: proc options(main);
+
+ dcl (inname,outname) char(50) varying;
+ dcl (infile,outfile) file;
+ dcl bytes char(2);
+ dcl wigit char(512);
+ dcl digit char;
+ dcl bdigit(128) bit(8);
+ dcl (j,i,bnum) bin ;
+ Dcl bytesb(2) char(1) based (bp1) ;
+ Dcl bp1 ptr ;
+ dcl (eof,fof) bit(1); 
+ dcl (temp,temp2) bit(8);
+
+ on endfile(infile) eof = '1'b;
+ on undefinedfile(infile) begin;
+				put skip list('File not found');
+				stop;
+			  end;
+
+ bp1 = addr(bytes) ;
+
+ put skip edit('Source Filename:      ')(a(23)); get edit(inname)(a(50));
+ put skip edit('Destination Filename: ')(a(23)); get edit(outname)(a(50));
+
+ open file(infile) input environment(block_io) sequential title(inname);
+ open file(outfile) output stream linesize(80) title(outname);
+
+ eof = '0'b; fof = '0'b;
+ read file(infile) into (wigit); 
+ do while( ^fof);
+    fof = eof;	
+    do bnum = 1 to 512;
+	temp = unspec(substr(wigit,bnum,1));
+	do i = 1 to 8 ; substr(temp2,i,1) = substr(temp,9-i,1); end;
+	bytes = byte_to_hex(temp2);
+	put file(outfile) edit((bytesb(i) do i = 1 to 2)) (2(a));
+    end;
+    if ^eof then read file(infile) into (wigit);
+  end;
+
+ close file(infile);
+ close file(outfile);
+
+	/* utility routines for conversions */
+
+	bit_to_hex:
+	proc(xb) returns(char(1));
+	dcl
+		xb bit(4),
+		xi fixed bin(7),
+		hex(16) bit(4) static initial
+		('0000','0001','0010','0011',
+		 '0100','0101','0110','0111',
+		 '1000','1001','1010','1011',
+		 '1100','1101','1110','1111'),
+		list char(16) static initial
+		('0123456789ABCDEF');
+	do xi = 1 to 16 while(hex(xi) ^= xb);
+	end;
+	return(substr(list,xi,1));
+	end bit_to_hex;
+
+	hex_to_bit:
+	proc(xc) returns(bit(4));
+	dcl
+		xc char(1),
+		xi fixed bin(7),
+		hex(16) bit(4) static initial
+		('0000','0001','0010','0011',
+		 '0100','0101','0110','0111',
+		 '1000','1001','1010','1011',
+		 '1100','1101','1110','1111'),
+		list char(16) static initial
+		('0123456789ABCDEF');
+	xi = index(list,xc);
+	if xi = 0 then
+		do;
+		put skip list('INVALID HEX CHARACTER:');
+		stop;
+		end;
+	else
+	return(hex(xi));
+	end hex_to_bit;
+
+	byte_to_hex:
+	proc(xb) returns(char(2));
+	dcl
+		xb bit(8);
+	return(bit_to_hex(substr(xb,1,4))||bit_to_hex(substr(xb,5,4)));
+	end byte_to_hex;
+
+	hex_to_byte:
+	proc(xc) returns(bit(8));
+	dcl
+		xc char(2);
+	return(hex_to_bit(substr(xc,1,1))||hex_to_bit(substr(xc,2,1)));
+	end hex_to_byte;
+
+ end;

@@ -1,0 +1,1594 @@
+
+
+File: serial16.a86   						Page 1
+   1	; Use   "gencmd serial data[m100]" when producing CMD file
+   2	
+   3	; print control constants
+   4	
+   5	cr		equ	00Dh	; carriage return
+   6	lf		equ	00Ah	; line feed
+   7	bell		equ	007h	; self-explanatory
+   8	bs		equ	008h	; backspace
+   9	vt		equ	00Bh	; vertical tab
+  10	
+  11	; ccpm call function codes
+  12	
+  13	ccpm		equ	224	; ccpm interrupt
+  14	
+  15	c_read		equ	 1	; request single character from console
+  16	c_write		equ	 2	; send single character to console
+  17	c_writebuf	equ	 9	; print string terminated by '$'
+  18	drv_dpb		equ	31	; get DBP offset and segment base
+  19	drv_resetall	equ	13	; reset disk system
+  20	drv_set		equ	14	; select disk drive reg DL=disk #
+  21					;  (0=A,1=B,etc.)
+  22	mc_max		equ	53	; find available memory space
+  23	
+  24	; bdos function codes for direct BIOS calls
+  25	
+  26	s_bios    	equ	50	; direct BIOS call function code
+  27	read_code  	equ	13	; read a 128 byte sector
+  28	write_code 	equ	14	; write a 128 byte sector
+  29	
+  30	; program constants
+  31	
+  32	blank		equ	0E5h	; data which an empty (blank)
+  33					;  sector will contain
+  34	false		equ	-1
+  35	true		equ	 0
+  36	
+  37		cseg
+  38	
+  39	start:
+  40	; init serial_number
+  41		mov	cx,length ser_def
+  42		mov	al,'0'
+  43		mov	bx,offset serial_number
+  44	initlop10:
+  45		mov	byte ptr[bx],al
+  46		inc	bx
+  47		loop	initlop10
+  48	
+  49	; give sign on
+  50		call	clear			; clear the monitor screen
+  51		mov     dx,offset msg0 		; print sign on message
+  52		call    pmsg
+  53	
+  54	; prompt operator for source and destination drives
+  55		mov	dx,offset msg12		; send source message to
+  56		call	pmsg			;  console
+  57		call	get_char		; get disk code
+  58		sub	al,'A'			; correct it
+  59		mov	dskS,al			; store code for source disk
+  60		mov	dx,offset msg13		; send destination message
+
+
+File: serial16.a86   						Page 2
+  61		call	pmsg			;  to console
+  62		call	get_char		; get disk code
+  63		sub	al,'A'			; correct it
+  64		mov	dskD,al			; store code for dest disk
+  65	
+  66	; prompt operator for source disk
+  67		mov	dx,offset msg14		; send message
+  68		call	pmsg_wait	
+  69	
+  70	; the reset function clears out any previous information pertaining
+  71	;  to format, sector size, density, etc. and the next time a disk is
+  72	;  selected those values will be reinitialized.
+  73		mov	cl,drv_resetall		; reset disks
+  74		int	ccpm
+  75	
+  76	; when a disk is selected, CP/M initializes the Disk Parameter Header
+  77	;  and the Disk Parameter Block to conform with the format of the
+  78	;  selected disk.
+  79		mov	al,dskS			; select source disk
+  80		mov	disk,al
+  81		mov	cl,s_bios
+  82		mov	dx,offset sel_dsk_tab
+  83		int	ccpm
+  84	
+  85	; when the "select disk" function is performed using a direct BIOS call
+  86	;  the offset of the DPH (in system's extra segment) is returned in the
+  87	;  BX register.  the first word of the DPH is the offset of the sector
+  88	;  translation table for the system.
+  89		mov	xlt_offset,bx		; save offset of system's
+  90						;  sector translation table
+  91	
+  92	; move DPB into program data area
+  93		cld
+  94		mov     cl,drv_dpb       	; get system extra segment
+  95		int	ccpm			;  value and offset of DPB
+  96		push	es			; save ES value
+  97		mov	si,bx			; init source pointer
+  98		mov     es,data_base
+  99		mov     di,offset DPB
+ 100		pop	ds			; get system extra seg into DS
+ 101		mov     cx,15			; init byte counter
+ 102		rep  movsb
+ 103		push	ds			; save system extra seg value
+ 104		push	es			; restore DS value
+ 105		pop	ds
+ 106	
+ 107	; get system sector translation table into data segment of program
+ 108		pop	es			; recover extra seg value
+ 109		mov	bx,xlt_offset		; get offset of trans table
+ 110		mov	si,es:word ptr[bx]	;  into SI	
+ 111		test	si,si			; if SI = 0 then system doesn't
+ 112		jnz	has_table		;  have a translation table
+ 113		mov	bx,offset xlt_tab	;  which means that I'll have 
+ 114		mov	cx,spt			;  to init "xlt_tab" myself
+ 115		mov	al,0
+ 116	initlop0:
+ 117		mov	byte ptr[bx],al
+ 118		inc	al
+ 119		inc	bx
+ 120		loop	initlop0
+
+
+File: serial16.a86   						Page 3
+ 121		mov	al,1			; set skew factor = 1
+ 122		jmps	init_addr_tab
+ 123	has_table:
+ 124		push	es			; save extra seg again
+ 125		mov	bx,xlt_offset		; get offset of trans table
+ 126		mov	di,offset xlt_tab	; DI = offset of program sector
+ 127						;  translation table
+ 128		mov	cx,spt			; use sectors/track as
+ 129						;  counter value
+ 130		mov	es,data_base		; init ES value
+ 131		pop	ds			; init DS
+ 132		rep  movsb
+ 133		push	es			; restore old DS value
+ 134		pop	ds
+ 135	
+ 136	; make sure that serial numbers that cross sector boundries will be
+ 137	;  found
+ 138	init_addr_tab:
+ 139		sub	ax,ax			; init address offset
+ 140		mov	si,offset xlt_tab	; SI -> xlt-tab
+ 141		mov	cx,spt			; init counter
+ 142		sub	dh,dh			; DH = 0
+ 143	initlop9:
+ 144		mov	bx,offset addr_tab
+ 145		mov	dl,byte ptr[si]		; get sector number
+ 146		inc	si			; move pointer
+ 147		sub	dl,xlt_tab		; subtract 1st sector number
+ 148		add	dl,dl			; multiply by 2
+ 149		add	bx,dx			; BX -> correct table entry
+ 150		mov	word ptr[bx],ax		; put address into table
+ 151		add	ax,128			; AX = AX+bytes/sectorz
+ 152		loop	initlop9
+ 153	
+ 154	; depending on the system, each physical sector on a diskette can
+ 155	;  be made up of a number of logical sectors (128 bytes long).  the
+ 156	;  following code analyses the system sector translate table to 
+ 157	;  determine the number of logical sectors in a physical sector.
+ 158		mov	bx,offset xlt_tab	; BX -> xlt_tab
+ 159	xltlop0:
+ 160		mov	al,byte ptr[bx]		; AL = table entry
+ 161		inc	bx			; BX -> next byte in table
+ 162		inc	al
+ 163		cmp	al,byte ptr[bx]		; see if the two numbers are in
+ 164		je	xltlop0			;  the right order
+ 165		sub	bx,offset xlt_tab	; if they aren't then calculate
+ 166						;  how long the sequence was
+ 167		mov	spb,bx			;  and save the value
+ 168	; calculate skew of system sector translation table
+ 169		mov	al,xlt_tab[bx]		; get byte at xlt_tab+spb
+ 170		sub	al,xlt_tab		;  and subtract byte at xlt_tab
+ 171		mov	bx,spb			;  now divide by sectors/block
+ 172		sub	ah,ah			; prepare of division
+ 173		div	bl
+ 174		mov	skew,al
+ 175	; tell operator about skew
+ 176	skew_prompt:
+ 177		push	ax			; save system skew
+ 178		call	clear			; clear screen
+ 179		mov	dx,offset msg21		; send message
+ 180		call	pmsg
+
+
+File: serial16.a86   						Page 4
+ 181		pop	dx			; recover skew
+ 182		or	dl,030h			; make it ASCII
+ 183		mov	cl,c_write
+ 184		int	ccpm
+ 185	; ask operator if he/she would like to change the sector skew
+ 186		mov	dx,offset msg16
+ 187		call	pmsg
+ 188		call	get_char		; get Y/N response
+ 189		cmp	al,'N'			; check for No
+ 190		je	dont_change
+ 191	; ask for new skew factor
+ 192		mov	dx,offset msg17
+ 193		call	pmsg
+ 194		call	get_1num
+ 195		mov	skew,al
+ 196	; make new sector translation table using skew factor supplied by
+ 197	;  operator
+ 198		mov	si,offset xlt_tab	; BX is pointer into xlt_tab
+ 199		mov	bl,byte ptr[si]		; init beginning sector number
+ 200		mov	bh,bl
+ 201		mov	dl,sptbyte		; calculate sectors/track +
+ 202		add	dl,bl			;  first sector number
+ 203		mov	cl,skew			; init loop counter
+ 204		sub	ch,ch
+ 205	xltlop1:
+ 206		push	cx			; save loop counter
+ 207	xltlop2:
+ 208		mov	cx,spb			; init sectors/block counter
+ 209		push	bx			; save sector # registers
+ 210	xltlop3:
+ 211		mov	byte ptr[si],bh		; put sector number into table
+ 212		inc	si			; increment pointer
+ 213		inc	bh			; increment sector number
+ 214		loop	xltlop3
+ 215		mov	ax,spb			; calculate new starting sector
+ 216		mov	cl,skew
+ 217		mul	cl
+ 218		pop	bx			; recover sector # registers
+ 219		add	bh,al			; add skew*spt to starting
+ 220						;  sector number
+ 221		cmp	bh,dl			; compare new starting sector #
+ 222						;  to first sector # + spt
+ 223		jb	xltlop2
+ 224		add	bl,spbbyte		; add sectors/block to 1st
+ 225						;  starting sector number
+ 226		mov	bh,bl			; init starting sector
+ 227						;  number of the next sector
+ 228						;  block
+ 229		pop	cx			; recover loop counter
+ 230		loop	xltlop1
+ 231	dont_change:
+ 232	; ok, now calculate many how bytes there are on a track.
+ 233	;  bytes/track = sectors/track * logical sector size
+ 234		mov     ax,spt	    
+ 235		mov     bx,128
+ 236		mul     bx
+ 237		mov     bpt,ax   		; save value
+ 238	
+ 239		mov     cl,mc_max	    	; find 64k or less of free
+ 240		mov     dx,offset mcb		;  memory
+
+
+File: serial16.a86   						Page 5
+ 241		int     ccpm
+ 242	
+ 243	; check the disk for blank tracks starting at last track. blank
+ 244	;  tracks won't be copied
+ 245		mov	dx,offset msg1		; tell operator about search
+ 246		call	pmsg
+ 247		cld			       	; set direction flag forward
+ 248		mov	dx,offset msg7		; send 'Reading' message
+ 249		call	pmsg
+ 250		mov     cx,last_trk    		; initialize track counter
+ 251	scan_loop:
+ 252		push    cx	     		; save track counter
+ 253		mov     track,cl       		; get current track
+ 254		mov	al,cl			; make track number ascii
+ 255		call	make_ascii
+ 256		mov	dx,offset ascii_trk	; print it
+ 257		call	pmsg
+ 258		mov     dma_addr,0   		; initialize dma offset
+ 259		call    seek	   		; seek to track
+ 260		call    read	   		; read a track 
+ 261		mov	al,blank		; init AL with the character
+ 262						;  which is found in blank
+ 263						;  (empty) sectors
+ 264		mov	es,m_base		; init segment reg
+ 265		mov     di,0	   		; offset is set to zero
+ 266		mov     cx,bpt			; how many bytes to scan
+ 267		repe  scasb	    		; scan until ZF=1 or CX=0
+ 268		jne     data_found     		; if ZF=1 then have found data
+ 269		call	erase_trk		; erase old track message
+ 270		pop     cx	     		; otherwise scan another track
+ 271		loop    scan_loop      		;  if CX<>0
+ 272	
+ 273	; the diskette is blank if program flow reaches this point
+ 274		mov	dx,offset error_msg0
+ 275		call	pmsg			; inform operator that the
+ 276		call	abort			;  source disk is blank and
+ 277						;  abort operation
+ 278	
+ 279	data_found:
+ 280		pop     cx	     		; if data is found then save
+ 281		mov     last_trk,cx    		;  the number of the non-blank
+ 282						;  track
+ 283	; the information on the source disk will more than likely need to be
+ 284	;  paged into memory.  the following code calculates how many pages
+ 285	;  or blocks will be needed.
+ 286		mov	ax,m_length		; calculate number of bytes
+ 287		mov	bx,16			;  available to be used for
+ 288		mul	bx			;  a buffer area
+ 289		mov	bx,bpt
+ 290		div	bx
+ 291		mov	cx,last_trk		; CX will contain number of
+ 292		sub	cx,off			;  tracks to be copied
+ 293		cmp     ax,cx      		; if block1 track count<lst_trk
+ 294		jl      over0			;  then get block2 track count 
+ 295		mov     B1_trk_cnt,cx		;  last_trk, block_cnt=
+ 296		mov     block_cnt,1 		;  1 and jump to new_disk  
+ 297		jmps    over07
+ 298	over0:
+ 299		dec	ax
+ 300		mov     B1_trk_cnt,ax
+
+
+File: serial16.a86   						Page 6
+ 301		sub	dx,dx  
+ 302		mov	bx,ax			; bx holds divisor
+ 303		mov     ax,cx			;  hold dividend in division
+ 304						;  operation
+ 305		div	bx	 		; do division
+ 306		mov	block_cnt,ax		; move result to memory
+ 307		mov	B2_trk_cnt,dx		; remainder = block2 track
+ 308						;  count
+ 309	over07:
+ 310	; prompt operator for number of serial fields on source disk
+ 311		call	get_cnt
+ 312		cmp	al,0			; if count = 0 then don't ask
+ 313		jz	over09			;  for a starting serial number
+ 314	
+ 315	; prompt operator for starting serial number
+ 316		call	get_serial
+ 317	over09:
+ 318	; ask operator if he/she wants to verify the copy against the source
+ 319	;  disk and if so, how often
+ 320		call	clear			; clear monitor screen
+ 321		mov	dx,offset msg18		; ask question
+ 322		call	pmsg
+ 323		mov	ver_freq,0		; init verification frequency
+ 324						;  value
+ 325		call	get_char		; get yes/no answer
+ 326		cmp	al,'N'			; check for no
+ 327		je	over01			; if no then dont verify
+ 328	; ask operator for frequency of verification
+ 329		mov	dx,offset msg19		; send message
+ 330		call	pmsg
+ 331		call	get_2num		; get response from operator
+ 332		mov	ver_freq,al		; save value
+ 333	over01:
+ 334	
+ 335	; clear monitor screen
+ 336		call	clear
+ 337	
+ 338		mov	dsk_cnt,0		; init diskette counter
+ 339	
+ 340	; this portion of code does the copying and serializing
+ 341	new_disk:
+ 342		cld    				; move current serial number
+ 343		mov     es,data_base		;  into insert serial message
+ 344		mov     cx,length ser_def
+ 345		mov     si,offset serial_number
+ 346		mov     di,offset serial_1
+ 347		rep  movsb
+ 348	
+ 349		mov	dx,offset msg3		; prompt operator for
+ 350		call    pmsg_wait		;  destination diskette
+ 351	
+ 352	; home both disk drives
+ 353		call	selectD
+ 354		call	home
+ 355		call	selectS
+ 356		call	home
+ 357	
+ 358		mov     ax,off			; don't copy reserved tracks
+ 359		mov     trackS,al
+ 360		mov     trackD,al
+
+
+File: serial16.a86   						Page 7
+ 361	
+ 362		mov     ax,B1_trk_cnt		; init track counter
+ 363		mov     track_cnt,ax
+ 364	
+ 365		mov     tog0,0	    		; decides whether to use
+ 366			       			;  B1_trk_cnt or B2_trk_cnt
+ 367	
+ 368		mov     serial_cnt,0		; used to check if all the
+ 369						;  serial fields were found
+ 370	
+ 371		mov	dx,offset msg7		; send 'Reading' message
+ 372		call	pmsg
+ 373		call	seekS			; read in a track so that
+ 374		mov	dma_addr,0		;  there is always an extra
+ 375		call	read			;  one in memory
+ 376		call	erase_msg		; erase "Reading" message
+ 377	
+ 378		mov	cx,block_cnt		; init block counter
+ 379	
+ 380	create_dsk:
+ 381		push    cx	     		; save block counter
+ 382		mov	cx,bpt	  		; intialize dma offset
+ 383		mov	dma_addr,cx
+ 384		call	selectS			; select source disk
+ 385		mov	dx,offset msg7		; send 'Reading' message
+ 386		call	pmsg
+ 387		mov	cx,track_cnt	 	; init track counter
+ 388	lop0:
+ 389		push    cx	  		; save track counter
+ 390		call    seekS      		; seek track on source drive
+ 391		call    read			; read a track
+ 392		call	erase_trk		; erase old track message
+ 393		pop     cx	  		; recover track counter
+ 394		loop    lop0
+ 395		call	erase_msg		; erase "Reading" message
+ 396	
+ 397		call    serialize  		; insert current serial number
+ 398						;  into all serial fields in
+ 399						;  this block
+ 400	
+ 401		mov     dma_addr,0   		; same as above but write to
+ 402						;  destination drive
+ 403		call	selectD			; select destination drive
+ 404		mov	dx,offset msg8		; send "Writing" message to
+ 405		call	pmsg			;  console
+ 406		mov     cx,track_cnt
+ 407	lop1:
+ 408		push    cx
+ 409		call    seekD
+ 410		call    write
+ 411		call	erase_trk		; erase old track message
+ 412		pop     cx
+ 413		loop    lop1
+ 414		call	erase_msg		; erase "Writing" message
+ 415	
+ 416	; move extra track (read and searched but not written) from end of
+ 417	;  buffer to the beginning of the buffer
+ 418		cld		 		; clear direction flag
+ 419		mov	cx,bpt			; init counter
+ 420		mov	ax,cx			; calculate starting address 
+
+
+File: serial16.a86   						Page 8
+ 421		mov	bx,B1_trk_cnt		;  of data to be moved
+ 422		mul	bx
+ 423		mov	si,ax
+ 424		mov	di,0			; where block is to be moved
+ 425		mov	ax,m_base		; init segment registers
+ 426		push	ds			; save old values
+ 427		push	es
+ 428		mov	ds,ax			; move in new values
+ 429		mov	es,ax
+ 430		rep  movsb			; do the move
+ 431		pop	es			; recover values of segment
+ 432		pop	ds			;  registers
+ 433	
+ 434		pop	cx			; recover block counter
+ 435		loop    create_dsk	 	; do again if not last block
+ 436		cmp	tog0,1			; check if we have reached this
+ 437						;  point before
+ 438		je	done			; if yes then we are done
+ 439		mov	tog0,1			; no, so toggle tog0
+ 440		mov	ax,B2_trk_cnt		; if B2_trk_cnt=0
+ 441		cmp	ax,0			;  then we are done
+ 442		je	 done
+ 443		mov	track_cnt,ax		; else do above again but with
+ 444		mov	cx,1			;  B2_trk_cnt = track count
+ 445		jmp	create_dsk
+ 446	done:
+ 447		mov	dx,offset msg8		; send "Writing" message
+ 448		call	pmsg			;  to console
+ 449		call	seekD			; write last track to dest
+ 450		call	write			;  drive
+ 451	
+ 452		mov	al,count_num		; check if all serial fields
+ 453		cmp	al,serial_cnt		;  were found
+ 454		je	serial_ok		; if not then there is an error
+ 455		mov	dx,offset error_msg3	; inform operator of error
+ 456		call	pmsg
+ 457		call	abort			; abort operation
+ 458	serial_ok:
+ 459	
+ 460		call	erase_msg		; erase "Writing" message
+ 461	
+ 462		inc	dsk_cnt			; increment diskette counter
+ 463	
+ 464		mov	ax,dsk_cntword		; get number of diskettes done
+ 465		mov	cx,ver_freqword		; get verification frequency
+ 466		jcxz	dont_verify		; don't verify if CX = 0
+ 467		div	cl			; see if it's time to verify
+ 468		test	ah,ah			; if DX = 0 then it's time
+ 469		jnz	dont_verify
+ 470	; do the verification
+ 471		mov	dx,offset msg20		; send "Verifying" message
+ 472		call	pmsg
+ 473		mov	cx,last_trk		; calculate number of tracks to
+ 474		mov	ax,off			;  compare
+ 475		sub	cx,ax
+ 476		inc	cx			; correct result
+ 477		mov	trackS,al
+ 478		mov	trackD,al
+ 479	verlop0:
+ 480		push	cx			; save track counter
+
+
+File: serial16.a86   						Page 9
+ 481		call	selectD			; select dest disk
+ 482		call	seekD			; seek to track on dest disk
+ 483		mov	dma_addr,0		; init offset of 1st buffer
+ 484		call	read			; read a track from source disk
+ 485		call	erase_trk		; erase old track message
+ 486		call	selectS			; select source drive
+ 487		call	seekS			; seek to current track
+ 488		mov	cx,bpt			; init 2nd buffer offset
+ 489		push	cx			; temp save
+ 490		mov	dma_addr,cx
+ 491		call	read			; read a track from dest disk
+ 492		call	erase_trk		; erase old track message
+ 493		pop	cx			; recover track data length
+ 494						;  into byte counter
+ 495		sub	si,si			; init 1st pointer
+ 496		mov	di,cx			; init 2nd pointer
+ 497	verlop1:
+ 498		push	ds			; save value of data seg reg
+ 499		mov	ax,m_base		; get extra seg reg value
+ 500		mov	es,ax			; init ES
+ 501		mov	ds,ax			; init DS
+ 502		repe  cmpsb			; verify
+ 503		pop	ds			; recover data seg reg value
+ 504		je	verlop2			; if ZF = 0 then verification
+ 505						;  failed.  inform operator
+ 506		dec	di			; correct 2nd buffer pointer
+ 507		push	si			; save pointer to 1st buffer
+ 508		push	cx			; save byte pointer
+ 509		mov	si,offset ser_def	; SI -> to ser_def
+ 510		mov	cx,length ser_def	; init counter
+ 511		repe  cmpsb			; do compare
+ 512		jne	verlop3
+ 513		pop	cx			; recover byte counter
+ 514		sub	cx,length ser_def-1	; correct it
+ 515		pop	si			; recover 1st buffer pointer
+ 516		add	si,length ser_def-1	; correct it
+ 517		jmps	verlop1
+ 518	; verification failed so inform operator to try it again
+ 519	verlop3:
+ 520		call	clear
+ 521		mov	dx,offset error_msg7
+ 522		call	pmsg
+ 523		jmp	new_disk
+ 524	verlop2:
+ 525		pop	cx			; recover track counter
+ 526		loop	verlop0
+ 527	
+ 528	dont_verify:
+ 529		call	clear			; clear monitor screen
+ 530		cld			 	; insert current serial number
+ 531		mov	cx,length ser_def	;  into remove message
+ 532		mov	es,data_base
+ 533		mov	si,offset serial_number
+ 534		mov	di,offset serial_2
+ 535		rep  movsb
+ 536	
+ 537		mov	dx,offset msg4		; prompt operator to remove
+ 538		call	pmsg			;  copy
+ 539	
+ 540		call    inc_serial	  	; increment current serial
+
+
+File: serial16.a86   						Page 10
+ 541						;  number
+ 542	
+ 543		jmp	new_disk		; do another disk
+ 544	
+ 545	
+ 546	; read a track from the selected disk
+ 547	read:
+ 548		mov	io_tab,read_code
+ 549		jmps    track_io
+ 550	
+ 551	; write a track to the selected disk drive
+ 552	write:
+ 553		mov	io_tab,write_code
+ 554		jmps    track_io
+ 555	
+ 556	; do track input or output on selected disk drive
+ 557	track_io:
+ 558		mov	cx,4			; initialize io retry counter
+ 559	io_retry:
+ 560		push    cx		  	; save retry counter
+ 561		call    track_setup	 	; init dma base address
+ 562		mov	sector,0		; start with sector #0
+ 563		mov	cx,spt			; init sector counter
+ 564	io_lop:
+ 565		push    cx		  	; save sector counter
+ 566		call    sectran			; perform sector translation
+ 567		mov	dx,offset set_sector	; set sector thru ccpm
+ 568		mov	cl,s_bios
+ 569		int	ccpm
+ 570	
+ 571		mov	dx,offset set_dma_offset ; set dma offset thru ccpm
+ 572		mov	cl,s_bios
+ 573		int	ccpm
+ 574	
+ 575		mov	cl,s_bios	  	; set read/write func thru ccpm
+ 576		mov	dx,offset io_tab
+ 577		int	ccpm
+ 578		test    al,al		; io error if not zero
+ 579		jnz	io_error		; tell operator about io error
+ 580		inc	sector			; next sector to read
+ 581		pop	cx		  	; recover sector counter
+ 582		loop    io_lop
+ 583	
+ 584		pop	cx		  	; clean up stack
+ 585		mov	ax,bpt			; init dma_addr for next
+ 586		add	dma_addr,ax		;  track
+ 587		ret	
+ 588	io_error:
+ 589		pop	cx		  	; clean up stack
+ 590		call	home			; home disk
+ 591		pop	cx		  	; recover retry counter
+ 592		loop    io_retry
+ 593		ret
+ 594	 
+ 595	track_setup:
+ 596		mov	ax,m_base		; initialize dma base address
+ 597		mov	dma_base,ax
+ 598		mov	cl,s_bios
+ 599		mov	dx,offset set_dma_base
+ 600		int	ccpm
+
+
+File: serial16.a86   						Page 11
+ 601		ret
+ 602	
+ 603	; do logical to physical sector translation
+ 604	sectran:
+ 605		sub	ah,ah
+ 606		mov	al,sector
+ 607		mov	bx,offset xlt_tab
+ 608		xlat	xlt_tab
+ 609		mov	tsector,al
+ 610		sub	ah,ah
+ 611		sub	al,xlt_tab
+ 612		add	al,al
+ 613		mov	bx,offset addr_tab
+ 614		add	bx,ax
+ 615		mov	ax,word ptr[bx]
+ 616		add	ax,dma_addr
+ 617		mov	dma_offset,ax
+ 618		ret
+ 619	
+ 620	; home the selected drive
+ 621	home:
+ 622		mov	track,0
+ 623		jmps	seek
+ 624	
+ 625	; seek to the selected track on the source drive
+ 626	seekS:
+ 627		mov	al,trackS
+ 628		inc	trackS
+ 629		jmps	display_trk
+ 630	
+ 631	; seek to the selected track on the destination drive
+ 632	seekD:
+ 633		mov	al,trackD
+ 634		inc	trackD
+ 635	display_trk:
+ 636		mov	track,al
+ 637		call	make_ascii			; make track # ascii
+ 638		mov	dx,offset ascii_trk		; send track number to
+ 639		call	pmsg				;  console
+ 640	
+ 641	; seek to the selected track on the selected drive
+ 642	;  "track" = desired track #
+ 643	seek:
+ 644		mov	cl,s_bios
+ 645		mov	dx,offset seek_trk_tab
+ 646		int	ccpm
+ 647		ret
+ 648	
+ 649	; select source disk
+ 650	selectS:
+ 651		mov	dl,dskS
+ 652		jmps	select
+ 653	
+ 654	; select destination disk
+ 655	selectD:
+ 656		mov	dl,dskD
+ 657	
+ 658	; select a disk drive for future operations
+ 659	select:
+ 660		mov	cl,drv_set
+
+
+File: serial16.a86   						Page 12
+ 661		int	ccpm
+ 662		ret
+ 663	
+ 664	; get starting serial number from operator
+ 665	get_serial:
+ 666		mov	dx,offset msg2			; send prompt message
+ 667		call	pmsg				;  to console
+ 668	
+ 669		mov	dx,offset con_buf0	; point to console input buffer
+ 670		mov	cl,10			; CP/M read console buffer
+ 671		int	ccpm
+ 672		cmp	buf0_len,length ser_def ; check for correct number
+ 673							;  of digits
+ 674		jne	bad_serial
+ 675		ret
+ 676	
+ 677	bad_serial:
+ 678		mov	error_msg2,length ser_def
+ 679		or	error_msg2,030h			; make it ASCII
+ 680		mov	dx,offset error_msg1
+ 681		call	pmsg
+ 682		jmps	get_serial
+ 683	
+ 684	; get from the operator how many serial fields are on the source
+ 685	;  diskette.  this is a safeguard to help prevent the wrong disk
+ 686	;  from being used.
+ 687	get_cnt:
+ 688		mov	dx,offset msg6			; send prompt message
+ 689		call	pmsg				;  to console
+ 690		call	get_2num			; get a number (0-99)
+ 691							; from operator
+ 692		mov	count_num,al			; save number
+ 693		ret
+ 694	
+ 695	; input two ASCII numbers into buffer 1 and translate them into a 
+ 696	;  binary number which is returned in the AL register
+ 697	get_2num:
+ 698		mov	dx,offset con_buf1		; get address of buffer
+ 699		mov	cl,10
+ 700		int	ccpm
+ 701		cmp	buf1_len,2			; can't have more than
+ 702		jbe	input_ok0			;  two digits 0-99
+ 703	input_err0:
+ 704		mov	dx,offset error_msg6		; tell operator about
+ 705		call	pmsg				;  error and try again
+ 706		jmp	get_2num
+ 707	input_ok0:
+ 708		cmp	buf1_len,0			; need at least one
+ 709		je	input_err0			;  digit. tell operator
+ 710							;  if there isn't
+ 711		mov	bx,offset input_num		; bx -> input buffer
+ 712		mov	cl,buf1_len			; (cl) = digit count
+ 713		sub	ch,ch				; zero upper half of cx
+ 714		add	bx,cx				; make bx point to
+ 715		dec	bx				;  units digit of input
+ 716	
+ 717		mov	dh,byte ptr[bx]			; get units digit
+ 718		and	dh,00Fh				; mask off upper nybble
+ 719		loop	tens				; if (cx) <> 2 then get
+ 720							;  tens digit
+
+
+File: serial16.a86   						Page 13
+ 721		jmp	got_it				; only had one digit
+ 722	tens:
+ 723		dec	bx				; make bx -> to tens
+ 724							;  digit
+ 725		mov	dl,byte ptr[bx]			; get tens digit
+ 726		and	dl,00Fh				; mask off upper nybble
+ 727		mov	al,10				; load multiplier
+ 728		mul	dl				; do multiply
+ 729		add	dh,al				; add tens to units
+ 730	got_it:
+ 731		mov	al,dh				; save number
+ 732		ret
+ 733	
+ 734		
+ 735	serialize:	; locate all occurrances of serial numbers in buffer
+ 736	
+ 737		cld			; set direction forward
+ 738		mov	es,m_base	; point ES: to beginning of buffer
+ 739		mov	di,0
+ 740		mov	ax,bpt
+ 741		mov	bx,track_cnt
+ 742		inc	bx		; remember that an extra track was read
+ 743		mul	bx
+ 744		mov	cx,ax
+ 745	next_serial:
+ 746		mov	si,offset ser_def	; point at pattern
+ 747		lodsb			; get first char of pattern into AL
+ 748		repne scasb		; look for next occurance of AL
+ 749		jne	no_match	; if not match, then we are done
+ 750	
+ 751		push	di		; save scan pointer
+ 752		push	cx		; save count
+ 753		mov	cx,(length ser_def)-1	; residual length of pattern
+ 754		repe cmpsb
+ 755		pop	cx		; recover scan count
+ 756		pop	di		; recover scan pointer
+ 757		jne	next_serial	; no, rest didn't match
+ 758	
+ 759		push    cx		; save scan pointer
+ 760		dec	di		; move di back to start of field
+ 761		mov	si,offset serial_number ; si points to current serial
+ 762						;  number
+ 763		mov	cx,length ser_def ; counter for number of bytes to move
+ 764		rep  movsb
+ 765		pop	cx		; recover scan pointer
+ 766		inc	serial_cnt
+ 767		jmp	next_serial
+ 768	
+ 769	no_match:
+ 770		ret
+ 771	
+ 772	; increment the ASCII serial number
+ 773	
+ 774	inc_serial:
+ 775		mov	cx,length ser_def	; length of serial number
+ 776		mov	bx,offset serial_number ; bx points to start of string
+ 777		add	bx,(length ser_def)-1 ; bx now points to end of string
+ 778	addlop:
+ 779		push    cx		  	; save length of pointer
+ 780		mov	al,byte ptr[bx]		; get byte of serial number
+
+
+File: serial16.a86   						Page 14
+ 781		inc	al		  	; add 1 to it
+ 782		daa			 	; decimal adjust it
+ 783		lahf				; check to see if there was a
+ 784		and	ah,10h		;  carry from the lower half of
+ 785		mov	cl,4			;  the al register
+ 786		shl	ah,cl
+ 787		jc	fix		 	; if yes then increment the next
+ 788						;  byte of the serial number
+ 789		mov	byte ptr[bx],al		; else save byte and stop
+ 790		pop	cx		  	; clean up stack
+ 791		ret
+ 792	fix:
+ 793		and	al,0fh			; make high nybble of byte
+ 794		or	al,30h			;  equal to "3" again
+ 795		mov	byte ptr[bx],al		; save byte back in serial
+ 796						;  number
+ 797		dec	bx		  	; point at next higher byte
+ 798		pop	cx		  	; recover length of serial
+ 799						;  number
+ 800		loop    addlop			; do again if CX<>0
+ 801		ret
+ 802	
+ 803	; translate the 8 bit digit in AL to ASCII into "ascii_trk"
+ 804	make_ascii:
+ 805		mov	dx,'  '			; fill "ascii_trk" with blanks
+ 806		mov	ascii_trk,dx
+ 807		mov	ascii_trk+2,dx
+ 808		mov	bx,offset ascii_trk+3	; BX -> "ascii_trk"+3
+ 809		mov	dl,10			; init divisor
+ 810	makelop1:
+ 811		sub	ah,ah			; make AH zero	
+ 812		div	dl			; and divide by 10
+ 813		add	ah,'0'			; make remainder ascii
+ 814		mov	byte ptr[bx],ah		; store it in "ascii_trk"
+ 815		dec	bx			; move pointer to next location
+ 816		test	al,al			; see if quotient zero yet
+ 817		jnz	makelop1		; no, got more digits
+ 818		ret
+ 819	
+ 820	; print the message at [DX] and wait for RETURN key
+ 821	pmsg_wait:
+ 822		call	pmsg			; print the message
+ 823	wait_1:
+ 824		mov	cl,c_read		; CP/M Console Input
+ 825		int	ccpm
+ 826		cmp	al,'C'-'@'		; see if control-C
+ 827		je	abort			; terminate program
+ 828		cmp	al,cr			; see if ASCII carriage return
+ 829		jne	wait_1			; no, try again
+ 830		ret				; back to caller
+ 831	
+ 832	; abort the program
+ 833	abort:
+ 834		mov	dx,offset abort_msg
+ 835		call	pmsg_wait
+ 836		mov	cl,0			; CP/M reboot function
+ 837		int	ccpm
+ 838	
+ 839	; print the string whose offset is in dx and is terminated by '$'
+ 840	pmsg:
+
+
+File: serial16.a86   						Page 15
+ 841		mov	cl,c_writebuf
+ 842		int	ccpm
+ 843		ret
+ 844	
+ 845	; clears the monitor screen
+ 846	clear:
+ 847		cmp	clear_on,false		; see if clear screen enable is
+ 848		je	no_clear		;  off
+ 849		mov	dx,offset clear_msg
+ 850		call	pmsg
+ 851	no_clear:
+ 852		ret
+ 853	
+ 854	; get ASCII input from operator and translate to upper case
+ 855	get_char:
+ 856		mov	cl,c_read		; request single character
+ 857		int	ccpm			;  from console
+ 858		cmp	al,'C'-'@'			; check for control-C
+ 859		je	abort			; abort operation if yes
+ 860		and	al,05Fh			; xlate lower to upper chase
+ 861	; echo choice back to operator
+ 862	echo_choice:
+ 863		push	ax			; temp save
+ 864		mov	dl,bs			; write over last input
+ 865		mov	cl,c_write
+ 866		int	ccpm
+ 867		pop	dx			; get temp save
+ 868		push	dx
+ 869		mov	cl,c_write		; write it out
+ 870		int	ccpm
+ 871		pop	ax
+ 872		ret
+ 873	
+ 874	; get a single ASCII number from operator and check for .
+ 875	get_1num:
+ 876		mov	cl,c_read
+ 877		int	ccpm
+ 878		cmp	al,'C'-'@'			; check for control-C
+ 879		je	abort
+ 880		and	al,00Fh
+ 881		ret
+ 882	
+ 883	; this code erases the "Reading" and "Writing" messages from the
+ 884	;  monitor screen
+ 885	erase_msg:
+ 886		mov	dx,offset msg10
+ 887		call	pmsg
+ 888		ret
+ 889	
+ 890	; this code erases the old track numbers from the monitor screen
+ 891	erase_trk:
+ 892		mov	dx,offset msg11
+ 893		call	pmsg
+ 894		ret
+ 895	
+ 896		dseg
+ 897		org	0000h
+ 898	
+ 899		; Page Zero Definitions
+ 900	
+
+
+File: serial16.a86   						Page 16
+ 901	code_length	rw	1	; low 16 bits code segment length
+ 902	code_length_h	rb	1	; high 8 bits code segment length
+ 903	code_base	rw	1	; base paragraph of code segment
+ 904	model_8080	rb	1	; 8080 model byte
+ 905	data_length	rw	1	; low 16 bits data segment length
+ 906	data_length_h	rb	1	; high 8 bits data segment length
+ 907	data_base	rw	1	; base paragraph of data segment
+ 908			rs	1	; << reserved >>
+ 909	extra_length	rw	1	; low 16 bits extra segment length
+ 910	extra_length_h	rb	1	; high 8 bits extra segment length
+ 911	extra_base	rw	1	; base paragraph of extra segment
+ 912	
+ 913	
+ 914		org	0100h
+ 915	
+ 916	seek_trk_tab    db	10	; seek track function table
+ 917	track	   rb	4
+ 918	
+ 919	sel_dsk_tab	db	9	; select disk drive
+ 920	disk		rb	4
+ 921	
+ 922	set_dma_base    db	17	; set dma base address function table
+ 923	dma_base	rw	2
+ 924	
+ 925	set_dma_offset  db	12	; set dma offset address function table
+ 926	dma_offset	rw	2
+ 927	
+ 928	set_sector	db	11	; set sector function table
+ 929	tsector		rb	4	; holds translated sector #
+ 930	sector		rb	1	; holds untranslated sector #
+ 931	
+ 932	io_tab		rb	1	; select read/write function table
+ 933			rw	2
+ 934	
+ 935	bpt    rw	1		; how many bytes per track
+ 936	
+ 937	mcb		rw	0		; memory control block
+ 938	m_base	  rw	1		; base address (segment address)
+ 939	m_length	dw	0FFFh 	; desired length of memory area
+ 940	m_ext	   rw	1
+ 941	
+ 942	ver_freqword	rw	0
+ 943	ver_freq	db	0,0	; holds verification frequency value
+ 944	dsk_cntword	rw	0
+ 945	dsk_cnt		db	0,0	; number of copies made so far
+ 946	
+ 947	B1_trk_cnt    rw	1
+ 948	B2_trk_cnt    rw	1
+ 949	
+ 950	block_cnt	rw	1
+ 951	
+ 952	track_cnt	rw	1
+ 953	
+ 954	tog0	    rb	1
+ 955	
+ 956	serial_cnt    rb	1
+ 957	
+ 958	count_num	rs	1	; holds number of serial fields
+ 959					;  to expect on source disk
+ 960	dskS		db	0
+
+
+File: serial16.a86   						Page 17
+ 961	dskD		db	1
+ 962	
+ 963	skew		rb	1	; reserve storage for skew factor
+ 964	spb		rw	0	; sectors/block
+ 965	spbbyte		rb	2
+ 966	
+ 967	DPB		rb	0	; Disk Parameter Block
+ 968	spt		rw	0	; sector per track
+ 969	sptbyte		rb	2
+ 970	bsh		rb	1	; block shift factor
+ 971	blm		rb	1	; block mask
+ 972	exm		rb	1	; extent mask
+ 973	dsm		rw	1	; total storage capacity of drive
+ 974	drm		rw	1	; number of directory entries
+ 975	al0		rb	1
+ 976	al1		rb	1
+ 977	cks		rw	1
+ 978	off		rw	1	; number of reserved tracks
+ 979	
+ 980	xlt_offset	rw	1	; offset of system translate table
+ 981	
+ 982	xlt_tab		rb	128	; will contain sector translation table
+ 983	addr_tab	rw	128	; will contain sector address offsets
+ 984					;  from beginning of track address in
+ 985					;  disk data buffer
+ 986	dma_addr	rw	1	; will hold dma offset by track
+ 987	
+ 988	trackS		rb	1
+ 989	trackD		rb	1
+ 990	
+ 991	clear_on	db	true
+ 992	
+ 993	last_trk	dw	76
+ 994	
+ 995	ser_def		db	'654321'
+ 996	
+ 997	msg0		db	cr,lf,lf
+ 998			db	'-------------------------'
+ 999			db	'-------------------------'
+1000			db	'-'
+1001			db	cr,lf
+1002			db	'SERIAL16          V1.0  Serial No. '
+1003			db	'XXXX-0000-999999'
+1004			db	cr,lf
+1005			db	'Copyright (C) 1982'
+1006			db	cr,lf
+1007			db	'Digital Research, Inc.          '
+1008			db	'All Rights Reserved'
+1009			db	cr,lf
+1010			db	'-------------------------'
+1011			db	'-------------------------'
+1012			db	'-'
+1013			db	cr,lf,lf
+1014			db	'Diskette Generation Utility',cr,lf
+1015			db	'for CP/M-86 based systems'
+1016			db	'$'
+1017	
+1018	msg2		db	cr,lf,lf
+1019			db	'Enter starting serial number  '
+1020			db	'$'
+
+
+File: serial16.a86   						Page 18
+1021	
+1022	msg6		db	bell,cr,lf,lf
+1023			db	'Enter number of serial fields on source disk'
+1024			db	' ? '
+1025			db	'$'
+1026	
+1027	msg7		db	'Reading Track  '
+1028			db	'$'
+1029	
+1030	msg8		db	'Writing Track  '
+1031			db	'$'
+1032	
+1033	msg9		rs	0
+1034	ascii_trk	rw	2
+1035			db	' '
+1036			db	'$'
+1037	
+1038	msg10		db	bs,bs,bs,bs,bs,bs,bs,bs,bs,bs
+1039			db	bs,bs,bs,bs,bs,bs
+1040	msg11		db	bs,bs,bs,bs,bs
+1041			db	'$'
+1042	
+1043	error_msg1	db	cr,lf,lf
+1044			db	'Serial number must be '
+1045	error_msg2	rb	1
+1046			db	' digits long. Try again !!!  '
+1047			db	'$'
+1048	
+1049	msg12		db	cr,lf,lf,lf
+1050			db	'Source Drive is (A,B,etc.) ? '
+1051			db	'$'
+1052	
+1053	msg13		db	cr,lf,lf
+1054			db	'Destination Drive is (A,B,etc.) ? '
+1055			db	'$'
+1056	
+1057	msg14		db	cr,lf,lf
+1058			db	'Insert Source Disk '
+1059			db	'and type "Return" to continue '
+1060			db	cr,lf,lf
+1061			db	'$'
+1062	
+1063	msg3		db	cr,lf,lf
+1064			db	'Insert '
+1065	serial_1	rb	length ser_def
+1066			db	' into destination drive'
+1067			db	cr,lf
+1068			db	'then type "Return" to continue'
+1069			db	cr,lf,lf
+1070			db	'$'
+1071	
+1072	msg4		db	bell,cr,lf,lf
+1073			db	'Remove '
+1074	serial_2	rb	length ser_def
+1075			db	' from destination drive'
+1076			db	cr,lf,lf
+1077			db	'$'
+1078	
+1079	abort_msg	db	cr,lf,cr,lf
+1080			db	cr,lf,'*** Serialization terminated ***'
+
+
+File: serial16.a86   						Page 19
+1081			db	cr,lf
+1082			db	cr,lf,'Replace disk in Drive A:'
+1083			db	cr,lf,'	 then type ENTER to reboot ','$'
+1084	
+1085	msg16		db	cr,lf,lf
+1086			db	'Would you like to change the skew factor'
+1087			db	' (Y/N) ? '
+1088			db	'$'
+1089	
+1090	msg17		db	cr,lf,lf
+1091			db	'Enter skew factor (1-9) ? '
+1092			db	'$'
+1093	
+1094	msg18		db	cr,lf,lf
+1095			db	'Do you want to perform copy verification'
+1096			db	' (Y/N) ? '
+1097			db	'$'
+1098	
+1099	msg19		db	cr,lf,lf,lf
+1100			db	'1 = every disk is verified'
+1101			db	cr,lf
+1102			db	'2 = every 2nd disk is verified'
+1103			db	cr,lf
+1104			db	'3 = every 3rd disk is verified'
+1105			db	cr,lf,'"',cr,lf,'"',cr,lf,'"',cr,lf
+1106			db	'99 = every 99th disk is verified'
+1107			db	cr,lf,lf
+1108			db	'How often do you want the verification to'
+1109			db	' occur (1-99) ? '
+1110			db	'$'
+1111	
+1112	msg20		db	'Verifying Track '
+1113			db	'$'
+1114	
+1115	msg21		db	cr,lf,lf
+1116			db	'The current sector skew is '
+1117			db	'$'
+1118	
+1119	error_msg3	db	bell,cr,lf,lf
+1120			db	'Did not find all of the required serial '
+1121			db	'fields'
+1122			db	cr,lf
+1123			db	'$'
+1124	
+1125	error_msg6	db	cr,lf,lf
+1126			db	'Wrong. Need one or two digits'
+1127			db	'$'
+1128	
+1129	error_msg7	db	bell,cr,lf,lf
+1130			db	'**** Verification failed ****'
+1131			db	cr,lf,lf
+1132			db	'Try it again.'
+1133			db	cr,lf
+1134			db	'$'
+1135	
+1136	error_msg0	db	bell,cr,lf,lf
+1137			db	' The Source Disk is BLANK '
+1138			db	cr,lf
+1139			db	'$'
+1140	
+
+
+File: serial16.a86   						Page 20
+1141	msg1		db	cr,lf,lf
+1142			db	'Checking for blank tracks'
+1143			db	cr,lf,lf
+1144			db	'$'
+1145	
+1146	clear_msg	db	cr,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf
+1147			db	lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf,lf
+1148			db	lf,lf,lf,lf,lf
+1149			db	vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt,vt
+1150			db	vt,vt,vt,vt,vt,vt,vt,vt,vt
+1151			db	'$'
+1152	
+1153	con_buf0	db	10			; buffer used to read
+1154	buf0_len	rb	1			;  serial number
+1155	serial_number	rb	length ser_def
+1156			rb	10-1-length ser_def
+1157	
+1158	con_buf1	db	5		; another console input buffer
+1159	buf1_len	rb	1
+1160	input_num	rb	5
+1161	
+1162	
+1163			db	0		; force out end of data segment
+
+
+**** CROSS REFERENCE *****
+         abort  276, 457, 827, 833, 834, 859, 879,1079
+           add  148, 149, 151, 202, 219, 224, 516, 586, 612, 614, 616, 714, 729,
+                777, 813
+        addlop  778, 800
+          addr  122, 138, 144, 258, 374, 383, 401, 483, 490, 586, 613, 616, 983,
+                986
+            ah    6, 172, 468, 605, 610, 784, 786, 811, 813, 814
+            al   42,  45,  58,  59,  63,  64,  79,  80, 115, 117, 118, 121, 160,
+                162, 163, 169, 170, 174, 189, 195, 219, 254, 261, 312, 326, 332,
+                359, 360, 452, 453, 477, 478, 578, 606, 609, 611, 612, 627, 633,
+                636, 692, 727, 729, 731, 780, 781, 789, 793, 794, 795, 816, 826,
+                828, 858, 860, 878, 880
+           al0  975
+           al1  976
+           and  718, 726, 784, 793, 860, 880
+         ascii  255, 256, 637, 638, 804, 806, 807, 808,1034
+            ax  139, 150, 151, 177, 215, 234, 237, 286, 293, 299, 300, 302, 303,
+                306, 358, 362, 363, 420, 423, 425, 428, 429, 440, 441, 443, 464,
+                474, 475, 499, 500, 501, 585, 586, 596, 597, 614, 615, 616, 617,
+                740, 744, 863, 871
+            b1  295, 300, 362, 421, 947
+            b2  307, 440, 948
+           bad  674, 677
+          base   98, 130, 264, 343, 425, 499, 532, 596, 597, 599, 738, 903, 907,
+                911, 922, 923, 938
+          bell    7,1022,1072,1119,1129,1136
+            bh    9, 200, 211, 213, 219, 221, 226
+          bios   26,  81, 568, 572, 575, 598, 644
+            bl  173, 199, 200, 202, 224, 226
+         blank   32, 261
+           blm  971
+         block  296, 306, 378, 950
+           bpt  237, 266, 289, 382, 419, 488, 585, 740, 935
+            bs    8, 864,1038,1039,1040
+
+
+File: serial16.a86   		CROSS REFERENCE		Page 21
+           bsh  970
+          buf0  669, 672,1153,1154
+          buf1  698, 701, 708, 712,1158,1159
+            bx   43,  45,  46,  89,  97, 109, 110, 113, 117, 119, 125, 144, 149,
+                150, 158, 160, 161, 163, 165, 167, 169, 171, 209, 218, 235, 236,
+                287, 288, 289, 290, 302, 305, 421, 422, 607, 613, 614, 615, 711,
+                714, 715, 717, 723, 725, 741, 742, 743, 776, 777, 780, 789, 795,
+                797, 808, 814, 815
+          byte   45, 117, 145, 160, 163, 199, 211, 717, 725, 780, 789, 795, 814
+             c   15,  16,  17, 183, 824, 841, 856, 865, 869, 876
+          call   50,  52,  56,  57,  61,  62,  68, 178, 180, 187, 188, 193, 194,
+                246, 249, 255, 257, 259, 260, 269, 275, 276, 311, 316, 320, 322,
+                325, 330, 331, 336, 350, 353, 354, 355, 356, 372, 373, 375, 376,
+                384, 386, 390, 391, 392, 395, 397, 403, 405, 409, 410, 411, 414,
+                448, 449, 450, 456, 457, 460, 472, 481, 482, 484, 485, 486, 487,
+                491, 492, 520, 522, 529, 538, 540, 561, 566, 590, 637, 639, 667,
+                681, 689, 690, 705, 822, 835, 850, 887, 893
+          ccpm   13,  74,  83,  95, 184, 241, 569, 573, 577, 600, 646, 661, 671,
+                700, 825, 837, 842, 857, 866, 870, 877
+            ch  204, 713
+        change  190, 231
+          char   57,  62, 188, 325, 855
+        choice  862
+           cks  977
+            cl   73,  81,  94, 183, 203, 216, 217, 239, 253, 254, 467, 568, 572,
+                575, 598, 644, 660, 670, 699, 712, 785, 786, 824, 836, 841, 856,
+                865, 869, 876
+           cld   93, 247, 342, 418, 530, 737
+         clear   50, 178, 320, 336, 520, 529, 846, 847, 848, 849, 851, 991,1146
+           cmp  163, 189, 221, 293, 312, 326, 436, 441, 453, 672, 701, 708, 826,
+                828, 847, 858, 878
+         cmpsb  502, 511, 754
+           cnt  295, 296, 300, 306, 307, 311, 338, 362, 363, 368, 378, 387, 406,
+                421, 440, 443, 453, 462, 687, 741, 766, 945, 947, 948, 950, 952,
+                956
+       cntword  464, 944
+          code   27,  28, 548, 553, 901, 902, 903
+           con  669, 698,1153,1158
+         count  452, 692, 958
+            cr    5, 828, 997,1001,1004,1006,1009,1013,1014,1018,1022,1043,1049,
+               1053,1057,1060,1063,1067,1069,1072,1076,1079,1080,1081,1082,1083,
+               1085,1090,1094,1099,1101,1103,1105,1107,1115,1119,1122,1125,1129,
+               1131,1133,1136,1138,1141,1143,1146
+        create  380, 435, 445
+          cseg   37
+            cx   41, 101, 114, 128, 141, 206, 208, 229, 250, 252, 266, 270, 280,
+                281, 291, 292, 293, 295, 303, 344, 378, 381, 382, 383, 387, 389,
+                393, 406, 408, 412, 419, 420, 434, 444, 465, 473, 475, 476, 480,
+                488, 489, 490, 493, 496, 508, 510, 513, 514, 525, 531, 558, 560,
+                563, 565, 581, 584, 589, 591, 714, 744, 752, 753, 755, 759, 763,
+                765, 775, 779, 790, 798
+           daa  782
+          data   98, 130, 268, 279, 343, 532, 905, 906, 907
+            db  916, 919, 922, 925, 928, 943, 945, 960, 961, 991, 995, 997, 998,
+                999,1000,1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,1011,
+               1012,1013,1014,1015,1016,1018,1019,1020,1022,1023,1024,1025,1027,
+               1028,1030,1031,1035,1036,1038,1039,1040,1041,1043,1044,1046,1047,
+               1049,1050,1051,1053,1054,1055,1057,1058,1059,1060,1061,1063,1064,
+               1066,1067,1068,1069,1070,1072,1073,1075,1076,1077,1079,1080,1081,
+
+File: serial16.a86   		CROSS REFERENCE		Page 22
+
+               1082,1083,1085,1086,1087,1088,1090,1091,1092,1094,1095,1096,1097,
+               1099,1100,1101,1102,1103,1104,1105,1106,1107,1108,1109,1110,1112,
+               1113,1115,1116,1117,1119,1120,1121,1122,1123,1125,1126,1127,1129,
+               1130,1131,1132,1133,1134,1136,1137,1138,1139,1141,1142,1143,1144,
+               1146,1147,1148,1149,1150,1151,1153,1158,1163
+           dec  299, 506, 715, 723, 760, 797, 815
+           def   41, 344, 509, 510, 514, 516, 531, 672, 678, 746, 753, 763, 775,
+                777, 995,1065,1074,1155,1156
+            dh    5, 142, 717, 718, 729, 731
+            di   99, 126, 265, 346, 424, 496, 506, 534, 739, 751, 756, 760
+          disk   80, 341, 523, 543, 920
+       display  629, 635
+           div  173, 290, 305, 467, 812
+            dl  145, 147, 148, 182, 201, 202, 221, 651, 656, 725, 726, 728, 809,
+                812, 864
+           dma  258, 374, 383, 401, 483, 490, 571, 586, 597, 599, 616, 617, 922,
+                923, 925, 926, 986
+          done  438, 442, 446
+          dont  190, 231, 466, 469, 528
+           dpb   18,  94,  99, 967
+           drm  974
+           drv   18,  19,  20,  73,  94, 660
+            ds  100, 103, 105, 131, 134, 426, 428, 432, 498, 501, 503
+          dseg  896
+           dsk   82, 338, 380, 435, 445, 462, 464, 919, 944, 945
+          dskd   64, 656, 961
+          dsks   59,  79, 651, 960
+           dsm  973
+            dw  939, 993
+            dx   51,  55,  60,  67,  82, 149, 179, 181, 186, 192, 240, 245, 248,
+                256, 274, 301, 307, 321, 329, 349, 371, 385, 404, 447, 455, 471,
+                521, 537, 567, 571, 576, 599, 638, 645, 666, 669, 680, 688, 698,
+                704, 805, 806, 807, 834, 849, 867, 868, 886, 892
+           e5h   32
+          echo  862
+           equ    5,   6,   7,   8,   9,  13,  15,  16,  17,  18,  19,  20,  22,
+                 26,  27,  28,  32,  34,  35
+         erase  269, 376, 392, 395, 411, 414, 460, 485, 492, 885, 891
+          err0  703, 709
+         error  274, 455, 521, 579, 588, 678, 679, 680, 704,1043,1045,1119,1125,
+               1129,1136
+            es   96,  98, 104, 108, 110, 124, 130, 133, 264, 343, 427, 429, 431,
+                500, 532, 738
+           exm  972
+           ext  940
+         extra  909, 910, 911
+         false   34, 847
+          fffh  939
+            fh  718, 726, 793, 860, 880
+           fix  787, 792
+         found  268, 279
+          freq  323, 332, 943
+      freqword  465, 942
+           get   57,  62, 188, 194, 311, 316, 325, 331, 665, 682, 687, 690, 697,
+                706, 855, 875
+           got  721, 730
+             h    7,   8, 182, 679, 784, 794, 897, 902, 906, 910, 914
+           has  112, 123
+          home  354, 356, 590, 621
+
+
+File: serial16.a86   		CROSS REFERENCE		Page 23
+           inc   46, 118, 119, 146, 161, 162, 212, 213, 462, 476, 540, 580, 628,
+                634, 742, 766, 774, 781
+          init  122, 138
+      initlop0  116, 120
+     initlop10   44,  47
+      initlop9  143, 152
+         input  702, 703, 707, 709, 711,1160
+           int   74,  83,  95, 184, 241, 569, 573, 577, 600, 646, 661, 671, 700,
+                825, 837, 842, 857, 866, 870, 877
+            io  548, 549, 553, 554, 557, 559, 564, 576, 579, 582, 588, 592, 932
+            it  721, 730
+            jb  223
+           jbe  702
+            jc  787
+          jcxz  466
+            je  164, 190, 327, 438, 442, 454, 504, 709, 827, 848, 859, 879
+            jl  294
+           jmp  445, 523, 543, 706, 721, 767
+          jmps  122, 297, 517, 549, 554, 623, 629, 652, 682
+           jne  268, 512, 674, 749, 757, 829
+           jnz  112, 469, 579, 817
+            jz  313
+          lahf  783
+          last  250, 281, 291, 473, 993
+           len  672, 701, 708, 712,1154,1159
+        length   41, 286, 344, 510, 514, 516, 531, 672, 678, 753, 763, 775, 777,
+                901, 902, 905, 906, 909, 910, 939,1065,1074,1155,1156
+            lf    6, 997,1001,1004,1006,1009,1013,1014,1018,1022,1043,1049,1053,
+               1057,1060,1063,1067,1069,1072,1076,1079,1080,1081,1082,1083,1085,
+               1090,1094,1099,1101,1103,1105,1107,1115,1119,1122,1125,1129,1131,
+               1133,1136,1138,1141,1143,1146,1147,1148
+         lodsb  747
+          loop   47, 120, 152, 214, 230, 251, 271, 394, 413, 435, 526, 582, 592,
+                719, 800
+           lop  564, 582
+          lop0  388, 394
+          lop1  407, 413
+             m  264, 286, 425, 499, 596, 738, 938, 939, 940
+          make  255, 637, 804
+      makelop1  810, 817
+         match  749, 769
+           max   22, 239
+            mc   22, 239
+           mcb  240, 937
+         model  904
+           mov   41,  42,  43,  45,  51,  55,  59,  60,  64,  67,  73,  79,  80,
+                 81,  82,  89,  94,  97,  98,  99, 101, 109, 110, 113, 114, 115,
+                117, 121, 125, 126, 128, 130, 140, 141, 144, 145, 150, 158, 160,
+                167, 169, 171, 174, 179, 183, 186, 192, 195, 198, 199, 200, 201,
+                203, 208, 211, 215, 216, 226, 234, 235, 237, 239, 240, 245, 248,
+                250, 253, 254, 256, 258, 261, 264, 265, 266, 274, 281, 286, 287,
+                289, 291, 295, 296, 300, 302, 303, 306, 307, 321, 323, 329, 332,
+                338, 343, 344, 345, 346, 349, 358, 359, 360, 362, 363, 365, 368,
+                371, 374, 378, 382, 383, 385, 387, 401, 404, 406, 419, 420, 421,
+                423, 424, 425, 428, 429, 439, 440, 443, 444, 447, 452, 455, 464,
+                465, 471, 473, 474, 477, 478, 483, 488, 490, 496, 499, 500, 501,
+                509, 510, 521, 531, 532, 533, 534, 537, 548, 553, 558, 562, 563,
+                567, 568, 571, 572, 575, 576, 585, 596, 597, 598, 599, 606, 607,
+                609, 613, 615, 617, 622, 627, 633, 636, 638, 644, 645, 651, 656,
+
+File: serial16.a86   		CROSS REFERENCE		Page 24
+
+                660, 666, 669, 670, 678, 680, 688, 692, 698, 699, 704, 711, 712,
+                717, 725, 727, 731, 738, 739, 740, 741, 744, 746, 753, 761, 763,
+                775, 776, 780, 785, 789, 795, 805, 806, 807, 808, 809, 814, 824,
+                834, 836, 841, 849, 856, 864, 865, 869, 876, 886, 892
+         movsb  102, 132, 347, 430, 535, 764
+           msg  376, 395, 414, 460, 834, 849, 885,1079,1146
+          msg0   51, 274, 997,1136
+          msg1  245, 680,1043,1141
+         msg10  886,1038
+         msg11  892,1040
+         msg12   55,1049
+         msg13   60,1053
+         msg14   67,1057
+         msg16  186,1085
+         msg17  192,1090
+         msg18  321,1094
+         msg19  329,1099
+          msg2  666, 678, 679,1018,1045
+         msg20  471,1112
+         msg21  179,1115
+          msg3  349, 455,1063,1119
+          msg4  537,1072
+          msg6  688, 704,1022,1125
+          msg7  248, 371, 385, 521,1027,1129
+          msg8  404, 447,1030
+          msg9 1033
+           mul  217, 236, 288, 422, 728, 743
+           new  341, 523, 543
+          next  745, 757, 767
+            no  749, 769, 848, 851
+           num  194, 331, 452, 690, 692, 697, 706, 711, 875, 958,1160
+        number   43, 345, 533, 761, 776,1155
+           off  292, 358, 474, 978
+        offset   43,  51,  55,  60,  67,  82,  89,  99, 109, 113, 125, 126, 140,
+                144, 158, 165, 179, 186, 192, 198, 240, 245, 248, 256, 274, 321,
+                329, 345, 346, 349, 371, 385, 404, 447, 455, 471, 509, 521, 533,
+                534, 537, 567, 571, 576, 599, 607, 613, 617, 638, 645, 666, 669,
+                680, 688, 698, 704, 711, 746, 761, 776, 808, 834, 849, 886, 892,
+                925, 926, 980
+            ok  454, 458
+           ok0  702, 707
+            on  847, 991
+            or  182, 679, 794
+           org  897, 914
+         over0  294, 298
+        over01  327, 333
+        over07  297, 309
+        over09  313, 317
+          pmsg   52,  56,  61,  68, 180, 187, 193, 246, 249, 257, 275, 322, 330,
+                350, 372, 386, 405, 448, 456, 472, 522, 538, 639, 667, 681, 689,
+                705, 821, 822, 835, 840, 850, 887, 893
+           pop  100, 105, 108, 131, 134, 181, 218, 229, 270, 280, 393, 412, 431,
+                432, 434, 493, 503, 513, 515, 525, 581, 584, 589, 591, 755, 756,
+                765, 790, 798, 867, 871
+        prompt  176
+           ptr   45, 110, 117, 145, 150, 160, 163, 199, 211, 615, 717, 725, 780,
+                789, 795, 814
+          push   96, 103, 104, 124, 133, 177, 206, 209, 252, 381, 389, 408, 426,
+                427, 480, 489, 498, 507, 508, 560, 565, 751, 752, 759, 779, 863,
+
+File: serial16.a86   		CROSS REFERENCE		Page 25
+
+                868
+            rb  902, 904, 906, 910, 917, 920, 929, 930, 932, 954, 956, 963, 965,
+                967, 969, 970, 971, 972, 975, 976, 982, 988, 989,1045,1065,1074,
+               1154,1155,1156,1159,1160
+          read   15,  27, 260, 375, 391, 484, 491, 547, 548, 824, 856, 876
+           rep  102, 132, 347, 430, 535, 764
+          repe  267, 502, 511, 754
+         repne  748
+      resetall   19,  73
+           ret  587, 593, 601, 618, 647, 662, 675, 693, 732, 770, 791, 801, 818,
+                830, 843, 852, 872, 881, 888, 894
+         retry  559, 592
+            rs  908, 958,1033
+            rw  901, 903, 905, 907, 909, 911, 923, 926, 933, 935, 937, 938, 940,
+                942, 944, 947, 948, 950, 952, 964, 968, 973, 974, 977, 978, 980,
+                983, 986,1034
+             s   26,  81, 568, 572, 575, 598, 644
+          scan  251, 271
+         scasb  267, 748
+        sector  562, 567, 580, 606, 928, 930
+       sectran  566, 604
+          seek  259, 623, 643, 645, 916
+         seekd  409, 449, 482, 632
+         seeks  373, 390, 487, 626
+           sel   82, 919
+        select  652, 659
+       selectd  353, 403, 481, 655
+       selects  355, 384, 486, 650
+           ser   41, 344, 509, 510, 514, 516, 531, 672, 678, 746, 753, 763, 775,
+                777, 995,1065,1074,1155,1156
+        serial   43, 316, 345, 346, 368, 453, 454, 458, 533, 534, 540, 665, 674,
+                677, 682, 745, 757, 761, 766, 767, 774, 776, 956,1065,1074,1155
+     serialize  397, 735
+           set   20, 567, 571, 599, 660, 922, 925, 928
+         setup  561, 595
+           shl  786
+            si   97, 110, 111, 140, 145, 146, 198, 199, 211, 212, 345, 423, 495,
+                507, 509, 515, 516, 533, 746, 761
+          skew  174, 176, 195, 203, 216, 963
+           spb  167, 171, 208, 215, 964
+       spbbyte  224, 965
+           spt  114, 128, 141, 234, 563, 968
+       sptbyte  201, 969
+         start   39
+           sub   58,  63, 139, 142, 147, 165, 170, 172, 204, 292, 301, 475, 495,
+                514, 605, 610, 611, 713, 811
+           tab   82, 113, 122, 126, 138, 140, 144, 147, 158, 165, 169, 170, 198,
+                548, 553, 576, 607, 608, 611, 613, 645, 916, 919, 932, 982, 983
+         table  112, 123
+          tens  719, 722
+          test  111, 468, 578, 816
+          tog0  365, 436, 439, 954
+         track  253, 363, 387, 406, 443, 549, 554, 557, 561, 595, 622, 636, 741,
+                917, 952
+        trackd  360, 478, 633, 634, 989
+        tracks  359, 477, 627, 628, 988
+           trk  250, 256, 269, 281, 291, 295, 300, 307, 362, 392, 411, 421, 440,
+                473, 485, 492, 629, 635, 638, 645, 806, 807, 808, 891, 916, 947,
+                948, 993,1034
+
+
+File: serial16.a86   		CROSS REFERENCE		Page 26
+          true   35, 991
+       tsector  609, 929
+           ver  323, 332, 465, 942, 943
+        verify  466, 469, 528
+       verlop0  479, 526
+       verlop1  497, 517
+       verlop2  504, 524
+       verlop3  512, 519
+            vt    9,1149,1150
+          wait   68, 350, 821, 823, 829, 835
+          word  110, 150, 615
+         write   16,  28, 183, 410, 450, 552, 553, 865, 869
+      writebuf   17, 841
+          xlat  608
+           xlt   89, 109, 113, 125, 126, 140, 147, 158, 165, 169, 170, 198, 607,
+                608, 611, 980, 982
+       xltlop0  159, 164
+       xltlop1  205, 230
+       xltlop2  207, 223
+       xltlop3  210, 214
+**** end cross reference ***

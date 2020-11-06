@@ -1,0 +1,614 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 85
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp 2
+3.  MP/M ALTERATION GUIDE
+.sp
+.pp
+3.1 Introduction
+.pp
+The standard MP/M system assumes operation on an Intel MDS-800
+microcomputer development system, but is designed so that the user
+can alter a specific set of subroutines which define the hardware
+operating environment.  In this way, the user can produce a diskette
+which operates with any IBM-3741 format compatible diskette subsystem
+and other peripheral devices.
+.pp
+Although standard MP/M is configured for single density
+floppy disks, field-alteration features allow adaptation to
+a wide variety of disk subsystems from single drive minidisks
+through high-capacity "hard disk" systems.
+.pp
+In order to achieve device independence, MP/M is distinctly separated
+into an XIOS module which is hardware environment dependent and
+several other modules which are not dependent upon the hardware
+configuration.
+.pp
+The user can rewrite the distribution version of the
+MP/M XIOS to provide a new XIOS which provides a customized interface
+between the remaining MP/M modules and the user's own hardware
+system.  The user can also rewrite the distribution version of the
+LDRBIOS which is used to load the MP/M system from disk.
+.pp
+The purpose of this section is to provide the following step-by-step
+procedure for writing both your LDRBIOS and new XIOS for MP/M:
+.sp 2
+(1)  Implement CP/M 2.0 on the target computer
+.pp
+To simplify the MP/M adaptation process, we assume (and STRONGLY
+recommend) that CP/M 2.0
+has already been implemented on the target MP/M machine.
+If this is not the case it will be necessary for the user to
+implement the CP/M 2.0 BIOS as described in the Digital Research
+document titled "CP/M 2.0 Alteration Guide" in addition to the
+MP/M XIOS.
+The reason that both the BIOS and XIOS have to be implemented is
+that the MP/M loader uses the CP/M 2.0 BIOS to load and relocate
+MP/M.  Once loaded, MP/M uses the XIOS and not the BIOS.
+The CP/M 2.0 BIOS used by the MP/M loader is called the LDRBIOS.
+.pp
+Another good reason for implementing CP/M 2.0 on the target MP/M
+machine is that debugging your XIOS is greatly simplified by
+bringing up MP/M while running SID or DDT under a CP/M 2.0 system.
+.sp 2
+(2)  Prepare your custom MPMLDR by writing a LDRBIOS
+.pp
+Study the BIOS given in the "CP/M 2.0 Alteration Guide"
+and write a version which has a ORG of 1700H.
+Call this new BIOS by the
+name LDRBIOS (loader BIOS).  Implement only the primitive disk
+read operations on a single drive, and console output
+functions.
+.pp
+The first LDRBIOS call made by the MPMLDR is SELDSK: select
+disk.  If there are devices which require initialization a
+call to the LDRBIOS cold start or other initialization code
+should be placed at the beginning of the SELDSK handler.
+.pp
+Note:  The MPMLDR uses 4000H - 6FFFH as a buffer area  when
+loading and relocating the MPM.SYS file.
+.pp
+Test LDRBIOS completely to ensure that it properly performs
+console character output and disk reads.  Be especially
+careful to ensure that no disk write operations occur accidently
+during read operations, and check that the proper track and sectors
+are addressed on all reads.  Failure to make these checks
+may cause destruction of the initialized MP/M system after it is patched.
+.pp
+The following steps can be used to integrate a custom LDRBIOS
+into the MPMLDR.COM:
+.pp
+A.)  Obtain access to CP/M version 1.4 or 2.0 and prepare the
+LDRBIOS.HEX file.
+.pp
+B.)  Read the MPMLDR.COM file into memory using either DDT
+or SID.
+.li
+
+               A>DDT MPMLDR.COM
+               DDT VERS 2.0
+               NEXT  PC
+               1A00 0100
+.ad
+.pp
+C.)  Using the input command ('I') specify that the LDRBIOS.HEX
+file is to be read in and then read ('R') in the file.  The effect
+of this operation is to overlay the BIOS portion of the MP/M
+loader.
+.li
+
+               -ILDRBIOS.HEX
+               -R
+               NEXT  PC
+               1A00 0000
+.ad
+.pp
+D.)  Return to the CP/M console command processor (CCP) by
+executing a jump to location zero.
+.li
+
+               -G0
+
+.ad
+.pp
+E.)  Write the updated memory image onto a disk file using
+the CP/M 'SAVE' command.  The 'X' placed in front of the file
+name is used simply to designate an experimental version, preserving
+the orginal.
+.li
+
+	       A>SAVE 26 XMPMLDR.COM
+.ad
+.pp
+F.)  Test XMPMLDR.COM and then rename it to MPMLDR.COM.
+.sp 2
+(3)  Prepare your custom XIOS
+.pp
+If MP/M is being tailored to your computer system for the first
+time,
+the new XIOS requires some relatively simple software development and
+testing.  The standard XIOS is listed in APPENDIX I, and can be used as
+a model for the customized package.
+.pp
+The XIOS entry points, including both basic and extended, are described
+in sections 3.2 and 3.3.  These sections along with APPENDIX I
+provides you with the necessary information to write your XIOS.
+We suggest that your initial implementation of an XIOS utilize polled
+I/O without any interrupts.  The system will run without even a clock
+interrupt.
+The origin of your XIOS should be 0000H.  Note the two equates needed
+to access the dispatcher and XDOS from the XIOS:
+.li
+
+	       		ORG	0000H
+	       PDISP	EQU	$-3
+	       XDOS	EQU	PDISP-3
+.ad
+.pp
+The procedure to prepare an XIOS.SPR file from your customized XIOS
+is as follows:
+.pp
+A.)  Assemble your XIOS.ASM and then rename the XIOS.HEX file to
+XIOS.HX0.
+.pp
+B.)  Assemble your XIOS.ASM again specifying the +R option which
+offsets the ORG statements by 100H bytes.  Or, edit your XIOS.ASM
+and change the initial ORG 000H to an ORG 100H and assemble it again.
+.pp
+C.)  Use PIP to concatenate your two HEX files:
+.li
+
+	       A>PIP XIOS.HEX=XIOS.HX0,XIOS.HEX
+.ad
+.pp
+D.)  Run the GENMOD program to produce the XIOS.SPR file from the
+concatenated HEX files.
+.li
+
+	       A>GENMOD XIOS.HEX XIOS.SPR
+
+.ad
+.cp 15
+.ce
+*** Warning ***
+.pp
+Make  certain  that your XIOS.ASM file contains  a  defined
+byte  of zero at the end.  This is especially critical  if
+your XIOS.ASM file ends with a defined storage.  The reason
+for  this requirement is that there are no HEX file records
+produced  for defined storge (DS)  statements.  Thus, the
+output HEX file is misleading because it does not  identify
+the  true  lenth  of  your  XIOS.  The  following  example
+illustrates a properly terminated XIOS:
+.li
+
+	       begdat  equ     $
+	       dirbuf: ds      128
+	       alv0:   ds      31
+	       csv0:   ds      16
+
+	               db      0     ; force out hex record at end
+	               end
+.ad
+.pp
+Note  that  this  same technique must  be  applied  to  any
+other PRL or RSP programs that you prepare.
+.sp 2
+(4)  Debug your XIOS
+.pp
+An XIOS or a resident system process can be debugged using
+DDT or SID running under CP/M 1.4 or 2.0.  The debugging
+technique is outlined in the following steps:
+.pp
+A.)  Determine the amount of memory which is available to MP/M
+with the debugger and the CP/M operating system resident.  This
+can be done by loading the debugger and then listing the jump
+instruction at location 0005H.  This jump is to the base of
+the debugger.
+.li
+
+	       A>DDT
+	       DDT VERS 2.0
+
+	       -L5
+
+	       0005  JMP D800
+.ad
+.pp
+B.)  Using GENSYS running under CP/M, generate
+a MPM.SYS file which specifies the top of memory determined by
+the previous step, allowing at least 256 bytes for a patch area.
+.li
+
+               ...
+               Top page of memory = D6
+               ...
+.ad
+.pp
+Also while executing GENSYS specify the breakpoint
+restart number as that used by the CP/M SID or DDT which you
+will be executing.  This restart is usually #7.
+.li
+
+               ...
+               Breakpoint RST #  = 7
+               ...
+.ad
+.pp
+C.)  If a resident system process is being debugged make
+certain that it is selected for inclusion in MPM.SYS.
+.pp
+D.)  Using CP/M 1.4 or 2.0, load the MPMLDR.COM file into
+memory.
+.li
+
+               A>DDT MPMLDR.COM
+               DDT VERS 2.0
+               NEXT  PC
+               1A00 0100
+.ad
+.pp
+E.)  Place a 'B' character into the second position of
+default FCB.  This operation can be done with the 'I' command:
+.li
+
+               -IB
+.ad
+.pp
+F.)  Execute the MPMLDR.COM program by entering a 'G'
+command:
+.li
+
+               -G
+.ad
+.pp
+G.)  At point the MP/M loader will load the MP/M operating
+system into memory, displaying a memory map.
+.pp
+H.)  If you are debugging an XIOS, note the address of the
+XIOS.SPR memory segment.  If you are debugging a resident system
+process, note the address of the resident system process.  This
+address is the relative 0000H address of the code being debugged.
+You must also note the address of SYSTEM.DAT.
+.pp
+I.)  Using the 'S' command, set the byte at SYSTEM.DAT + 2
+to the restart number which you want the MP/M debugger to use.
+Do not select the same restart as that being used by the CP/M
+debugger.
+.li
+
+               ...
+               Memory Segment Table:
+               SYSTEM  DAT  D600H  0100H
+               ...
+
+               -SD602
+               D602 07 05
+.ad
+.pp
+J.)  Using the 'X' command, determine the MP/M beginning
+execution address.  The address is the first location past
+the current program counter.
+.li
+
+               -X
+               ....................... P = 0A93 .....
+.ad
+.pp
+K.)  Begin execution of MP/M using the 'G' command, specifying
+any breakpoints which you need in your code.  Actual memory address
+can be determined using the 'H' command to add the code segment
+base address given in the memory map to the relative displacement
+address in your XIOS or resident system process listing.
+.pp
+The following example shows how to set a breakpoint to
+debug an XIOS list subroutine given the memory map:
+.li
+
+               ...
+               XIOS    SPR  CD00H  0500H
+
+
+               -GA94,CD0F
+.ad
+.pp
+L.)  At this point you have MP/M running with CP/M and its
+debugger also in memory.  Since interrupts are left enabled during
+operation of the CP/M debugger, care
+must be taken to ensure that interrupt driven code does not
+execute through a point at which you have broken.
+.pp
+Since the CP/M debugger operates with interrupts
+left enabled it is a somewhat difficult task to debug an interrupt
+driven console handler.  This problem can be approached by leaving
+console #0 in a polled mode while debugging the other consoles
+in an interrupt driven mode.  Once this is done very little, if any,
+debugging would be required to adapt the interrupt driven code from
+another console to console #0.  It is further recommended that you
+maintain a debug version of your XIOS which has polled I/O for
+console #0.
+Otherwise it will not be possible to run the CP/M debugger underneath
+the MP/M system because the CP/M debugger will not be able to get
+any console input, as it will all go to the MP/M interrupt driven
+console #0 handler.
+.sp 2
+(5)  Directly booting MP/M from a cold start
+.pp
+In systems
+where MP/M is to be booted directly at cold start rather than loaded
+and run as a transient program under CP/M, the customized MPMLDR.COM
+file and cold start loader can be placed on the first two tracks of a diskette.
+If a CP/M SYSGEN.COM program is available it can
+be used to write the MPMLDR.COM file on the first two tracks.
+If a SYSGEN.COM program is not available, or if SYSGEN.COM will not
+work because a different media such as a mini-diskette or "hard" disk
+is to be used, the user must write a simple memory loader,
+called GETSYS, which brings the MP/M loader into memory and a
+program called PUTSYS, which places the MPMLDR on the first two tracks
+of a diskette.
+.pp
+Either the SID or DDT debugger can be used in place of writing a
+GETSYS program as is shown in the following example which also
+uses SYSGEN in place of PUTSYS.
+Sample skeletal GETSYS and PUTSYS programs are described
+later in this section (for a more detailed description of
+GETSYS and PUTSYS see the "CP/M 2.0 Alteration Guide").
+.pp
+In order to make the MP/M system load and run
+automatically, the user must also supply a cold start loader, similar
+to the one described in the "CP/M 2.0 Alteration Guide".
+The purpose of the cold start loader is to load the MP/M loader into
+memory from the first two tracks of the diskette.
+The CP/M 2.0 cold start loader must be modified in the following
+manner: the load address must be changed to 0100H and the execution
+address must also be changed to 0100H.
+.pp
+The following techniques are specifically for the MDS-800 which has
+a boot ROM that loads the first track into location 3000H.  However,
+the steps shown can be applied in general to any hardware.
+.pp
+If a SYSGEN program is available, the following steps can be used to
+prepare a diskette that cold starts MP/M:
+.pp
+A.)  Prepare the MPMLDR.COM file by integrating your custom
+LDRBIOS as described earlier in this section.  Test the MPMLDR.COM
+and verify that it operates properly.
+.pp
+B.)  Execute either DDT or SID.
+.li
+
+               A>DDT
+               DDT VERS 2.0
+.ad
+.pp
+C.)  Using the input command ('I') specify that the MPMLDR.COM
+file is to be read in and then read ('R') in the file with an
+offset of 880H bytes.
+.li
+
+               -IMPMLDR.COM
+               -R880
+               NEXT  PC
+               2480 0100
+.ad
+.pp
+D.)  Using the 'I' command specify that the BOOT.HEX file is to
+be read in and then read in the file with an offset that will load
+the boot into memory at 900H.  The 'H' command can be used to
+calculate the offset.
+.li
+
+               -H900 3000
+               3900 D900
+
+               -IBOOT.HEX
+               -RD900
+               NEXT  PC
+               2480 0000
+.ad
+.pp
+E.)  Return to the CP/M console command processor (CCP) by
+jumping to location zero.
+.li
+
+               -G0
+.ad
+.pp
+F.)  Use the SYSGEN program to write the new cold start loader
+onto the first two tracks of the diskette.
+.li
+
+               A>SYSGEN
+               SYSGEN VER 2.0
+               SOURCE DRIVE NAME (OR RETURN TO SKIP)<cr>
+               DESTINATION DRIVE NAME (OR RETURN TO REBOOT)B
+               DESTINATION ON B, THEN TYPE RETURN<cr>
+               FUNCTION COMPLETE
+.ad
+.sp 2
+If a SYSGEN program is not available then the following steps can
+be used to prepare a diskette that cold starts MP/M:
+.pp
+A.)  Write a GETSYS program which reads the
+custom MPMLDR.COM file into location 3380H and the cold start
+loader (or boot program) into location 3300H.
+Code GETSYS so that it starts
+at location 100H (base of the TPA).
+.pp
+As in the previous example, note that SID or DDT can be used to
+perform this function instead of writing a GETSYS program.
+.pp
+B.)  Run the GETSYS program using an initialized MP/M diskette to see
+if GETSYS loads the MP/M loader starting at 3380H (the operating
+system actually
+starts 128 bytes later at 3400H).
+.pp
+C.)  Write the PUTSYS program which writes
+memory starting at 3380H back onto the first two tracks of the
+diskette.  The PUTSYS program should be located at 200H.
+.pp
+D.)  Test the PUTSYS program using a blank uninitialized diskette by
+writing a portion of memory to the first two tracks; clear memory
+and read it back.  Test PUTSYS completely, since this program will
+be used to alter the MP/M system diskette.
+.pp
+E.)  Use PUTSYS to place the MP/M loader and cold start loader
+onto the first two tracks of a blank diskette.
+.sp 2
+.ce
+SAMPLE PUTSYS PROGRAM
+.pp
+The following program provides a framework for the PUTSYS program.
+The WRITESEC subroutine must be inserted by the user to write the
+specific sectors.
+.cp 52
+.li
+
+
+    ;   PUTSYS PROGRAM - WRITE TRACKS 0 AND 1 FROM MEMORY AT 3380H
+    ;   REGISTER                 USE
+    ;      A             (SCRATCH REGISTER)
+    ;      B             TRACK COUNT (0, 1)
+    ;      C             SECTOR COUNT (1,2,...,26)
+    ;      DE            (SCRATCH REGISTER PAIR)
+    ;      HL            LOAD ADDRESS
+    ;      SP            SET TO STACK ADDRESS
+    ;
+    START: LXI   SP,3380H    ;SET STACK POINTER TO SCRATCH AREA
+           LXI   H, 3380H    ;SET BASE LOAD ADDRESS
+           MVI   B, 0        ;START WITH TRACK 0
+    WRTRK:                   ;WRITE NEXT TRACK (INITIALLY 0)
+           MVI   C,1         ;WRITE STARTING WITH SECTOR 1
+    WRSEC:                   ;WRITE NEXT SECTOR
+           CALL  WRITESEC     ;USER-SUPPLIED SUBROUTINE
+           LXI   D,128       ;MOVE LOAD ADDRESS TO NEXT 1/2 PAGE
+           DAD   D           ;HL = HL + 128
+           INR   C           ;SECTOR = SECTOR + 1
+           MOV   A,C         ;CHECK FOR END OF TRACK
+           CPI   27
+           JC    WRSEC       ;CARRY GENERATED IF SECTOR < 27
+    ;
+    ;   ARRIVE HERE AT END OF TRACK, MOVE TO NEXT TRACK
+           INR   B
+           MOV   A,B         ;TEST FOR LAST TRACK
+           CPI   2
+           JC    WRTRK       ;CARRY GENERATED IF TRACK < 2
+    ;
+    ;   ARRIVE HERE AT END OF LOAD, HALT FOR NOW
+           HLT
+    ;
+    ;   USER-SUPPLIED SUBROUTINE TO WRITE THE DISK
+    WRITESEC:
+    ;   ENTER WITH TRACK NUMBER IN REGISTER B,
+    ;         SECTOR NUMBER IN REGISTER C, AND
+    ;         ADDRESS TO FILL IN HL
+    ;
+           PUSH   B          ;SAVE B AND C REGISTERS
+           PUSH   H          ;SAVE HL REGISTERS
+           ..........................................
+           perform disk write at this point, branch to
+
+           label START if an error occurs
+           ..........................................
+           POP    H          ;RECOVER HL
+           POP    B          ;RECOVER B AND C REGISTERS
+           RET               ;BACK TO MAIN PROGRAM
+
+           END    START
+.ad
+.bp
+.ce
+DIGITAL RESEARCH COPYRIGHT
+.pp
+Read your MP/M Licensing Agreement; it specifies your legal
+responsibilities when copying the MP/M system.  Place the copyright notice
+.sp
+.ce 2
+Copyright (c), 1980
+Digital Research
+.sp
+on each copy which is made of your customized MP/M diskette.
+.sp 2
+.ce
+DISKETTE ORGANIZATION
+.sp
+.pp
+The sector allocation for the standard distribution version of MP/M is
+given here for reference purposes.  The first sector (see table on the following page)
+contains an optional software boot section.  Disk controllers are often
+set up to bring track 0, sector 1 into memory at a specific location
+(often location 0000H).  The program in this sector, called BOOT, has
+the responsibility of bringing the remaining sectors into memory
+starting at location 0100H.  If your controller does not have a
+built-in sector load, you can ignore the program in track 0, sector 1,
+and begin the load from track 0 sector 2 to location 0100H.
+.pp
+As an example, the Intel MDS-800 hardware cold start loader brings
+track 0, sector 1 into absolute address 3000H.
+Upon loading this sector, control transfers to location 3000H, where
+the bootstrap operation commences
+by loading the remainder of track 0, and all of track 1 into
+memory, starting at 0100H.  The user should note that this bootstrap loader
+is of little use in a non-MDS environment, although it is useful to
+examine it since some of the boot actions will have to be duplicated in
+your cold start loader.
+.bp
+.li
+     Track#  Sector#   Page#    Memory Address    MP/M Module name
+       00      01               (boot address)    Cold Start Loader
+       00      02       00          0100H              MPMLDR
+        "      03        "          0180H               "
+        "      04       01          0200H               "
+        "      05        "          0280H               "
+        "      06       02          0300H               "
+        "      07        "          0380H               "
+        "      08       03          0400H               "
+        "      09        "          0480H               "
+        "      10       04          0500H               "
+        "      11        "          0580H               "
+        "      12       05          0600H               "
+        "      13        "          0680H               "
+        "      14       06          0700H               "
+        "      15        "          0780H               "
+        "      16       07          0800H               "
+        "      17        "          0880H               "
+        "      18       08          0900H               "
+        "      19        "          0980H               "
+        "      20       09          0A00H               "
+        "      21        "          0A80H               "
+        "      22       10          0B00H               "
+        "      23        "          0B80H               "
+        "      24       11          0C00H               "
+       00      25        "          0C80H              MPMLDR
+       00      26       12          0D00H              LDRBDOS
+       01      01        "          0D80H               "
+        "      02       13          0E00H               "
+        "      03        "          0E80H               "
+        "      04       14          0F00H               "
+        "      05        "          0F80H               "
+        "      06       15          1000H               "
+        "      07        "          1080H               "
+        "      08       16          1100H               "
+        "      09        "          1180H               "
+        "      10       17          1200H               "
+        "      11        "          1280H               "
+        "      12       18          1300H               "
+        "      13        "          1380H               "
+        "      14       19          1400H               "
+        "      15        "          1480H               "
+        "      16       20          1500H               "
+        "      17        "          1580H               "
+        "      18       21          1600H               "
+        01     19        "          1680H              LDRBDOS
+        01     20       22          1700H              LDRBIOS
+        "      21        "          1780H               "
+        "      22       23          1800H               "
+        "      23        "          1880H               "
+        "      24       24          1900H               "
+        "      25        "          1980H               "
+        01     26       25          1A00H              LDRBIOS
+.br
+

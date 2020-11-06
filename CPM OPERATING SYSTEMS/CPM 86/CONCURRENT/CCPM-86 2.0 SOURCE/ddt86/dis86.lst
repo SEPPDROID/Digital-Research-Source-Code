@@ -1,0 +1,878 @@
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE DISEM86
+OBJECT MODULE PLACED IN DIS86.OBJ
+COMPILER INVOKED BY:  PLM86 DIS86.PLM DEBUG PAGEWIDTH(100) XREF
+
+
+
+              $title('8086 disassembler')
+              $date(5/14/81)
+              $compact
+              $optimize(2)
+
+   1          disem86: do;
+
+   2   1      declare
+                  cr literally '0dh',
+                  lf literally '0ah',
+                  true literally '1',
+                  false literally '0';
+
+              $include(optab.dat)
+          =
+   3   1  =   declare ops2 (*) byte initial (
+          =       'IN', 'JA', 'JB', 'JC', 'JE', 
+          =       'JG', 'JL', 'JO', 'JP', 'JS', 
+          =       'JZ', 'OR');
+          =
+   4   1  =   declare ops3 (*) byte initial (
+          =       'AAA', 'AAD', 'AAM', 'AAS', 'ADC', 
+          =       'ADD', 'AND', 'CBW', 'CLC', 'CLD', 
+          =       'CLI', 'CMC', 'CMP', 'CS:', 'CWD', 
+          =       'DAA', 'DAS', 'DEC', 'DIV', 'DS:', 
+          =       'ES:', 'ESC', 'HLT', 'INC', 'INT', 
+          =       'JAE', 'JBE', 'JGE', 'JLE', 'JMP', 
+          =       'JNA', 'JNB', 'JNC', 'JNE', 'JNG', 
+          =       'JNL', 'JNO', 'JNP', 'JNS', 'JNZ', 
+          =       'JPE', 'JPO', 'LDS', 'LEA', 'LES', 
+          =       'MOV', 'MUL', 'NEG', 'NOP', 'NOT', 
+          =       'OUT', 'POP', 'RCL', 'RCR', 'REP', 
+          =       'RET', 'ROL', 'ROR', 'SAL', 'SAR', 
+          =       'SBB', 'SHL', 'SHR', 'SS:', 'STC', 
+          =       'STD', 'STI', 'SUB', 'XOR');
+          =
+   5   1  =   declare ops4 (*) byte initial (
+          =       'CALL', 'IDIV', 'IMUL', 'INTO', 'IRET', 
+          =       'JCXZ', 'JMPF', 'JMPS', 'JNAE', 'JNBE', 
+          =       'JNGE', 'JNLE', 'LAHF', 'LOCK', 'LOOP', 
+          =       'POPF', 'PUSH', 'REPE', 'REPZ', 'RETF', 
+          =       'SAHF', 'TEST', 'WAIT', 'XCHG', 'XLAT');
+          =
+   6   1  =   declare ops5 (*) byte initial (
+          =       'CALLF', 'CMPSB', 'CMPSW', 'LODSB', 'LODSW', 
+          =       'LOOPE', 'LOOPZ', 'MOVSB', 'MOVSW', 'PUSHF', 
+          =       'REPNE', 'REPNZ', 'SCASB', 'SCASW', 'STOSB', 
+          =       'STOSW');
+          =
+   7   1  =   declare ops6 (*) byte initial (
+          =       'LOOPNE', 'LOOPNZ');
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   2
+
+
+          =
+   8   1  =   declare nops (5) byte public initial (12, 69, 25, 16, 2);
+          =
+   9   1  =   declare opn$in (*) byte public initial (0, 12, 81, 106, 122, 255);
+
+  10   1      declare
+                  tab$ptrs (5) address public initial (.ops2, .ops3, .ops4, .ops5, .ops6);
+
+  11   1      declare
+                  left$bracket byte data ('['),
+                  right$bracket byte data (']');
+
+  12   1      declare
+                  alt$table$base address,
+                  alt$table based alt$table$base (16) byte,
+                  alt$table$ptrs (8) address external;
+
+  13   1      declare
+                  mod$bits byte,
+                  reg$bits byte,
+                  rm$bits byte,
+                  byte1$reg$bits byte,
+                  d$bit byte,
+                  s$bit byte,
+                  v$bit byte,
+                  w$bit byte,
+                  z$bit byte;
+
+  14   1      declare
+                  mnemonic$index byte,    /* index into opcodes */
+                  instr$type byte,
+                  table$ptr address,
+                  table$char based table$ptr byte,
+                  disem$ptr pointer,
+                  disem$offset address at (.disem$ptr),
+                  disem$end address,
+                  disem$byte based disem$ptr (1) byte,
+                  disem$word based disem$ptr (1) address,
+                  b$or$w$flag byte,
+                  error$flag byte;
+
+  15   1      declare instr$table (512) byte external;
+
+  16   1      declare
+                  ax$reg literally '0',
+                  cx$reg literally '1',
+                  dx$reg literally '2',
+                  bx$reg literally '3',
+                  sp$reg literally '4',
+                  bp$reg literally '5',
+                  si$reg literally '6',
+                  di$reg literally '7';
+
+  17   1      declare
+                  al$reg literally '0',
+                  cl$reg literally '1',
+                  dl$reg literally '2',
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   3
+
+
+                  bl$reg literally '3',
+                  ah$reg literally '4',
+                  ch$reg literally '5',
+                  dh$reg literally '6',
+                  bh$reg literally '7';
+                  
+  18   1      declare
+                  es$reg literally '0',
+                  cs$reg literally '1',
+                  ss$reg literally '2',
+                  ds$reg literally '3';
+
+  19   1      declare
+                  reg16 (*) byte public initial ('AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'),
+                  reg8 (*) byte public initial ('AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'),
+                  segreg (*) byte public initial ('ES', 'CS', 'SS', 'DS');
+
+  20   1      conout: procedure (c) external;
+  21   2          declare c byte;
+  22   2          end conout;
+
+  23   1      comma: procedure;
+  24   2          call conout (',');
+  25   2          end comma;
+
+  26   1      printm: procedure (a) PUBLIC;
+  27   2          declare a address;
+  28   2          declare b based a byte;
+  29   2          do while b <> '$';
+  30   3              call conout (b);
+  31   3              a = a + 1;
+  32   3          end;
+  33   2          end printm;
+
+  34   1      print$nibble: procedure (b);
+  35   2          declare b byte;
+  36   2          if b > 9 then call conout (b - 10 + 'A');
+  38   2          else call conout (b + '0');
+  39   2          end print$nibble;
+
+  40   1      print$byte: procedure (b);
+  41   2          declare b byte;
+  42   2          call print$nibble (shr (b, 4));
+  43   2          call print$nibble (b and 0fh);
+  44   2          end print$byte;
+
+  45   1      print$word: procedure (a) public;
+  46   2          declare a address;
+  47   2          call print$byte (high (a));
+  48   2          call print$byte (low (a));
+  49   2          end print$word;
+
+  50   1      error: procedure;
+  51   2          call printm (.('??=    $'));
+  52   2          call print$byte (disem$byte (0));
+  53   2          disem$offset = disem$offset + 1;
+  54   2          end error;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   4
+
+
+
+  55   1      set$bits: procedure;
+  56   2          byte1$reg$bits = disem$byte (0) and 7;
+  57   2          mod$bits = shr (disem$byte (1), 6);
+  58   2          reg$bits = shr (disem$byte (1), 3) and 7;
+  59   2          rm$bits = disem$byte (1) and 7;
+  60   2          w$bit, z$bit = disem$byte (0) and 1;
+  61   2          d$bit, s$bit, v$bit = shr (disem$byte (0), 1) and 1;
+  62   2          end set$bits;
+
+  63   1      print$b$or$w: procedure;
+  64   2          if w$bit then call printm (.('WORD $'));
+  66   2          else call printm (.('BYTE $'));
+  67   2          end print$b$or$w;
+
+  68   1      print$reg: procedure (reg$add, reg);
+  69   2          declare reg$add address, reg byte;
+  70   2          table$ptr = reg$add + shl (reg, 1);
+  71   2          call conout (table$char);
+  72   2          table$ptr = table$ptr + 1;
+  73   2          call conout (table$char);
+  74   2          end print$reg;
+
+  75   1      print$reg8: procedure (reg);
+  76   2          declare reg byte;
+  77   2          call print$reg (.reg8, reg);
+  78   2          end print$reg8;
+
+  79   1      print$reg16: procedure (reg);
+  80   2          declare reg byte;
+  81   2          call print$reg (.reg16, reg);
+  82   2          end print$reg16;
+
+  83   1      print$reg$8$or$16: procedure (reg$num);
+  84   2          declare reg$num byte;
+  85   2          if w$bit then call print$reg$16 (reg$num);
+  87   2          else call print$reg$8 (reg$num);
+  88   2          end print$reg$8$or$16;
+
+  89   1      print$2$reg$16: procedure (r1, r2);
+  90   2          declare (r1, r2) byte;
+  91   2          call print$reg$16 (r1);
+  92   2          call conout ('+');
+  93   2          call print$reg$16 (r2);
+  94   2          end print$2$reg$16;
+
+  95   1      print$A$reg: procedure;
+  96   2          if w$bit then call print$reg$16 (ax$reg);
+  98   2          else call print$reg$8 (al$reg);
+  99   2          end print$A$reg;
+
+ 100   1      print$seg$reg: procedure (reg);
+ 101   2          declare reg byte;
+ 102   2          call print$reg (.seg$reg, reg);
+ 103   2          end print$seg$reg;
+
+ 104   1      print$data$8: procedure;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   5
+
+
+ 105   2          call print$byte (disem$byte (0));
+ 106   2          disem$offset = disem$offset + 1;
+ 107   2          end print$data$8;
+
+ 108   1      print$data$16: procedure;
+ 109   2          call print$word (disem$word (0));
+ 110   2          disem$offset = disem$offset + 2;
+ 111   2          end print$data$16;
+
+ 112   1      print$data$8$or$16: procedure;
+ 113   2          if w$bit then call print$data$16;
+ 115   2          else call print$data$8;
+ 116   2          end print$data$8$or$16;
+
+ 117   1      print$data$sw: procedure;
+ 118   2          if rol (disem$byte (0), 1) then call print$word (0ff00h or disem$byte (0));
+ 120   2          else call print$word (disem$byte (0));
+ 121   2          disem$offset = disem$offset + 1;
+ 122   2          end print$data$sw;
+
+ 123   1      print$signed$8: procedure;
+ 124   2          declare a address;
+ 125   2          a = disem$byte (0);
+ 126   2          if low (a) >= 80h then a = a or 0ff00h;  /* sign extend to 16 bits */
+ 128   2          call print$word (disem$offset + a + 1);
+ 129   2          disem$offset = disem$offset + 1;
+ 130   2          end print$signed$8;
+
+ 131   1      print$signed$16: procedure;
+ 132   2          call print$word (disem$offset + disem$word (0) + 2);
+ 133   2          disem$offset = disem$offset + 2;
+ 134   2          end print$signed$16;
+
+ 135   1      print$direct$addr: procedure;
+ 136   2          call conout (left$bracket);
+ 137   2          call print$word (disem$word (0));
+ 138   2          call conout (right$bracket);
+ 139   2          disem$offset = disem$offset + 2;
+ 140   2          end print$direct$addr;
+
+ 141   1      print$mod$rm: procedure;
+ 142   2          disem$offset = disem$offset + 1;    /* point past mod/reg/rm byte */
+ 143   2          if mod$bits = 3 then
+ 144   2              do;
+ 145   3                  call print$reg$8$or$16 (rm$bits);
+ 146   3                  return;
+ 147   3              end;
+ 148   2          if b$or$w$flag then call print$b$or$w;
+ 150   2          if rm$bits = 6 and mod$bits = 0 then
+ 151   2              do;
+ 152   3                  call print$direct$addr;
+ 153   3                  return;
+ 154   3              end;
+ 155   2          if mod$bits = 1 then
+ 156   2              do;
+ 157   3                  if (rm$bits <> 6) or (disem$byte (0) <> 0)
+                            then call print$byte (disem$byte (0));
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   6
+
+
+ 159   3                  disem$offset = disem$offset + 1;
+ 160   3              end;
+ 161   2          else if mod$bits = 2 then
+ 162   2              do;
+ 163   3                  call print$word (disem$word (0));
+ 164   3                  disem$offset = disem$offset + 2;
+ 165   3              end;
+                  call conout (left$bracket);
+ 167   2          do case rm$bits;
+ 168   3              call print$2$reg$16 (3, 6);
+ 169   3              call print$2$reg$16 (3, 7);
+ 170   3              call print$2$reg$16 (5, 6);
+ 171   3              call print$2$reg$16 (5, 7);
+ 172   3              call print$reg$16 (6);
+ 173   3              call print$reg$16 (7);
+ 174   3              call print$reg$16 (5);
+ 175   3              call print$reg$16 (3);
+ 176   3          end;
+ 177   2          call conout (right$bracket);
+ 178   2          end print$mod$rm;
+
+ 179   1      print$mod$reg$rm: procedure;
+ 180   2          if d$bit then
+ 181   2              do;
+ 182   3                  call print$reg$8$or$16 (reg$bits);
+ 183   3                  call conout (',');
+ 184   3                  call print$mod$rm;
+ 185   3              end;
+                  else
+ 186   2              do;
+ 187   3                  call print$mod$rm;
+ 188   3                  call conout (',');
+ 189   3                  call print$reg$8$or$16 (reg$bits);
+ 190   3              end;
+ 191   2          end print$mod$reg$rm;
+
+ 192   1      print$mnemonic: procedure;
+ 193   2          declare (len, i) byte;
+ 194   2          len = 2;
+ 195   2          do while mnemonic$index >= opn$in (len - 1);
+ 196   3              len = len + 1;
+ 197   3          end;
+ 198   2          table$ptr = tab$ptrs (len - 2) + (mnemonic$index - opn$in (len - 2))
+                    * len;
+ 199   2          do i = 1 to 7;
+ 200   3              if i <= len then
+ 201   3                  do;
+ 202   4                      call conout (table$char);
+ 203   4                      table$ptr = table$ptr + 1;
+ 204   4                  end;
+ 205   3              else call conout (' ');
+ 206   3          end;
+ 207   2          disem$offset = disem$offset + 1;
+ 208   2          end print$mnemonic;
+
+ 209   1      type1: procedure;
+ 210   2          call print$mnemonic;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   7
+
+
+ 211   2          end type1;
+
+ 212   1      type2: procedure;
+ 213   2          if disem$byte (1) = 0ah then
+ 214   2              do;
+ 215   3                  call print$mnemonic;
+ 216   3                  disem$offset = disem$offset + 1;
+ 217   3              end;
+ 218   2          else error$flag = true;
+ 219   2          end type2;
+
+ 220   1      type3: procedure;
+ 221   2          call print$mnemonic;
+ 222   2          call print$reg$16 (byte1$reg$bits);
+ 223   2          end type3;
+
+ 224   1      type4: procedure;
+ 225   2          declare temp byte;
+ 226   2          temp = shr (disem$byte (0), 3) and 3;
+ 227   2          call print$mnemonic;
+ 228   2          call print$segreg (temp);
+ 229   2          end type4;
+
+ 230   1      type5: procedure;
+ 231   2          call print$mnemonic;
+ 232   2          call print$signed$8;
+ 233   2          end type5;
+
+ 234   1      type6: procedure;
+ 235   2          call print$mnemonic;
+ 236   2          call print$signed$16;
+ 237   2          end type6;
+
+ 238   1      type8: procedure;   /* 7, 9 */
+ 239   2          call print$mnemonic;
+ 240   2          call print$mod$rm;
+ 241   2          end type8;
+
+ 242   1      type10: procedure;
+ 243   2          call print$mnemonic;
+ 244   2          call print$data$8;
+ 245   2          end type10;
+
+ 246   1      type11: procedure;
+ 247   2          call print$mnemonic;
+ 248   2          call print$data$16;
+ 249   2          end type11;
+
+ 250   1      type12: procedure;
+ 251   2          call print$mnemonic;
+ 252   2          call conout ('3');
+ 253   2          end type12;
+
+ 254   1      type13: procedure;
+ 255   2          declare temp address;
+ 256   2          call print$mnemonic;
+ 257   2          temp = disem$word (0);
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   8
+
+
+ 258   2          disem$offset = disem$offset + 2;
+ 259   2          call print$data$16;
+ 260   2          call conout (':');
+ 261   2          call print$word (temp);
+ 262   2          end type13;
+
+ 263   1      type14: procedure;    /* 15, 16, 17 */
+ 264   2          call print$mnemonic;
+ 265   2          call print$mod$reg$rm;
+ 266   2          end type14;
+
+ 267   1      type18: procedure;    /* 19, 20, 21 */
+ 268   2          call print$mnemonic;
+ 269   2          if d$bit then
+ 270   2              do;
+ 271   3                  call print$direct$addr;
+ 272   3                  call comma;
+ 273   3                  call print$A$reg;
+ 274   3              end;
+                  else
+ 275   2              do;
+ 276   3                  call print$A$reg;
+ 277   3                  call comma;
+ 278   3                  call print$direct$addr;
+ 279   3              end;
+ 280   2          end type18;
+
+ 281   1      type22: procedure;
+ 282   2          call print$mnemonic;
+ 283   2          if d$bit then
+ 284   2              do;
+ 285   3                  call print$data$8;
+ 286   3                  call comma;
+ 287   3                  call print$A$reg;
+ 288   3              end;
+                  else
+ 289   2              do;
+ 290   3                  call print$A$reg;
+ 291   3                  call comma;
+ 292   3                  call print$data$8;
+ 293   3              end;
+ 294   2          end type22;
+
+ 295   1      type23: procedure;    /* 24 */
+ 296   2          call print$mnemonic;
+ 297   2          call print$A$reg;
+ 298   2          call comma;
+ 299   2          call print$data$8$or$16;
+ 300   2          end type23;
+
+ 301   1      type25: procedure;   /* 26 */
+ 302   2          call print$mnemonic;
+ 303   2          if d$bit then
+ 304   2              do;
+ 305   3                  call print$reg$16 (dx$reg);
+ 306   3                  call comma;
+ 307   3                  call print$A$reg;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE   9
+
+
+ 308   3              end;
+                  else
+ 309   2              do;
+ 310   3                  call print$A$reg;
+ 311   3                  call comma;
+ 312   3                  call print$reg$16 (dx$reg);
+ 313   3              end;
+ 314   2          end type25;
+
+ 315   1      type27: procedure;   /* 28, 29, 30 */
+ 316   2          call print$mnemonic;
+ 317   2          b$or$w$flag = true;
+ 318   2          call print$mod$rm;
+ 319   2          call comma;
+ 320   2          if v$bit then call print$reg$8 (cl$reg);
+ 322   2          else call conout ('1');
+ 323   2          end type27;
+
+ 324   1      type31: procedure;    /* 32 */
+ 325   2          call setbits;
+ 326   2          reg$bits = byte1$reg$bits;
+ 327   2          w$bit = shr (disem$byte (0), 3) and 1;
+ 328   2          call print$mnemonic;
+ 329   2          call print$reg$8$or$16 (reg$bits);
+ 330   2          call comma;
+ 331   2          call print$data$8$or$16;
+ 332   2          end type31;
+
+ 333   1      type33: procedure;
+ 334   2          call print$mnemonic;
+ 335   2          call print$reg$16 (ax$reg);
+ 336   2          call comma;
+ 337   2          call print$reg$16 (byte1$reg$bits);
+ 338   2          end type33;
+
+ 339   1      type34: procedure;   /* 35 */
+ 340   2          call print$mnemonic;
+ 341   2          b$or$w$flag = true;
+ 342   2          call print$mod$rm;
+ 343   2          call comma;
+ 344   2          call print$data$8$or$16;
+ 345   2          end type34;
+
+ 346   1      type36: procedure;   /* 37 */
+ 347   2          w$bit = true;   /* force 16 bit reg, mem */
+ 348   2          if reg$bits > 3 then
+ 349   2              do;
+ 350   3                  error$flag = true;
+ 351   3                  return;
+ 352   3              end;
+ 353   2          call print$mnemonic;
+ 354   2          if d$bit then
+ 355   2              do;
+ 356   3                  call print$seg$reg (reg$bits);
+ 357   3                  call comma;
+ 358   3                  call print$mod$rm;
+ 359   3              end;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  10
+
+
+                  else
+ 360   2              do;
+ 361   3                  call print$mod$rm;
+ 362   3                  call comma;
+ 363   3                  call print$seg$reg (reg$bits);
+ 364   3              end;
+ 365   2          end type36;
+
+ 366   1      type38: procedure;
+ 367   2          call print$mnemonic;
+ 368   2          call print$mod$rm;
+ 369   2          call comma;
+ 370   2          call print$data$8;
+ 371   2          end type38;
+
+ 372   1      type39: procedure;
+ 373   2          if mod$bits = 3 then
+ 374   2              do;
+ 375   3                  error$flag = true;
+ 376   3                  return;
+ 377   3              end;
+ 378   2          call print$mnemonic;
+ 379   2          call print$reg$16 (reg$bits);
+ 380   2          call comma;
+ 381   2          call print$mod$rm;
+ 382   2          end type39;
+
+ 383   1      type40: procedure;   /* 41 */
+ 384   2          if mod$bits = 3 then
+ 385   2              do;
+ 386   3                  error$flag = true;
+ 387   3                  return;
+ 388   3              end;
+ 389   2          call print$mnemonic;
+ 390   2          b$or$w$flag = true;
+ 391   2          call print$mod$rm;
+ 392   2          call comma;
+ 393   2          call print$data$8$or$16;
+ 394   2          end type40;
+
+ 395   1      type42: procedure;
+ 396   2          call print$mnemonic;
+ 397   2          call print$byte (shl (byte1$reg$bits, 3) or reg$bits);
+ 398   2          call comma;
+ 399   2          call print$mod$rm;
+ 400   2          end type42;
+
+ 401   1      type44: procedure;
+ 402   2          call print$mnemonic;
+ 403   2          b$or$w$flag = true;
+ 404   2          call print$modrm;
+ 405   2          call comma;
+ 406   2          if s$bit = 1 and w$bit = 1 then call print$data$sw;
+ 408   2          else call print$data$8$or$16;
+ 409   2          end type44;
+
+ 410   1      type45: procedure;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  11
+
+
+ 411   2          b$or$w$flag = true;
+ 412   2          call type8;
+ 413   2          end type45;
+
+ 414   1      dis: procedure;
+ 415   2          error$flag, b$or$w$flag = false;
+ 416   2          call set$bits;
+ 417   2          if instr$type = 26 then
+ 418   2              do;
+ 419   3                  alt$table$base = alt$table$ptrs (mnemonic$index);
+ 420   3                  mnemonic$index = alt$table (reg$bits * 2);
+ 421   3                  instr$type = alt$table (reg$bits * 2 + 1);
+ 422   3              end;
+ 423   2          if instr$type > 28 then error$flag = true;
+                  else
+ 425   2          do case instr$type;
+ 426   3              error$flag = true;
+ 427   3              call type1;
+ 428   3              call type2;
+ 429   3              call type3;
+ 430   3              call type4;
+ 431   3              call type5;
+ 432   3              call type6;
+ 433   3              call type8;
+ 434   3              call type10;
+ 435   3              call type11;
+ 436   3              call type12;
+ 437   3              call type13;
+ 438   3              call type14;
+ 439   3              call type18;
+ 440   3              call type22;
+ 441   3              call type23;
+ 442   3              call type25;
+ 443   3              call type27;
+ 444   3              call type31;
+ 445   3              call type33;
+ 446   3              call type34;
+ 447   3              call type36;
+ 448   3              call type38;
+ 449   3              call type39;
+ 450   3              call type40;
+ 451   3              call type42;
+ 452   3              ;
+ 453   3              call type44;
+ 454   3              call type45;
+ 455   3          end;
+ 456   2          if error$flag then call error;
+ 458   2          end dis;
+
+ 459   1      disem: procedure (disloc) address public;
+ 460   2          declare disloc pointer;
+ 461   2          declare nprefix byte;
+ 462   2          disem$ptr = disloc;
+ 463   2          nprefix = 0;
+ 464   2          do while true;
+ 465   3              mnemonic$index = instr$table (disem$byte (0) * 2);
+ 466   3              instr$type = instr$table (disem$byte (0) * 2 + 1);
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  12
+
+
+ 467   3              if instr$type = 0ffh and nprefix < 3 then
+ 468   3                  do;
+ 469   4                      call print$mnemonic;
+ 470   4                      nprefix = nprefix + 1;
+ 471   4                  end;
+                      else
+ 472   3                  do;
+ 473   4                      if instr$type = 0ffh then instr$type = 1;
+ 475   4                      call dis;
+ 476   4                      return disem$offset;
+ 477   4                  end;
+ 478   3          end;
+ 479   2          end disem;
+
+ 480   1      end disem86;
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  13
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    124  0014H     2  A. . . . . . . . .    WORD       125  126  127  128 
+     45  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        46   47   48 
+     26  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        27   28   29   30
+                                              31 
+     17               AHREG. . . . . . .    LITERALLY
+     17               ALREG. . . . . . .    LITERALLY        98 
+     12  0000H    16  ALTTABLE . . . . .    BYTE BASED(ALTTABLEBASE) ARRAY(16)       420  421
+     12  000AH     2  ALTTABLEBASE . . .    WORD        12  419  420  421 
+     12  0000H    16  ALTTABLEPTRS . . .    WORD ARRAY(8) EXTERNAL(0)      419 
+     16               AXREG. . . . . . .    LITERALLY        97  335 
+     40  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        41   42   43 
+     34  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        35   36   37   38
+     28  0000H     1  B. . . . . . . . .    BYTE BASED(A)         29   30 
+     17               BHREG. . . . . . .    LITERALLY
+     17               BLREG. . . . . . .    LITERALLY
+     14  01D5H     1  BORWFLAG . . . . .    BYTE       148  317  341  390  403  411  415 
+     16               BPREG. . . . . . .    LITERALLY
+     16               BXREG. . . . . . .    LITERALLY
+     13  01CDH     1  BYTE1REGBITS . . .    BYTE        56  222  326  337  397 
+     20  0000H     1  C. . . . . . . . .    BYTE PARAMETER        21 
+     17               CHREG. . . . . . .    LITERALLY
+     17               CLREG. . . . . . .    LITERALLY       321 
+     23  0002H    11  COMMA. . . . . . .    PROCEDURE STACK=0006H          272  277  286  291
+                                             298  306  311  319  330  336  343  357  362  369
+                                             380  392  398  405 
+     20  0000H        CONOUT . . . . . .    PROCEDURE EXTERNAL(2) STACK=0000H         24   30
+                                              37   38   71   73   92  136  138  166  177  183
+                                             188  202  205  252  260  322 
+      2               CR . . . . . . . .    LITERALLY
+     18               CSREG. . . . . . .    LITERALLY
+     16               CXREG. . . . . . .    LITERALLY
+     13  01CEH     1  DBIT . . . . . . .    BYTE        61  180  269  283  303  354 
+     17               DHREG. . . . . . .    LITERALLY
+     16               DIREG. . . . . . .    LITERALLY
+    414  0694H   295  DIS. . . . . . . .    PROCEDURE STACK=0028H          475 
+    459  07BBH    90  DISEM. . . . . . .    PROCEDURE WORD PUBLIC STACK=0030H
+      1  0002H        DISEM86. . . . . .    PROCEDURE STACK=0000H
+     14  0000H     1  DISEMBYTE. . . . .    BYTE BASED(DISEMPTR) ARRAY(1)        52   56   57
+                                              58   59   60   61  105  118  119  120  125  157
+                                             158  213  226  327  465  466 
+     14  0012H     2  DISEMEND . . . . .    WORD
+     14  000EH     2  DISEMOFFSET. . . .    WORD AT          53  106  110  121  128  129  132
+                                             133  139  142  159  164  207  216  258  476 
+     14  000EH     4  DISEMPTR . . . . .    POINTER          14   52   56   57   58   59   60
+                                              61  105  109  118  119  120  125  132  137  157
+                                             158  163  213  226  257  327  462  465  466 
+     14  0000H     2  DISEMWORD. . . . .    WORD BASED(DISEMPTR) ARRAY(1)       109  132  137
+                                             163  257 
+    459  0004H     4  DISLOC . . . . . .    POINTER PARAMETER AUTOMATIC         460  462 
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  14
+
+
+     17               DLREG. . . . . . .    LITERALLY
+     18               DSREG. . . . . . .    LITERALLY
+     16               DXREG. . . . . . .    LITERALLY       305  312 
+     50  0077H    26  ERROR. . . . . . .    PROCEDURE STACK=0012H          457 
+     14  01D6H     1  ERRORFLAG. . . . .    BYTE       218  350  375  386  415  424  426  456
+     18               ESREG. . . . . . .    LITERALLY
+      2               FALSE. . . . . . .    LITERALLY       415 
+                      HIGH . . . . . . .    BUILTIN          47 
+    193  0200H     1  I. . . . . . . . .    BYTE       199  200 
+     15  0000H   512  INSTRTABLE . . . .    BYTE ARRAY(512) EXTERNAL(1)         465  466 
+     14  01D4H     1  INSTRTYPE. . . . .    BYTE       417  421  423  425  466  467  473  474
+     11  0000H     1  LEFTBRACKET. . . .    BYTE DATA       136  166 
+    193  01FFH     1  LEN. . . . . . . .    BYTE       194  195  196  198  200 
+      2               LF . . . . . . . .    LITERALLY
+                      LOW. . . . . . . .    BUILTIN          48  126 
+     14  01D3H     1  MNEMONICINDEX. . .    BYTE       195  198  419  420  465 
+     13  01CAH     1  MODBITS. . . . . .    BYTE        57  143  150  155  161  373  384 
+      8  01BFH     5  NOPS . . . . . . .    BYTE ARRAY(5) PUBLIC INITIAL
+    461  0202H     1  NPREFIX. . . . . .    BYTE       463  467  470 
+      9  01C4H     6  OPNIN. . . . . . .    BYTE ARRAY(6) PUBLIC INITIAL        195  198 
+      3  0018H    24  OPS2 . . . . . . .    BYTE ARRAY(24) INITIAL          10 
+      4  0030H   207  OPS3 . . . . . . .    BYTE ARRAY(207) INITIAL         10 
+      5  00FFH   100  OPS4 . . . . . . .    BYTE ARRAY(100) INITIAL         10 
+      6  0163H    80  OPS5 . . . . . . .    BYTE ARRAY(80) INITIAL          10 
+      7  01B3H    12  OPS6 . . . . . . .    BYTE ARRAY(12) INITIAL          10 
+     89  0159H    25  PRINT2REG16. . . .    PROCEDURE STACK=0018H          168  169  170  171
+     95  0172H    26  PRINTAREG. . . . .    PROCEDURE STACK=0014H          273  276  287  290
+                                             297  307  310 
+     63  00DAH    24  PRINTBORW. . . . .    PROCEDURE STACK=000CH          149 
+     40  0045H    27  PRINTBYTE. . . . .    PROCEDURE STACK=000EH           47   48   52  105
+                                             158  397 
+    108  01B0H    20  PRINTDATA16. . . .    PROCEDURE STACK=0018H          114  248  259 
+    104  019DH    19  PRINTDATA8 . . . .    PROCEDURE STACK=0012H          115  244  285  292
+                                             370 
+    112  01C4H    20  PRINTDATA8OR16 . .    PROCEDURE STACK=001CH          299  331  344  393
+                                             408 
+    117  01D8H    45  PRINTDATASW. . . .    PROCEDURE STACK=0018H          407 
+    135  024BH    34  PRINTDIRECTADDR. .    PROCEDURE STACK=0018H          152  271  278 
+     26  000DH    25  PRINTM . . . . . .    PROCEDURE PUBLIC STACK=0008H         51   65   66
+    192  0368H   116  PRINTMNEMONIC. . .    PROCEDURE STACK=0006H          210  215  221  227
+                                             231  235  239  243  247  251  256  264  268  282
+                                             296  302  316  328  334  340  353  367  378  389
+                                             396  402  469 
+    179  033AH    46  PRINTMODREGRM. . .    PROCEDURE STACK=0020H          265 
+    141  026DH   205  PRINTMODRM . . . .    PROCEDURE STACK=001CH          184  187  240  318
+                                             342  358  361  368  381  391  399  404 
+     34  0026H    31  PRINTNIBBLE. . . .    PROCEDURE STACK=0008H           42   43 
+     68  00F2H    41  PRINTREG . . . . .    PROCEDURE STACK=000AH           77   81  102 
+     79  012CH    17  PRINTREG16 . . . .    PROCEDURE STACK=0010H           86   91   93   97
+                                             172  173  174  175  222  305  312  335  337  379
+     75  011BH    17  PRINTREG8. . . . .    PROCEDURE STACK=0010H           87   98  321 
+     83  013DH    28  PRINTREG8OR16. . .    PROCEDURE STACK=0016H          145  182  189  329
+    100  018CH    17  PRINTSEGREG. . . .    PROCEDURE STACK=0010H          228  356  363 
+    131  0230H    27  PRINTSIGNED16. . .    PROCEDURE STACK=0018H          236 
+    123  0205H    43  PRINTSIGNED8 . . .    PROCEDURE STACK=0018H          232 
+     45  0060H    23  PRINTWORD. . . . .    PROCEDURE PUBLIC STACK=0014H        109  119  120
+                                             128  132  137  163  261 
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  15
+
+
+     89  0006H     1  R1 . . . . . . . .    BYTE PARAMETER AUTOMATIC        90   91 
+     89  0004H     1  R2 . . . . . . . .    BYTE PARAMETER AUTOMATIC        90   93 
+    100  0004H     1  REG. . . . . . . .    BYTE PARAMETER AUTOMATIC       101  102 
+     79  0004H     1  REG. . . . . . . .    BYTE PARAMETER AUTOMATIC        80   81 
+     75  0004H     1  REG. . . . . . . .    BYTE PARAMETER AUTOMATIC        76   77 
+     68  0004H     1  REG. . . . . . . .    BYTE PARAMETER AUTOMATIC        69   70 
+     19  01D7H    16  REG16. . . . . . .    BYTE ARRAY(16) PUBLIC INITIAL        81 
+     19  01E7H    16  REG8 . . . . . . .    BYTE ARRAY(16) PUBLIC INITIAL        77 
+     68  0006H     2  REGADD . . . . . .    WORD PARAMETER AUTOMATIC        69   70 
+     13  01CBH     1  REGBITS. . . . . .    BYTE        58  182  189  326  329  348  356  363
+                                             379  397  420  421 
+     83  0004H     1  REGNUM . . . . . .    BYTE PARAMETER AUTOMATIC        84   86   87 
+     11  0001H     1  RIGHTBRACKET . . .    BYTE DATA       138  177 
+     13  01CCH     1  RMBITS . . . . . .    BYTE        59  145  150  157  167 
+                      ROL. . . . . . . .    BUILTIN         118 
+     13  01CFH     1  SBIT . . . . . . .    BYTE        61  406 
+     19  01F7H     8  SEGREG . . . . . .    BYTE ARRAY(8) PUBLIC INITIAL        102 
+     55  0091H    73  SETBITS. . . . . .    PROCEDURE STACK=0006H          325  416 
+                      SHL. . . . . . . .    BUILTIN          70  397 
+                      SHR. . . . . . . .    BUILTIN          42   57   58   61  226  327 
+     16               SIREG. . . . . . .    LITERALLY
+     16               SPREG. . . . . . .    LITERALLY
+     18               SSREG. . . . . . .    LITERALLY
+     14  0000H     1  TABLECHAR. . . . .    BYTE BASED(TABLEPTR)       71   73  202 
+     14  000CH     2  TABLEPTR . . . . .    WORD        14   70   71   72   73  198  202  203
+                                            
+     10  0000H    10  TABPTRS. . . . . .    WORD ARRAY(5) PUBLIC INITIAL        198 
+    255  0016H     2  TEMP . . . . . . .    WORD       257  261 
+    225  0201H     1  TEMP . . . . . . .    BYTE       226  228 
+      2               TRUE . . . . . . .    LITERALLY       218  317  341  347  350  375  386
+                                             390  403  411  424  426  464 
+    209  03DCH     8  TYPE1. . . . . . .    PROCEDURE STACK=000AH          427 
+    242  0451H    11  TYPE10 . . . . . .    PROCEDURE STACK=0016H          434 
+    246  045CH    11  TYPE11 . . . . . .    PROCEDURE STACK=001CH          435 
+    250  0467H    14  TYPE12 . . . . . .    PROCEDURE STACK=000AH          436 
+    254  0475H    39  TYPE13 . . . . . .    PROCEDURE STACK=001CH          437 
+    263  049CH    11  TYPE14 . . . . . .    PROCEDURE STACK=0024H          438 
+    267  04A7H    35  TYPE18 . . . . . .    PROCEDURE STACK=001CH          439 
+    212  03E4H    30  TYPE2. . . . . . .    PROCEDURE STACK=000AH          428 
+    281  04CAH    35  TYPE22 . . . . . .    PROCEDURE STACK=0018H          440 
+    295  04EDH    17  TYPE23 . . . . . .    PROCEDURE STACK=0020H          441 
+    301  04FEH    41  TYPE25 . . . . . .    PROCEDURE STACK=0018H          442 
+    315  0527H    40  TYPE27 . . . . . .    PROCEDURE STACK=0020H          443 
+    220  0402H    15  TYPE3. . . . . . .    PROCEDURE STACK=0014H          429 
+    324  054FH    46  TYPE31 . . . . . .    PROCEDURE STACK=0020H          444 
+    333  057DH    24  TYPE33 . . . . . .    PROCEDURE STACK=0014H          445 
+    339  0595H    22  TYPE34 . . . . . .    PROCEDURE STACK=0020H          446 
+    346  05ABH    62  TYPE36 . . . . . .    PROCEDURE STACK=0020H          447 
+    366  05E9H    17  TYPE38 . . . . . .    PROCEDURE STACK=0020H          448 
+    372  05FAH    35  TYPE39 . . . . . .    PROCEDURE STACK=0020H          449 
+    224  0411H    31  TYPE4. . . . . . .    PROCEDURE STACK=0014H          430 
+    383  061DH    36  TYPE40 . . . . . .    PROCEDURE STACK=0020H          450 
+    395  0641H    29  TYPE42 . . . . . .    PROCEDURE STACK=0020H          451 
+    401  065EH    41  TYPE44 . . . . . .    PROCEDURE STACK=0020H          453 
+    410  0687H    13  TYPE45 . . . . . .    PROCEDURE STACK=0024H          454 
+    230  0430H    11  TYPE5. . . . . . .    PROCEDURE STACK=001CH          431 
+    234  043BH    11  TYPE6. . . . . . .    PROCEDURE STACK=001CH          432 
+PL/M-86 COMPILER    8086 DISASSEMBLER                                            5/14/81    PAGE  16
+
+
+    238  0446H    11  TYPE8. . . . . . .    PROCEDURE STACK=0020H          412  433 
+     13  01D0H     1  VBIT . . . . . . .    BYTE        61  320 
+     13  01D1H     1  WBIT . . . . . . .    BYTE        60   64   85   96  113  327  347  406
+     13  01D2H     1  ZBIT . . . . . . .    BYTE        60 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 0815H   2069D
+     CONSTANT AREA SIZE = 0016H     22D
+     VARIABLE AREA SIZE = 0203H    515D
+     MAXIMUM STACK SIZE = 0030H     48D
+     636 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

@@ -1,0 +1,273 @@
+title	'Software Interrupt Init & Handlers'
+
+include system.lib
+include sysdat.lib
+
+include flags.equ
+
+OVEC1		equ	1 * 4           ;; Equates for SID's interrupt vector.
+SVEC1		equ	OVEC1 + 2       ;; They are used during initialization.
+
+OVEC3		equ	3 * 4
+SVEC3		equ	OVEC3 + 2
+
+OVECE1		equ	0E1H * 4
+SVECE1		equ	OVECE1 + 2
+
+LOW_NIBBLE	EQU	0FH		;; used by outbyte
+
+	dseg
+
+extrn	debugflag:byte
+
+	cseg
+
+public nmiint, int_init
+
+extrn	sysdat:word
+extrn	supif:near
+extrn	dispatch:dword
+extrn	pmsg:near
+
+;;======
+nmiint:
+;;======
+;;
+;; Non-maskable interrupt handler
+;;
+;;	This handler sets a flag when an NMI is executed.
+;;	A process is expected to be sleeping on this flag.
+ 
+	push ds				;; establish a data segment
+	mov ds, sysdat
+
+	mov nmi_ssreg,ss		;; establish a stack
+	mov nmi_spreg,sp
+	mov ss,sysdat			
+	mov sp,offset nmi_tos
+
+	push ax ! push bx		;; save the environment
+	push cx ! push dx
+	push di ! push si
+	push bp ! push es
+
+ 	mov dx, nmi_flag		;; wake up the sleeping NMI
+ 	mov cl, f_flagset 		;; process
+	call supif
+
+	pop es ! pop bp			;; restore the environment
+	pop si ! pop di
+	pop dx ! pop cx
+	pop bx ! pop ax
+
+	mov ss,nmi_ssreg		;; restore the stack
+	mov sp,nmi_spreg
+
+	pop ds				;; restore the data segment
+
+	jmpf cs:dispatch		;; exit through the dispatcher
+
+eject
+
+
+int_trap:	;;unknown interrupts go here ...
+;;-------
+;;
+;;	We will terminate the process that caused this
+;;	after writing a message to the process's default
+;;	console.  If the process is in KEEP mode, we will
+;;	force it to terminate anyway...
+;;
+;;	We don't need to save any registers since we are
+;;	not going to return to the process.
+
+	mov ds,sysdat
+	                                ;; print first 6 chars of PD Name
+	mov bx,rlr			;; get the PD 
+	add bx,p_name			;; get the process name
+	mov byte ptr 6[bx],':'		;; step on the process name
+	mov byte ptr 7[bx],0ffh
+	call pmsg			;; print the first 6 letters
+
+	                                ;; calculate and print the 
+                                        ;; Illegal Interrupt message
+	pop ax				;; get the addr of the int 3
+	sub ax,offset int_work + 1	;; subtract from this addr
+					;; the base of the INT 3 table
+	mov bx,offset int_trpcode	;; point to where the ascii will go
+	call outbyte			;; convert the int number to ascii
+	mov bx,offset int_trp		;; print the message
+	call pmsg
+	                                ;; terminate process
+	mov bx,rlr			;; get the PD
+	and p_flag[bx], not pf_keep	;; turn off the process's keep flag
+	mov cx,f_terminate		;; set the terminate code
+	mov dx,0ffffh			;; free its memory
+	int 224				;; go to the system
+
+	hlt				;; this instruction should 
+					;; never execute
+
+
+outbyte:
+;;-------
+;;	ENTRY:	al = binary of an unsigned byte 
+;;		bx = where to put the ascii
+;;
+;;	EXIT:	[bx] = ascii of high nibble of byte
+;;		[bx+1] = ascii of low nibble of byte
+
+	push ax			;; save the byte
+	mov di, bx		;; save where to put the ascii
+	mov bx, offset xlate_tbl
+	mov cl, 4
+
+	shr al, cl		;; move the high nibble into place
+	xlat xlate_tbl		;; translate the highest nibble
+	mov [di], al		;; stash it, di -> destination
+	inc di			;; next ascii position
+
+	pop ax			;; get the byte back
+	and al, LOW_NIBBLE	;; mask out the upper nibble
+	xlat xlate_tbl		;; tanslate the lower nibble
+	mov [di], al		;; di -> destination
+
+	ret
+
+eject
+
+;;========
+int_init:
+;;========
+;;
+;; Un-initialized interrupt initialization
+;;
+
+	cli				;; interrupts should be off on entry,but...
+	                                ;; setup an INT 3 for each possible interrupt
+
+	mov cx,256			;; # of interrupt vectors
+	mov di,offset int_work		;; base of the INT 3 table
+	mov al,0cch			;; opcode for INT 3
+	rep stosb			;; store INT 3 in interrupt table
+
+	push ds                         ;; Setup all interrupt vectors in low
+	xor ax,ax                       ;; memory to their respective INT 3 in the INT 3 table
+	mov ds,ax			;; set DS to zero
+	                                ;; save SID's interrupt vectors
+	mov ax, word ptr .OVEC1		;; vector 1
+	mov es:vec1_off, ax
+	mov ax, word ptr.SVEC1
+	mov es:vec1_seg, ax
+
+	mov ax, word ptr.OVEC3		;; vector 3
+	mov es:vec3_off, ax
+	mov ax, word ptr.SVEC3
+	mov es:vec3_seg, ax
+
+	mov ax, word ptr.OVECE1		;; vector E1
+	mov es:vece1_off, ax
+	mov ax, word ptr.SVECE1
+	mov es:vece1_seg, ax
+
+	xor di,di			;; start with vector 0
+	mov bx,offset int_work 		;; bx -> base of interrupt 3 table
+	mov cx,256			;; cx = # of interrupt vectors
+setint:
+	mov word ptr [di],bx		;; interrupt vector offset
+	mov word ptr 2[di],cs		;; interrupt vector segment (INT 3 table)
+
+	add di,004H			;; next vector 
+	inc bx				;; next table entry
+	loop setint			;; initialize all the int vectors ...
+
+	mov word ptr .0008h,offset nmiint
+	mov word ptr .000ah,cs          ;; initialize the NMI
+
+	;; if we're in a debugging environment put sids interrupt vectors
+	;; back.  If we're not in an interrupt environment then make
+	;; the interrupt 3 vector point to the un-initialized interrupt
+	;; handler.
+
+	test es:debugflag, 002H        ;; do we want to put SID'S vector back ?
+            jz set_int_trap            ;; no ...
+
+	  mov ax, es:vec1_off	       ;; yes, do vector 1
+	  mov word ptr .OVEC1, ax
+	  mov ax, es:vec1_seg
+	  mov word ptr .SVEC1, ax
+
+	  mov ax, es:vec3_off		;; vector 3
+	  mov word ptr .OVEC3, ax
+	  mov ax, es:vec3_seg
+	  mov word ptr .SVEC3, ax
+
+	  mov ax, es:vece1_off		;; vector E1
+	  mov word ptr .OVECE1, ax
+	  mov ax, es:vece1_seg
+	  mov word ptr .SVECE1, ax
+
+	  jmps intie
+
+set_int_trap:
+	                                        ;; point to our trap.
+	mov word ptr .OVEC3, offset int_trap	;; setup INT 3's offset
+	mov word ptr .SVEC3, cs			;; and segment
+intie:
+	pop ds				        ;; restore the data segment
+	ret
+
+eject
+
+	dseg
+
+nmi_tos		rw	80
+nmi_ssreg	rw	1		;; nonmaskable interrupt stack
+nmi_spreg	rw	1
+nmi_instk	rb	1
+
+		rw	48		;; tick's interrupt stack
+tick_tos	rw	0
+tick_ssreg	rw	1
+tick_spreg	rw	1
+
+                                        ;; this translate table is used by outbyte
+                                        ;; to translate from binary to ascii
+xlate_tbl	db	'0123456789ABCDEF'
+
+                                        ;; this message is printed by the uninitialized interrupt
+                                        ;; routine.
+int_trp db	' Uninitialized interrupt, code = 0'
+int_trpcode db	'xxH',0dh,0ah,0ffh
+
+
+                                        ;; SID's interrupt vectors are stored
+                                        ;; here during initialization.
+vec1_off	dw	0		;; interrupt vector 1
+vec1_seg	dw	0
+
+vec3_off	dw	0		;; interrupt vector 3
+vec3_seg	dw	0
+
+vece1_off	dw	0		;; interrupt vector E1
+vece1_seg	dw	0
+
+;;	scratch area
+;;
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+
+                                        ;; Int 3 table for the unintialized interrupts
+int_work rb	256		        ;;interrupt vector routines
+
+
+
+
+	end
+
+

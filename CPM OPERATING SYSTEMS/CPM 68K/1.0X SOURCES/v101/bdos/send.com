@@ -1,0 +1,16 @@
+$ set noon
+$ vsend BDOSDEF.H
+$ vsend BDOSIF.S
+$ vsend BDOSINC.H
+$ vsend BDOSMAIN.C
+$ vsend BDOSMISC.C
+$ vsend BDOSRW.C
+$ vsend BIOSDEF.H
+$ vsend CONBDOS.C
+$ vsend CPMC.DOC
+$ vsend DSKUTIL.C
+$ vsend EXCEPTN.S
+$ vsend FILEIO.C
+$ vsend IOSYS.C
+$ vsend PGMLD.S
+$ vsend PKTIO.H

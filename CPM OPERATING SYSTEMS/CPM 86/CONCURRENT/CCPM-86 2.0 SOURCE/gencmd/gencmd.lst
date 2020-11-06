@@ -1,0 +1,1038 @@
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE GENCMD
+OBJECT MODULE PLACED IN GENCMD.OBJ
+COMPILER INVOKED BY:  :F0: GENCMD.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+   1          GENCMD:
+              DO;
+              /*   CP/M 8086 CMD file generator  
+
+                  COPYRIGHT (C) 1983
+                  DIGITAL RESEARCH
+                  BOX 579 PACIFIC GROVE
+                  CALIFORNIA 93950
+
+                  */
+
+              /**** The following commands were used on the VAX to compile GENCMD:
+
+                  $ util := GENCMD
+                  $ ccpmsetup ! set up environment
+                  $ plm86 'util'.plm xref 'p1' optimize(3) debug
+                  $ link86 f1:scd.obj, 'util'.obj  to 'util'.lnk
+                  $ loc86 'util'.lnk od(sm(code,dats,data,stack,const)) -
+                        ad(sm(code(0),dats(10000h))) ss(stack(+32)) to 'util'.
+                  $ h86 'util'
+
+              **** Followed on the micro by:
+                  A>vax gencmd.h86 $fans
+                  A>gencmd gencmd data[b1000 m86 xfff]
+
+              ****/
+
+   2   1      DECLARE
+                  digital$code literally '0081h',  /*DR code record */
+                  digital$data literally '0082h',  /* DR data record */
+                  digital02 literally '0085h',   /* DR 02 records */
+                  paragraph literally '16',
+                  ex literally '12',         /* extent */
+                  nr literally '32',         /* current record */
+                  maxb address external,
+                  fcba(33) byte external,    /* DEFAULT FILE CONTROL BLOCK */
+                  buffa(128) byte external; /* DEFAULT BUFFER ADDRESS */
+
+
+   3   1      DECLARE COPYRIGHT(*) BYTE DATA
+                  (' COPYRIGHT (C) 1983, DIGITAL RESEARCH ');
+
+   4   1      MON1: PROCEDURE(F,A) EXTERNAL;
+   5   2          DECLARE F BYTE, A ADDRESS;
+   6   2          END MON1;
+
+   7   1      MON2: PROCEDURE(F,A) BYTE EXTERNAL;
+   8   2          DECLARE F BYTE, A ADDRESS;
+   9   2          END MON2;
+
+  10   1      DECLARE SP ADDRESS;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   2
+
+
+
+  11   1      BOOT: PROCEDURE;
+  12   2          call mon1 (0,0);
+  13   2          END BOOT;
+
+  14   1      declare segmts(11) structure (name(5) byte,begin$add address)
+                  initial ('CODE ',00h,'DATA ',0ffffh,'EXTRA',0ffffh,'STACK',0,
+                    'X1   ',0,'X2   ',0,'X3   ',0,'X4   ',0,'8080 ',0,'NZERO',0,
+                    'NHEAD',0);
+                
+                
+                 
+  15   1      declare header (15) structure
+                 (typseg byte,file$length address,absolute$add address,
+                   minimum$mem address,
+                   maximum$mem address) initial (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,00,0,0,0,0,0,0,0,0,0,
+                   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+                 
+
+  16   1      plmstart: PROCEDURE public;
+  17   2          DECLARE FCB (33) BYTE AT (.FCBA),
+                     DFCBA LITERALLY 'FCBA';
+  18   2          DECLARE BUFFER (128) BYTE AT (.BUFFA),
+                      DBUFF LITERALLY 'BUFFA';
+  19   2          DECLARE SFCB(33) BYTE,  /* SOURCE FILE CONTROL BLOCK */
+                      BSIZE LITERALLY '1024',
+                      EOFILE LITERALLY '1AH',
+                      SBUFF(BSIZE) BYTE,  /* SOURCE FILE BUFFER */
+                      RFLAG BYTE,         /* READER FLAG */
+                      SBP ADDRESS;        /* SOURCE FILE BUFFER POINTER */
+  20   2          declare tbp address;     /* pointer to command tail  */
+  21   2          declare count$command$tail byte at (.buffa);
+  22   2          declare (t8080,nozero) byte;
+                
+                
+
+  23   2      DECLARE
+                  TRUE LITERALLY '1',
+                  FALSE LITERALLY '0',
+                  FOREVER LITERALLY 'WHILE TRUE',
+                  CR LITERALLY '13',
+                  LF LITERALLY '10',
+                  WHAT LITERALLY '63';
+
+  24   2      PRINTCHAR: PROCEDURE(CHAR);
+  25   3          DECLARE CHAR BYTE;
+  26   3          CALL MON1(2,CHAR);
+  27   3          END PRINTCHAR;
+
+  28   2      CRLF: PROCEDURE;
+  29   3          CALL PRINTCHAR(CR);
+  30   3          CALL PRINTCHAR(LF);
+  31   3          END CRLF;
+
+  32   2      PRINTNIB: PROCEDURE(N);
+  33   3          DECLARE N BYTE;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   3
+
+
+  34   3              IF N > 9 THEN CALL PRINTCHAR(N+'A'-10); ELSE
+  36   3              CALL PRINTCHAR(N+'0');
+  37   3          END PRINTNIB;
+
+  38   2      PRINTHEX: PROCEDURE(B);
+  39   3          DECLARE B BYTE;
+  40   3              CALL PRINTNIB(SHR(B,4)); CALL PRINTNIB(B AND 0FH);
+  42   3          END PRINTHEX;
+
+  43   2      PRINTADDR: PROCEDURE(A);
+  44   3          DECLARE A ADDRESS;
+  45   3          CALL PRINTHEX(HIGH(A)); CALL PRINTHEX(LOW(A));
+  47   3          END PRINTADDR;
+
+  48   2      PRINTM: PROCEDURE(A);
+  49   3          DECLARE A ADDRESS;
+  50   3          CALL MON1(9,A);
+  51   3          END PRINTM;
+
+  52   2      PRINT: PROCEDURE(A);
+  53   3          DECLARE A ADDRESS;
+                  /* PRINT THE STRING STARTING AT ADDRESS A UNTIL THE
+                  NEXT DOLLAR SIGN IS ENCOUNTERED WITH PRECEDING CRLF */
+  54   3          CALL CRLF;
+  55   3          CALL PRINTM(A);
+  56   3          END PRINT;
+
+  57   2      declare    mbuffadr address,
+                   LA ADDRESS;  /* CURRENT LOAD ADDRESS */
+  58   2           declare head byte;
+
+  59   2      PERROR: PROCEDURE(A);
+                  /* PRINT ERROR MESSAGE */
+  60   3          DECLARE A ADDRESS;
+  61   3          CALL PRINT(.('ERROR: $'));
+  62   3          CALL PRINTM(A);
+  63   3          CALL PRINTM(.(', LOAD ADDRESS $'));
+  64   3          CALL PRINTADDR(LA);
+  65   3          CALL BOOT;
+  66   3          END PERROR;
+
+                
+  67   2      diskerror: procedure;
+  68   3               call perror(.('DISK WRITE$'));
+  69   3          end diskerror;
+                
+  70   2      DECLARE DCNT BYTE;
+
+                
+  71   2      setdma: procedure(a);
+  72   3          declare a address;
+  73   3          call mon1 (26,a);
+  74   3          end setdma;
+                 
+  75   2      OPEN: PROCEDURE(FCB);
+  76   3          DECLARE FCB ADDRESS;
+  77   3          DCNT = MON2(15,FCB);
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   4
+
+
+  78   3          END OPEN;
+
+  79   2      CLOSE: PROCEDURE(FCB);
+  80   3          DECLARE FCB ADDRESS;
+  81   3          DCNT = MON2(16,FCB);
+  82   3          END CLOSE;
+
+  83   2      SEARCH: PROCEDURE(FCB);
+  84   3          DECLARE FCB ADDRESS;
+  85   3          DCNT = MON2(17,FCB);
+  86   3          END SEARCH;
+
+  87   2      SEARCHN: PROCEDURE;
+  88   3          DCNT = MON2(18,0);
+  89   3          END SEARCHN;
+
+  90   2      DELETE: PROCEDURE(FCB);
+  91   3          DECLARE FCB ADDRESS;
+  92   3          CALL MON1(19,FCB);
+  93   3          END DELETE;
+
+  94   2      DISKREAD: PROCEDURE(FCB) BYTE;
+  95   3          DECLARE FCB ADDRESS;
+  96   3          RETURN MON2(20,FCB);
+  97   3          END DISKREAD;
+
+  98   2      DISKWRITE: PROCEDURE(FCB) BYTE;
+  99   3          DECLARE FCB ADDRESS;
+ 100   3          RETURN MON2(21,FCB);
+ 101   3          END DISKWRITE;
+
+ 102   2      MAKE: PROCEDURE(FCB);
+ 103   3          DECLARE FCB ADDRESS;
+ 104   3          DCNT = MON2(22,FCB);
+ 105   3          END MAKE;
+
+ 106   2      RENAME: PROCEDURE(FCB);
+ 107   3          DECLARE FCB ADDRESS;
+ 108   3          CALL MON1(23,FCB);
+ 109   3          END RENAME;
+
+ 110   2          MOVE: PROCEDURE(S,D,N);
+ 111   3              DECLARE (S,D) ADDRESS, N BYTE,
+                      A BASED S BYTE, B BASED D BYTE;
+ 112   3                  DO WHILE (N:=N-1) <> 255;
+ 113   4                  B = A; S=S+1; D=D+1;
+ 116   4                  END;
+ 117   3              END MOVE;
+                
+                
+ 118   2          declare char byte;
+                
+                 
+                 
+                 
+ 119   2      comline$error: procedure;
+ 120   3          declare i byte;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   5
+
+
+ 121   3          call crlf;
+ 122   3          do i = 1 to tbp;
+ 123   4             call printchar (buffer(i));
+ 124   4             end;
+ 125   3          call printchar ('?');
+ 126   3          call crlf;
+ 127   3          call boot;
+ 128   3          end comline$error;
+                
+                
+                 
+                
+ 129   2      retchar: procedure byte;
+                 /*  get another character from command tail */
+ 130   3            if (tbp :=tbp+1) <= count$command$tail then
+ 131   3               return buffer(tbp);
+ 132   3            else return (0dh);
+ 133   3            end retchar;
+                
+ 134   2      tran: procedure(b) byte;
+ 135   3            declare b byte;
+ 136   3            if b < ' ' then return 0dh;  /* non-graphic */
+ 138   3            if b - 'a' < ('z' - 'a') then
+ 139   3               b = b and 101$1111b;    /* upper case */
+ 140   3            return b;
+ 141   3            end tran;
+                
+                
+ 142   2      next$non$blank: procedure;
+ 143   3            char=tran(retchar);
+ 144   3            do while char= ' ';
+ 145   4            char= tran(retchar);
+ 146   4            end;
+ 147   3          end next$non$blank;
+                
+                 
+ 148   2          CHECK$ONE$HEX: PROCEDURE (h) BYTE;
+                      /* READ ONE HEX CHARACTER FROM THE INPUT */
+ 149   3              DECLARE H BYTE;
+ 150   3              IF H  - '0' <= 9 THEN RETURN H - '0';
+ 152   3              IF H - 'A' > 5 THEN
+ 153   3              return (0ffh);
+ 154   3              RETURN H - 'A' + 10;
+ 155   3              END CHECK$ONE$HEX;
+                
+                 
+                 
+ 156   2          MAKE$DOUBLE: PROCEDURE(H,L) ADDRESS;
+                      /* CREATE A BOUBLE BYTE VALUE FROM TWO SINGLE BYTES */
+ 157   3              DECLARE (H,L) BYTE;
+ 158   3              RETURN SHL(DOUBLE(H),8) OR L;
+ 159   3              END MAKE$DOUBLE;
+
+
+                
+ 160   2      delimiter:  procedure byte;    /*   logical     */
+ 161   3          declare i byte;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   6
+
+
+ 162   3          declare del (*) byte data (0dh,'[], ');
+ 163   3          do i = 0 to last(del);
+ 164   4              if char = del(i) then return true;
+ 166   4          end;
+ 167   3          return false;
+ 168   3          end delimiter;
+                
+                  
+ 169   2      get$num:  procedure address;
+ 170   3          declare paradd address;
+ 171   3          paradd = 0;
+ 172   3          char = retchar;
+ 173   3          do while not delimiter ;
+ 174   4             if (char:=check$one$hex(char)) = 0ffh then
+ 175   4             call comline$error;   else
+ 176   4             paradd = paradd * 16 + char;
+ 177   4             char = retchar;
+ 178   4             end;
+                
+ 179   3           return paradd;
+ 180   3          end get$num;
+                
+               
+               
+               
+ 181   2          GETCHAR: PROCEDURE BYTE;
+                      /* GET NEXT CHARACTER FROM DISK BUFFER */
+ 182   3              DECLARE I BYTE;
+ 183   3              IF (SBP := SBP+1) <= LAST(SBUFF) THEN
+ 184   3                  RETURN SBUFF(SBP);
+                      /* OTHERWISE READ ANOTHER BUFFER FULL */
+ 185   3                  DO SBP = 0 TO LAST(SBUFF) BY 128;
+ 186   4                  IF (I:=DISKREAD(.SFCB)) = 0 THEN
+ 187   4                      CALL MOVE(.buffer,.SBUFF(SBP),80H); ELSE
+ 188   4                      DO;
+ 189   5                      IF I<>1 THEN CALL PERROR(.('DISK READ$'));
+ 191   5                      SBUFF(SBP) = EOFILE;
+ 192   5                      SBP = LAST(SBUFF);
+ 193   5                      END;
+ 194   4                  END;
+ 195   3              SBP = 0; RETURN SBUFF(0);
+ 197   3              END GETCHAR;
+ 198   2      DECLARE
+                  STACKPOINTER LITERALLY 'STACKPTR';
+
+               /* INTEL HEX FORMAT LOADER */
+
+ 199   2      RELOC: PROCEDURE;
+ 200   3          DECLARE (RL, CS, RT,K) BYTE;
+ 201   3          declare multi$segments byte;
+ 202   3          DECLARE
+                      tabs address,   /* temporary value */
+                      TA ADDRESS,     /* TEMP ADDRESS */
+                      SA ADDRESS,     /* PARAGRAPH LOAD ADDRESS */
+                      FA ADDRESS,     /* FINAL ADDRESS */
+                      NB ADDRESS,     /* NUMBER OF BYTES LOADED */
+                      nxb byte,       /*  next byte in stream   */
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   7
+
+
+                      segadjst address,  /* segment adjust  */
+                      seg$length (8) address,    /* length of each segment  */
+                      write$add address,
+
+                      MBUFF based mbuffadr (256) BYTE,
+                      P BYTE;
+ 203   3          declare high$add address;
+
+ 204   3          SETMEM: PROCEDURE(B);
+                     /* set mbuff to b at location la */
+ 205   4              DECLARE (B) BYTE;
+ 206   4              if ((.memory+la) < 0) or ((.memory+la) > maxb) then 
+ 207   4              do;
+ 208   5                call print (.('INSUFFICIENT MEMORY TO CREATE CMD FILE $'));
+ 209   5                call boot;
+ 210   5                end;
+ 211   4              MBUFF(LA) = B;
+ 212   4              END SETMEM;
+                
+                
+ 213   3          zero$mem: procedure;
+ 214   4             do while (.memory +la) <maxb and not nozero;
+ 215   5                mbuff(la) = 0;
+ 216   5                la = la +1;
+ 217   5                end;
+ 218   4          end zero$mem;
+                
+                 
+
+ 219   3          DIAGNOSE: PROCEDURE;
+
+ 220   4          DECLARE M BASED TA BYTE;
+
+ 221   4          NEWLINE: PROCEDURE;
+ 222   5              CALL CRLF; CALL PRINTADDR(TA); CALL PRINTCHAR(':');
+ 225   5              CALL PRINTCHAR(' ');
+ 226   5              END NEWLINE;
+
+                  /* PRINT DIAGNOSTIC INFORMATION AT THE CONSOLE */
+ 227   4              CALL PRINT(.('LOAD  ADDRESS $')); CALL PRINTADDR(TA);
+ 229   4              CALL PRINT(.('ERROR ADDRESS $')); CALL PRINTADDR(LA);
+
+ 231   4              CALL PRINT(.('BYTES READ:$')); CALL NEWLINE;
+ 233   4              DO WHILE TA < LA;
+ 234   5              IF (LOW(TA) AND 0FH) = 0  THEN CALL NEWLINE;
+ 236   5              CALL PRINTHEX(MBUFF(TA)); TA=TA+1;
+ 238   5              CALL PRINTCHAR(' ');
+ 239   5              END;
+ 240   4          CALL CRLF;
+ 241   4          CALL BOOT;
+ 242   4          END DIAGNOSE;
+ 243   3       write$record: procedure;
+                
+ 244   4         call setdma(write$add);
+ 245   4         if diskwrite(.fcba) <> 0 then call diskerror;
+ 247   4         p = p+1;
+ 248   4         end write$record;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   8
+
+
+                 
+                
+                 
+ 249   3      empty$buffers:  procedure;
+ 250   4           write$add = .memory;
+ 251   4           do while write$add+127 <= (.memory+fa);
+ 252   5              call write$record;
+ 253   5              write$add = write$add+128;
+ 254   5              end;
+ 255   4           if not multi$segments then
+ 256   4           do;
+ 257   5              call write$record;
+ 258   5              return;
+ 259   5           end;
+ 260   4           call move (write$add,.memory,(la:=.memory+fa+1-write$add));
+ 261   4           end empty$buffers;
+                
+                 
+
+ 262   3          READHEX: PROCEDURE BYTE;
+                      /* READ ONE HEX CHARACTER FROM THE INPUT */
+ 263   4              declare khex byte;
+ 264   4          if  (khex := check$one$hex(getchar)) <> 0ffh then return khex;
+                    else
+ 266   4                  DO; CALL PRINT(.('INVALID HEX DIGIT$'));
+ 268   5                  CALL DIAGNOSE;
+ 269   5                 end;
+ 270   4           end readhex;
+
+ 271   3          READBYTE: PROCEDURE BYTE;
+                      /* READ TWO HEX DIGITS */
+ 272   4              RETURN SHL(READHEX,4) OR READHEX;
+ 273   4              END READBYTE;
+
+ 274   3          READCS: PROCEDURE BYTE;
+                      /* READ BYTE WHILE COMPUTING CHECKSUM */
+ 275   4              DECLARE B BYTE;
+ 276   4              CS = CS + (B := READBYTE);
+ 277   4              RETURN B;
+ 278   4              END READCS;
+               
+                
+ 279   3      hex$input: procedure;
+ 280   4           if rt = 2 or rt > 84h then
+ 281   4           segadjst = make$double(readcs,readcs); else
+                
+ 282   4              do;
+                                      /* PROCESS EACH BYTE */
+ 283   5                  DO WHILE (RL := RL - 1) <> 255;
+ 284   6                  CALL SETMEM(READCS); LA = LA+1;
+ 286   6                  END;
+ 287   5              IF LA > FA THEN FA = LA - 1;
+ 289   5              end;
+                
+                
+
+                                /* NOW READ CHECKSUM AND COMPARE */
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE   9
+
+
+ 290   4                        IF CS + READBYTE <> 0 THEN
+ 291   4                        DO; CALL PRINT(.('CHECK SUM ERROR $'));
+ 293   5                            CALL DIAGNOSE;
+ 294   5                            END;
+ 295   4              end hex$input;
+                 
+                
+ 296   3      get$buffer$len: procedure;
+ 297   4          multi$segments = true;
+ 298   4          if rt = 84h then rt = 83h;
+ 300   4          else if rt = 83h then rt = 84h;
+                  if seg$length (rt-81h) <= (high$add:=la+rl-1) then
+ 303   4              do;
+ 304   5              if high$add=0 then high$add = 1;
+ 306   5              seg$length (rt-81h) = high$add;
+ 307   5              header(rt-81h).typseg = rt-80h;
+ 308   5              end;
+ 309   4          end get$buffer$len;
+                
+ 310   3      compute$la:  procedure (j) address;
+ 311   4          declare j byte;
+ 312   4          return (la and 000Fh)+shl((sa-segmts(j).begin$add),4);
+ 313   4          end compute$la;
+                
+                
+                 
+
+                  /* INITIALIZE */
+ 314   3          SA, FA, NB = 0;
+ 315   3          P = 0; /* PARAGRAPH COUNT */
+ 316   3          SBUFF(0) = EOFILE;
+ 317   3          fcb(nr) = 0;
+ 318   3          if head then fcb(nr) = 1;
+ 320   3          multi$segments = false;
+ 321   3          segadjst = 0;
+ 322   3          do k= 0 to 7;
+ 323   4             seglength(k) = 0;
+ 324   4             end;
+                
+ 325   3          call zero$mem;
+                
+ 326   3          ta=0;
+ 327   3          la=1;
+                  /* READ RECORDS UNTIL :00XXXX IS ENCOUNTERED */
+
+ 328   3              DO FOREVER;
+                      /* SCAN THE : */
+ 329   4                  DO WHILE (nxb:=getchar) <> ':';
+ 330   5                    if nxb = eofile then go to second;
+                            /* MAY BE THE END OF TAPE */
+ 332   5                  END;
+
+                      /* SET CHECK SUM TO ZERO, AND SAVE THE RECORD LENGTH */
+ 333   4              CS = 0;
+ 334   4                     nb = nb +(rl:=readcs);
+
+ 335   4                     TA, LA = MAKE$DOUBLE(READCS,READCS) ;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  10
+
+
+ 336   4                     sa = segadjst + shr(la,4);
+
+
+                             /* READ THE RECORD TYPE  */
+                 
+                             /*   skip all records except type 0 2 81  */
+ 337   4                     if (rt:=readcs) > digital$code and rt < digital02 then
+ 338   4                        do;
+ 339   5                        if not t8080 then
+ 340   5                          call get$buffer$len;  else
+ 341   5                          call hex$input;
+ 342   5                        end;    else
+ 343   4                            do;
+ 344   5                            if (rt = digital$code) then
+ 345   5                                do;
+ 346   6                                call hex$input;
+ 347   6                                header(0).typseg = 1;
+ 348   6                                end;   else
+ 349   5                                    do;
+ 350   6                                      if (rt = 0 and sa < segmts(1).begin$add and sa >= segmts(0).begin$add) 
+                                              or rt = 2 then
+ 351   6                                          do;
+ 352   7                                          la = compute$la(0);
+ 353   7                                          call hex$input;
+ 354   7                                          header(0).typseg = 1;
+ 355   7                                          end;
+ 356   6                                          if (rt = 0 and sa >= segmts(1).begin$add) then
+ 357   6                                               do;
+ 358   7                                               multi$segments = true;
+ 359   7                                               if seg$length(1) <
+                                                       (high$add:=compute$la(1) +rl-1) then
+ 360   7                                                   do;
+ 361   8                                                   seg$length(1) = high$add;
+ 362   8                                                   header(1).typseg=2;
+ 363   8                                                   end;
+ 364   7                                               end;
+ 365   6                                    end;
+ 366   5                           end;
+ 367   4                  end;
+                 
+                
+
+ 368   3      second:
+                      call empty$buffers;
+ 369   3              ta = (la+paragraph-1) and 0fff0h;
+ 370   3              header(0).file$length=fa/16+1;
+ 371   3              if header(0).minimum$mem = 0 then header(0).minimum$mem = fa/16+1;
+ 373   3              fa=ta;
+ 374   3              if not multi$segments then go to fin;
+ 376   3              call zero$mem;
+ 377   3              multi$segments = false;
+ 378   3              sfcb(ex),sfcb(nr) = 0;
+ 379   3              call open(.sfcb);
+ 380   3              call setdma(.buffer);
+                
+ 381   3              do k = 1 to 7;
+ 382   4                 if seg$length(k) <> 0 then
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  11
+
+
+ 383   4                 do;
+ 384   5                   seg$length(k) = seg$length(k)+paragraph and 0fff0h;
+ 385   5                   header(k).file$length = seg$length(k)/16;
+ 386   5                   if header(k).minimum$mem=0 then
+ 387   5                   header(k).minimum$mem=seg$length(k)/16;
+ 388   5                   end;
+ 389   4                 end;
+ 390   3              segadjst = 0;
+ 391   3              seg$length(0) = ta;
+ 392   3              sbp=length(sbuff);
+                
+                
+ 393   3              DO FOREVER;
+                      /* SCAN THE : */
+ 394   4                  DO WHILE (nxb:=getchar) <> ':';
+ 395   5                    if nxb = eofile then go to afin;
+ 397   5                  END;
+
+ 398   4              cs = 0;
+ 399   4              rl = readcs;
+               
+ 400   4              la = make$double(readcs,readcs);
+ 401   4              sa = segadjst + shr(la,4);
+                
+ 402   4              if (rt := readcs) = eofile then go to afin;
+ 404   4          if rt = 84h then rt = 83h;
+ 406   4          else if rt = 83h then rt = 84h;
+                      if rt > digital$code and rt < digital02 then
+ 409   4              do;
+ 410   5                do k = 0 to (rt-82h);
+ 411   6                la = la + seg$length(k);
+ 412   6                end;
+ 413   5              call hex$input;
+ 414   5              end;
+ 415   4               if (rt = 0 and sa >= segmts(1).begin$add) or rt = 2 then
+ 416   4               do;
+ 417   5                  la = compute$la(1) + seg$length(0);
+ 418   5                  call hex$input;
+ 419   5                  end;
+                
+
+ 420   4              END;
+
+                
+ 421   3      afin:
+                  call empty$buffers;
+               
+                
+ 422   3          FIN:
+                  /* PRINT FINAL STATISTICS */
+                  CALL PRINT(.('BYTES READ    $')); CALL PRINTADDR(NB);
+ 424   3          CALL PRINT(.('RECORDS WRITTEN $')); CALL PRINTHEX(P+1);
+ 426   3          CALL CRLF;
+                
+                  /*   write the header record   */
+ 427   3          call close(.fcba);
+ 428   3              if head then
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  12
+
+
+ 429   3              do;
+ 430   4                 fcb(ex),fcb(nr) = 0;
+ 431   4                 call open(.fcba);
+ 432   4                 call move (.header,.buffer,128);
+ 433   4                 call setdma(.buffer);
+ 434   4                 if diskwrite(.fcba) <> 0 then call diskerror;
+                 
+ 436   4              end;
+ 437   3          END RELOC;
+                
+               
+ 438   2      declare seg$number byte;
+
+ 439   2      ignore$filename: procedure;
+ 440   3           tbp = 0;
+ 441   3           char = buffer(tbp);
+ 442   3           call next$non$blank;
+ 443   3           do while (char:=buffer(tbp)) <> ' ';
+ 444   4           tbp = tbp +1;
+ 445   4           end;
+                
+ 446   3      end ignore$filename;
+                
+                
+                
+ 447   2      parse$tail: procedure;
+ 448   3         declare seg$index byte;
+                
+ 449   3         get$segmt: procedure byte;
+                 /*   get the segment name   */
+ 450   4            declare ( kentry, match$flag,j, no$match) byte;
+ 451   4            declare user$segmt(5)  byte;
+                 
+ 452   4            do j = 0 to last (user$segmt);
+ 453   5               if delimiter then
+ 454   5               user$segmt(j) = ' ';  else
+ 455   5                 do;
+ 456   6                 user$segmt(j) = char;
+ 457   6                 char = tran(retchar);
+ 458   6                 end;
+ 459   5               end;
+                
+                 
+ 460   4            seg$index = 0;
+ 461   4            no$match, matchflag = true;
+                  
+ 462   4            do while no$match and seg$index < 11;
+                 
+ 463   5                match$flag=true;
+ 464   5                kentry = 0;
+ 465   5                do while match$flag and kentry <= last (segmts.name);
+ 466   6                   if usersegmt(kentry) <> segmts(seg$index).name(kentry) then
+ 467   6                      matchflag = false;  else
+ 468   6                      kentry = kentry +1;
+ 469   6                      end;
+ 470   5                if matchflag then no$match = false; else
+ 472   5                   seg$index = seg$index +1;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  13
+
+
+ 473   5                end;
+ 474   4                if no$match then seg$index = 0ffh;
+ 476   4                return seg$index;
+ 477   4            end get$segmt;
+                
+ 478   3      get$switches: procedure;
+ 479   4         do while char <> ']' and char <> cr;
+ 480   5             call next$non$blank;
+ 481   5            if char= 'A' then header(seg$index).absolute$add = (get$num);
+ 483   5            else if
+                    char= 'M' then 
+ 484   5                do;
+ 485   6                header(seg$index).minimum$mem = (get$num);
+ 486   6                header(seg$index).typseg = seg$index+1;
+ 487   6                end;
+ 488   5            else if
+                    char= 'X' then header(seg$index).maximum$mem = (get$num);
+ 490   5            else if
+                    char= 'B' then segmts(seg$index).begin$add = (get$num);
+ 492   5            else do;
+ 493   6               call comline$error;
+ 494   6               call boot;
+ 495   6             end ;
+ 496   5           end;
+                 
+                 
+ 497   4       end get$switches;
+                
+                 
+                 
+ 498   3          do forever;
+ 499   4             call next$non$blank;
+ 500   4             if char = cr then return;
+ 502   4             if  get$segmt = 0ffh then
+ 503   4             do;
+ 504   5               call comline$error;
+ 505   5             end;
+ 506   4             if seg$index < 8 then
+ 507   4             do;
+ 508   5                if char = ']' or char = cr then call comline$error;
+ 510   5                call get$switches;
+ 511   5             end;
+                     else
+ 512   4             do;
+ 513   5                if seg$index = 8 then t8080 = true; else
+ 515   5                do;
+ 516   6                   if seg$index = 9 then nozero = true; else
+ 518   6                    head = false;
+ 519   6                end;
+ 520   5             end;
+ 521   4          end;
+                
+ 522   3          end parse$tail;
+                
+
+                 
+               /* ARRIVE HERE FROM THE SYSTEM MONITOR, READY TO READ THE HEX TAPE */
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  14
+
+
+
+               /* SET UP STACKPOINTER IN THE LOCAL AREA */
+ 523   2      DECLARE STACK(64) ADDRESS;
+ 524   2      SP = STACKPOINTER; STACKPOINTER = .STACK(LENGTH(STACK));
+ 526   2      LA = 0h;
+ 527   2      mbuffadr = .memory;
+ 528   2      t8080 = false;
+ 529   2      nozero = false;
+ 530   2      head = true;
+
+ 531   2      SBP = LENGTH(SBUFF);
+                 /* SET UP THE SOURCE FILE */
+ 532   2          CALL MOVE(.FCBA,.SFCB,33);
+ 533   2          CALL MOVE(.('H86',0),.SFCB(9),4);
+ 534   2          CALL OPEN(.SFCB);
+ 535   2          IF DCNT = 255 THEN CALL PERROR(.('CANNOT OPEN SOURCE$'));
+
+ 537   2          CALL MOVE(.('CMD'),.FCBA+9,3);
+
+               /* REMOVE ANY EXISTING FILE BY THIS NAME */
+ 538   2       CALL DELETE(.FCBA);
+               /* THEN OPEN A NEW FILE */
+ 539   2       CALL MAKE(.FCBA); CALL OPEN(.FCBA);
+ 541   2       IF DCNT = 255 THEN CALL PERROR(.('NO MORE DIRECTORY SPACE$')); ELSE
+ 543   2              DO;
+ 544   3              call ignore$filename;
+ 545   3              call parse$tail;
+ 546   3              CALL RELOC;
+ 547   3              CALL CLOSE(.FCBA);
+ 548   3              IF DCNT = 255 THEN CALL PERROR(.('CANNOT CLOSE FILE$'));
+ 550   3              END;
+ 551   2       CALL CRLF;
+
+ 552   2       CALL BOOT;
+ 553   2      END plmstart;
+ 554   1      END;
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  15
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+      4  0000H     2  A. . . . . . . . .    WORD PARAMETER         5 
+     48  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        49   50 
+      7  0000H     2  A. . . . . . . . .    WORD PARAMETER         8 
+     52  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        53   55 
+     43  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        44   45   46 
+     59  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        60   62 
+     71  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        72   73 
+    111  0000H     1  A. . . . . . . . .    BYTE BASED(S)        113 
+     15  0003H     2  ABSOLUTEADD. . . .    WORD MEMBER(HEADER)       482 
+    421  0704H        AFIN . . . . . . .    LABEL      396  403 
+    134  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC       135  136  138  139  140 
+    275  05B2H     1  B. . . . . . . . .    BYTE       276  277 
+     38  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        39   40   41 
+    204  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC       205  211 
+    111  0000H     1  B. . . . . . . . .    BYTE BASED(D)        113 
+     14  0005H     2  BEGINADD . . . . .    WORD MEMBER(SEGMTS)       312  350  356  415  491 
+     11  0000H    14  BOOT . . . . . . .    PROCEDURE STACK=0008H           65  127  209  241  494  552 
+     19               BSIZE. . . . . . .    LITERALLY        19 
+      2  0000H   128  BUFFA. . . . . . .    BYTE ARRAY(128) EXTERNAL(2)          18   21 
+     18  0000H   128  BUFFER . . . . . .    BYTE ARRAY(128) EXTERNAL(2) AT      123  131  187  380  432  433  441
+                                             443 
+     24  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        25   26 
+    118  05A6H     1  CHAR . . . . . . .    BYTE       143  144  145  164  172  174  176  177  441  443  456  457
+                                             479  481  483  488  490  500  508 
+    148  02E5H    36  CHECKONEHEX. . . .    PROCEDURE BYTE STACK=0004H          174  264 
+     79  01ABH    19  CLOSE. . . . . . .    PROCEDURE STACK=000AH          427  547 
+    119  025BH    51  COMLINEERROR . . .    PROCEDURE STACK=0012H          175  493  504  509 
+    310  09C0H    38  COMPUTELA. . . . .    PROCEDURE WORD STACK=0006H          352  359  417 
+      3  0000H    38  COPYRIGHT. . . . .    BYTE ARRAY(38) DATA
+     21  0000H     1  COUNTCOMMANDTAIL .    BYTE EXTERNAL(2) AT       130 
+     23               CR . . . . . . . .    LITERALLY        29  479  500  508 
+     28  00D5H    17  CRLF . . . . . . .    PROCEDURE STACK=000EH           54  121  126  222  240  426  551 
+    200  05ABH     1  CS . . . . . . . .    BYTE       276  290  333  398 
+    110  0006H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       111  113  115 
+     18               DBUFF. . . . . . .    LITERALLY
+     70  05A5H     1  DCNT . . . . . . .    BYTE        77   81   85   88  104  535  541  548 
+    162  0026H     5  DEL. . . . . . . .    BYTE ARRAY(5) DATA        163  164 
+     90  01E3H    16  DELETE . . . . . .    PROCEDURE STACK=000AH          538 
+    160  0320H    44  DELIMITER. . . . .    PROCEDURE BYTE STACK=0002H          173  453 
+     17               DFCBA. . . . . . .    LITERALLY
+    219  07C7H    90  DIAGNOSE . . . . .    PROCEDURE STACK=0024H          268  293 
+      2               DIGITAL02. . . . .    LITERALLY       337  408 
+      2               DIGITALCODE. . . .    LITERALLY       337  344  408 
+      2               DIGITALDATA. . . .    LITERALLY
+     67  017CH    12  DISKERROR. . . . .    PROCEDURE STACK=0026H          246  435 
+     94  01F3H    16  DISKREAD . . . . .    PROCEDURE BYTE STACK=000AH          186 
+     98  0203H    16  DISKWRITE. . . . .    PROCEDURE BYTE STACK=000AH          245  434 
+                      DOUBLE . . . . . .    BUILTIN         158 
+    249  085AH    81  EMPTYBUFFERS . . .    PROCEDURE STACK=002EH          368  421 
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  16
+
+
+     19               EOFILE . . . . . .    LITERALLY       191  316  330  395  402 
+      2               EX . . . . . . . .    LITERALLY       378  430 
+      7  0000H     1  F. . . . . . . . .    BYTE PARAMETER         8 
+      4  0000H     1  F. . . . . . . . .    BYTE PARAMETER         5 
+    202  0012H     2  FA . . . . . . . .    WORD       251  260  287  288  314  370  372  373 
+     23               FALSE. . . . . . .    LITERALLY       167  320  377  467  471  518  528  529 
+    106  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       107  108 
+     98  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        99  100 
+     17  0000H    33  FCB. . . . . . . .    BYTE ARRAY(33) EXTERNAL(1) AT       317  319  430 
+    102  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       103  104 
+     90  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        91   92 
+     83  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        84   85 
+     79  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        80   81 
+     75  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        76   77 
+     94  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        95   96 
+      2  0000H    33  FCBA . . . . . . .    BYTE ARRAY(33) EXTERNAL(1)           17  245  427  431  434  532  537
+                                             538  539  540  547 
+     15  0001H     2  FILELENGTH . . . .    WORD MEMBER(HEADER)       370  385 
+    422  0707H        FIN. . . . . . . .    LABEL      375 
+     23               FOREVER. . . . . .    LITERALLY       328  393  498 
+      1  0000H        GENCMD . . . . . .    PROCEDURE STACK=0000H
+    296  094EH   114  GETBUFFERLEN . . .    PROCEDURE STACK=0004H          340 
+    181  0391H   124  GETCHAR. . . . . .    PROCEDURE BYTE STACK=0026H          264  329  394 
+    169  034CH    69  GETNUM . . . . . .    PROCEDURE WORD STACK=0016H          482  485  489  491 
+    449  0A6EH   201  GETSEGMT . . . . .    PROCEDURE BYTE STACK=0008H          502 
+    478  0B37H   175  GETSWITCHES. . . .    PROCEDURE STACK=001AH          510 
+    148  0004H     1  H. . . . . . . . .    BYTE PARAMETER AUTOMATIC       149  150  151  152  154 
+    156  0006H     1  H. . . . . . . . .    BYTE PARAMETER AUTOMATIC       157  158 
+     58  05A4H     1  HEAD . . . . . . .    BYTE       318  428  518  530 
+     15  00F9H   135  HEADER . . . . . .    STRUCTURE ARRAY(15) INITIAL         307  347  354  362  370  371  372
+                                             385  386  387  432  482  485  486  489 
+    279  08F2H    92  HEXINPUT . . . . .    PROCEDURE STACK=003AH          341  346  353  413  418 
+                      HIGH . . . . . . .    BUILTIN          45 
+    203  002AH     2  HIGHADD. . . . . .    WORD       302  304  305  306  359  361 
+    182  05A9H     1  I. . . . . . . . .    BYTE       186  189 
+    161  05A8H     1  I. . . . . . . . .    BYTE       163  164 
+    120  05A7H     1  I. . . . . . . . .    BYTE       122  123 
+    439  09E6H    45  IGNOREFILENAME . .    PROCEDURE STACK=000CH          544 
+    310  0004H     1  J. . . . . . . . .    BYTE PARAMETER AUTOMATIC       311  312 
+    450  05B7H     1  J. . . . . . . . .    BYTE       452  454  456 
+    200  05ADH     1  K. . . . . . . . .    BYTE       322  323  381  382  384  385  386  387  410  411 
+    450  05B5H     1  KENTRY . . . . . .    BYTE       464  465  466  468 
+    263  05B1H     1  KHEX . . . . . . .    BYTE       264  265 
+    156  0004H     1  L. . . . . . . . .    BYTE PARAMETER AUTOMATIC       157  158 
+     57  0008H     2  LA . . . . . . . .    WORD        64  206  211  214  215  216  230  233  260  285  287  288
+                                             302  312  327  335  336  352  369  400  401  411  417  526 
+                      LAST . . . . . . .    BUILTIN         163  183  185  192  452  465 
+                      LENGTH . . . . . .    BUILTIN         392  525  531 
+     23               LF . . . . . . . .    LITERALLY        30 
+                      LOW. . . . . . . .    BUILTIN          46  234 
+    220  0000H     1  M. . . . . . . . .    BYTE BASED(TA)
+    102  0213H    19  MAKE . . . . . . .    PROCEDURE STACK=000AH          539 
+    156  0309H    23  MAKEDOUBLE . . . .    PROCEDURE WORD STACK=0006H          281  335  400 
+    450  05B6H     1  MATCHFLAG. . . . .    BYTE       461  463  465  467  470 
+      2  0000H     2  MAXB . . . . . . .    WORD EXTERNAL(0)          206  214 
+     15  0007H     2  MAXIMUMMEM . . . .    WORD MEMBER(HEADER)       489 
+    202  0000H   256  MBUFF. . . . . . .    BYTE BASED(MBUFFADR) ARRAY(256)          211  215  236 
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  17
+
+
+     57  0006H     2  MBUFFADR . . . . .    WORD       202  211  215  236  527 
+         0000H        MEMORY . . . . . .    BYTE ARRAY(0)        206  214  250  251  260  527 
+     15  0005H     2  MINIMUMMEM . . . .    WORD MEMBER(HEADER)       371  372  386  387  485 
+      4  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(3) STACK=0000H         12   26   50   73   92  108
+      7  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(4) STACK=0000H         77   81   85   88   96
+                                             100  104 
+    110  0236H    37  MOVE . . . . . . .    PROCEDURE STACK=0008H          187  260  432  532  533  537 
+    201  05AEH     1  MULTISEGMENTS. . .    BYTE       255  297  320  358  374  377 
+     32  0004H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC        33   34   35   36 
+    110  0004H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC       111  112 
+     14  0000H     5  NAME . . . . . . .    BYTE ARRAY(5) MEMBER(SEGMTS)        465  466 
+    202  0014H     2  NB . . . . . . . .    WORD       314  334  423 
+    221  0821H    27  NEWLINE. . . . . .    PROCEDURE STACK=0020H          232  235 
+    142  02CFH    22  NEXTNONBLANK . . .    PROCEDURE STACK=0008H          442  480  499 
+    450  05B8H     1  NOMATCH. . . . . .    BYTE       461  462  471  474 
+     22  05A3H     1  NOZERO . . . . . .    BYTE       214  517  529 
+      2               NR . . . . . . . .    LITERALLY       317  319  378  430 
+    202  05AFH     1  NXB. . . . . . . .    BYTE       329  330  394  395 
+     75  0198H    19  OPEN . . . . . . .    PROCEDURE STACK=000AH          379  431  534  540 
+    202  05B0H     1  P. . . . . . . . .    BYTE       247  315  425 
+    170  000AH     2  PARADD . . . . . .    WORD       171  176  179 
+      2               PARAGRAPH. . . . .    LITERALLY       369  384 
+    447  0A13H    91  PARSETAIL. . . . .    PROCEDURE STACK=001EH          545 
+     59  0157H    37  PERROR . . . . . .    PROCEDURE STACK=0022H           68  190  536  542  549 
+     16  000EH   180  PLMSTART . . . . .    PROCEDURE PUBLIC STACK=0042H
+     52  0147H    16  PRINT. . . . . . .    PROCEDURE STACK=0014H           61  208  227  229  231  267  292  422
+                                             424 
+     43  0120H    23  PRINTADDR. . . . .    PROCEDURE STACK=001CH           64  223  228  230  423 
+     24  00C2H    19  PRINTCHAR. . . . .    PROCEDURE STACK=000AH           29   30   35   36  123  125  224  225
+                                             238 
+     38  0105H    27  PRINTHEX . . . . .    PROCEDURE STACK=0016H           45   46  236  425 
+     48  0137H    16  PRINTM . . . . . .    PROCEDURE STACK=000AH           55   62   63 
+     32  00E6H    31  PRINTNIB . . . . .    PROCEDURE STACK=0010H           40   41 
+    271  08CDH    19  READBYTE . . . . .    PROCEDURE BYTE STACK=0030H          276  290 
+    274  08E0H    18  READCS . . . . . .    PROCEDURE BYTE STACK=0034H          281  284  334  335  337  399  400
+                                             402 
+    262  08ABH    34  READHEX. . . . . .    PROCEDURE BYTE STACK=002AH          272 
+    199  040DH   863  RELOC. . . . . . .    PROCEDURE STACK=003EH          546 
+    106  0226H    16  RENAME . . . . . .    PROCEDURE STACK=000AH
+    129  028EH    32  RETCHAR. . . . . .    PROCEDURE BYTE STACK=0002H          143  145  172  177  457 
+     19  05A1H     1  RFLAG. . . . . . .    BYTE
+    200  05AAH     1  RL . . . . . . . .    BYTE       283  302  334  359  399 
+    200  05ACH     1  RT . . . . . . . .    BYTE       280  298  299  300  301  302  306  307  337  344  350  356
+                                             402  404  405  406  407  408  410  415 
+    110  0008H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       111  113  114 
+    202  0010H     2  SA . . . . . . . .    WORD       312  314  336  350  356  401  415 
+     19  0002H     2  SBP. . . . . . . .    WORD       183  184  185  187  191  192  195  392  531 
+     19  01A1H  1024  SBUFF. . . . . . .    BYTE ARRAY(1024)          183  184  185  187  191  192  196  316  392
+                                             531 
+     83  01BEH    19  SEARCH . . . . . .    PROCEDURE STACK=000AH
+     87  01D1H    18  SEARCHN. . . . . .    PROCEDURE STACK=0008H
+    368  0572H        SECOND . . . . . .    LABEL      331 
+    202  0016H     2  SEGADJST . . . . .    WORD       281  321  336  390  401 
+    448  05B4H     1  SEGINDEX . . . . .    BYTE       460  462  466  472  475  476  482  485  486  489  491  506
+                                             513  516 
+    202  0018H    16  SEGLENGTH. . . . .    WORD ARRAY(8)        302  306  323  359  361  382  384  385  387  391
+                                             411  417 
+PL/M-86 COMPILER    GENCMD                                                                                      PAGE  18
+
+
+     14  00ACH    77  SEGMTS . . . . . .    STRUCTURE ARRAY(11) INITIAL         312  350  356  415  465  466  491
+    438  05B3H     1  SEGNUMBER. . . . .    BYTE
+     71  0188H    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          244  380  433 
+    204  076CH    42  SETMEM . . . . . .    PROCEDURE STACK=001AH          284 
+     19  0180H    33  SFCB . . . . . . .    BYTE ARRAY(33)       186  378  379  532  533  534 
+                      SHL. . . . . . . .    BUILTIN         158  272  312 
+                      SHR. . . . . . . .    BUILTIN          40  336  401 
+     10  0000H     2  SP . . . . . . . .    WORD       524 
+    523  002CH   128  STACK. . . . . . .    WORD ARRAY(64)       525 
+    198               STACKPOINTER . . .    LITERALLY       524 
+                      STACKPTR . . . . .    BUILTIN         524  525 
+     22  05A2H     1  T8080. . . . . . .    BYTE       339  514  528 
+    202  000EH     2  TA . . . . . . . .    WORD       220  223  228  233  234  236  237  326  335  369  373  391
+    202  000CH     2  TABS . . . . . . .    WORD
+     20  0004H     2  TBP. . . . . . . .    WORD       122  130  131  440  441  443  444 
+    134  02AEH    33  TRAN . . . . . . .    PROCEDURE BYTE STACK=0004H          143  145  457 
+     23               TRUE . . . . . . .    LITERALLY       165  297  328  358  393  461  463  498  514  517  530
+     15  0000H     1  TYPSEG . . . . . .    BYTE MEMBER(HEADER)       307  347  354  362  486 
+    451  05B9H     5  USERSEGMT. . . . .    BYTE ARRAY(5)        452  454  456  466 
+     23               WHAT . . . . . . .    LITERALLY
+    202  0028H     2  WRITEADD . . . . .    WORD       244  250  251  253  260 
+    243  083CH    30  WRITERECORD. . . .    PROCEDURE STACK=002AH          252  257 
+    213  0796H    49  ZEROMEM. . . . . .    PROCEDURE STACK=0002H          325  376 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 0BE6H   3046D
+     CONSTANT AREA SIZE = 0131H    305D
+     VARIABLE AREA SIZE = 05BEH   1470D
+     MAXIMUM STACK SIZE = 0042H     66D
+     771 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

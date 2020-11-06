@@ -1,0 +1,2 @@
+It contains the contents of 11 8" SSSD disks labeled 01 through 11. These are from Digital Research and are original disks. The first 6 disks are labeled as being able to compile on micro and the last 5 are to be compiled on "the VAX". All diskettes, though originally from DRI, have hand written labels, i.e. they are probably work disks. If you're curious, here's a scan of a disk label.
+![Disk Label Scan](mpm8620_cover.jpg "Disk Label Scan")

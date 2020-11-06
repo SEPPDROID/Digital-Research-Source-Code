@@ -1,0 +1,254 @@
+;
+; This little segment appears in Apricot PCP/M-86 between the BDOS proper
+; and the XIOS. I'm assembling it as part of the BDOS, but it may need to
+; become a separate file with separate support in DPGEN.
+;
+; It appears to be a miniature CCP that can be used to run commands and 
+; set the drive/user containing the CCP. It has only one builtin command 
+; - USER.
+;
+		include	equates.a86
+
+		dseg
+		extrn	boot_drive:byte
+		extrn	ccp_user:byte
+
+		cseg
+		public	ccpldr
+
+ccpldr:		jmp	ccpl_main
+
+ccpl_space:	mov	al, ' '
+ccpl_putch:	mov	dl, al
+		push	cx
+		mov	cl, 2
+		int	0E0h
+		pop	cx
+		ret
+;
+ccpl_crlf:	mov	al, 0Dh
+		call	ccpl_putch
+		mov	al, 0Ah
+		jmps	ccpl_putch
+
+ccpl_drv_set:	mov	dl, al
+		mov	cl, 0Eh
+		int	0E0h
+		ret
+
+ccpl_getuid:	mov	dl, 0FFh
+ccpl_setuid:	mov	cl, 20h
+		int	0E0h
+		ret
+;
+ccpl_input:	mov	dx, offset ccpl_inpbuf
+		mov	cl, 0Ah
+		int	0E0h
+		xor	bh, bh
+		mov	bl, ccpl_inpbuf+1
+		mov	ccpl_inpbuf+2[bx], bh
+		mov	ccpl_pfcb, offset ccpl_inpbuf+2
+		ret
+;
+ccpl_drv_get:	mov	cl, 19h
+		int	0E0h
+		ret
+;
+ccpl_parse_name:
+		mov	ax, ccpl_pfcb
+		mov	ccpl_filename_0,ax
+		mov	dx, offset ccpl_pfcb
+		mov	cl, 98h
+		int	0E0h
+		mov	ccpl_pfcb, ax
+		or	ax, ax
+		jnz	ccpl_pn1
+		mov	ccpl_pfcb, offset ccpl_blank
+ccpl_pn1:	dec	ax
+		ret
+;
+ccpl_main:	mov	ds,word ptr .0	;-> CP/M DSEG
+		mov	ccpl_sp, sp
+		push	ds
+		pop	es
+		mov	dl, 0FEh
+		mov	cl, 2Dh
+		int	0E0h
+ccpl_mainloop:	mov	sp, ccpl_sp
+		mov	dl, ccp_user
+		call	ccpl_setuid
+		mov	al, boot_drive
+		call	ccpl_drv_set
+		cld
+		mov	dx, addr_no_ccp
+		mov	cl, 9
+		int	0E0h
+		mov	al, ccp_user
+		cmp	al, 0Ah
+		jc	bootuserlt9
+		mov	al, '1'
+		call	ccpl_putch
+		mov	al, ccp_user
+		sub	al, 0Ah
+bootuserlt9:	add	al, '0'
+		call	ccpl_putch
+		mov	al, boot_drive
+		add	al, 'A'
+		call	ccpl_putch
+		mov	al, '>'
+		call	ccpl_putch
+		call	ccpl_input
+		call	ccpl_parse_name
+		jz	ccpl_showerr	;Name does not parse
+		test	ccpl_fcb, 0FFh
+		jz	ccpl_1
+		jmp	ccpl_trychain
+;
+ccpl_1:		cmp	ccpl_fcb+1, 20h
+		jz	ccpl_mainloop
+		mov	di, addr_user	;Check if the command entered is USER
+		mov	si, offset ccpl_fcb+1
+		mov	cl, [di]
+		xor	ch, ch
+		inc	di
+		rep	cmpsb
+		jnz	ccpl_2
+		lodsb
+		cmp	al, ' '
+		jnz	ccpl_2
+		jmp	ccpl_setuser
+;
+ccpl_2:		jmp	ccpl_trychain
+;
+ccpl_showerr:	call	ccpl_crlf	;Echo the first filename then "?"
+		mov	si, ccpl_filename_0
+ccpl_skipsp:	lodsb
+		cmp	al, 20h
+		jz	ccpl_skipsp
+ccpl_showerr2:	cmp	al, 20h
+		jz	ccpl_showerr3
+		or	al, al
+		jz	ccpl_showerr3
+		call	ccpl_putch
+		lodsb
+		jmps	ccpl_showerr2
+;
+ccpl_showerr3:	mov	al, '?'
+		call	ccpl_putch
+		call	ccpl_crlf
+		jmp	ccpl_mainloop
+;
+ccpl_parse_num:	call	ccpl_parse_name
+		jz	ccpl_showerr
+		mov	si, offset ccpl_fcb+1
+		mov	cx, 0Bh
+		cmp	byte ptr [si], ' '
+		jnz	ccpl_pnum_1
+		mov	al, 33
+		ret
+;
+ccpl_pnum_1:	lodsb
+		cmp	al, ' '
+		jz	ccpl_pnum_next
+		sub	al, '0'
+		cmp	al, 0Ah
+		jnc	ccpl_showerr
+		xchg	al, ch
+		mov	ah, 0Ah
+		mul	ah
+		add	al, ch
+		cmp	al, 16
+		jnc	ccpl_showerr
+		mov	ch, al	
+		dec	cl
+		jnz	ccpl_pnum_1
+		ret
+;
+ccpl_pnum_next:
+		cmp	al, ' '
+		jnz	ccpl_showerr
+		lodsb
+		dec	cl
+		jnz	ccpl_pnum_next
+		mov	al, ch
+		ret
+;
+ccpl_setuser:	call	ccpl_parse_num
+		cmp	al, 33
+		jnz	ccpl_setuser2
+		call	ccpl_crlf
+		call	ccpl_getuid
+		cmp	al, 9
+		jbe	ccpl_setuser1
+		push	ax
+		mov	al, '1'
+		call	ccpl_putch
+		pop	ax
+		sub	al, 0Ah
+ccpl_setuser1:	add	al, '0'
+		call	ccpl_putch
+		jmps	ccpl_setuser3
+;
+ccpl_setuser2:	mov	dl, al
+		mov	ccp_user, al
+		call	ccpl_setuid
+ccpl_setuser3:	jmp	ccpl_mainloop
+;
+ccpl_trychain:	cmp	ccpl_fcb+1, ' '
+		jnz	ccpl_trychain1
+		mov	al, ccpl_fcb
+		or	al, al	
+		jz	ccpl_setuser3
+		dec	al
+		push	ax
+		call	ccpl_drv_set
+		inc	al
+		pop	ax
+		jz	ccpl_trychain2
+		mov	boot_drive, al
+		jmps	ccpl_setuser3
+;
+ccpl_trychain1:	cmp	ccpl_fcb+9, ' '
+		jz	ccpl_chain
+ccpl_trychain2:	jmp	ccpl_showerr
+;
+ccpl_chain:	call	ccpl_crlf
+		mov	dx, offset ccpl_inpbuf+2
+		mov	cl, 1Ah	;F_DMAOFF
+		int	0E0h	
+		mov	dx, ds
+		mov	cl, 33h	;F_DMASEG
+		int	0E0h
+		mov	cl, 2Fh	;P_CHAIN
+		int	0E0h
+		jmp	ccpl_showerr	
+
+		dseg
+		public	ccpldr_ds
+		public	ccpldr_cs
+
+ccpldr_ds	dw	0
+		db	0
+ccpldr_cs	dw	0
+		db	0
+ccpl_inpbuf	db	3Fh
+		rb	40h
+ccpl_blank	db	0
+ccpl_sp		dw	0
+ccpl_filename_0	dw	0
+ccpl_pfcb	dw	offset ccpl_inpbuf+2
+		dw	offset ccpl_fcb
+		
+		rb	12
+
+ccpl_fcb	rb	24h
+
+		rb	40h
+;
+; I hope this is junk picked up by (eg) something being a couple of paragraphs
+; short of a whole sector rather than anything important.
+;	
+		db	 0Ch,  3Ch, 5Ah,  76h,  0Ah,  3Ch,  61h,  72h
+		db	 04h,  3Ch, 7Ah,  76h,  02h, 0F9h, 0C3h, 0F8h
+		db	0C3h, 0B1h, 31h, 0C6h,  06h, 0B5h,  02h,  00h
+		db	0BAh, 0B4h, 02h, 0CDh, 0E0h, 0BBh, 0B6h,  02h

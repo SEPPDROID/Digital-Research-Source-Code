@@ -1,0 +1,272 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 102
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+3.3 Extended I/O System Entry Points
+.PP
+The extended I/O facilities include the hardware environment dependent
+code to poll devices, handle interrupts and perform memory
+management functions.
+.pp
+A jump vector containing the extended I/O system entry points
+is located immediately following the BIOS jump vector as shown
+below:
+.li
+
+   BIOS+33H    JMP SELMEMORY    ; SELECT MEMORY
+   BIOS+36H    JMP POLLDEVICE   ; POLL DEVICE
+   BIOS+39H    JMP STARTCLOCK   ; START CLOCK
+   BIOS+3CH    JMP STOPCLOCK    ; STOP CLOCK
+   BIOS+3FH    JMP EXITREGION   ; EXIT CRITICAL REGION
+   BIOS+42H    JMP MAXCONSOLE   ; MAXIMUM CONSOLE NUMBER
+   BIOS+45H    JMP SYSTEMINIT   ; SYSTEM INITIALIZATION
+   BIOS+48H    JMP IDLE         ; IDLE PROCEDURE (Optional)
+
+.AD
+.pp
+Each jump address corresponds to a particular subroutine which performs
+the specific function.  The exact responsibilities
+of each entry point subroutine are given below:
+.SP
+.in 16
+.ti 4
+SELMEMORY   Each time a process is dispatched to run a call is made to
+the XIOS memory protection procedure.  If the hardware environment has
+memory bank selection/protection it can use the passed
+parameter to select/protect
+areas of memory.  The passed parameter (in registers BC) is a pointer
+to a memory descriptor from which the memory base, size,
+attributes and bank
+of the executing process can be determined.
+Thus, all other regions of memory can to be write protected.
+.SP
+.ti 4
+POLLDEVICE  In hardware environments where there are no interrupts a
+polled environment can be created by coding an XIOS device poll handler.
+The device poll handler (POLLDEVICE) is called by the XDOS with the
+device to be polled in the C register as a single parameter.
+The user written POLLDEVICE procedure can be coded to access the device
+polling routines via a table which contains the addresses
+of the device polling procedures.  An association is made between
+a device number to be polled and the polling procedure itself.
+The polling procedures must return a value of 0FFH in the accumulator
+if the device is ready, or 00H if the device is not ready.
+.SP
+.ti 4
+STARTCLOCK  When a process delays for a specified number of ticks of
+the system time unit, the start clock procedure is called.
+.PP
+The purpose of the STARTCLOCK procedure is to eliminate unneccessary
+system clock interrupt overhead when there are not any delayed
+processes.
+.PP
+In some hardware environments it is not acutally possible to shut off
+the system time unit clock while still maintaining the one second flag
+used for the purposes of keeping time of day.  In this situation
+the STARTCLOCK procedure simply sets a boolean variable to true,
+indicating that there is a delayed process.  The clock interrupt
+handler can then determine if system time unit flag is to be set
+by testing the boolean.
+.SP
+.ti 4
+STOPCLOCK   When the system delay list is emptied the stop clock
+procedure is called.
+.PP
+The purpose of the STOPCLOCK procedure is to eliminate unneccessary
+system clock interrupt overhead when there are no delayed
+processes.
+.PP
+In some hardware environments it is not acutally possible to shut off
+the system time unit clock while still maintaining the one second flag
+used for the purposes of keeping time of day.  (i.e. a single
+clock/timer interrupt source is used.)  In this situation
+the STOPCLOCK procedure simply sets a boolean variable to false,
+indicating that there are no delayed processes.  The clock interrupt
+handler can then determine if the system time unit flag is to be set
+by testing the boolean.
+.SP
+.ti 4
+EXITREGION  The purpose of the exit region procedure is to test a
+preempted flag,
+set by the interrupt handler, enabling interrupts if preempted is
+false.  This procedure allows interrupt service routines to make
+MP/M system calls, leaving interrupts disabled until completion of
+the interrupt handling.
+.SP
+.ti 4
+MAXCONSOLE  The purpose of the maximum console procedure is to enable
+the calling
+program to determine the number of physical consoles which the BIOS
+is capable of supporting.  The number of physical consoles is returned
+in the A register.
+.SP
+.ti 4
+SYSTEMINIT  The purpose of the system initialization procedure is to
+perform
+required MP/M cold start initialization.  Typical initialization
+includes setting up interrupt jump vectors, interrupt masks, and
+setting up the base page in each bank of a banked memory system.
+.pp
+The  SYSTEMINIT  entry point is called prior to  any  other
+XIOS call.  The MPMLDR disables interrupts, thus it can be
+assumed  that  interrupts are still disabled upon entry  to
+SYSTEMINIT.  Interrupts  are enabled by  MP/M  immediately
+upon return from SYSTEMINIT.
+.pp
+In  systems  with bank switched memory it is  necessary  to
+setup  the  base page (0000H - 00FFH) within each  bank  of
+memory.  Both  the MPMLDR and MP/M itself assume that  the
+base  bank  (bank  #0) is switched in when  the  MPMLDR  is
+executed.  The  base bank is properly initialized by  MP/M
+prior to entering SYSTEMINIT.  The information required for
+the  initialization is provided on entry to  SYSTEMINIT  in
+the following registers:
+.li
+
+	           C  = MP/M Debugger restart #
+	           DE = MP/M entry point address for the debugger
+	                  Place a jump at the proper debugger
+	                restart location to the address contained
+	                in DE.
+	           HL = BIOS direct jump table address
+	                  Place a jump instruction at location
+	                0000H in each banks base page to the
+	                address contained in HL.
+.ad
+.sp
+.ti +4
+IDLE      The  idle  entry  point  is  included  to  permit
+optimization of system performance when the  user
+has an XIOS that is all interrupt driven.  If you
+have  polled  devices  in  your  XIOS, the  IDLE
+procedure   may  be  omitted  by  placing  a  NOP
+instruction at the BIOS+48H location where  there
+would otherwise be a jump to an idle procedure.
+.pp
+The  idle  entry point is called repeatedly  when
+MP/M is idling.  That is, when there are no other
+processes  ready  to run.  In systems  that  are
+entirely  interrupt  driven  the  idle  procedure
+should be as follows:
+.li
+
+	            IDLE:
+	                    HLT
+	                    RET
+
+.ad
+.sp
+.in 0
+.CE
+INTERRPUT SERVICE ROUTINES
+.SP
+.PP
+The MP/M operating system is designed to work with virtually any
+interrupt architecture, be it flat or vectored.  The function of the
+code operating at the interrupt level is to save the
+required registers,
+determine the cause of the interrupt,
+remove the interrupting condition, and to set an appropriate flag.
+Operation of the flags are described in section 2.4.
+Briefly, flags are used to synchronize asynchronous processes.  One
+process, such as an interrupt service routine, sets a particular flag
+while another process waits for the flag to be set.
+.PP
+At a logical level above the physical interrupts the flags can be
+regarded as providing 256 levels of virtual interrupts
+(32 flags are supported under release 1 of MP/M).
+Thus, logical interrupt handlers wait
+on flags to be set by the physical interrupt handlers.
+This mechanism allows a common XDOS to operate on all microcomputers,
+regardless of the hardware environment.
+.PP
+As an example consider a hardware environment with
+a flat interrupt structure.  That is, a single interrupt level is
+provided and devices must be polled to determine the cause of the
+interrupt.  Once the interrupt cause is determined a specific flag
+is set indicating that that particular interrupt has occurred.
+.PP
+At the conclusion of the interrupt processing a jump should be made
+to the MP/M dispatcher.  This is done by jumping to the PDISP entry
+point.  The effect of this jump is to give the processor to the highest
+priority ready process, usually the process readied by setting the
+flag in the interrupt handler, and then to enable interrupts before
+jumping to resume execution of the process.
+.PP
+The  only  XDOS or BDOS call which should be made  from  an
+interrupt  handler  is FUNCTION 133: FLAG SET.  Any  other
+XDOS  or  BDOS call will result in a dispatch  which  would
+then enable interrupts prior to completing execution of the
+interrupt handler.
+.pp
+It  is  recommended  that  interrupts  only  be  used   for
+operations which are asynchronous, such as console input or
+disk  operation complete.  In general, operations such as
+console output should not be interrupt driven.  The reason
+that  interrupts  are not desirable for console  output  is
+that  the system is afforded some elasticity by  performing
+polled console outputs while idling, rather than incurring
+the dispatch overhead for each character transmitted.  This
+is particularily true at higher baud rates.
+.pp
+On  systems requiring the Z80 return from interrupt  (RETI)
+instruction, the jump to PDISP at the end of the interrupt
+servicing  can  be done by placing the address of PDISP  on
+the stack and then executing an RETI instruction.
+.SP 2
+.ce
+TIME BASE MANAGEMENT
+.sp
+.PP
+The time base management provided by the BIOS performs the operations
+of setting the system tick and one second flags.  As described
+earlier the start and stop clock procedures control
+the system tick operation.  The one second flag operation is logically
+separate from the system tick operation even though it may physically
+share the same clock/timer interrupt source.
+.PP
+The purpose of the system time unit tick procedure is to set flag #1
+at system time unit intervals.  The system time unit is used
+by MP/M to manage the delay list.
+.pp
+The   recommended   time  unit   is   16.67   milliseconds,
+corresponding  to  60 Hz.  When operating with 50  Hz  the
+recommended time unit is 20 milliseconds.
+.pp
+The  tick  frequency is critical in that it determines  the
+dispatch  frequency for compute bound  processes.  If  the
+frequency  is  too  high, a significant amount  of  system
+overhead  is  incurred by  excessive  dispatches.  If  the
+frequency is too low, compute bound processes will keep the
+CPU resource for accordingly longer periods.
+.PP
+The purpose of the one second flag procedure is to set flag #2
+at each second of real time.  Flag #2 is used by MP/M to maintain
+a time of day clock.
+.SP 2
+.ce
+XIOS EXTERNAL JUMP VECTOR
+.sp
+.PP
+In order for the XIOS to access the BDOS/XDOS a jump vector is
+dynamically
+built by the MP/M loader and placed directly below the base address
+of the XIOS.  The jump vector contains two entry points
+which provide access to the MP/M dispatcher, XDOS and BDOS.
+.PP
+The following code illustrates the equates used to access the jump
+table:
+.LI
+
+	BASE	EQU	0000H	; BASE OF THE BIOS
+	PDISP	EQU	BASE-3	; MP/M DISPATCHER
+	XDOS	EQU	PDISP-3	; MP/M BDOS/XDOS
+	...
+	CALL	XDOS		; CALL TO XDOS THRU JUMP VECTOR
+.AD
+.br
+

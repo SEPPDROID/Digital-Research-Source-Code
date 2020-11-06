@@ -1,0 +1,354 @@
+title	'Hardware Interrupts'
+
+;****************************************
+;					*
+;	HARDWARE INTERRUPTS		*
+;	Last changed : 2/16/84		*
+;					*
+;****************************************
+
+NP_8087			equ	1	; will xios support 8087
+					; 1 -- yes
+					; 0 -- no
+CPMDEBUG                equ      1      ; 1 = turn off I3 int's for debug envir.
+                                        ; 0 = I3 int's are on - normal envir.
+MASTER_PIC_PORT		equ	50H
+SLAVE_PIC_PORT		equ	52H
+
+; Specific End Of Interrupt Commands
+
+CI0_EOI		EQU	67H		; Specific EOI master/slave
+CO0_EOI		EQU	66H		; Specific EOI master/slave
+I3_CI_EOI	EQU	62H		; Specific EOI master only
+I3_CO_EOI	EQU	63H		; Specific EOI master only
+
+HD_EOI		EQU	61H		; specific eoi master only
+FLPY_EOI	EQU	64H		; Specific EOI master only
+TICK_EOI	EQU	61H		; Specific EOI master/slave
+NP_8087_EOI	EQU	60H		; Specific EOI master/slave
+
+SLAVE_EOI	EQU	67H		; Specific EOI master only
+
+DISABLE_INTS	EQU	0FFH		; mask to turn off all interrupts
+
+MASTER_INT_MASK	EQU	063H		; floppies, transmit and 
+  					; receive for interfacer 3,
+                                        ; and slave pic
+
+SLAVE_INT_MASK	EQU	07CH		; receive interrupts, 8087
+					; and the timer tick
+
+NS_EOI		EQU	20H		; Non specific end of interrupt
+
+
+MASTER_ICW_1	EQU	1DH		; basic operational mode of chip
+
+MASTER_ICW_2	EQU	40H		; base of chips interrupt vectors
+
+MASTER_ICW_3	EQU	80H		; master/slave map
+
+MASTER_ICW_4	EQU	01H		; interrupt response mode
+	
+
+SLAVE_ICW_1	EQU	MASTER_ICW_1
+
+SLAVE_ICW_2	EQU	MASTER_ICW_2 + 8
+
+SLAVE_ICW_3	EQU	07H		; slave I.D. number
+
+SLAVE_ICW_4	EQU	MASTER_ICW_4
+
+I3_INT_ENABLE		EQU	0FFH
+
+
+; Character interrupt vectors
+;
+
+MASTER_INT_BASE	equ	40H
+
+SLAVE_INT_BASE	equ	48H
+
+CONIN_IR	equ	7		; on the slave
+CONOUT_IR	equ	6		; on the slave
+
+I3_IN_IR	equ	2		; on the master
+I3_OUT_IR	equ	3		; on the master
+
+HD_IR		equ	1		; on the master
+FLPY_IR		equ	4		; on the master
+TICK_IR		equ	1		; on the slave
+NP_8087_IR	equ	0		; on the slave
+
+
+CON_IN_OFF	EQU	( SLAVE_INT_BASE + CONIN_IR ) * 4
+CON_IN_SEG	EQU	CON_IN_OFF + 2
+
+CON_OUT_OFF	EQU	( SLAVE_INT_BASE + CONOUT_IR ) * 4
+CON_OUT_SEG	EQU	CON_OUT_OFF + 2
+
+I3_IN_OFF	EQU	( MASTER_INT_BASE + I3_IN_IR ) * 4
+I3_IN_SEG	EQU	I3_IN_OFF + 2
+
+I3_OUT_OFF	EQU	( MASTER_INT_BASE + I3_OUT_IR ) * 4
+I3_OUT_SEG	EQU	I3_OUT_OFF + 2
+
+FLPY_OFF	EQU	( MASTER_INT_BASE + FLPY_IR ) * 4
+FLPY_SEG	EQU	FLPY_OFF + 2
+
+H_DISK_OFF	EQU	( MASTER_INT_BASE + HD_IR ) * 4
+H_DISK_SEG	EQU	H_DISK_OFF + 2
+
+TICK_OFF	EQU	( SLAVE_INT_BASE + TICK_IR ) * 4
+TICK_SEG	EQU	TICK_OFF + 2
+
+NP_8087_OFF	EQU	( SLAVE_INT_BASE + NP_8087_IR ) * 4
+NP_8087_SEG	EQU	NP_8087_OFF + 2
+
+
+		cseg
+
+public	hard_int_vec
+public	pic_init
+public	int_enable
+public	reset_tick_pic
+public	reset_sstint_pic
+public	reset_i3tint_pic
+public	reset_ssiint_pic
+public	reset_i3iint_pic
+
+extrn   conin_int:near
+extrn	sst_int:near		; public in ssint.a86
+extrn   i3r_int:near
+extrn	i3t_int:near		; public in i3int.a86
+extrn	h_disk_int:near		; public in hdisk.a86
+extrn	flint:near		; public in fd.a86
+extrn	tick_int:near		; public in tick.a86
+
+if NP_8087
+
+extrn   np_8087_int:near	
+public	reset_8087_pic
+
+endif
+
+;==============
+reset_tick_pic:
+;==============
+;
+; reset the PIC for the tick.
+
+	mov al, SLAVE_EOI
+	out MASTER_PIC_PORT, al
+	mov al, TICK_EOI
+	out SLAVE_PIC_PORT, al
+	ret
+
+if NP_8087
+
+;=============
+reset_8087_pic:
+;=============
+;
+; reset the PIC for the 8087
+
+	mov al, SLAVE_EOI
+	out MASTER_PIC_PORT, al
+	mov al, NP_8087_EOI
+	out SLAVE_PIC_PORT, al
+	ret
+
+endif
+	
+;=============
+reset_ssiint_pic:
+;=============
+;       Reset System Support Board's PIC for receive
+;
+	mov al, SLAVE_EOI	       ;; clear the PICS for this interrupt
+	out MASTER_PIC_PORT, al	       ;;  request channel
+	mov al, CI0_EOI
+	out SLAVE_PIC_PORT, al
+	ret
+
+
+;===============
+reset_sstint_pic:
+;===============
+;
+;	Reset System support board USART's PIC  for transmit
+
+	mov al, SLAVE_EOI		;; reset the PIC's
+	out MASTER_PIC_PORT,al
+	mov al, CO0_EOI
+	out SLAVE_PIC_PORT,al
+	ret
+
+
+;================
+reset_i3tint_pic:
+;================
+;
+;	Reset the interfacer 3's PIC IR line
+
+	mov al, I3_CO_EOI		;; reset the PIC
+	out MASTER_PIC_PORT,al
+	ret
+
+;================
+reset_i3iint_pic:
+;================
+;       Reset Interfacer 3's PIC
+
+	mov al, I3_CI_EOI		;; reset the interfacer 3's PIC
+	out MASTER_PIC_PORT, al		;; interrupt line
+
+	ret
+
+
+
+;========
+pic_init:
+;========	
+;
+; PIC initialization entry point
+;
+;	 interrupt structure
+;
+;	MASTER PIC :
+;		IRQ0 = 
+;		IRQ1 = DISK 2
+;		IRQ2 = interfacer 3 receive ready
+;		IRQ3 = interfacer 3 transmit ready
+;		IRQ4 = DISK 1
+;		IRQ5 = 
+;		IRQ6 = 
+;		IRQ7 = Slave input
+;
+;	SLAVE PIC :
+;		IRQ0 = 8087
+;		IRQ1 = Timer 0 ( mpm's tick )
+;		IRQ2 = Timer 1 ( free )
+;		IRQ3 = Timer 2 ( free )
+;		IRQ4 = 9511 svrq
+;		IRQ5 = 9511 end
+;		IRQ6 = SS Tx int
+;		IRQ7 = SS Rx int
+;
+; DETAILS about the interrupt structure
+;
+;	For both the master and the slave:
+;	  1] 8086 mode
+;	  2] the interrupt system is level-triggered
+;	  3] all interrupts are masked off after the PICs are initialized
+;
+;	The Master PIC:
+;	  1] pic interrupt base is 40H
+;	  2] IR 7 is a slave input
+;
+;	The Slave PIC:
+;	  1] pic interrupt base is at 48H
+
+	mov al,MASTER_ICW_1              ;set up the master PIC
+	out MASTER_PIC_PORT, al
+	
+	mov al,MASTER_ICW_2
+	out MASTER_PIC_PORT + 1,al
+
+	mov al,MASTER_ICW_3 
+	out MASTER_PIC_PORT + 1, al
+
+	mov al,MASTER_ICW_4
+	out MASTER_PIC_PORT + 1, al
+
+	mov al,DISABLE_INTS
+	out MASTER_PIC_PORT + 1, al
+
+	mov al,SLAVE_ICW_1               ; set up the slave PIC
+	out SLAVE_PIC_PORT, al
+	
+	mov al,SLAVE_ICW_2
+	out SLAVE_PIC_PORT + 1,al 
+
+	mov al,SLAVE_ICW_3
+	out SLAVE_PIC_PORT + 1, al
+
+	mov al,SLAVE_ICW_4
+	out SLAVE_PIC_PORT + 1, al
+
+	mov al, DISABLE_INTS
+	out SLAVE_PIC_PORT + 1, al
+
+	ret
+
+;==========
+int_enable:
+;==========
+;
+; Interrupt enable entry point
+;
+;	The hard disk, and all usart transmitters are not
+;	enabled until they are needed.
+
+	mov al, MASTER_INT_MASK
+	out MASTER_PIC_PORT + 1, al
+
+	mov al,SLAVE_INT_MASK
+	out SLAVE_PIC_PORT + 1, al
+
+	ret
+
+
+;============
+hard_int_vec:
+;============
+;
+; Hardware interrupt vector initialization entry point
+;
+
+	                                ; set DS to the interrupt vector area
+	push ds				; save incoming DS
+	xor ax,ax			; point to the vectors
+	mov ds, ax
+	                                ; setup character i/o interrupt addr
+	                                ; console input slave irq 7 ( int 4fh )
+	mov word ptr .CON_IN_OFF, offset conin_int
+	mov word ptr .CON_IN_SEG, cs
+
+	                                ; console output slave irq 6 ( int 4eh )
+	mov word ptr .CON_OUT_OFF, offset sst_int
+	mov word ptr .CON_OUT_SEG, cs
+
+	                                ; interfacer 3 input master irq 2 ( int 42h )
+	mov word ptr .I3_IN_OFF, offset i3r_int
+	mov word ptr .I3_IN_SEG, cs
+
+	                                ; interfacer 3 output master irq 3 ( int 43h )
+	mov word ptr .I3_OUT_OFF, offset i3t_int
+	mov word ptr .I3_OUT_SEG, cs
+
+	                                ; setup hard disk i/o interrupt addr
+	mov word ptr .H_DISK_OFF, offset h_disk_int
+	mov word ptr .H_DISK_SEG, cs
+
+	                                ; setup floppy disk i/o interrupt addr (VI5)
+	mov word ptr .FLPY_OFF, offset flint
+	mov word ptr .FLPY_SEG, cs
+
+	                                ; setup tick interrupt addr
+	mov word ptr .TICK_OFF, offset tick_int
+	mov word ptr .TICK_SEG, cs
+
+if NP_8087
+
+	                                ; setup 8087 interrupt addr
+	mov word ptr .NP_8087_OFF, offset NP_8087_int
+	mov word ptr .NP_8087_SEG, cs
+
+endif
+	pop ds				; restore the data segment
+
+	ret
+
+	end
+
+

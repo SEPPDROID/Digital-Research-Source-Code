@@ -1,0 +1,123 @@
+
+;=====
+rlsmx:
+;=====
+; Release all MX queues held by a given process
+;	input:	SI = pd address
+
+	pushf ! cli ! mov di,(offset qlr)-q_link
+rm_nxt:
+	mov bx,q_link[di]
+	or bx,bx ! jz rm_dne
+	    test q_flags[bx],qf_mx ! jz rm_notthis
+		cmp si,q_buf[bx] ! jne rm_notthis
+		    push bx ! sub ax,ax ! push ax
+		    mov dx,sp ! mov cx,f_cqwrite
+		    push ds ! push ss ! pop ds
+		    call mpmif ! pop ds ! pop ax ! pop bx
+rm_notthis: mov di,bx ! jmps rm_nxt
+rm_dne:	popf ! ret
+
+getqdaddr:
+;----------
+; Check qd address. If within MPM, use it else grab
+; qd from table and initialize with buffer space
+; returning its address. also set qf_table flag.
+;	input:	DX = offset of qd in u_wrkseg
+;	output: DX = offset of qd in MPM CSEG.
+
+	push dx ! mov ax,u_wrkseg
+	push ax ! mov cl,4 ! shr dx,cl
+	add ax,dx
+		;must be above SYSDAT
+	cmp ax,sysdat ! jb gqd_bad
+		;must be below end of system
+	    cmp ax,endseg  ! jae gqd_bad
+			;must be within 64K of SYSDAT
+			; 64K=1000h memory paragraphs
+		mov cx,sysdat ! add cx,1000h
+		cmp ax,cx ! jae gqd_bad
+		    pop ax ! sub ax,sysdat
+		    mov cl,4 ! shl ax,cl
+		    pop dx ! add dx,ax
+		    mov si,dx ! sub cx,cx
+		    cmp q_buf[si],cx
+		    je gqd_ret
+			add q_buf[si],ax
+gqd_ret:	    ret
+gqd_bad:
+	pop ax ! pop dx ! pushf ! cli
+	mov di,qul
+	cmp di,0 ! jne gqd_have
+	    mov cx,e_no_qd ! popf ! ret
+gqd_have:
+	mov bx,q_link[di] ! mov qul,bx
+	push di ! push es ! push ds
+	mov ds,u_wrkseg ! pop es
+	mov cx,qdlen/2 ! mov si,dx
+	rep movs ax,ax
+	push es ! pop ds ! pop es ! pop di
+	or q_flags[di],qf_table
+	push di ! mov si,di
+	call qspace ! pop di
+	cmp cx,0 ! je gqd_exit
+	    mov ax,qul ! mov q_link[di],ax
+	    mov qul,di
+gqd_exit:
+	mov dx,di ! popf ! ret
+
+remqd:
+;-------
+; Place qd on queue unused list
+;	Input SI = qd address
+
+	mov ax,q_flags[si]
+	and ax,qf_table ! jz rqd_exit
+	    pushf ! cli
+	    mov ax,qul ! mov q_link[si],ax
+	    mov qul,ax ! call qrelease
+	    popf
+rqd_exit:
+	ret
+
+qspace:
+;------
+;	find buffer space for qd
+;	input	SI = QD address
+;	output	CX = Error Code
+
+
+
+		;compute AX=size of buffer wanted
+	mov ax,q_msglen[si] ! mul q_nmsgs[si]
+		;call maualloc
+	mov cx,0 ! push cx ! push cx ! push ax
+	push ax ! push cx
+	mov dx,sp ! mov ax,ss ! mov ds,ax
+	mov bx,offset qmau
+	push si
+	mov cx,f_maualloc ! call mpmif
+	pop si ! mov ds,sysdat
+	cmp cx,0 ! jne qspace_ret
+	    mov bp,sp ! mov ax,mpb_start[bp]
+	    mov q_buf[si],ax
+qspace_ret:
+	pop ax ! pop ax ! pop ax ! pop ax ! pop ax
+	ret
+
+qrelease:
+;--------
+;	release buffer space for qd
+;	if the released space is ajacent to another
+;	free area, they are joined and a md is freed.
+;	input	SI = QD address
+
+	mov ax,q_buf[si]
+	mov cx,offset qmau
+	push ax ! push ax ! push cx
+	mov cx,f_maufree
+	mov dx,sp ! mov ax,ss ! mov ds,ax
+	call mpmif
+	pop ax ! pop ax ! pop ax
+	ret
+

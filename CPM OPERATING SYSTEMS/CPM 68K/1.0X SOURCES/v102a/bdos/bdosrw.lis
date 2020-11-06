@@ -1,0 +1,320 @@
+1File: BDOSRW.C                                                            Page       1
+     1    
+     2   /****************************************************************
+     3   *								*
+     4   *		CP/M-68K BDOS Disk Read/Write Module		*
+     5   *								*
+     6   *	This module contains functions to perform sequential   	*
+     7   *	or random access read or write to the disk for CP/M-68K	*
+     8   *								*
+     9   *	It includes the following external functions:		*
+    10   *								*
+    11   *		bdosrw()    - sequential and random disk I/O	*
+    12   *								*
+    13   *								*
+    14   *	Compiled with Alcyon C on the VAX			*
+    15   *								*
+    16   ****************************************************************/
+    17    
+    18   #include "bdosinc.h"		/* Standard I/O declarations		*/
+    19    
+    20   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    21    
+    22    
+    23   /* External function definitions */
+    24   EXTERN	UWORD	rdwrt();	/* disk read/write routine		*/
+    25   EXTERN	WORD	getaloc();	/* allocate a block of disk space	*/
+    26   EXTERN	WORD	swap();		/* assembly language byte swapper	*/
+    27   EXTERN	UWORD	dirscan();	/* directory scanning routine		*/
+    28   EXTERN	BOOLEAN openfile();	/* open file function passed to dirscan */
+    29   EXTERN	UWORD	close_fi();	/* close file function			*/
+    30   EXTERN	BOOLEAN create();	/* create file function passed to dirscan */
+    31   EXTERN  UWORD	ro_err();	/* read-only file error handler		*/
+    32    
+    33   /* External variable definitions */
+    34   EXTERN	UWORD	ro_dsk;		/* read-only disk vector		*/
+    35    
+    36    
+    37   /**********************************************************/
+    38   /*  First, some utility functions used by seqio and ranio */
+    39   /**********************************************************/
+    40    
+    41   /******************************
+    42   *  FCB block number routines  *
+    43   ******************************/
+    44    
+    45   WORD	blkindx(fcbp)
+    46   /*  return index into fcb disk map	*/
+    47    
+    48   REG struct fcb	*fcbp;			/* pointer to fcb		*/
+    49   {
+    50       REG struct dpb *dparmp;		/* pointer to disk parameter block */
+    51       REG WORD i;
+    52       REG WORD blkshf;
+    53       BSETUP
+    54    
+    55       dparmp = GBL.parmp;
+    56       blkshf = dparmp->bsh;
+    57       i = ((fcbp->extent) & dparmp->exm) << (7 - blkshf);
+    58       return (i + (UBWORD(fcbp->cur_rec) >> blkshf) );
+    59   }
+1File: BDOSRW.C                                                            Page       2
+    60    
+    61    
+    62   UWORD	blknum(fcbp, index, wrdfcb)
+    63   /* return block number in fcb indicated by index */
+    64    
+    65   REG struct fcb	*fcbp;		/* pointer to fcb			*/
+    66   REG WORD	index;		/* index into disk map of fcb 		*/
+    67   WORD		wrdfcb;		/* boolean, fcb disk map of words	*/
+    68   {
+    69       if (wrdfcb)
+    70   	return( swap(fcbp->dskmap.big[index]) );
+    71       else return( UBWORD(fcbp->dskmap.small[index]) );
+    72   }
+    73    
+    74    
+    75   setblk(fcbp, index, wrdfcb, block)
+    76   /* put block number into fcb */
+    77    
+    78   REG struct fcb	*fcbp;		/* pointer to fcb			*/
+    79   REG WORD	index;		/* index into disk map of fcb 		*/
+    80   WORD		wrdfcb;		/* boolean, fcb disk map of words	*/
+    81   REG UWORD	block;		/* block number				*/
+    82   {
+    83       fcbp->s2 &= 0x7f;		/* set file write flag			*/
+    84       if (wrdfcb)
+    85   	fcbp->dskmap.big[index] = swap(block);
+    86       else fcbp->dskmap.small[index] = (UBYTE)block;
+    87   }
+    88    
+    89    
+    90   /***************************
+    91   *  disk read/write routine *
+    92   ***************************/
+    93    
+    94   UWORD do_io(block, rcrd, parm)
+    95    
+    96   UWORD	block;		/* block number		*/
+    97   UBYTE	rcrd;		/* record number	*/
+    98   REG WORD parm;		/* write parameter	*/
+    99   {
+   100       REG LONG lsec;
+   101       REG struct dpb *dparmp;
+   102       BSETUP
+   103    
+   104       dparmp = GBL.parmp;				/* init dpb pointer */
+   105       lsec = ((LONG)block << (dparmp->bsh)) +
+   106   		(LONG)(rcrd & (dparmp->blm));
+   107       return( rdwrt(lsec, GBL.dmaadr, parm) );
+   108   }
+   109    
+   110    
+   111   /*******************************************
+   112   *  routine for crossing extent boundaries  *
+   113   *******************************************/
+   114    
+   115   WORD new_ext(fcbp, reading, ran)
+   116   /*  If sequential I/O, open the next extent			*/
+   117   /*  If random I/O, compute new extent from random record field	*/
+   118    
+1File: BDOSRW.C                                                            Page       3
+   119   REG struct fcb	*fcbp;		/* pointer to fcb  */
+   120   BOOLEAN reading;		/* read/write flag */
+   121   WORD  ran;			/* random I/O flag */
+   122   {
+   123       REG UBYTE mod;		/* module number   */
+   124       REG UBYTE ext;		/* extent number   */
+   125       REG UBYTE t_mod;		/* temp mod number */
+   126       REG UBYTE t_ext;		/* temp extent     */
+   127       BSETUP
+   128    
+   129       if (ran)
+   130       {
+   131   	mod = ( (fcbp->ran0) << 4) | ( (fcbp->ran1) >> 4);
+   132   	ext = ( ((fcbp->ran1) & 0x0f) << 1);
+   133   	if ((fcbp->ran2) & 0x80) ext |= 1;
+   134   		/* the calculation of ext was coded this way because of a */
+   135   		/* compiler bug from Alcyon */
+   136       }
+   137       else
+   138       {
+   139   	mod = (fcbp->s2) & 0x3f;
+   140   	ext = (fcbp->extent) + 1;	/* for sequential, incr extent	*/
+   141       }
+   142       if (ext >= 32)
+   143       {
+   144   	ext = 0;
+   145   	mod += 1;
+   146       }
+   147       if (mod >= 64) return(6);		/* past maximum file size */
+   148       if ( mod == ((fcbp->s2) & 0x3f) )
+   149   	if ( ! ((ext ^ (fcbp->extent)) & ~((GBL.parmp)->exm) & 0x1f) )
+   150   	{				/* we're in same logical extent */
+   151   	    fcbp->extent = ext;
+   152   	    return(0);
+   153   	}
+   154       /* Extent or Module numbers don't match	*/
+   155       /* Close the old extent and open a  one	*/
+   156       if ( close_fi(fcbp) >= 255 ) return(3);
+   157   					/* can't close old extent */
+   158       t_mod = fcbp->s2;
+   159       t_ext = fcbp->extent;
+   160       fcbp->s2 = mod;
+   161       fcbp->extent = ext;
+   162       if ( dirscan(openfile, fcbp, 0) >= 255 )  /* open  extent */
+   163       {
+   164   	if (reading)
+   165   	{				/* reading unwritten extent */
+   166   	    fcbp->s2 = t_mod;
+   167   	    fcbp->extent = t_ext;
+   168   	    return(4);
+   169   	}
+   170   	if ( dirscan(create, fcbp, 8) >= 255 )
+   171   	    return(5);			/* can't create new extent */
+   172       }
+   173       return(0);
+   174   }
+   175    
+   176    
+   177   /************************************
+1File: BDOSRW.C                                                            Page       4
+   178   * Routine to calculate the maximum  *
+   179   * extent number of an FCB in a	    *
+   180   * extent-folded environment	    *
+   181   ************************************/
+   182    
+   183   UWORD calcext(fcbp)
+   184    
+   185   REG struct fcb *fcbp;
+   186    
+   187   {
+   188       REG UWORD i;
+   189       REG BYTE *p;
+   190       BSETUP
+   191    
+   192       i = 15;
+   193       p = &(fcbp->dskmap.small[16]);
+   194       do
+   195       {
+   196   	if (*--p) break;
+   197   	i -= 1;
+   198       } while (i);
+   199   /* Now i contains the index of the last non-zero block in the FCB */
+   200       if ((GBL.parmp)->dsm > 255) i >>= 1;
+   201       i >>= 7 - ((GBL.parmp)->bsh);
+   202       return ( (fcbp->extent) & ~((GBL.parmp)->exm) & 0x1f | i );
+   203   }
+   204    
+   205    
+   206   /*********************************
+   207   * Routine to get the actual	 *
+   208   * record count of the currently  *
+   209   * active logical extent of a FCB *
+   210   *********************************/
+   211    
+   212   UWORD get_rc(fcbp)
+   213    
+   214   REG struct fcb *fcbp;
+   215    
+   216   {
+   217       REG UWORD ext;
+   218    
+   219       ext = calcext(fcbp);	/* find last active extent in fcb */
+   220       if (ext == fcbp->extent) return(UBWORD(fcbp->rcdcnt));
+   221   			/* if this is the last active fcb, return fcb's rc */
+   222       else if (ext > fcbp->extent) return(128);
+   223   			/* if the fcb has more extents past this one, then */
+   224   			/* the current one is logically full	*/
+   225       else return (0);
+   226   			/* if we seeked past the last active extent, rc = 0 */
+   227   }
+   228    
+   229    
+   230   /************************
+   231   *  bdosrw entry point	*
+   232   ************************/
+   233    
+   234   UWORD bdosrw(fcbp, reading, random)
+   235    
+   236   REG struct fcb *fcbp;		/* fcbp is a pointer to a fcb */
+1File: BDOSRW.C                                                            Page       5
+   237   REG BOOLEAN reading;		/* boolean to tell whether to read or write */
+   238   WORD random;			/* 0 = sequential, 1 = random (normal),  */
+   239   				/* 2 = random with zero fill	*/
+   240   {
+   241       REG UWORD	block;		/* block number from fcb	*/
+   242       REG WORD	index;		/* index into disk map of fcb	*/
+   243       REG BYTE	*old_dma;	/* temp holding spot for dmaadr */
+   244       REG WORD	parm;		/* parameter to do-io		*/
+   245       REG WORD	bigfile;	/* file system is in word mode	*/
+   246       REG UWORD	rtn;		/* return parameter		*/
+   247       REG UBYTE	rc;		/* temp storage for rcdcnt	*/
+   248       BSETUP
+   249    
+   250       bigfile = ((GBL.parmp)->dsm) & ~0xff;
+   251       if ( ( ! reading) && (fcbp->ftype[robit] & 0x80) )
+   252   		 ro_err(fcbp,((GBL.dpbp)->dpbp)->drm);
+   253   				/* check for read-only file */
+   254       if (random)
+   255       {
+   256   	if ( rtn = new_ext(fcbp, reading, TRUE) ) return(rtn);
+   257   			/* open new extent if necessary, return if error */
+   258   	fcbp->cur_rec = (fcbp->ran2) & 0x7f;
+   259       }
+   260       else		/* sequential */
+   261   	if (fcbp->cur_rec == 128)
+   262   	{			/* time to try next extent */
+   263   	    if ( new_ext(fcbp, reading, FALSE) )
+   264   		return(1);	/* if can't open new extent, error */
+   265   	    fcbp->cur_rec = 0;	/* opened new extent, zero cur_rec */
+   266   	}
+   267    
+   268       /* record is now in active fcb */
+   269       rc = fcbp->rcdcnt;
+   270       if ( UBWORD(fcbp->cur_rec) >= get_rc(fcbp) )
+   271       {
+   272   	if (reading) return(1);		/* reading unwritten data */
+   273   	fcbp->s2 &= 0x7f;		/* set file write flag */
+   274   	rc = fcbp->cur_rec + 1;
+   275       }
+   276       index = blkindx(fcbp);		/* get index into fcb disk map */
+   277       block = blknum(fcbp, index, bigfile);
+   278       if (block) parm = (reading ? 0 : 1);
+   279       else		/* if allocated block, parm is just read or write */
+   280       {					/* unallocated block	*/
+   281   	if (reading) return(1);		/* reading unwritten data */
+   282    
+   283   	/* Writing to new block	*/
+   284   	/* The parm passed to getaloc is the previously allocated block	*/
+   285   	/*	or 0, if the previous block is not allocated		*/
+   286    
+   287   	block = getaloc(blknum(fcbp, (index ? (index - 1) : 0), bigfile));
+   288   	if (block == ~0) return(2);	/* out of space	*/
+   289   	setblk(fcbp, index, bigfile, block);
+   290   	parm = 3;
+   291   	if (random == 2)
+   292   	{				/* Write random with zero fill	*/
+   293   	    old_dma = GBL.dmaadr;
+   294   	    GBL.dmaadr = GBL.dirbufp;	/* Do DMA from dir_buf */
+   295   	    index = SECLEN;
+1File: BDOSRW.C                                                            Page       6
+   296   	    do GBL.dmaadr[--index] = 0;
+   297   		while (index);		/* zero the dma buffer */
+   298   	    for (index = 0; index <= ((GBL.parmp)->blm); index++)
+   299   	    {
+   300   		do_io(block, (UBYTE)index, parm);
+   301   					/* write zeros to the block */
+   302   		parm = 1;		/* next write is not to new block */
+   303   	    }
+   304   	    GBL.dmaadr = old_dma;	/* restore dma address	*/
+   305   	}
+   306       }
+   307       rtn = do_io(block, fcbp->cur_rec, parm);
+   308       if ( rtn == 0 )
+   309       {
+   310   	fcbp->rcdcnt = rc;
+   311   	if ( ! random ) fcbp->cur_rec += 1;
+   312       }
+   313       return(rtn);
+   314   }

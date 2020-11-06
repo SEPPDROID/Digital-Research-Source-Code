@@ -1,0 +1,135 @@
+title	'8087 module'
+
+;******************************************
+;					  *
+;	8087 MODULE			  *
+;	Last changed : 1/30/84		  *
+;					  *
+;******************************************
+
+
+	cseg
+
+public	np_8087_int			; extrn in pic.a86
+public	np_8087_test
+
+extrn	sysdat:word			; public in header.a86
+extrn	reset_8087_pic:near		; public in pic.a86
+
+
+NP_8087_OFF		equ	0120H	; interrupt vector offset (COMPUPRO)
+
+NP_8087_OWNER		equ	08cH	; 8087 owner(SYSDAT)
+
+IV_SEG_8087		equ	0a2H	; address of Interrupt Vector for
+IV_OFF_8087		equ	0a0H	; interupt handler (SYSDAT)
+
+IH_SEG_8087		equ	0a6H	; address of system's interrupt
+IH_OFF_8087		equ	0a4H	; handler (SYSDAT)
+
+status		equ	byte ptr 02H	; status word location in 8087
+					; environment
+p_flag		equ	word ptr 06H	; PD flag field
+
+pf_keep		equ	02H		; KEEP bit in p_flag
+pf_term		equ	80H		; TERMINATE bit in p_flag
+
+severe		equ	05H		; Zero divide and invalid operation
+
+;========
+np_8087_int:
+;========
+;
+	push	ds			; setup the system's date segment
+	mov	ds, sysdat
+
+	mov	np_8087_ss, ss		; establish a stack
+	mov	np_8087_sp, sp
+	mov	ss, sysdat
+	mov	sp, offset np_8087_tos
+
+	push	ax			; save registers that we
+	push	bx			; will be using
+	push	si
+
+
+	FNSTENV	np_8087_env		; save 8087 environment
+	FCLEX
+	FDISI
+	call	reset_8087_pic		; COMPUPRO specific
+
+;	We can now check what 8087 exception caused the interrupt
+
+	mov	bx, word ptr .NP_8087_OWNER
+	test	bx,bx			; has owner already terminated
+	jz	exit1			; yes
+	mov	si, offset np_8087_env
+	mov	al, status[si]
+	test	al, not severe		; Is it a severe error
+	jnz	exit1			; no
+	and	p_flag[bx],not pf_keep	; terminate user even if
+	or	p_flag[bx],pf_term	; keep flag was on
+
+exit1:
+
+;
+
+	mov	status[si],0H		; Clear status word for env. restore
+
+	pop	si
+	pop	bx
+	pop	ax
+
+	mov	ss, np_8087_ss
+	mov	sp, np_8087_sp
+
+	FLDENV	np_8087_env		; restore 8087
+	FWAIT
+
+	pop	ds		
+	iret	
+
+
+	;========
+	np_8087_test:
+	;========
+	;
+	; Checks for presence of 8087 and place a zero in np_8087_owner
+	; location of SYSDAT if 8087 is present.  The SUP init routine
+	; has placed 0ffffH there as the default of no 8087.
+	;
+
+	FNINIT				; init to see if 8087 is present
+	FSTCW	control			; get 8087 control word
+	mov	bx, NP_8087_OWNER
+	xor	ax,ax
+	FWAIT				; let 8087 finish
+	or	ax,control		; is 8087 present
+	jz	exit2			; no
+
+	mov	word ptr [bx],0		; record that 8087 is present
+
+	mov	bx, IV_SEG_8087		; init SYSDAT with segment and
+	mov	word ptr [bx],0		; offset of interrupt vector for
+	mov	bx, IV_OFF_8087		; 8087 exception handler
+	mov	word ptr [bx], NP_8087_OFF
+
+	mov	bx, IH_SEG_8087		; init SYSDAT with segment and
+	mov	word ptr [bx],ds	; offset of system's execption handler
+	mov	bx, IH_OFF_8087
+	mov	word ptr [bx], offset np_8087_int
+exit2:
+
+
+
+		dseg
+
+		rw	18H		; Local stack
+np_8087_tos:
+np_8087_ss	rw	1
+np_8087_sp	rw	1
+
+np_8087_env	rw	7		; 8087 environment stored here
+control		rw	1		; control word for test stored here
+
+		end

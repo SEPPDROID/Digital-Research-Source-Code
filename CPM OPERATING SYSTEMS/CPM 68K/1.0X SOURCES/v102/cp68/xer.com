@@ -1,0 +1,9 @@
+$ xer CEXPR.LIS
+$ xer INIT.LIS
+$ xer LEX.LIS
+$ xer MACRO.LIS
+$ xer MAIN.LIS
+$ xer UTIL.LIS
+$ xer ICODE.LST
+$ xer MACHINE.LST
+$ xer PREPROC.LST

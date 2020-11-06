@@ -1,0 +1,2391 @@
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE SET
+OBJECT MODULE PLACED IN SET.OBJ
+COMPILER INVOKED BY:  :F0: SET.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+              $ TITLE('SET: Sets BDOS/XFCB options for MP/M & CCP/M')
+              $ COMPACT
+
+              /* Revised:
+                  9/4/81 changes in upper case
+                  23 Jun 82  by Bill Fitler 
+                  1/26/83 for CCPM 2.0 by F.Borda
+              */
+
+              $include (:f2:copyrt.lit)
+          =
+          =   /*
+          =     Copyright (C) 1983
+          =     Digital Research
+          =     P.O. Box 579
+          =     Pacific Grove, CA 93950
+          =   */
+          =
+
+              $include (:f2:vaxcmd.lit)
+          =
+          =   /**** VAX commands for generation - read the name of this program 
+          =           for PROGNAME below.
+          =
+          =       $ util := PROGNAME
+          =       $ ccpmsetup             ! set up environment
+          =       $ assign 'f$directory()' f1:        ! use local dir for temp files
+          =       $ plm86 'util'.plm xref 'p1' optimize(3) debug
+          =       $ link86 f2:scd.obj, 'util'.obj  to 'util'.lnk
+          =       $ loc86 'util'.lnk od(sm(code,dats,data,stack,const)) -
+          =             ad(sm(code(0),dats(10000h))) ss(stack(+32)) to 'util'.
+          =       $ h86 'util'
+          =
+          =   ***** Then, on a micro:
+          =       A>vax progname.h86 $fans
+          =       A>gencmd progname data[b1000]
+          =
+          =   ***** Notes: Stack is increased for interrupts.  Const(ants) are last
+          =           to force hex generation.
+          =   ****/
+
+              /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+                                     * * *  SET  * * *
+
+               * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+   1          set:
+              do;
+
+              $include (:f2:vermpm.lit)
+          =
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   2
+
+
+          =   /*   This utility requires MP/M or Concurrent function calls */
+          =
+          =   /****** commented out for CCP/M-86 :
+          =   declare Ver$OS literally '11h',
+          =       Ver$Needs$OS literally '''Requires MP/M-86''';
+          =    ******/
+          =
+   2   1  =   declare Ver$OS literally '14h',
+          =       Ver$Needs$OS literally '''Requires Concurrent CP/M-86''';
+          =
+          =
+   3   1  =   declare Ver$Mask literally '0fdh';  /* mask out Is_network bit */
+          =
+   4   1  =   declare Ver$BDOS literally '30h';   /* minimal BDOS version rqd */
+          =
+
+   5   1      declare copyright (*) byte data (
+                ' Copyright (c) 1983, Digital Research ');
+
+   6   1      declare versiondate (*) byte data ('02/15/83');
+   7   1      declare version     (*) byte data ('SET 2.1',0);
+
+
+
+   8   1      declare
+                  true        literally '1',
+                  false       literally '0',
+                  dcl         literally 'declare',
+                  lit         literally 'literally',
+                  proc        literally 'procedure',
+                  addr        literally 'address',
+                  forever     literally 'while true',
+                  tab         literally '9',
+                  cr          literally '13',
+                  lf          literally '10',
+                  ctrlc       literally '3h',
+                  ctrlx       literally '18h',
+                  ctrlh       literally '8h';
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   3
+
+
+              $ eject
+              /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+
+                                 * * *  MESSAGES  * * *
+
+
+               * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
+
+   9   1              declare
+                          not$found  (*) byte data (' File not found',0),
+                          no$space   (*) byte data (' or no directory space',0),
+                          invalid    (*) byte data ('Invalid ',0),
+                          set$prot   (*) byte data ('[protect=on]',0),
+                          dirlabel   (*) byte data ('Directory Label ',0),
+                          option$set (*) byte data (' attribute set ',0),
+                          errATTRIB  (*) byte data (' Attribute.',0),  
+                          read$only  (*) byte data ('read only',0),
+                          ro         (*) byte data (' (RO)',0),
+                          read$write (*) byte data ('read write (RW)',0),
+                          comma      (*) byte data (', ',0),
+                          set$to     (*) byte data ('set to ',0),
+                          error$msg  (*) byte data ('ERROR: ',0),
+                          readmode   (*) byte data ('READ',0),
+                          writemode  (*) byte data ('WRITE',0),
+                          deletemode (*) byte data ('DELETE',0),
+                          nopasswd   (*) byte data ('NONE',0),
+                          on         (*) byte data ('    on   ',0),
+                          off        (*) byte data ('    off  ',0),
+                          fail       (*) byte data ('Invalid drive attribute.',0),
+                          failed     (*) byte data ('Could not reset an open drive.',0),
+                          label$name (*) byte data ('Label'),
+                          errRDLBL   (*) byte data ('Directory Label does not exist.',0),
+                          errNOPASS  (*) byte data ('Assign a password to this file.',0),
+                          errENAB    (*) byte data 
+                      ('Enable password protection first: SET d: [PROTECT=ON].',0),
+                          errCRAC    (*) byte data 
+                      ('Cannot have both create and access time stamps.',0),
+                          errFORMAT  (*) byte data 
+                      ('Directory needs to be reformatted for time/date stamping.',0),
+                          errFORM2   (*) byte data ('  Use "INITDIR d:"',0),
+                          err$nofile (*) byte data ('Option requires a file reference.',0); 
+
+              /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+
+                                 * * *  CP/M INTERFACE * * *
+
+
+               * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+              $include (:f2:proces.lit)
+          =
+          =   /*
+          =       Proces Literals MP/M-8086 II
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   4
+
+
+          =   */
+          =
+  10   1  =   declare pnamsiz literally '8';
+          =
+  11   1  =   declare pd$hdr literally 'structure
+          =     (link word,thread word,stat byte,prior byte,flag word,
+          =     name (8) byte,uda word,dsk byte,user byte,ldsk byte,luser byte,
+          =     mem word';
+          =
+  12   1  =   declare pd$structure literally 'pd$hdr,
+          =     dvract word,wait word,org byte,net byte,parent word,
+          =     cns byte,abort byte,conmode word,lst byte,sf3 byte,sf4 byte,sf5 byte,
+          =     reservd (4) byte,pret word,scratch word)';
+          =
+  13   1  =     declare psrun                 lit '00',
+          =             pspoll                lit '01',
+          =             psdelay               lit '02',
+          =             psswap                lit '03',
+          =             psterm                lit '04',
+          =             pssleep               lit '05',
+          =             psdq                  lit '06',
+          =             psnq                  lit '07',
+          =             psflagwait            lit '08',
+          =             psciowait             lit '09';
+          =
+  14   1  =     declare pf$sys                lit '00001h',
+          =             pf$keep               lit '00002h',
+          =             pf$kernal             lit '00004h',
+          =             pf$pure               lit '00008h',
+          =             pf$table              lit '00010h',
+          =             pf$resource           lit '00020h',
+          =             pf$raw                lit '00040h',
+          =             pf$ctlc               lit '00080h',
+          =             pf$active             lit '00100h',
+          =             pf$tempkeep           lit '00200h',
+          =             pf$ctld               lit '00400h',
+          =             pf$childabort         lit '00800h',
+          =             pf$noctls             lit '01000h';
+          =
+  15   1  =     declare pcm$11                lit '00001h',
+          =             pcm$ctls              lit '00002h',
+          =             pcm$rout              lit '00004h',
+          =             pcm$ctlc              lit '00008h',
+          =             pcm$ctlo              lit '00080h',
+          =             pcm$rsx               lit '00300h';
+
+              $include (:f2:uda.lit)
+          =
+          =   /* MP/M-86 II  User Data Area format - August 8, 1981 */
+          =
+  16   1  =   declare uda$structure lit 'structure (
+          =       dparam          word,
+          =       dma$ofst        word,
+          =       dma$seg         word,
+          =       func            byte,
+          =       searchl         byte,
+          =       searcha         word,
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   5
+
+
+          =       searchabase     word,
+          =       dcnt            word,
+          =       dblk            word,
+          =       error$mode      byte,
+          =       mult$cnt        byte,
+          =       df$password     (8) byte,
+          =       pd$cnt          byte)';
+          =
+
+
+  17   1      declare
+                  maxb      address external,    /* addr field of jmp BDOS */
+                  fcb (33)  byte external,       /* default file control block */
+                  buff(128) byte external,       /* default buffer */
+                  buffa     literally '.buff',   /* default buffer */
+                  fcba      literally '.fcb',    /* default file control block */
+                  sectorlen literally '128',     /* sector length */
+                  user$code byte;                /* current user code */
+
+
+                  /* reset drive mask */
+  18   1          declare reset$mask (16) address data (
+                    0000000000000001b,
+                    0000000000000010b,
+                    0000000000000100b,
+                    0000000000001000b,
+                    0000000000010000b,
+                    0000000000100000b,
+                    0000000001000000b,
+                    0000000010000000b,
+                    0000000100000000b,
+                    0000001000000000b,
+                    0000010000000000b,
+                    0000100000000000b,
+                    0001000000000000b,
+                    0010000000000000b,
+                    0100000000000000b,
+                    1000000000000000b );
+
+
+  19   1      mon1: procedure(f,a) external;
+  20   2          declare f byte, a address;
+  21   2          end mon1;
+
+  22   1      mon2: procedure(f,a) byte external;
+  23   2          declare f byte, a address;
+  24   2          end mon2;
+
+              /* declare mon3 literally 'mon2a'; */
+
+  25   1      mon3: procedure(f,a) address external;
+  26   2          declare f byte, a address;
+  27   2          end mon3;
+
+  28   1      MON4: PROCEDURE (F,A) POINTER EXTERNAL;
+  29   2          DECLARE F BYTE, A ADDRESS;
+  30   2          END MON4;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   6
+
+
+
+
+
+
+                  /********** SYSTEM FUNCTION CALLS *********************/
+
+  31   1      BOOT: PROCEDURE;
+  32   2          CAll MON1(0,0);
+                  /* reboot */
+  33   2          END BOOT;
+
+  34   1      printchar: procedure(char);
+  35   2          declare char byte;
+  36   2          call mon1(2,char);
+  37   2          end printchar;
+
+  38   1      printb: procedure;
+                  /* print blank character */
+  39   2          call printchar(' ');
+  40   2          end printb;
+
+  41   1      printx: procedure(a);
+  42   2          declare a address;
+  43   2          declare s based a byte;
+  44   2              do while s <> 0;
+  45   3              call printchar(s);
+  46   3              a = a + 1;
+  47   3              end;
+  48   2          end printx;
+
+  49   1      check$con$stat: procedure byte;
+  50   2          return mon2(11,0); /* console ready */
+  51   2          end check$con$stat;
+
+  52   1      crlf: procedure;
+  53   2          call printchar(cr);
+  54   2          call printchar(lf);
+
+  55   2          end crlf;
+
+  56   1      print: procedure(a);
+  57   2          declare a address;
+                  /* print the string starting at address a until the
+                  next 0 is encountered */
+  58   2          call crlf;
+  59   2          call printx(a);
+  60   2          end print;
+
+  61   1      get$version: procedure addr;
+                  /* returns current cp/m version # */
+  62   2          return mon3(12,0);
+  63   2          end get$version;
+
+
+  64   1      conin: procedure byte;
+  65   2          return mon2(6,0fdh);
+  66   2          end conin;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   7
+
+
+
+  67   1      select: procedure(d);
+  68   2          declare d byte;
+  69   2          call mon1(14,d);
+  70   2          end select;
+
+  71   1      open: procedure(fcb) byte;
+  72   2          declare fcb address;
+  73   2          return mon2(15,fcb);
+  74   2          end open;
+
+  75   1      search$first: procedure(fcb) byte;
+  76   2          declare fcb address;
+  77   2          return mon2(17,fcb);
+  78   2          end search$first;
+
+  79   1      search$next: procedure byte;
+  80   2          return mon2(18,0);
+  81   2          end search$next;
+
+  82   1      cselect: procedure byte;
+                  /* return current disk number */
+  83   2          return mon2(25,0);
+  84   2          end cselect;
+
+  85   1      setdma: procedure(dma);
+  86   2          declare dma address;
+  87   2          call mon1(26,dma);
+  88   2          end setdma;
+
+  89   1      writeprot: procedure byte;
+                  /* write protect the current disk */
+  90   2          return mon2(28,0);
+  91   2          end writeprot;
+
+  92   1      getuser: procedure byte;
+                  /* return current user number */
+  93   2          return mon2(32,0ffh);
+  94   2          end getuser;
+
+  95   1      setuser: procedure(user);
+  96   2          declare user byte;
+  97   2          call mon1(32,user);
+  98   2          end setuser;
+
+  99   1      getfilesize: procedure(fcb);
+ 100   2          declare fcb address;
+ 101   2          call mon1(35,fcb);
+ 102   2          end getfilesize;
+
+                /* 0ff => return BDOS errors */
+ 103   1      return$errors:
+                  procedure(mode);
+ 104   2          declare mode byte;
+ 105   2            call mon1 (45,mode);  
+ 106   2          end return$errors;
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   8
+
+
+ 107   1      setind: procedure(fcb) address;
+ 108   2          dcl fcb addr;
+ 109   2          call setdma(.passwd);
+                  /* set file indicators for current fcb */
+ 110   2          return mon3(30,fcb);
+ 111   2          end setind;
+
+                  /********** DISK PARAMETER BLOCK **********************/
+
+ 112   1      declare
+                  DPBPTR POINTER,               
+                  dpb based DPBPTR structure
+                  (spt address, bls byte, bms byte, exm byte, mxa address,
+                   dmx address, dbl address, cks address, ofs address),
+                  scptrk literally 'dpb.spt',
+                  blkshf literally 'dpb.bls',
+                  blkmsk literally 'dpb.bms',
+                  extmsk literally 'dpb.exm',
+                  maxall literally 'dpb.mxa',
+                  dirmax literally 'dpb.dmx',
+                  dirblk literally 'dpb.dbl',
+                  chksiz literally 'dpb.cks',
+                  offset literally 'dpb.ofs';
+
+ 113   1      set$dpb: procedure;
+                  /* set disk parameter block values */
+ 114   2          DPBPTR = MON4(31,0); /* base of dpb */
+ 115   2          end set$dpb;
+
+                  /******************************************************/
+
+ 116   1      wrlbl: procedure(fcb) address;
+ 117   2          declare fcb address;
+ 118   2          call setdma(.passwd);   /* set dma=password */
+ 119   2          return mon3(100,fcb);
+ 120   2          end wrlbl;
+
+ 121   1      getlbl: procedure(d) byte;
+ 122   2          declare d byte;
+
+ 123   2          return mon2(101,d);
+ 124   2          end getlbl;
+                
+ 125   1      readxfcb: procedure(fcb);
+ 126   2          declare fcb address;
+ 127   2          call setdma(.passwd);   /* set dma=password */
+ 128   2          call mon1(102,fcb);
+ 129   2          end readxfcb;
+
+ 130   1      wrxfcb: procedure(fcb) address;
+ 131   2          declare fcb address;
+
+ 132   2          call setdma(.passwd);
+ 133   2          return mon3(103,fcb);
+ 134   2          end wrxfcb;
+
+ 135   1      declare
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE   9
+
+
+                  PD$POINTER POINTER,
+                  PD$PTR     STRUCTURE (
+                                 OFF ADDRESS,
+                                 SEGMENT ADDRESS) AT (@PD$POINTER),
+                  pd         based PD$POINTER PD$STRUCTURE,
+
+                  PD$PARENT$POINTER POINTER,
+                  PD$PARENT$PTR     STRUCTURE (
+                                 OFF ADDRESS,
+                                 SEGMENT ADDRESS) AT (@PD$PARENT$POINTER),
+                  PD$PARENT      based PD$PARENT$POINTER PD$STRUCTURE;
+
+ 136   1      DECLARE
+
+                  UDA$POINTER POINTER,
+                  UDA$PTR     STRUCTURE (
+                                  OFF ADDRESS,
+                                  SEGMENT ADDRESS) AT (@UDA$POINTER),
+                  UDA         BASED UDA$POINTER UDA$STRUCTURE,
+
+                  UDA$PARENT$POINTER POINTER,
+                  UDA$PARENT$PTR     STRUCTURE (
+                                       OFF ADDRESS,
+                                       SEGMENT ADDRESS) AT (@UDA$PARENT$POINTER),
+                  UDA$PARENT         BASED UDA$PARENT$POINTER UDA$STRUCTURE;
+
+
+ 137   1      GET$PD$UDA: PROCEDURE;
+
+ 138   2          PDPOINTER = MON4(156,0);
+ 139   2          UDA$PTR.OFF = 0;
+ 140   2          UDA$PTR.SEGMENT = PD.UDA;
+ 141   2          END GET$PD$UDA;
+
+ 142   1      reset$drv: procedure(drv) byte;
+ 143   2          dcl drv byte;
+
+ 144   2          return mon2(37,reset$mask(drv));
+ 145   2          end reset$drv;
+
+ 146   1      terminate: procedure;
+ 147   2          call crlf;
+ 148   2          call mon1 (0,0);
+ 149   2          end terminate;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  10
+
+
+              $ eject
+
+
+
+              /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+
+                               * * *  GLOBAL DATA  * * *
+
+
+               * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
+ 150   1              declare
+                          fnam     literally '11',
+                          fmod     literally '14',
+                          frc      literally '15',
+                          fln      literally '15',
+                          fdm      literally '16',
+                          fdl      literally '31',
+                          ftyp     literally '9',
+                          rofile   literally '9',     /* read/only file */
+                          infile   literally '10',    /* invisible file */
+                          archiv   literally '11',    /* archived  file */
+                          attrb1   literally  '1',    /* attribute F1'  */
+                          attrb2   literally  '2',    /* attribute F2'  */
+                          attrb3   literally  '3',    /* attribute F3'  */
+                          attrb4   literally  '4';    /* attribute F4'  */
+                  
+
+ 151   1              declare
+                          fcbp     address,
+                          fcbv     based fcbp (32) byte,
+                          fext     literally 'fcbv(12)';
+
+ 152   1              declare
+                          xfcb     (32) byte,
+                          xfcbmode byte at (.xfcb(12));  /* password mode */
+
+ 153   1              declare                          /* command buffer */
+                          cmd (27) byte initial(0,'HELP       ',0),
+                          passwd (17) byte;           /* password buffer */
+
+ 154   1              declare
+                          scase   byte initial(-1),    /* file attributes */
+                          fileref byte initial(false), /* file reference  */
+                          lblcmd  byte initial(false), /* label attribute */
+                          xfcbcmd byte initial(false), /* xfcb  attribute */
+                          wild    byte initial(false), /* file = a wildcard */
+                          optdel  byte initial(false), /* delimiter = option */
+                          option$found  byte initial(false),/* options exist */
+                          time$opt byte initial(false),/* option = [time] */
+                          password byte initial(false), /* file has password */
+                          option  byte initial(false), /* cmd = a option */
+                          mxstamp byte initial(false);/* separates create,update*/
+
+ 155   1              declare                         /* parsing */
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  11
+
+
+                          more  byte initial(true),   /* more to parse */
+                          opt$adr    addr,            /* start of options */
+                          ibp        addr;            /* input buffer ptr */
+
+ 156   1              declare            
+                          (sav$dcnt, sav$searcha)     addr,
+                          sav$searchl  byte,
+                          dirbuf (128) byte;          /* used for searches */
+
+ 157   1              declare
+                          cdisk     byte,             /* current disk */
+                          ver       addr;             /* version checking */
+
+ 158   1              declare
+                          error$code addr;            /* for bdos returned
+                                                         errors */
+ 159   1              declare
+                          parse$fn structure (
+                              buff$adr  addr,
+                              fcb$adr   addr),
+                          last$buff$adr addr;         /* used for parsing */
+
+ 160   1              declare  /* file attribute bytes and values by scase */
+                          attr$byte (14) byte   
+                              /*     RW RO DIR SYS  A F F F F  A F F F F  */
+                              initial(9, 9, 10, 10,11,1,2,3,4,11,1,2,3,4),
+                          attr$value (14) byte  
+                              /*     RW RO DIR SYS  A F F F F  A F F F F  */
+                              initial(0, 1,  0,  1, 1,1,1,1,1, 0,0,0,0,0);
+
+ 161   1              declare                /* strings for match routine */
+                          attributes (*) byte data
+                              ('RWRODISYARF1F2F3F4Attribute',0),
+                          values     (*) byte data
+                              ('REWRDENO',0),
+                          boolean    (*) byte data
+                              ('OFONValue, Use ON or OFF',0);
+
+                      /*       VALUES                 FILE ATTRIBUTES
+                            mode   keyword          scase     attribute
+                               0   READ                 0     RW
+                               1   WRITE                1     RO
+                               2   DELETE               2     DIR
+                               3   NONE                 3     SYS
+                                                        4     ARCHIVE
+                                                        5     F1
+                               BOOLEAN                  6     F2
+                               0   OFF                  7     F3
+                               1   ON                   8     F4          */
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  12
+
+
+              $ eject
+
+
+
+              /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+
+                               * * *  BASIC ROUTINES  * * *
+
+
+               * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
+
+                               /* help message */
+ 162   1      help: procedure;
+ 163   2          call print(.(tab,tab,tab,'SET EXAMPLES',0));
+ 164   2          call print(.(cr,lf,'FOR FILES',cr,lf,cr,lf,
+                               'set *.asm [rw, dir] ',tab,tab,tab,'(File Attributes)',0));
+ 165   2          call print(.(
+                               'set *.prl [ro, sys]',0));
+ 166   2          call print(.(
+                               'set *.dat [archive=on,f1=off,f2=on,f3=on]',0));
+ 167   2          call print(.(
+                               'set *.asm [password = xyz]',
+                               tab,tab,'(Password Protection)',0));
+ 168   2          call print(.('set *.asm [protect  = read]',
+                               tab,tab,'(read, write, delete or none)',0));
+ 169   2          call print(.(cr,lf,'FOR DRIVES',cr,lf,cr,lf,
+                               'set [password = xyz]',tab,tab,tab,'(Label Password)',0));
+ 170   2          call print(.('set [protect  = on] ',tab,tab,tab,'(Password Protection)',0));
+ 171   2          call print(.('set [update   = on] ',tab,tab,tab,'(Update Time Stamps - on or off)',0));
+ 172   2          call print(.('set [create   = on] ',tab,tab,tab,'(Creation Time Stamps - on or off)',0));
+ 173   2          call print(.('set [access   = on] ',tab,tab,tab,'(Access Time Stamps - on or off)',0));
+ 174   2          call print(.(
+                               'set [default  = xyz]',tab,tab,tab,'(Default Password)',0));
+ 175   2          call print(.('set a:[rw],   b:[ro]',tab,tab,tab,'(Drive Status)',0));
+ 176   2          end help;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* invalid command error */
+ 177   1      perror: proc(msg);
+ 178   2          dcl msg addr;
+
+ 179   2          call print(.error$msg);
+ 180   2          if ibp = 0 then 
+ 181   2              call printx(parse$fn.buff$adr);
+                  else
+ 182   2              call printx(last$buff$adr);
+ 183   2          call printx(.(' ?',0));
+ 184   2          call print(.invalid);
+ 185   2          call printx(msg);
+ 186   2          call terminate;
+ 187   2          end perror;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  13
+
+
+
+                               /* parsing error */
+ 188   1      parse$error: proc;
+
+ 189   2          if option then 
+ 190   2              call perror(.('Parameter',0));
+                  else
+ 191   2              call perror(.('File',0));
+ 192   2          end parse$error;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                      /* parse the next lexical item in the command line 
+                         parse$fn must filled in with input parameters */
+ 193   1      parse: procedure address;
+ 194   2          declare p address;
+ 195   2          declare c based p byte;
+
+ 196   2          p = mon3(152,.parse$fn);
+ 197   2          if p = 0FFFFh then 
+ 198   2              call parse$error;
+ 199   2          else if p <> 0 then do;
+ 201   3              if c = '[' then
+ 202   3                  optdel = true;
+ 203   3              else if c = ']' then 
+ 204   3                  optdel = false;
+                      p = p + 1;
+ 206   3              if c = ',' then
+ 207   3                  p = p + 1;
+ 208   3              last$buff$adr = parse$fn.buff$adr - 1;
+ 209   3              parse$fn.buff$adr = p;
+ 210   3              end;
+                  else
+ 211   2              optdel = false;
+ 212   2          return p;
+ 213   2          end parse;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* parse a option value */
+ 214   1      parse$value: proc;
+
+                  /* test for end */
+ 215   2          if ibp = 0 then
+ 216   2              call parse$error;
+
+                  /* more to go */
+ 217   2          ibp = parse;
+ 218   2          end parse$value;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* fill string @ s for c bytes with f */
+ 219   1      fill:   proc(s,f,c);
+ 220   2          dcl s addr,
+                      (f,c) byte,
+                      a based s byte;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  14
+
+
+
+ 221   2              do while (c:=c-1)<>255;
+ 222   3              a = f;
+ 223   3              s = s+1;
+ 224   3              end;
+ 225   2          end fill;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* copy c bytes from s to d */
+ 226   1      copy:   proc(s,d,c);
+ 227   2          dcl (s,d) addr, c byte;
+ 228   2          dcl a based s byte, b based d byte;
+
+ 229   2              do while (c:=c-1)<>255;
+ 230   3              b=a; s=s+1; d=d+1;
+ 233   3              end;
+ 234   2          end copy;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* upper case character from console */
+ 235   1      ucase:   proc byte;
+ 236   2          dcl c byte;
+
+ 237   2          if (c:=conin) >= 'a' then
+ 238   2             if c < '{' then
+ 239   2                return(c-20h);
+ 240   2          return c;
+ 241   2          end ucase;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* get password and place in passwd */
+ 242   1      getpasswd:   proc;
+ 243   2          dcl (i,c) byte;
+
+ 244   2          call print(.('Password ? ',0));
+ 245   2      retry:
+                  call fill(.passwd,' ',8);
+ 246   2              do i = 0 to 7;
+ 247   3      nxtchr:
+                      if (c:=ucase) >= ' ' then 
+ 248   3                  passwd(i)=c;
+ 249   3              if c = cr then
+ 250   3                  go to exit;
+ 251   3              if c = ctrlx then
+ 252   3                  goto retry;
+ 253   3              if c = ctrlh then do;
+ 255   4                  if i<1 then
+ 256   4                      goto retry;
+ 257   4                  else do;
+ 258   5                      passwd(i:=i-1)=' ';
+ 259   5                      goto nxtchr;
+ 260   5                      end;
+ 261   4                  end;
+ 262   3              if c = ctrlc then
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  15
+
+
+ 263   3                  call terminate;       /* end of program */
+ 264   3              end;
+ 265   2      exit:
+                  c = check$con$stat;             /* clear raw I/O mode */
+ 266   2          end getpasswd;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* print drive name */
+ 267   1      printdrv: procedure;
+
+ 268   2              call printchar(cdisk+'A');
+ 269   2              call printchar(':');
+ 270   2              end printdrv;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* print file name */
+ 271   1      printfn: procedure;
+ 272   2              declare k byte;
+
+ 273   2              call printdrv;
+
+ 274   2                  do k = 1 to fnam;
+ 275   3                  if k = ftyp then 
+ 276   3                 call printchar('.');
+ 277   3                  call printchar(fcbv(k) and 7fh);
+ 278   3                  end;
+ 279   2              end printfn;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* error message routine */
+ 280   1      bdos$error:   procedure;
+ 281   2         declare
+                    code byte;
+
+ 282   2          if (code:=high(error$code)) < 3 then do;
+ 284   3              call print(.error$msg);
+ 285   3              call printdrv;
+ 286   3              call printb;
+ 287   3              if code = 1 then 
+ 288   3                  call printx(.('BDOS Bad Sector',0));
+ 289   3              if code=2 then do;
+ 291   4                  call printx(.('Drive ',0));
+ 292   4                  call printx(.read$only);
+ 293   4                  end;
+ 294   3              call terminate;
+ 295   3              end;
+ 296   2          call printx(.error$msg);
+ 297   2          if code = 3 then
+ 298   2              call printx(.read$only);
+ 299   2          if code = 5 then      
+ 300   2              call printx(.('Currently Opened',0));
+ 301   2          if code = 7 then 
+ 302   2              call printx(.('Wrong Password',0));
+ 303   2          end bdos$error;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  16
+
+
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* get address of FCB in dirbuf */
+ 304   1      set$up$file: procedure(dir$index);
+ 305   2          dcl dir$index byte;
+
+ 306   2          if dir$index <> 0ffh then do;
+ 308   3              sav$dcnt = UDA.DCNT;
+ 309   3              sav$searchl = UDA.SEARCHL;
+ 310   3              sav$searcha = UDA.SEARCHA;
+ 311   3              fcbp = shl(dir$index,5) + .dirbuf;
+ 312   3              fcbv(0) = fcb(0);                 /* set drive byte */
+ 313   3              end;
+ 314   2          end set$up$file;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /*  match command from command string */
+ 315   1      match: proc(commands$adr, last$cmd) byte;
+ 316   2          dcl (i,j,matched,scase,last$cmd) byte;
+ 317   2          dcl 
+                      commands$adr       address,
+                      commands based commands$adr (1) byte;
+
+ 318   2          j = 0;
+ 319   2              do scase = 0 to last$cmd;
+ 320   3              matched = true;
+ 321   3                  do i = 1 to 2;
+ 322   4                  if commands(j) <> cmd(i) then 
+ 323   4                      matched = false;
+ 324   4                  j = j + 1;
+ 325   4                  end;
+ 326   3              if matched then 
+ 327   3                  return scase;
+ 328   3              end;
+ 329   2          call perror(.errATTRIB);
+ 330   2          end match;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* return boolean option value */
+ 331   1      bool: procedure byte;
+
+ 332   2              if match(.boolean,1) then
+ 333   2                  return true;
+                      else 
+ 334   2                  return false;
+ 335   2              end bool;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* print boolean option value */
+ 336   1      pbool: procedure(value);
+ 337   2              declare
+                         value byte;
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  17
+
+
+ 338   2              call printx(.option$set);
+ 339   2              if value then
+ 340   2                  call printx(.('ON',0));
+                      else
+ 341   2                  call printx(.('OFF',0));
+ 342   2              end pbool;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* print command */
+ 343   1      printcmd: procedure;
+
+ 344   2              call printx(.set$to);
+ 345   2              cmd(12)=0;
+ 346   2              call printx(.cmd(1));
+ 347   2              end printcmd;
+
+
+              /*******************************************************
+
+                            F I L E   A T T R I B U T E S
+
+              ********************************************************/
+
+
+
+                               /* print attribute set */
+ 348   1      printatt: procedure;
+
+
+                  /* test if attribute fcbv(i) is on */
+ 349   2          attribute: procedure(i) byte;
+ 350   3             declare i byte;
+
+ 351   3             if rol(fcbv(i),1) then
+ 352   3                return true;
+ 353   3             return false;
+ 354   3             end attribute;
+
+
+                  /* print character c if attribute(b) is true */
+ 355   2          prnt$attrib: procedure(b,c);
+ 356   3             declare (b,c) byte;
+
+ 357   3             if attribute(b) then
+ 358   3                call printchar(c);
+ 359   3             end prnt$attrib;
+
+                  /* display attributes: sys,ro,a,f1-f4 */
+                        
+ 360   2          call printx(.set$to);
+ 361   2          if attribute(infile) then 
+ 362   2              call printx(.('system (SYS)',0));
+                  else
+ 363   2              call printx(.('directory (DIR)',0));
+ 364   2          call printx(.(', ',0));
+ 365   2          if attribute(rofile) then do;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  18
+
+
+ 367   3              call printx(.read$only);
+ 368   3              call printx(.ro);
+ 369   3              end;
+                  else
+ 370   2              call printx(.read$write);
+
+ 371   2          call printchar(tab);
+ 372   2          call prnt$attrib(archiv,'A');
+ 373   2          call prnt$attrib(attrb1,'1');
+ 374   2          call prnt$attrib(attrb2,'2');
+ 375   2          call prnt$attrib(attrb3,'3');
+ 376   2          call prnt$attrib(attrb4,'4');
+ 377   2          end print$att;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* read current file attributes */
+ 378   1      rd$attributes: procedure;
+
+ 379   2          if scase = -1 then
+ 380   2              if not wild then do;
+ 382   3                  call setdma(.dirbuf);
+ 383   3                  call set$up$file(search$first(.fcb));
+ 384   3                  end;
+ 385   2          end rd$attributes;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* set up file attributes */
+ 386   1      set$attributes: procedure;
+
+              /*------------------------------------------------------------
+
+              scase ranges from 0 - 13 : 
+
+              0 - RW   3 - SYS       6 - F2 (on)  9 - not Archived 
+              1 - RO   4 - ARCHIVED  7 - F3 (on) 10 - F1 (off) 12 - F3 (off)
+              2 - DIR  5 - F1 (on)   8 - F4 (on) 11 - F2 (off) 13 - F4 (off) 
+
+              -------------------------------------------------------------*/
+
+ 387   2          call rd$attributes;
+ 388   2          if (scase := match(.attributes,8)) > 3 then do;
+ 390   3              call parse$value;
+ 391   3              if not bool then 
+ 392   3                  scase = scase + 5;
+ 393   3              end;
+ 394   2          if attr$value(scase) then
+ 395   2              fcbv(attr$byte(scase)) = fcbv(attr$byte(scase)) or 80h;
+                  else
+ 396   2              fcbv(attr$byte(scase)) = fcbv(attr$byte(scase)) and 7fh;
+
+ 397   2          end set$attributes;
+
+
+
+              /*******************************************************
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  19
+
+
+
+                           D R I V E   A T T R I B U T E S
+
+              ********************************************************/
+
+
+
+
+
+                                                          /* set drive attributes */
+ 398   1      setdrvstatus: procedure;
+ 399   2              dcl code byte;
+
+                                                          /* set the drive */
+ 400   2          if (scase:=match(.attributes,1)) then
+ 401   2              code = writeprot;                   /* RO */
+                  else 
+ 402   2              if ((cmd(1) = 'R') and (cmd(2) = 'W'))then
+ 403   2              code = reset$drv(cdisk);            /* RW */
+ 404   2              else do;                            /* Invalid drive option */
+ 405   3                   call print(.fail);
+ 406   3                   call terminate;
+ 407   3                   end;
+               
+ 408   2          if code <> 0ffh then do;
+ 410   3              call print(.('Drive ',0));
+ 411   3              call printdrv;
+ 412   3              call printb;
+ 413   3              call printx(.set$to);
+ 414   3              if scase then do;
+ 416   4                  call printx(.read$only);
+ 417   4                  call printx(.ro);
+ 418   4                  end;
+                      else
+ 419   3                  call printx(.read$write);
+ 420   3              end;
+                  else
+ 421   2              call print(.failed);
+
+ 422   2          scase = -1;
+ 423   2          end setdrvstatus;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set default password */
+ 424   1      defaultpass: procedure;
+
+ 425   2              if (getlbl(cdisk) and 80h) <> 80h then /* Is drive password enabled? */
+ 426   2                 do;                                 /* If not, print and leave.   */
+ 427   3                   call print(.errENAB);
+ 428   3                   call terminate;
+ 429   3                 end;
+
+ 430   2              call fill(.cmd(1),' ',8);
+ 431   2              ibp = parse;             /* get password */
+ 432   2              call mon1(106,.cmd(1));  /* set default password */
+ 433   2              call print(.('Default Password ',0));
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  20
+
+
+ 434   2              call printcmd;
+
+ 435   2              CALL GET$PD$UDA;
+ 436   2              PD$PARENT$PTR.SEGMENT = PD$PTR.SEGMENT;
+ 437   2              PD$PARENT$PTR.OFF = PD.PARENT;
+ 438   2              UDA$PARENT$PTR.SEGMENT = PD$PARENT.UDA;
+ 439   2              UDA$PARENT$PTR.OFF = 0;
+ 440   2              CALL MOVW(@UDA.DF$PASSWORD,@UDA$PARENT.DF$PASSWORD,4);
+
+ 441   2              end defaultpass;
+
+
+              /*******************************************************
+
+                           L A B E L   A T T R I B U T E S
+
+              ********************************************************/
+
+
+                               /* read the directory label before
+                                  writing the label to preserve the
+                                  name, type, and stamps */
+ 442   1      readlabel: procedure;
+ 443   2          dcl (mode, dcnt) byte;
+                      
+
+ 444   2      readlbl: proc;
+ 445   3          dcl d byte data('?');
+                  
+ 446   3          call setdma(.dirbuf);
+ 447   3          dcnt = search$first(.d);
+ 448   3              do while dcnt <> 0ffh;
+ 449   4              if dirbuf(ror(dcnt,3) and 110$0000b)=20H then
+ 450   4                  return;
+ 451   4              dcnt = search$next;
+ 452   4              end;
+
+ 453   3          call print(.errRDLBL);
+ 454   3          call terminate;
+ 455   3          end readlbl;
+
+ 456   2          if lblcmd then
+ 457   2              return;  
+ 458   2          mode = getlbl(cdisk);
+ 459   2          password = false;
+ 460   2          if mode > 0 then do;
+ 462   3              call readlbl;
+ 463   3              fcbp = shl(dcnt,5) + .dirbuf;
+ 464   3              fext = fext and 11110000b;      /* turn off set passwd */
+ 465   3              if fcbv(16) <> ' ' then
+ 466   3                  if fcbv(16) <> 0 then
+ 467   3                      password = true;
+ 468   3              end;
+ 469   2          else do;
+ 470   3              fcbp = .fcb;
+ 471   3              call copy(.label$name,.fcb(1),length(label$name));
+ 472   3              end;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  21
+
+
+ 473   2          if password then
+ 474   2              call getpasswd;
+ 475   2          lblcmd = true;
+ 476   2          end readlabel;
+
+
+              /*******************************************************
+
+                           X F C B     A T T R I B U T E S
+
+              ********************************************************/
+
+
+                               /* read xfcb into xfcb buffer */
+ 477   1      set$up$xfcb: procedure;
+                  
+ 478   2              if not xfcbcmd then do;
+ 480   3                  call copy(.fcbv,.xfcb,12);
+ 481   3                  password,xfcbmode = 0;
+ 482   3                  call readxfcb(.xfcb);        /* read xfcb */
+ 483   3                  if xfcbmode then
+ 484   3                      password = true;
+ 485   3                  xfcbcmd = true;
+ 486   3                  end;
+                   /* else
+                          already done */
+ 487   2          end set$up$xfcb;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* no directory label exists */
+ 488   1      no$label: procedure(msg);
+ 489   2          declare msg addr;
+
+ 490   2          call crlf;
+ 491   2          call print(.error$msg);
+ 492   2          call printx(.(' First SET ',0));
+ 493   2          call printdrv;
+ 494   2          call printx(msg);
+ 495   2          call terminate;
+ 496   2          end no$label;
+
+
+              /*******************************************************
+
+                       PASSWORD  AND  PASSWORD  MODE  ROUTINES
+
+              ********************************************************/
+
+
+                               /* set file or label password */
+ 497   1      set$password: procedure;
+ 498   2          dcl (p,q) address;
+ 499   2          dcl c based p byte;
+ 500   2          dcl d based q byte;
+                  
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  22
+
+
+ 501   2          if (getlbl(cdisk) and 80h) <> 80h then /* Is the drive passwd enabled? */
+ 502   2             do;                                 /* If not, print and leave      */
+ 503   3                call print(.errENAB);
+ 504   3                call terminate;
+ 505   3             end;
+ 506   2              if fileref then do;
+                         /* if getlbl(cdisk) = 0 then
+                              call no$label(.set$prot);*/
+ 508   3                  call set$up$xfcb;                 /* read xfcb */
+ 509   3                  xfcbmode = xfcbmode or 1;         /* set passwd */
+ 510   3                  end;
+ 511   2              else do;
+ 512   3                  call readlabel;
+ 513   3                  fext = fext or 1;
+ 514   3                  end;
+ 515   2              p = (q:=parse$fn.buff$adr) - 1;
+ 516   2              if c = ',' or d = ']' then            /* null password */
+ 517   2                  call fill(.passwd(8),' ',8);
+ 518   2              else do;
+ 519   3                  ibp = parse;                      /* parse password */
+ 520   3                  call copy(.cmd(1),.passwd(8),8);  /* copy it to fcb */
+ 521   3                  password = true;
+ 522   3                  end;
+ 523   2          end set$password;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set file or drive protection mode */
+ 524   1      protect: procedure;
+ 525   2          declare new$password byte;
+                  
+ 526   2          zeropass: proc;
+ 527   3              xfcbmode = 1;
+ 528   3              call fill(.passwd(8),' ',8);
+ 529   3              password = true;
+ 530   3              end zeropass;
+                  
+
+ 531   2          call parse$value;             /* protection value */
+ 532   2          if fileref then  do;
+ 534   3              if ((getlbl(cdisk) and 80h) <> 80h) then
+ 535   3                  do;                   /* Must set protect=on first */
+ 536   4                  call print(.errENAB);
+ 537   4                  call terminate;
+ 538   4                  end;
+ 539   3              call set$up$xfcb;
+ 540   3              if xfcbmode then          /* lsb    */
+ 541   3                  new$password = true;  /* save   */
+                      else
+ 542   3                  new$password = false;
+
+                       
+ 543   3                   do case match(.values,3);
+ 544   4                    xfcbmode = 80h;        /* READ   */
+ 545   4                    xfcbmode = 40h;        /* WRITE  */
+ 546   4                    xfcbmode = 20h;        /* DELETE */
+ 547   4                    call zeropass;         /* NONE   */
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  23
+
+
+ 548   4                    end;
+
+ 549   3                    if new$password then       /* restore */
+ 550   3                       xfcbmode = xfcbmode or 1;
+                          
+                          
+ 551   3           end;
+ 552   2          else do;            /* Not a file ref, do the label */
+ 553   3              call readlabel;
+ 554   3              if bool then
+ 555   3                  fext = fext or 80h;         /* turn on passwords */
+                      else
+ 556   3                  fext = fext and 01111111b;  /* turn off passwords */
+ 557   3              end;   
+ 558   2          end ;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+
+              /*******************************************************
+
+                              LABEL  ATTRIBUTE  ROUTINES
+
+              ********************************************************/
+
+
+                               /* gets the label option boolean value */
+ 559   1      getbool: procedure;
+
+ 560   2          if fileref then 
+ 561   2              call parse$error;
+ 562   2          call readlabel;         /* get label name */
+ 563   2          call parse$value;           /* option value */
+ 564   2          end getbool;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* sets the label name */
+ 565   1      lname: procedure;
+
+ 566   2          call getbool;
+ 567   2          call copy(.cmd(1),.fcbv(1),11);      /* copy label name */
+ 568   2          end lname;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set access time stamping */
+ 569   1      access: procedure;
+                  
+ 570   2            call getbool;
+ 571   2            if not bool then
+ 572   2               fext = fext and 10111111b;       /* turn off access ts */
+                    else
+ 573   2               do;  
+ 574   3                if mxstamp then                 /* Create has also been chosen */
+ 575   3                   do;
+ 576   4                     call print(.errCRAC);
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  24
+
+
+ 577   4                     call terminate;
+ 578   4                   end;
+                        else
+ 579   3                   do;
+ 580   4                     fext = fext or 40h;        /* turn on access ts */
+ 581   4                     fext = fext and 11101111b; /* turn off create ts */
+ 582   4                     mxstamp = true;            /* Mark 1 of 2 as chosen */      
+ 583   4                   end;
+ 584   3              end;
+ 585   2          end access;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set update time stamping */
+ 586   1      update: procedure;
+
+ 587   2            call getbool;
+ 588   2            if not bool then
+ 589   2              fext = fext and 11011111b;        /* turn off update ts */
+                    else 
+ 590   2              fext = fext or 20h;               /* turn on update ts */ 
+ 591   2          end update;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set create time stamping */
+ 592   1      create: procedure;
+
+ 593   2            call getbool;
+ 594   2            if not bool then 
+ 595   2              fext = fext and 11101111b;        /* turn off create ts*/
+                    else   
+ 596   2              do; 
+ 597   3                 if mxstamp then                /* Access has also been chosen */
+ 598   3                 do;
+ 599   4                   call print(.errCRAC);
+ 600   4                   call terminate;
+ 601   4                 end;
+                         else
+ 602   3                 do;
+ 603   4                   fext = fext or 10h;          /* turn on create ts */
+ 604   4                   fext = fext and 10111111b;   /* turn off access ts*/
+ 605   4                   mxstamp = true;              /* Mark 1 of 2 mx stamps */
+ 606   4                end;                            /* as being chosen   */
+ 607   3              end;
+ 608   2          end create;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+
+              /*******************************************************
+
+                         S H O W   L A B E L   &   X F C B 
+
+              ********************************************************/
+
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  25
+
+
+
+
+
+                               /* display the new password */
+ 609   1      show$passwd: procedure;
+
+ 610   2          call printx(.('Password = ',0));
+ 611   2          passwd(16) = 0;
+ 612   2          call printx(.passwd(8));
+ 613   2          end show$passwd;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+              /* HEADER for showlbl procedure */
+
+ 614   1      dcl label1 (*) byte data (
+              'Directory       Passwds    Stamp    Stamp    Stamp',cr,lf,
+              'Label           Reqd       Create   Access   Update',cr,lf,
+              '--------------  -------    -------  -------  -------',cr,lf,0);
+
+                               /* show the label options */
+ 615   1      showlbl: procedure;
+ 616   2          declare (make,access) byte;
+
+ 617   2          call print(.('Label for drive ',0));
+ 618   2          call printdrv;
+ 619   2          call crlf;
+ 620   2          call print(.label1);
+ 621   2          call printfn;
+
+                  /* PASSWORDS REQUIRED */
+ 622   2          if (fext and 80h) = 80h then
+ 623   2              call printx(.on);
+                  else
+ 624   2              call printx(.off);
+
+                  /* STAMP CREATE */
+ 625   2          if (fext and 10h) = 10h  then
+ 626   2             call printx(.on);
+                  else
+ 627   2             call printx(.off);
+
+                  /* STAMP ACCESS */
+ 628   2          if (fext and 40h) = 40h then
+ 629   2               call printx(.on);
+                  else
+ 630   2              call printx(.off);
+
+                  /* STAMP UPDATE */
+ 631   2          if (fext and 20h) = 20h then
+ 632   2              call printx(.on);
+                  else
+ 633   2              call printx(.off);
+
+ 634   2          call crlf;
+ 635   2          if fext then do;
+ 637   3              call crlf;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  26
+
+
+ 638   3              call show$passwd;
+ 639   3              end;
+ 640   2          end showlbl;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* display xfcb attributes */
+ 641   1      show$xfcb: procedure;
+
+ 642   2          if xfcbmode = 0 then do;    /* xfcbmode = true status of file */ 
+ 644   3             if not(password) then do;/* must first have a password     */     
+ 646   4                      call printx(.error$msg);
+ 647   4                      call printx(.errNOPASS);
+ 648   4                      return;        /* error condition */
+ 649   4                      end;
+ 650   3             else do;                /* No protection at all. This = default */    
+ 651   4                  call printx(.('Protection = ',0));
+ 652   4                  call printx(.nopasswd);
+ 653   4                  end;
+ 654   3              end;
+ 655   2          else do;
+ 656   3              call printx(.('Protection = ',0));
+ 657   3              if (xfcbmode and 80h) = 80h then 
+ 658   3                  call printx(.readmode);
+ 659   3              else if (xfcbmode and 40h) = 40h then 
+ 660   3                  call printx(.writemode);
+ 661   3              else if (xfcbmode and 20h) = 20h then 
+ 662   3                  call printx(.deletemode);
+                      /* else if (not xfcbmode) or (passwd(8) = ' ') then
+                          call printx(.nopasswd);
+                      else
+                          call printx(.readmode);*/
+                      
+                    /*  if xfcbmode then
+                         do;
+                           call printx(.comma);
+                           call show$passwd;
+                       end;*/
+                      end;        
+
+ 664   2          end ;
+
+
+              /*******************************************************
+
+                      WRITE  XFCB, LABEL  AND  FILE  ATTRIBUTES
+
+              ********************************************************/
+
+
+
+
+
+                               /* display the file or xfcb */
+ 665   1      put$file: procedure;
+
+ 666   2          call crlf;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  27
+
+
+ 667   2          call printfn;
+ 668   2          call printb;
+ 669   2          call printb;
+ 670   2          end put$file;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* write file attributes */
+ 671   1      put$attributes: procedure;
+ 672   2          if (not fileref) then do;
+ 674   3             call print(.err$nofile);
+ 675   3             call terminate;
+ 676   3             end;     
+ 677   2          error$code = setind(fcbp);
+ 678   2          if low(error$code) = 0ffh then 
+ 679   2              if high(error$code) <> 0 then do;
+ 681   3                  call put$file;
+ 682   3                  call bdos$error;
+ 683   3                  if high(error$code) = 7 then do;
+ 685   4                      call crlf;
+ 686   4                      call getpasswd;
+ 687   4                      call crlf;
+ 688   4                      error$code = setind(fcbp);
+ 689   4                      if high(error$code) <> 0 then do;
+ 691   5                          call put$file;
+ 692   5                          call bdos$error;
+ 693   5                          end;
+ 694   4                      end;
+ 695   3                  end;
+                      else
+ 696   2                  call printx(.not$found);
+ 697   2          if low(error$code) <> 0ffh then
+ 698   2              if fext <= extmsk then do;
+ 700   3                  call put$file;
+ 701   3                  call print$att;
+ 702   3                  end;
+ 703   2          scase = -1;
+ 704   2          end put$attributes;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* write new label */
+ 705   1      write$label: procedure;
+ 706   2          err: proc;
+ 707   3              call print(.dirlabel);
+ 708   3              call bdos$error;
+ 709   3              end err;
+
+ 710   2          error$code = wrlbl(fcbp);
+ 711   2          if low(error$code) = 0ffh then 
+ 712   2              if high(error$code) <> 0 then do;
+ 714   3                  call err;
+ 715   3                  if high(error$code) = 7 then do;
+ 717   4                      call crlf;
+ 718   4                      call getpasswd;
+ 719   4                      error$code = wrlbl(fcbp);
+ 720   4                      if high(error$code) <> 0 then do;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  28
+
+
+ 722   5                          call err;
+ 723   5                          call terminate;
+ 724   5                          end;
+ 725   4                      call crlf;
+ 726   4                      end;
+ 727   3                  end;
+ 728   2              else do;
+ 729   3                  call print(.errFORMAT);
+ 730   3                  call print(.errFORM2);
+ 731   3                  call terminate;
+ 732   3                  end;
+
+                  /* successful */
+ 733   2          call showlbl;   
+ 734   2          lblcmd = false;
+ 735   2          end write$label;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* write out new xfcb */
+ 736   1      write$xfcb: procedure;
+                  
+ 737   2          call put$file;
+ 738   2          error$code = wrxfcb(.xfcb);
+ 739   2          if low(error$code) = 0ffh then 
+ 740   2              if high(error$code) <> 0 then do;
+ 742   3                  call bdos$error;
+ 743   3                  if high(error$code) = 7 then do;
+ 745   4                      call crlf;
+ 746   4                      call getpasswd;
+ 747   4                      call crlf;
+ 748   4                      call put$file;
+ 749   4                      error$code = wrxfcb(.xfcb);
+ 750   4                      if high(error$code) <> 0 then 
+ 751   4                          call bdos$error;
+ 752   4                      end;
+ 753   3                  end;
+ 754   2              else do;
+ 755   3                  call printx(.not$found);
+ 756   3                  call printx(.no$space);
+ 757   3                  end;
+ 758   2          if low(error$code) <> 0ffh then 
+ 759   2              call show$xfcb;
+ 760   2          xfcbcmd = false;
+ 761   2          end write$xfcb;
+
+
+
+
+              /*******************************************************
+
+                         C O M M A N D   P R O C E S S I N G
+
+              ********************************************************/
+
+
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  29
+
+
+                               /* select the disk specified in cmd line */
+ 762   1      setdisk: procedure;
+ 763   2          if cmd(0) <> 0 then do;
+ 765   3              cdisk = cmd(0)-1;
+ 766   3              call select(cdisk);
+ 767   3              call set$dpb;
+ 768   3              end;
+ 769   2          end setdisk;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* find the next file matching the wildcard */
+ 770   1      getfile: procedure byte;
+ 771   2          declare
+                      dir$index byte;
+
+ 772   2          call setdma(.dirbuf);
+ 773   2          if wild then do;
+ 775   3              UDA.DCNT = sav$dcnt;
+ 776   3              UDA.SEARCHL = sav$searchl;
+ 777   3              UDA.SEARCHA = sav$searcha;
+ 778   3              dir$index = search$next;
+ 779   3              end;
+                  else 
+ 780   2              dir$index = search$first(.fcb);
+ 781   2          if dir$index <> 0ffh then do;
+ 783   3              call set$up$file(dir$index);
+ 784   3              return true;
+ 785   3              end;
+                  /* else */
+ 786   2              return false;
+ 787   2          end getfile;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* test if the file is a wildcard */
+ 788   1      wildcard: procedure byte;
+ 789   2          declare
+                      i byte;
+
+ 790   2              do i=1 to fnam;
+ 791   3              if fcb(i) = '?' then
+ 792   3                  return true;
+ 793   3              end;
+ 794   2          return false;
+ 795   2          end wildcard;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* set up the next file or drive reference */
+ 796   1      setup$fcb: procedure;
+
+ 797   2          call setdisk;
+ 798   2          call copy(.cmd,.fcb,12);       /* name */
+ 799   2          call copy(.cmd(16),.passwd,8); /* password */
+ 800   2          time$opt, option$found = false;
+ 801   2          if fcb(1) <> ' ' or fcb(ftyp) <> ' ' then do;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  30
+
+
+ 803   3              fileref = true;
+ 804   3              if wildcard then 
+ 805   3                  if getfile then do;
+ 807   4                      wild = true;
+ 808   4                      opt$adr = parse$fn.buff$adr;
+ 809   4                      end;
+ 810   3                  else do;
+ 811   4                      call print(.not$found);
+ 812   4                      call terminate;
+ 813   4                      end;
+                      else
+ 814   3                  fcbp = .fcb;
+ 815   3              end;
+                  else 
+ 816   2              fileref = false;
+ 817   2          end setup$fcb;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* parse next option */
+ 818   1      parse$option: procedure;
+
+ 819   2          if cmd(1) = 'A' then do;                 /* A */
+ 821   3              if cmd(2) = 'C' then
+ 822   3                  call access;
+ 823   3              else if fileref then
+ 824   3                  call set$attributes;
+                      else
+ 825   3                  call parse$error;
+ 826   3              end;
+ 827   2          else if cmd(1) = 'C' then                /* C */
+ 828   2              call create;
+ 829   2          else if cmd(1) = 'D' then do;            /* D */
+ 831   3              if fileref then
+ 832   3                  call set$attributes;
+ 833   3              else if cmd(2) = 'E' then 
+ 834   3                  call defaultpass;
+                      else 
+ 835   3                  call parse$error;
+ 836   3              end;
+ 837   2          else if cmd(1) = 'F' then                /* F */
+ 838   2              call set$attributes;    
+ 839   2          else if cmd(1) = 'H' then                /* H */
+ 840   2              call help;
+ 841   2          else if cmd(1) = 'N' then                /* N */
+ 842   2              call lname;
+ 843   2          else if cmd(1) = 'P' then do;            /* P */
+ 845   3              if cmd(2) = 'R' then
+ 846   3                  call protect;
+ 847   3              else if cmd(2) = 'A' then
+ 848   3                  call set$password;
+                      else
+ 849   3                  call parse$error;
+ 850   3              end;
+ 851   2          else if cmd(1) = 'R' then do;            /* R */
+ 853   3              if fileref then 
+ 854   3                  call set$attributes;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  31
+
+
+                      else
+ 855   3                  call setdrvstatus;
+ 856   3              end;
+ 857   2          else if cmd(1) = 'S' and fileref then    /* S */
+ 858   2              call set$attributes;
+ 859   2          else if cmd(1) = 'U' then                /* U */
+ 860   2              call update;
+                  else 
+ 861   2              call parse$error;
+ 862   2          end parse$option;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* check for more to parse */
+ 863   1      is$there$more: proc;
+
+ 864   2          if ibp = 0 then do;
+ 866   3              if not option$found then do;
+ 868   4                  call print(.error$msg);
+ 869   4                  call printx(.('Invalid Command Parameter, try SET [HELP].',0));
+ 870   4                  call terminate;
+ 871   4                  end;
+ 872   3              if not wild then 
+ 873   3                  more = false;
+ 874   3              end;
+ 875   2          end is$there$more;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                               /* check for SET HELP */
+                               /* REMOVED FOR CONSISTANCY WITH SDIR 
+              help$check: proc;
+                  declare i byte;
+
+                      do i=1 to 11;
+                      if fcb(i) <> cmd(i) then 
+                          return;
+                      end;
+                  call help;
+                  call terminate;
+                  end help$check;
+                               */
+
+              /*******************************************************
+
+                              M A I N  P R O G R A M
+
+              ********************************************************/
+
+
+
+ 876   1      declare 
+                      i              byte   initial (1),
+                      last$dseg$byte byte   initial (0);
+
+
+ 877   1      PLMSTART:
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  32
+
+
+                procedure public;
+              /* process request */
+ 878   2          ver = get$version;
+ 879   2          if low(ver) < Ver$BDOS  or  (high(ver) and Ver$Mask) <> Ver$OS then
+ 880   2              call print(.(Ver$Needs$OS,0));
+                  else
+ 881   2              do;
+              /*        call help$check;  */
+                          /* scan for global option */
+ 882   3                  do while buff(i)=' ';
+ 883   4                  i = i + 1;
+ 884   4                  end;
+ 885   3              if buff(i) = '[' then do;
+ 887   4                  option, optdel, option$found = true;
+ 888   4                  parse$fn.buff$adr = .buff(i+1);
+ 889   4                  end;
+                      else
+ 890   3                  parse$fn.buff$adr = .buff(1);
+ 891   3              last$buff$adr = .buff(1);       /* used by perror routine */
+ 892   3              parse$fn.fcb$adr = .cmd;
+ 893   3              user$code = getuser;
+ 894   3              call GET$PD$UDA;        /* get process descriptor */
+ 895   3              call set$dpb;                   /* get disk parameter blk */
+ 896   3              cdisk=cselect;          /* get current disk       */
+ 897   3              ibp = parse;
+ 898   3                  do while more;
+ 899   4                  call is$there$more;
+ 900   4                  if option then
+ 901   4                      call parse$option;
+ 902   4                  else if more then
+ 903   4                      call setup$fcb;         /* file or drive reference */
+
+                          if optdel then
+ 905   4                      option, option$found = true;
+ 906   4                  else do;
+ 907   5                      option = false;
+ 908   5                      call return$errors(0FFh);  /* bdos return errors */
+ 909   5                      if lblcmd then             /* label options */
+ 910   5                          call write$label;
+ 911   5                      if scase <> -1 then        /* file attributes */
+ 912   5                          call put$attributes;
+ 913   5                      if xfcbcmd then            /* xfcb attributes */
+ 914   5                          call write$xfcb;
+ 915   5                      call return$errors(0);  
+ 916   5                      if wild then 
+ 917   5                          if getfile then do;
+ 919   6                              parse$fn.buff$adr = opt$adr;
+ 920   6                              option, optdel = true;
+ 921   6                              end;
+                                  else
+ 922   5                              wild = false;
+ 923   5                      end;
+ 924   4                  call is$there$more;
+ 925   4                  ibp = parse;
+ 926   4                  end;
+ 927   3              end;
+ 928   2          call terminate;
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  33
+
+
+ 929   2        END PLMSTART;
+
+ 930   1      end set;
+
+
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  34
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+     41  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        42   43   44   45   46 
+     19  0000H     2  A. . . . . . . . .    WORD PARAMETER        20 
+    220  0000H     1  A. . . . . . . . .    BYTE BASED(S)        222 
+     56  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        57   59 
+     22  0000H     2  A. . . . . . . . .    WORD PARAMETER        23 
+     28  0000H     2  A. . . . . . . . .    WORD PARAMETER        29 
+    228  0000H     1  A. . . . . . . . .    BYTE BASED(S)        230 
+     25  0000H     2  A. . . . . . . . .    WORD PARAMETER        26 
+    135  0021H     1  ABORT. . . . . . .    BYTE MEMBER(PD)
+    135  0021H     1  ABORT. . . . . . .    BYTE MEMBER(PDPARENT)
+    569  0AA9H    67  ACCESS . . . . . .    PROCEDURE STACK=0030H          822 
+    616  0133H     1  ACCESS . . . . . .    BYTE
+      8               ADDR . . . . . . .    LITERALLY        61  108  155  156  157  158  159  178  220  227  489
+    150               ARCHIV . . . . . .    LITERALLY       372 
+    150               ATTRB1 . . . . . .    LITERALLY       373 
+    150               ATTRB2 . . . . . .    LITERALLY       374 
+    150               ATTRB3 . . . . . .    LITERALLY       375 
+    150               ATTRB4 . . . . . .    LITERALLY       376 
+    160  0109H    14  ATTRBYTE . . . . .    BYTE ARRAY(14) INITIAL         395  396 
+    349  066EH    32  ATTRIBUTE. . . . .    PROCEDURE BYTE STACK=0004H          357  361  365 
+    161  0271H    28  ATTRIBUTES . . . .    BYTE ARRAY(28) DATA       388  400 
+    160  0117H    14  ATTRVALUE. . . . .    BYTE ARRAY(14) INITIAL         394 
+    355  0006H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC       356  357 
+    228  0000H     1  B. . . . . . . . .    BYTE BASED(D)        230 
+    280  0487H   117  BDOSERROR. . . . .    PROCEDURE STACK=001AH          682  692  708  742  751 
+    112               BLKMSK . . . . . .    LITERALLY
+    112               BLKSHF . . . . . .    LITERALLY
+    112  0002H     1  BLS. . . . . . . .    BYTE MEMBER(DPB)
+    112  0003H     1  BMS. . . . . . . .    BYTE MEMBER(DPB)
+    331  05A3H    25  BOOL . . . . . . .    PROCEDURE BYTE STACK=0028H          391  554  571  588  594 
+    161  0296H    25  BOOLEAN. . . . . .    BYTE ARRAY(25) DATA       332 
+     31  0002H    14  BOOT . . . . . . .    PROCEDURE STACK=0008H
+     17  0000H   128  BUFF . . . . . . .    BYTE ARRAY(128) EXTERNAL(2)         882  885  888  890  891 
+     17               BUFFA. . . . . . .    LITERALLY
+    159  0000H     2  BUFFADR. . . . . .    WORD MEMBER(PARSEFN)      181  208  209  515  808  888  890  919 
+    219  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC       220  221 
+    243  0127H     1  C. . . . . . . . .    BYTE       247  248  249  251  253  262  265 
+    499  0000H     1  C. . . . . . . . .    BYTE BASED(P)        516 
+    226  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC       227  229 
+    355  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC       356  358 
+    236  0125H     1  C. . . . . . . . .    BYTE       237  238  239  240 
+    195  0000H     1  C. . . . . . . . .    BYTE BASED(P)        201  203  206 
+    157  0108H     1  CDISK. . . . . . .    BYTE       268  403  425  458  501  534  765  766  896 
+     34  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        35   36 
+     49  0047H    15  CHECKCONSTAT . . .    PROCEDURE BYTE STACK=0008H          265 
+    112               CHKSIZ . . . . . .    LITERALLY
+    112  000BH     2  CKS. . . . . . . .    WORD MEMBER(DPB)
+    153  004FH    27  CMD. . . . . . . .    BYTE ARRAY(27) INITIAL         322  345  346  402  430  432  520  567
+                                             763  765  798  799  819  821  827  829  833  837  839  841  843  845
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  35
+
+
+                                             847  851  857  859  892 
+    135  0020H     1  CNS. . . . . . . .    BYTE MEMBER(PDPARENT)
+    135  0020H     1  CNS. . . . . . . .    BYTE MEMBER(PD)
+    281  0129H     1  CODE . . . . . . .    BYTE       282  287  289  297  299  301 
+    399  012EH     1  CODE . . . . . . .    BYTE       401  403  408 
+      9  00E0H     3  COMMA. . . . . . .    BYTE ARRAY(3) DATA
+    317  0000H     1  COMMANDS . . . . .    BYTE BASED(COMMANDSADR) ARRAY(1)         322 
+    315  0006H     2  COMMANDSADR. . . .    WORD PARAMETER AUTOMATIC       317  322 
+     64  0086H    15  CONIN. . . . . . .    PROCEDURE BYTE STACK=0008H          237 
+    135  0022H     2  CONMODE. . . . . .    WORD MEMBER(PD)
+    135  0022H     2  CONMODE. . . . . .    WORD MEMBER(PDPARENT)
+    226  0373H    37  COPY . . . . . . .    PROCEDURE STACK=0008H          471  480  520  567  798  799 
+      5  0020H    38  COPYRIGHT. . . . .    BYTE ARRAY(38) DATA
+      8               CR . . . . . . . .    LITERALLY        53  164  169  249  614 
+    592  0B0FH    67  CREATE . . . . . .    PROCEDURE STACK=0030H          828 
+     52  0056H    17  CRLF . . . . . . .    PROCEDURE STACK=000EH           58  147  490  619  634  637  666  685
+                                             687  717  725  745  747 
+     82  00D7H    15  CSELECT. . . . . .    PROCEDURE BYTE STACK=0008H          896 
+      8               CTRLC. . . . . . .    LITERALLY       262 
+      8               CTRLH. . . . . . .    LITERALLY       253 
+      8               CTRLX. . . . . . .    LITERALLY       251 
+    500  0000H     1  D. . . . . . . . .    BYTE BASED(Q)        516 
+    226  0006H     2  D. . . . . . . . .    WORD PARAMETER AUTOMATIC       227  228  230  232 
+     67  0004H     1  D. . . . . . . . .    BYTE PARAMETER AUTOMATIC        68   69 
+    445  02AFH     1  D. . . . . . . . .    BYTE DATA       447 
+    121  0004H     1  D. . . . . . . . .    BYTE PARAMETER AUTOMATIC       122  123 
+    112  0009H     2  DBL. . . . . . . .    WORD MEMBER(DPB)
+    136  000EH     2  DBLK . . . . . . .    WORD MEMBER(UDAPARENT)
+    136  000EH     2  DBLK . . . . . . .    WORD MEMBER(UDA)
+      8               DCL. . . . . . . .    LITERALLY
+    136  000CH     2  DCNT . . . . . . .    WORD MEMBER(UDA)          308  775 
+    443  0130H     1  DCNT . . . . . . .    BYTE       447  448  449  451  463 
+    136  000CH     2  DCNT . . . . . . .    WORD MEMBER(UDAPARENT)
+    424  07ACH   130  DEFAULTPASS. . . .    PROCEDURE STACK=0028H          834 
+      9  00FEH     7  DELETEMODE . . . .    BYTE ARRAY(7) DATA        662 
+    136  0012H     8  DFPASSWORD . . . .    BYTE ARRAY(8) MEMBER(UDA)      440 
+    136  0012H     8  DFPASSWORD . . . .    BYTE ARRAY(8) MEMBER(UDAPARENT)          440 
+    112               DIRBLK . . . . . .    LITERALLY
+    156  0088H   128  DIRBUF . . . . . .    BYTE ARRAY(128)      311  382  446  449  463  772 
+    304  0004H     1  DIRINDEX . . . . .    BYTE PARAMETER AUTOMATIC       305  306  311 
+    771  0134H     1  DIRINDEX . . . . .    BYTE       778  780  781  783 
+      9  0093H    17  DIRLABEL . . . . .    BYTE ARRAY(17) DATA       707 
+    112               DIRMAX . . . . . .    LITERALLY
+     85  0004H     2  DMA. . . . . . . .    WORD PARAMETER AUTOMATIC        86   87 
+    136  0002H     2  DMAOFST. . . . . .    WORD MEMBER(UDAPARENT)
+    136  0002H     2  DMAOFST. . . . . .    WORD MEMBER(UDA)
+    136  0004H     2  DMASEG . . . . . .    WORD MEMBER(UDAPARENT)
+    136  0004H     2  DMASEG . . . . . .    WORD MEMBER(UDA)
+    112  0007H     2  DMX. . . . . . . .    WORD MEMBER(DPB)
+    136  0000H     2  DPARAM . . . . . .    WORD MEMBER(UDA)
+    136  0000H     2  DPARAM . . . . . .    WORD MEMBER(UDAPARENT)
+    112  0000H    15  DPB. . . . . . . .    STRUCTURE BASED(DPBPTR)        698 
+    112  0000H     4  DPBPTR . . . . . .    POINTER         112  114  698 
+    142  0004H     1  DRV. . . . . . . .    BYTE PARAMETER AUTOMATIC       143  144 
+    135  0012H     1  DSK. . . . . . . .    BYTE MEMBER(PDPARENT)
+    135  0012H     1  DSK. . . . . . . .    BYTE MEMBER(PD)
+    135  0018H     2  DVRACT . . . . . .    WORD MEMBER(PD)
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  36
+
+
+    135  0018H     2  DVRACT . . . . . .    WORD MEMBER(PDPARENT)
+    706  0D66H    15  ERR. . . . . . . .    PROCEDURE STACK=001EH          714  722 
+      9  00B4H    12  ERRATTRIB. . . . .    BYTE ARRAY(12) DATA       329 
+      9  01D2H    48  ERRCRAC. . . . . .    BYTE ARRAY(48) DATA       576  599 
+      9  019BH    55  ERRENAB. . . . . .    BYTE ARRAY(55) DATA       427  503  536 
+      9  023CH    19  ERRFORM2 . . . . .    BYTE ARRAY(19) DATA       730 
+      9  0202H    58  ERRFORMAT. . . . .    BYTE ARRAY(58) DATA       729 
+      9  024FH    34  ERRNOFILE. . . . .    BYTE ARRAY(34) DATA       674 
+      9  017BH    32  ERRNOPASS. . . . .    BYTE ARRAY(32) DATA       647 
+    158  0020H     2  ERRORCODE. . . . .    WORD       282  677  678  679  683  688  689  697  710  711  712  715
+                                             719  720  738  739  740  743  749  750  758 
+    136  0010H     1  ERRORMODE. . . . .    BYTE MEMBER(UDAPARENT)
+    136  0010H     1  ERRORMODE. . . . .    BYTE MEMBER(UDA)
+      9  00EBH     8  ERRORMSG . . . . .    BYTE ARRAY(8) DATA        179  284  296  491  646  868 
+      9  015BH    32  ERRRDLBL . . . . .    BYTE ARRAY(32) DATA       453 
+    265  0431H        EXIT . . . . . . .    LABEL      250 
+    112  0004H     1  EXM. . . . . . . .    BYTE MEMBER(DPB)          698 
+    112               EXTMSK . . . . . .    LITERALLY       698 
+    219  0006H     1  F. . . . . . . . .    BYTE PARAMETER AUTOMATIC       220  222 
+     28  0000H     1  F. . . . . . . . .    BYTE PARAMETER        29 
+     25  0000H     1  F. . . . . . . . .    BYTE PARAMETER        26 
+     22  0000H     1  F. . . . . . . . .    BYTE PARAMETER        23 
+     19  0000H     1  F. . . . . . . . .    BYTE PARAMETER        20 
+      9  011EH    25  FAIL . . . . . . .    BYTE ARRAY(25) DATA       405 
+      9  0137H    31  FAILED . . . . . .    BYTE ARRAY(31) DATA       421 
+      8               FALSE. . . . . . .    LITERALLY       154  204  211  323  334  353  459  542  734  760  786
+                                             794  800  816  873  907  922 
+     99  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       100  101 
+    130  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       131  133 
+    116  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       117  119 
+    107  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       108  110 
+     75  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        76   77 
+     71  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC        72   73 
+     17  0000H    33  FCB. . . . . . . .    BYTE ARRAY(33) EXTERNAL(1)          312  383  470  471  780  791  798
+                                             801  814 
+    125  0004H     2  FCB. . . . . . . .    WORD PARAMETER AUTOMATIC       126  128 
+     17               FCBA . . . . . . .    LITERALLY
+    159  0002H     2  FCBADR . . . . . .    WORD MEMBER(PARSEFN)      892 
+    151  0014H     2  FCBP . . . . . . .    WORD       151  277  311  312  351  395  396  463  464  465  466  470
+                                             480  513  555  556  567  572  580  581  589  590  595  603  604  622
+                                             625  628  631  635  677  688  698  710  719  814 
+    151  0000H    32  FCBV . . . . . . .    BYTE BASED(FCBP) ARRAY(32)          277  312  351  395  396  464  465
+                                             466  480  513  555  556  567  572  580  581  589  590  595  603  604
+                                             622  625  628  631  635  698 
+    150               FDL. . . . . . . .    LITERALLY
+    150               FDM. . . . . . . .    LITERALLY
+    151               FEXT . . . . . . .    LITERALLY       464  513  555  556  572  580  581  589  590  595  603
+                                             604  622  625  628  631  635  698 
+    154  007CH     1  FILEREF. . . . . .    BYTE INITIAL         506  532  560  672  803  816  823  831  853  857
+    219  0353H    32  FILL . . . . . . .    PROCEDURE STACK=0008H          245  430  517  528 
+    135  0006H     2  FLAG . . . . . . .    WORD MEMBER(PD)
+    135  0006H     2  FLAG . . . . . . .    WORD MEMBER(PDPARENT)
+    150               FLN. . . . . . . .    LITERALLY
+    150               FMOD . . . . . . .    LITERALLY
+    150               FNAM . . . . . . .    LITERALLY       274  790 
+      8               FOREVER. . . . . .    LITERALLY
+    150               FRC. . . . . . . .    LITERALLY
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  37
+
+
+    150               FTYP . . . . . . .    LITERALLY       275  801 
+    136  0006H     1  FUNC . . . . . . .    BYTE MEMBER(UDA)
+    136  0006H     1  FUNC . . . . . . .    BYTE MEMBER(UDAPARENT)
+    559  0A7AH    21  GETBOOL. . . . . .    PROCEDURE STACK=002CH          566  570  587  593 
+    770  0DFFH    79  GETFILE. . . . . .    PROCEDURE BYTE STACK=000EH          805  917 
+     99  0127H    16  GETFILESIZE. . . .    PROCEDURE STACK=000AH
+    121  018FH    19  GETLBL . . . . . .    PROCEDURE BYTE STACK=000AH          425  458  501  534 
+    242  03B8H   129  GETPASSWD. . . . .    PROCEDURE STACK=001AH          474  686  718  746 
+    137  01D0H    40  GETPDUDA . . . . .    PROCEDURE STACK=0008H          435  894 
+     92  0105H    15  GETUSER. . . . . .    PROCEDURE BYTE STACK=0008H          893 
+     61  0077H    15  GETVERSION . . . .    PROCEDURE WORD STACK=0008H          878 
+    162  0221H    96  HELP . . . . . . .    PROCEDURE STACK=001AH          840 
+                      HIGH . . . . . . .    BUILTIN         282  679  683  689  712  715  720  740  743  750  879
+    316  012AH     1  I. . . . . . . . .    BYTE       321  322 
+    789  0135H     1  I. . . . . . . . .    BYTE       790  791 
+    349  0004H     1  I. . . . . . . . .    BYTE PARAMETER AUTOMATIC       350  351 
+    243  0126H     1  I. . . . . . . . .    BYTE       246  248  255  258 
+    876  0136H     1  I. . . . . . . . .    BYTE INITIAL         882  883  885  888 
+    155  0018H     2  IBP. . . . . . . .    WORD       180  215  217  431  519  864  897  925 
+    150               INFILE . . . . . .    LITERALLY       361 
+      9  007DH     9  INVALID. . . . . .    BYTE ARRAY(9) DATA        184 
+    863  0FABH    52  ISTHEREMORE. . . .    PROCEDURE STACK=001AH          899  924 
+    316  012BH     1  J. . . . . . . . .    BYTE       318  322  324 
+    272  0128H     1  K. . . . . . . . .    BYTE       274  275  277 
+    614  02B0H   160  LABEL1 . . . . . .    BYTE ARRAY(160) DATA      620 
+      9  0156H     5  LABELNAME. . . . .    BYTE ARRAY(5) DATA        471 
+    159  0026H     2  LASTBUFFADR. . . .    WORD       182  208  891 
+    315  0004H     1  LASTCMD. . . . . .    BYTE PARAMETER AUTOMATIC       316  319 
+    876  0137H     1  LASTDSEGBYTE . . .    BYTE INITIAL
+    154  007DH     1  LBLCMD . . . . . .    BYTE INITIAL         456  475  734  909 
+    135  0014H     1  LDSK . . . . . . .    BYTE MEMBER(PD)
+    135  0014H     1  LDSK . . . . . . .    BYTE MEMBER(PDPARENT)
+                      LENGTH . . . . . .    BUILTIN         471 
+      8               LF . . . . . . . .    LITERALLY        54  164  169  614 
+    135  0000H     2  LINK . . . . . . .    WORD MEMBER(PD)
+    135  0000H     2  LINK . . . . . . .    WORD MEMBER(PDPARENT)
+      8               LIT. . . . . . . .    LITERALLY        13   14   15   16 
+    565  0A8FH    26  LNAME. . . . . . .    PROCEDURE STACK=0030H          842 
+                      LOW. . . . . . . .    BUILTIN         678  697  711  739  758  879 
+    135  0024H     1  LST. . . . . . . .    BYTE MEMBER(PD)
+    135  0024H     1  LST. . . . . . . .    BYTE MEMBER(PDPARENT)
+    135  0015H     1  LUSER. . . . . . .    BYTE MEMBER(PD)
+    135  0015H     1  LUSER. . . . . . .    BYTE MEMBER(PDPARENT)
+    616  0132H     1  MAKE . . . . . . .    BYTE
+    315  0539H   106  MATCH. . . . . . .    PROCEDURE BYTE STACK=0024H          332  388  400  543 
+    316  012CH     1  MATCHED. . . . . .    BYTE       320  323  326 
+    112               MAXALL . . . . . .    LITERALLY
+     17  0000H     2  MAXB . . . . . . .    WORD EXTERNAL(0)
+    135  0016H     2  MEM. . . . . . . .    WORD MEMBER(PD)
+    135  0016H     2  MEM. . . . . . . .    WORD MEMBER(PDPARENT)
+    103  0004H     1  MODE . . . . . . .    BYTE PARAMETER AUTOMATIC       104  105 
+    443  012FH     1  MODE . . . . . . .    BYTE       458  460 
+     19  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(3) STACK=0000H         32   36   69   87   97  101
+                                             105  128  148  432 
+     22  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(4) STACK=0000H         50   65   73   77   80
+                                              83   90   93  123  144 
+     25  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(5) STACK=0000H         62  110  119  133  196
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  38
+
+
+     28  0000H        MON4 . . . . . . .    PROCEDURE POINTER EXTERNAL(6) STACK=0000H          114  138 
+    155  0086H     1  MORE . . . . . . .    BYTE INITIAL         873  898  902 
+                      MOVW . . . . . . .    BUILTIN         440 
+    177  0004H     2  MSG. . . . . . . .    WORD PARAMETER AUTOMATIC       178  185 
+    488  0004H     2  MSG. . . . . . . .    WORD PARAMETER AUTOMATIC       489  494 
+    136  0011H     1  MULTCNT. . . . . .    BYTE MEMBER(UDAPARENT)
+    136  0011H     1  MULTCNT. . . . . .    BYTE MEMBER(UDA)
+    112  0005H     2  MXA. . . . . . . .    WORD MEMBER(DPB)
+    154  0085H     1  MXSTAMP. . . . . .    BYTE INITIAL         574  582  597  605 
+    135  0008H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(PD)
+    135  0008H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(PDPARENT)
+    135  001DH     1  NET. . . . . . . .    BYTE MEMBER(PD)
+    135  001DH     1  NET. . . . . . . .    BYTE MEMBER(PDPARENT)
+    525  0131H     1  NEWPASSWORD. . . .    BYTE       541  542  549 
+    488  0923H    36  NOLABEL. . . . . .    PROCEDURE STACK=001CH
+      9  0105H     5  NOPASSWD . . . . .    BYTE ARRAY(5) DATA        652 
+      9  0066H    23  NOSPACE. . . . . .    BYTE ARRAY(23) DATA       756 
+      9  0056H    16  NOTFOUND . . . . .    BYTE ARRAY(16) DATA       696  755  811 
+    247  03DBH        NXTCHR . . . . . .    LABEL      259 
+    135  0000H     2  OFF. . . . . . . .    WORD MEMBER(PDPTR)
+      9  0114H    10  OFF. . . . . . . .    BYTE ARRAY(10) DATA       624  627  630  633 
+    136  0000H     2  OFF. . . . . . . .    WORD MEMBER(UDAPARENTPTR)      439 
+    136  0000H     2  OFF. . . . . . . .    WORD MEMBER(UDAPTR)       139 
+    135  0000H     2  OFF. . . . . . . .    WORD MEMBER(PDPARENTPTR)       437 
+    112               OFFSET . . . . . .    LITERALLY
+    112  000DH     2  OFS. . . . . . . .    WORD MEMBER(DPB)
+      9  010AH    10  ON . . . . . . . .    BYTE ARRAY(10) DATA       623  626  629  632 
+     71  00A8H    16  OPEN . . . . . . .    PROCEDURE BYTE STACK=000AH
+    155  0016H     2  OPTADR . . . . . .    WORD       808  919 
+    154  0080H     1  OPTDEL . . . . . .    BYTE INITIAL         202  204  211  887  904  920 
+    154  0084H     1  OPTION . . . . . .    BYTE INITIAL         189  887  900  905  907  920 
+    154  0081H     1  OPTIONFOUND. . . .    BYTE INITIAL         800  866  887  905 
+      9  00A4H    16  OPTIONSET. . . . .    BYTE ARRAY(16) DATA       338 
+    135  001CH     1  ORG. . . . . . . .    BYTE MEMBER(PD)
+    135  001CH     1  ORG. . . . . . . .    BYTE MEMBER(PDPARENT)
+    194  0028H     2  P. . . . . . . . .    WORD       195  196  197  199  201  203  205  206  207  209  212 
+    498  002AH     2  P. . . . . . . . .    WORD       499  515  516 
+    135  001EH     2  PARENT . . . . . .    WORD MEMBER(PD)      437 
+    135  001EH     2  PARENT . . . . . .    WORD MEMBER(PDPARENT)
+    193  02D2H   108  PARSE. . . . . . .    PROCEDURE WORD STACK=0024H          217  431  519  897  925 
+    188  02BAH    24  PARSEERROR . . . .    PROCEDURE STACK=0020H          198  216  561  825  835  849  861 
+    159  0022H     4  PARSEFN. . . . . .    STRUCTURE       181  196  208  209  515  808  888  890  892  919 
+    818  0EEDH   190  PARSEOPTION. . . .    PROCEDURE STACK=0034H          901 
+    214  033EH    21  PARSEVALUE . . . .    PROCEDURE STACK=0028H          390  531  563 
+    153  006AH    17  PASSWD . . . . . .    BYTE ARRAY(17)       109  118  127  132  245  248  258  517  520  528
+                                             611  612  799 
+    154  0083H     1  PASSWORD . . . . .    BYTE INITIAL         459  467  473  481  484  521  529  644 
+    336  05BCH    33  PBOOL. . . . . . .    PROCEDURE STACK=0016H
+     15               PCM11. . . . . . .    LITERALLY
+     15               PCMCTLC. . . . . .    LITERALLY
+     15               PCMCTLO. . . . . .    LITERALLY
+     15               PCMCTLS. . . . . .    LITERALLY
+     15               PCMROUT. . . . . .    LITERALLY
+     15               PCMRSX . . . . . .    LITERALLY
+    135  0000H    48  PD . . . . . . . .    STRUCTURE BASED(PDPOINTER)          140  437 
+    136  001AH     1  PDCNT. . . . . . .    BYTE MEMBER(UDAPARENT)
+    136  001AH     1  PDCNT. . . . . . .    BYTE MEMBER(UDA)
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  39
+
+
+     11               PDHDR. . . . . . .    LITERALLY       135 
+    135  0000H    48  PDPARENT . . . . .    STRUCTURE BASED(PDPARENTPOINTER)         438 
+    135  0008H     4  PDPARENTPOINTER. .    POINTER         135  438 
+    135  0008H     4  PDPARENTPTR. . . .    STRUCTURE AT         436  437 
+    135  0004H     4  PDPOINTER. . . . .    POINTER         135  138  140  437 
+    135  0004H     4  PDPTR. . . . . . .    STRUCTURE AT         436 
+     12               PDSTRUCTURE. . . .    LITERALLY       135 
+    177  0281H    57  PERROR . . . . . .    PROCEDURE STACK=001CH          190  191  329 
+     14               PFACTIVE . . . . .    LITERALLY
+     14               PFCHILDABORT . . .    LITERALLY
+     14               PFCTLC . . . . . .    LITERALLY
+     14               PFCTLD . . . . . .    LITERALLY
+     14               PFKEEP . . . . . .    LITERALLY
+     14               PFKERNAL . . . . .    LITERALLY
+     14               PFNOCTLS . . . . .    LITERALLY
+     14               PFPURE . . . . . .    LITERALLY
+     14               PFRAW. . . . . . .    LITERALLY
+     14               PFRESOURCE . . . .    LITERALLY
+     14               PFSYS. . . . . . .    LITERALLY
+     14               PFTABLE. . . . . .    LITERALLY
+     14               PFTEMPKEEP . . . .    LITERALLY
+    877  0FDFH   274  PLMSTART . . . . .    PROCEDURE PUBLIC STACK=0038H
+     10               PNAMSIZ. . . . . .    LITERALLY
+    135  002CH     2  PRET . . . . . . .    WORD MEMBER(PDPARENT)
+    135  002CH     2  PRET . . . . . . .    WORD MEMBER(PD)
+     56  0067H    16  PRINT. . . . . . .    PROCEDURE STACK=0016H          163  164  165  166  167  168  169  170
+                                             171  172  173  174  175  179  184  244  284  405  410  421  427  433
+                                             453  491  503  536  576  599  617  620  674  707  729  730  811  868
+                                             880 
+    348  05F5H   121  PRINTATT . . . . .    PROCEDURE STACK=0016H          701 
+     38  0023H    11  PRINTB . . . . . .    PROCEDURE STACK=000EH          286  412  668  669 
+     34  0010H    19  PRINTCHAR. . . . .    PROCEDURE STACK=000AH           39   45   53   54  268  269  276  277
+                                             358  371 
+    343  05DDH    24  PRINTCMD . . . . .    PROCEDURE STACK=0014H          434 
+    267  0439H    20  PRINTDRV . . . . .    PROCEDURE STACK=000EH          273  285  411  493  618 
+    271  044DH    58  PRINTFN. . . . . .    PROCEDURE STACK=0012H          621  667 
+     41  002EH    25  PRINTX . . . . . .    PROCEDURE STACK=0010H           59  181  182  183  185  288  291  292
+                                             296  298  300  302  338  340  341  344  346  360  362  363  364  367
+                                             368  370  413  416  417  419  492  494  610  612  623  624  626  627
+                                             629  630  632  633  646  647  651  652  656  658  660  662  696  755
+                                             756  869 
+    135  0005H     1  PRIOR. . . . . . .    BYTE MEMBER(PD)
+    135  0005H     1  PRIOR. . . . . . .    BYTE MEMBER(PDPARENT)
+    355  068EH    23  PRNTATTRIB . . . .    PROCEDURE STACK=0012H          372  373  374  375  376 
+      8               PROC . . . . . . .    LITERALLY       177  188  214  219  226  235  242  315  444  526  706
+                                             863 
+    524  09C1H   157  PROTECT. . . . . .    PROCEDURE STACK=002CH          846 
+     13               PSCIOWAIT. . . . .    LITERALLY
+     13               PSDELAY. . . . . .    LITERALLY
+     13               PSDQ . . . . . . .    LITERALLY
+     13               PSFLAGWAIT . . . .    LITERALLY
+     13               PSNQ . . . . . . .    LITERALLY
+     13               PSPOLL . . . . . .    LITERALLY
+     13               PSRUN. . . . . . .    LITERALLY
+     13               PSSLEEP. . . . . .    LITERALLY
+     13               PSSWAP . . . . . .    LITERALLY
+     13               PSTERM . . . . . .    LITERALLY
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  40
+
+
+    671  0C6FH   143  PUTATTRIBUTES. . .    PROCEDURE STACK=001EH          912 
+    665  0C5EH    17  PUTFILE. . . . . .    PROCEDURE STACK=0016H          681  691  700  737  748 
+    498  002CH     2  Q. . . . . . . . .    WORD       500  515  516 
+    378  06A5H    39  RDATTRIBUTES . . .    PROCEDURE STACK=000EH          387 
+    442  082EH   114  READLABEL. . . . .    PROCEDURE STACK=001EH          512  553  562 
+    444  08A0H    66  READLBL. . . . . .    PROCEDURE STACK=001AH          462 
+      9  00F3H     5  READMODE . . . . .    BYTE ARRAY(5) DATA        658 
+      9  00C0H    10  READONLY . . . . .    BYTE ARRAY(10) DATA       292  298  367  416 
+      9  00D0H    16  READWRITE. . . . .    BYTE ARRAY(16) DATA       370  419 
+    125  01A2H    23  READXFCB . . . . .    PROCEDURE STACK=0010H          482 
+    135  0028H     4  RESERVD. . . . . .    BYTE ARRAY(4) MEMBER(PD)
+    135  0028H     4  RESERVD. . . . . .    BYTE ARRAY(4) MEMBER(PDPARENT)
+    142  01F8H    24  RESETDRV . . . . .    PROCEDURE BYTE STACK=000AH          403 
+     18  0000H    32  RESETMASK. . . . .    WORD ARRAY(16) DATA       144 
+    245  03C2H        RETRY. . . . . . .    LABEL      252  256 
+    103  0137H    19  RETURNERRORS . . .    PROCEDURE STACK=000AH          908  915 
+      9  00CAH     6  RO . . . . . . . .    BYTE ARRAY(6) DATA        368  417 
+    150               ROFILE . . . . . .    LITERALLY       365 
+                      ROL. . . . . . . .    BUILTIN         351 
+                      ROR. . . . . . . .    BUILTIN         449 
+    226  0008H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       227  228  230  231 
+    219  0008H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       220  222  223 
+     43  0000H     1  S. . . . . . . . .    BYTE BASED(A)         44   45 
+    156  001AH     2  SAVDCNT. . . . . .    WORD       308  775 
+    156  001CH     2  SAVSEARCHA . . . .    WORD       310  777 
+    156  0087H     1  SAVSEARCHL . . . .    BYTE       309  776 
+    316  012DH     1  SCASE. . . . . . .    BYTE       319  327 
+    154  007BH     1  SCASE. . . . . . .    BYTE INITIAL         379  388  392  394  395  396  400  414  422  703
+                                             911 
+    112               SCPTRK . . . . . .    LITERALLY
+    135  002EH     2  SCRATCH. . . . . .    WORD MEMBER(PDPARENT)
+    135  002EH     2  SCRATCH. . . . . .    WORD MEMBER(PD)
+    136  0008H     2  SEARCHA. . . . . .    WORD MEMBER(UDAPARENT)
+    136  0008H     2  SEARCHA. . . . . .    WORD MEMBER(UDA)          310  777 
+    136  000AH     2  SEARCHABASE. . . .    WORD MEMBER(UDAPARENT)
+    136  000AH     2  SEARCHABASE. . . .    WORD MEMBER(UDA)
+     75  00B8H    16  SEARCHFIRST. . . .    PROCEDURE BYTE STACK=000AH          383  447  780 
+    136  0007H     1  SEARCHL. . . . . .    BYTE MEMBER(UDAPARENT)
+    136  0007H     1  SEARCHL. . . . . .    BYTE MEMBER(UDA)          309  776 
+     79  00C8H    15  SEARCHNEXT . . . .    PROCEDURE BYTE STACK=0008H          451  778 
+     17               SECTORLEN. . . . .    LITERALLY
+    135  0002H     2  SEGMENT. . . . . .    WORD MEMBER(PDPTR)        436 
+    136  0002H     2  SEGMENT. . . . . .    WORD MEMBER(UDAPARENTPTR)      438 
+    136  0002H     2  SEGMENT. . . . . .    WORD MEMBER(UDAPTR)       140 
+    135  0002H     2  SEGMENT. . . . . .    WORD MEMBER(PDPARENTPTR)       436 
+     67  0095H    19  SELECT . . . . . .    PROCEDURE STACK=000AH          766 
+      1  0002H        SET. . . . . . . .    PROCEDURE STACK=0000H
+    386  06CCH    94  SETATTRIBUTES. . .    PROCEDURE STACK=002CH          824  832  838  854  858 
+    762  0DE4H    27  SETDISK. . . . . .    PROCEDURE STACK=000EH          797 
+     85  00E6H    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          109  118  127  132  382  446  772 
+    113  0161H    23  SETDPB . . . . . .    PROCEDURE STACK=0008H          767  895 
+    398  072AH   130  SETDRVSTATUS . . .    PROCEDURE STACK=0028H          855 
+    107  014AH    23  SETIND . . . . . .    PROCEDURE WORD STACK=0010H          677  688 
+    497  0947H   122  SETPASSWORD. . . .    PROCEDURE STACK=0028H          848 
+      9  0086H    13  SETPROT. . . . . .    BYTE ARRAY(13) DATA
+      9  00E3H     8  SETTO. . . . . . .    BYTE ARRAY(8) DATA        344  360  413 
+    796  0E78H   117  SETUPFCB . . . . .    PROCEDURE STACK=001AH          903 
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  41
+
+
+    304  04FCH    61  SETUPFILE. . . . .    PROCEDURE STACK=0004H          383  783 
+    477  08E2H    65  SETUPXFCB. . . . .    PROCEDURE STACK=0014H          508  539 
+     95  0114H    19  SETUSER. . . . . .    PROCEDURE STACK=000AH
+    135  0025H     1  SF3. . . . . . . .    BYTE MEMBER(PD)
+    135  0025H     1  SF3. . . . . . . .    BYTE MEMBER(PDPARENT)
+    135  0026H     1  SF4. . . . . . . .    BYTE MEMBER(PD)
+    135  0026H     1  SF4. . . . . . . .    BYTE MEMBER(PDPARENT)
+    135  0027H     1  SF5. . . . . . . .    BYTE MEMBER(PD)
+    135  0027H     1  SF5. . . . . . . .    BYTE MEMBER(PDPARENT)
+                      SHL. . . . . . . .    BUILTIN         311  463 
+    615  0B6AH   148  SHOWLBL. . . . . .    PROCEDURE STACK=001AH          733 
+    609  0B52H    24  SHOWPASSWD . . . .    PROCEDURE STACK=0014H          638 
+    641  0BFEH    96  SHOWXFCB . . . . .    PROCEDURE STACK=0014H          759 
+    112  0000H     2  SPT. . . . . . . .    WORD MEMBER(DPB)
+    135  0004H     1  STAT . . . . . . .    BYTE MEMBER(PD)
+    135  0004H     1  STAT . . . . . . .    BYTE MEMBER(PDPARENT)
+      8               TAB. . . . . . . .    LITERALLY       163  164  167  168  169  170  171  172  173  174  175
+                                             371 
+    146  0210H    17  TERMINATE. . . . .    PROCEDURE STACK=0012H          186  263  294  406  428  454  495  504
+                                             537  577  600  675  723  731  812  870  928 
+    135  0002H     2  THREAD . . . . . .    WORD MEMBER(PD)
+    135  0002H     2  THREAD . . . . . .    WORD MEMBER(PDPARENT)
+    154  0082H     1  TIMEOPT. . . . . .    BYTE INITIAL         800 
+      8               TRUE . . . . . . .    LITERALLY       155  202  320  333  352  467  475  484  485  521  529
+                                             541  582  605  784  792  803  807  887  905  920 
+    235  0398H    32  UCASE. . . . . . .    PROCEDURE BYTE STACK=000CH          247 
+    135  0010H     2  UDA. . . . . . . .    WORD MEMBER(PD)      140 
+    136  0000H    27  UDA. . . . . . . .    STRUCTURE BASED(UDAPOINTER)         308  309  310  440  775  776  777
+    135  0010H     2  UDA. . . . . . . .    WORD MEMBER(PDPARENT)          438 
+    136  0000H    27  UDAPARENT. . . . .    STRUCTURE BASED(UDAPARENTPOINTER)        440 
+    136  0010H     4  UDAPARENTPOINTER .    POINTER         136  440 
+    136  0010H     4  UDAPARENTPTR . . .    STRUCTURE AT         438  439 
+    136  000CH     4  UDAPOINTER . . . .    POINTER         136  308  309  310  440  775  776  777 
+    136  000CH     4  UDAPTR . . . . . .    STRUCTURE AT         139  140 
+     16               UDASTRUCTURE . . .    LITERALLY       136 
+    586  0AECH    35  UPDATE . . . . . .    PROCEDURE STACK=0030H          860 
+    135  0013H     1  USER . . . . . . .    BYTE MEMBER(PD)
+     95  0004H     1  USER . . . . . . .    BYTE PARAMETER AUTOMATIC        96   97 
+    135  0013H     1  USER . . . . . . .    BYTE MEMBER(PDPARENT)
+     17  002EH     1  USERCODE . . . . .    BYTE       893 
+    336  0004H     1  VALUE. . . . . . .    BYTE PARAMETER AUTOMATIC       337  339 
+    161  028DH     9  VALUES . . . . . .    BYTE ARRAY(9) DATA        543 
+    157  001EH     2  VER. . . . . . . .    WORD       878  879 
+      4               VERBDOS. . . . . .    LITERALLY       879 
+      3               VERMASK. . . . . .    LITERALLY       879 
+      2               VERNEEDSOS . . . .    LITERALLY       880 
+      2               VEROS. . . . . . .    LITERALLY       879 
+      7  004EH     8  VERSION. . . . . .    BYTE ARRAY(8) DATA
+      6  0046H     8  VERSIONDATE. . . .    BYTE ARRAY(8) DATA
+    135  001AH     2  WAIT . . . . . . .    WORD MEMBER(PD)
+    135  001AH     2  WAIT . . . . . . .    WORD MEMBER(PDPARENT)
+    154  007FH     1  WILD . . . . . . .    BYTE INITIAL         380  773  807  872  916  922 
+    788  0E4EH    42  WILDCARD . . . . .    PROCEDURE BYTE STACK=0002H          804 
+    705  0CFEH   104  WRITELABEL . . . .    PROCEDURE STACK=0022H          910 
+      9  00F8H     6  WRITEMODE. . . . .    BYTE ARRAY(6) DATA        660 
+     89  00F6H    15  WRITEPROT. . . . .    PROCEDURE BYTE STACK=0008H          401 
+    736  0D75H   111  WRITEXFCB. . . . .    PROCEDURE STACK=001EH          914 
+PL/M-86 COMPILER    SET: SETS BDOS/XFCB OPTIONS FOR MP/M & CCP/M                                                PAGE  42
+
+
+    116  0178H    23  WRLBL. . . . . . .    PROCEDURE WORD STACK=0010H          710  719 
+    130  01B9H    23  WRXFCB . . . . . .    PROCEDURE WORD STACK=0010H          738  749 
+    152  002FH    32  XFCB . . . . . . .    BYTE ARRAY(32)       152  480  482  738  749 
+    154  007EH     1  XFCBCMD. . . . . .    BYTE INITIAL         478  485  760  913 
+    152  003BH     1  XFCBMODE . . . . .    BYTE AT         481  483  509  527  540  544  545  546  550  642  657
+                                             659  661 
+    526  0A5EH    28  ZEROPASS . . . . .    PROCEDURE STACK=000CH          547 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 10F1H   4337D
+     CONSTANT AREA SIZE = 06C3H   1731D
+     VARIABLE AREA SIZE = 0138H    312D
+     MAXIMUM STACK SIZE = 0038H     56D
+     1783 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

@@ -1,0 +1,1873 @@
+/*SPLH*/ /*$TITLE='STATUS'     */
+STAT:
+DO;
+ 
+/* COMMON STAT MODULE FOR MP/M-80 2.0 AND MP/M-86 2.0
+                          CP/M-80 2.2 AND CP/M-86 1.1  */
+ 
+/*
+            COPYRIGHT(C) 1975, 1976, 1977, 1978, 1979, 1980, 1981,1982
+            DIGITAL RESEARCH
+            BOX 579
+            PACIFIC GROVE, CA
+            93950
+ 
+            REVISED:
+              20 JAN  80  BY THOMAS ROLANDER
+              29 JULY 81  BY DOUG HUSKEY (FOR MP/M 2.0)
+              02 SEPT 81  (FOR MP/M-86)
+              14 NOV  81  BY DOUG HUSKEY (FOR CP/M-86)
+              16 DEC  81  BY DOUG HUSKEY (FOR CP/M-86)
+              31 JULY 82  BY H.CHAKI(FOR CP/M-68K)
+  */
+ 
+/* MODIFIED 10/30/78 TO FIX THE SPACE COMPUTATION */
+/* MODIFIED 01/28/79 TO REMOVE DESPOOL DEPENDENCIES */
+/* MODIFIED 07/26/79 TO OPERATE UNDER CP/M 2.0 */
+/* MODIFIED 07/31/82 TO OPERATE UNDER CP/M-68K */
+ 
+ /*  Command line to generate STAT.68K
+ [[ assume that the all default VOLUME is SYS:0.. on EXORmacs]]
+ 
+ (1)S-PL/H Compile and ASM on EXORmacs
+    =SPLH STAT,,;A,S,X,NOV,NOF,MAR=1/80
+    =SPLH STATSUB,,;A,S,X,NOV,NOF,MAR=1/80
+    =ASM UT68K,,;
+    [[ caution ]]
+     STAT: main routine of STAT utility in S-PL/H
+     STATSUB: sub routine of STAT utility in S-PL/H
+     UT68K: standard interface routine in ASM
+     A: assemble listing option
+     S: symbol listing option
+     X: xref listing option
+     NOV: non save option
+     NOF: non floatable option
+     MAR: margin option [[ important ]]
+ 
+  (2)LINK on EXORmacs
+     =LINK STAT/STATSUB/UT68K,STAT68K,STAT68K;MIXRL=SPLHLIB.RO
+     [[ caution ]]
+     R option: generate relocatable object
+ 
+  (3)XLINK on EXORmacs
+     =XLINK STAT68K.RO,STAT68K.OX,O=STAT68K.OL
+ 
+  (4)Convert file on EXORmacs to send to VAX
+     =CONV STAT68K.OX,STAT68K.OC
+ 
+  (5)Send to VAX from EXORMACS
+     =VAX
+     VAX command
+     S
+     Source file
+     STAT68K.OC
+ 
+  (6)Download to CP/M file from VAX
+ 
+  (7)Re-convert file on CP/M
+    A>RECONV
+      input file :STAT68K.OC
+      output file :STAT.68K
+ 
+ 
+                           end command line                 */
+ 
+        /* 
+        NOTE:  IN AN ATTEMPT TO HAVE A COMMON SOURCE FOR 
+        ALL DRI O.S. SHARED UTILITIES THE VERSION IS TESTED
+        AND A NUMBER OF CONDITIONALLY EXECUTED STATEMENTS
+        HAVE BEEN ADDED FOR COMPATIBILITY BETWEEN MP/M 2 
+        AND CP/M.  THIS INCLUDES HANDLING BOTH R/O (UNDER
+        CP/M AND RO).
+        */
+ 
+DECLARE
+    BDOS3VER LITERALLY '30H'; /* TESTS FOR 3.0 CP/M BDOS */
+ 
+/* SPLH */ DCL MEMORY(1028) BYTE EXT;
+/* SPLH */
+DECLARE
+ /*SPLH*/  /* LIT LITERALLY 'LITERALLY',
+              DCL LIT 'DECLARE',
+              PROC LIT 'PROCEDURE',
+              ADDR LIT 'ADDRESS',    */
+        TRUE               LIT                '0FFH',
+        FALSE              LIT                '0',
+   /*   BOOLEAN            LIT                'BYTE',  */
+        FOREVER            LIT                'WHILE TRUE',
+        CR                 LIT                '13',
+        LF                 LIT                '10',
+        TAB                LIT                '9',
+        FF                 LIT                '12',
+        SECTORLEN          LIT                '128';
+ 
+  /**************************************
+   *                                    *
+   *       B D O S   INTERFACE          *
+   *                                    *
+   **************************************/
+ 
+ 
+  MON1:
+    PROCEDURE (FUNC,INFO) EXTERNAL;
+      DECLARE FUNC BYTE;
+      DECLARE INFO ADDRESS;
+    END MON1;
+ 
+  MON2:
+    PROCEDURE (FUNC,INFO) BYTE EXTERNAL;
+      DECLARE FUNC BYTE;
+      DECLARE INFO ADDRESS;
+    END MON2;
+ 
+  MON3:
+    PROCEDURE (FUNC,INFO) ADDRESS EXTERNAL;
+      DECLARE FUNC BYTE;
+      DECLARE INFO ADDRESS;
+    END MON3;
+ 
+ MON5 : PROC(FN,IN)   EXT;
+   DCL FN BYTE; DCL IN POINTER;
+ END;
+ MON6 : PROC(FN,IN) BYTE  EXT;
+   DCL FN BYTE; DCL IN POINTER;
+ END;
+ MON7 : PROC(FN,IN) ADDR  EXT;
+   DCL FN BYTE; DCL IN POINTER;
+ END;
+ 
+BASE$DPB: PROCEDURE EXTERNAL;     /* SET UP BASE OF DPB IN DPB86 */
+END BASE$DPB;                     /* OR IN DPB80 MODULE          */
+ 
+DPB$WORD: PROCEDURE (DPBINDEX) ADDRESS EXTERNAL;
+  DECLARE DPBINDEX BYTE;
+END DPB$WORD;
+ 
+DPB$BYTE: PROCEDURE (DPBINDEX) BYTE EXTERNAL;
+  DECLARE DPBINDEX BYTE;
+END DPB$BYTE;
+ 
+/*SPLH*/
+/* INDICES INTO DISK PARAMETER BLOCK, USED AS PARAMETERS TO DPB PROCEDURE */
+ 
+DCL        SPT$W        LIT        '0',
+           BLKSHF$B     LIT        '2',
+           BLKMSK$B     LIT        '3',
+           EXTMSK$B     LIT        '4',
+           BLKMAX$W     LIT      /*'5', */ '6',
+           DIRMAX$W     LIT      /*'7', */ '8',
+           DIRBLK$W     LIT      /*'9', */ '10',
+           CHKSIZ$W     LIT      /*'11',*/ '12',
+           OFFSET$W     LIT      /*'13';*/ '14';
+ 
+        /* RETURNS THE NUMBER OF ALLOCATED BLOCKS IN THE 
+           ALLOCATION VECTOR */
+/*GET$ALL: PROCEDURE (DSM) ADDRESS EXTERNAL;
+  DECLARE DSM ADDRESS;
+END GET$ALL; */        /* S-PL/H */
+ 
+        /* RETURNS THE NUMBER OF CRT COLUMNS */
+COLUMNS: PROCEDURE BYTE EXTERNAL;
+END COLUMNS;
+ 
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                    * * *  GLOBAL DATA  * * *
+ 
+ 
+  * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+   /* BDOS INTERFACE */
+ 
+/*  DECLARE CMDRV     BYTE    EXTERNAL;   /* COMMAND DRIVE      */
+/* */ DECLARE FCB (100)   BYTE    EXTERNAL;   /* 1ST DEFAULT FCB    */
+/* */ DECLARE FCB16 (100) BYTE    EXTERNAL;   /* 2ND DEFAULT FCB    */
+/*  DECLARE PASS0     ADDRESS EXTERNAL;   /* 1ST PASSWORD PTR   */
+/*  DECLARE LEN0      BYTE    EXTERNAL;   /* 1ST PASSWD LENGTH  */
+/*  DECLARE PASS1     ADDRESS EXTERNAL;   /* 2ND PASSWORD PTR   */
+/*  DECLARE LEN1      BYTE    EXTERNAL;   /* 2ND PASSWD LENGTH  */
+/* */ DECLARE TBUFF (100) BYTE    EXTERNAL;   /* DEFAULT DMA BUFFER */
+ 
+DECLARE
+    MAXB  POINTER EXT , /*68K*/         /* ADDR FIELD OF JMP BDOS */
+    MAXBL LONG AT(@MAXB), /*68K*/
+    BUFF(128)BYTE EXTERNAL,             /* DEFAULT BUFFER */
+    BUFFA LITERALLY '@BUFF',            /* DEFAULT BUFFER */
+    FCBA  LITERALLY '@FCB',             /* DEFAULT FILE CONTROL BLOCK */
+    DOLLA LITERALLY '@FCB(6DH-5CH)',    /* DOLLAR SIGN POSITION */
+    PARMA LITERALLY '@FCB(6DH-5CH)',    /* PARAMETER, IF SENT */
+    RRECA LITERALLY '@FCB(7DH-5CH)',    /* RANDOM RECORD 7D,7E,7F */
+    RRECO LITERALLY '@FCB(7FH-5CH)',    /* HIGH BYTE OF RANDOM OVERFLOW */
+    MEMSIZE LITERALLY 'MAXB',           /* END OF MEMORY */
+    RREC ADDRESS AT(RRECA),             /* RANDOM RECORD ADDRESS */
+    ROVF BYTE AT(RRECO),                /* OVERFLOW ON GETFILE */
+    DOLL BYTE AT(DOLLA),                /* DOLLAR PARAMETER */
+    PARM BYTE AT(PARMA);                /* PARAMETER */
+ 
+ 
+ 
+    /* SEARCH AND SEARCH NEXT FCB */
+ 
+DECLARE
+/*68K*/ CHAKI (6) BYTE INIT (1,2,3,4,5,6),
+        DCNT      BYTE,
+        UFCB(14)  BYTE DATA('?????????????',0),  /* 68K */
+        BFCBA     POINTER,               /* INDEX INTO DIR BUFFER */
+/*68K*/ BFCBAL    LONG AT(@BFCBA),
+        BFCBUSER  BASED BFCBA BYTE,
+        BFCB      BASED BFCBA (32) BYTE; /* TEMPLATE OVER DIRBUFF */
+ 
+    /* GENERAL GLOBALS */
+ 
+DECLARE
+    FCBMAX    LITERALLY '512',   /* MAX FCB COUNT */
+    SPKSHF    LITERALLY '3',     /* 2**N SECTORS PER KBYTE */
+    IOVAL     BYTE,              /* IO BYTE */
+    SIZESET   BYTE INITIAL(0),   /* TRUE IF DISPLAYING SIZE FIELD */
+    SET$ATTRIBUTE BYTE INITIAL(0), /* TRUE IF SETTING FILE ATTRIBUTES */
+    USER$CODE BYTE,              /* CURRENT USER CODE */
+    VER       ADDRESS,           /* OS VERSION NUMBER */
+    KPB       ADDRESS,           /* KBYTES PER BLOCK */
+    ALL$BLKS  ADDRESS,           /* NUMBER OF ALLOCATED BLOCKS */
+    BDOS3     BYTE,              /* IS IT BDOS VERSION 3 ? */
+    RODISK    ADDRESS,           /* READ ONLY DISK VECTOR */ 
+    CDISK     BYTE;              /* CURRENT DISK */
+ 
+DECLARE
+    BYTE3     STRUCTURE (
+        LWORD ADDRESS,
+        HBYTE BYTE);
+ 
+ 
+    /* SCANNER */
+ 
+DECLARE
+    ACCUM(4) BYTE,    /* ACCUMULATOR */
+    IBP BYTE INITIAL(1);         /* INPUT BUFFER POINTER */
+ 
+DECLARE
+    DRIVENAME  (*) BYTE DATA 
+        (' DRIVE ',0),
+    READONLY   (*) BYTE DATA 
+        ('READ ONLY (RO)',0),
+    READWRITE  (*) BYTE DATA 
+        ('READ WRITE (RW)',0),
+    SYSTEM     (*) BYTE DATA 
+        ('SYSTEM (SYS)',0),
+    DIRECTORY  (*) BYTE DATA 
+        ('DIRECTORY (DIR)',0),
+    ENTRIES    (*) BYTE DATA 
+        ('  DIRECTORY ENTRIES',0),
+    FILENAME   (*) BYTE DATA 
+        ('D:FILENAME.TYP ',0),
+    USE        (*) BYTE DATA 
+        ('USE: STAT ',0),
+    INVALID    (*) BYTE DATA 
+        ('INVALID ASSIGNMENT',0),
+    SET$TO     (*) BYTE DATA 
+        (' SET TO ',0),
+    RECORD$MSG (*) BYTE DATA 
+        ('128 BYTE RECORD',0),
+    ATTRIBUTES (*) BYTE DATA 
+        ('[RO] [RW] [SYS] OR [DIR]',0),
+    DEVL       (*) BYTE DATA
+        ('CON:AXI:AXO:LST:DEV:VAL:USR:DSK:'),
+    ATTRIBL    (*) BYTE DATA
+        ('RO  RW  SYS DIR SIZE');
+ 
+ 
+ 
+    /* PRINT A 3 BYTE NUMBER */
+ 
+DECLARE
+    VAL (7) BYTE INITIAL(0,0,0,0,0,0,0),   /* BCD DIGITS    */
+    FAC (7) BYTE INITIAL(0,0,0,0,0,0,0),   /* HIBYTE FACTOR */
+/*68K*/F0  (7) BYTE DATA(6,3,5,5,6,0,0),   /*    65,536     */
+/*68K*/F1  (7) BYTE DATA(2,7,0,1,3,1,0),   /*   131,072     */
+/*68K*/F2  (7) BYTE DATA(4,4,1,2,6,2,0),   /*   262,144     */
+/*68K*/F3  (7) BYTE DATA(8,8,2,4,2,5,0),   /*   524,288     */
+/*68K*/F4  (7) BYTE DATA(6,7,5,8,4,0,1),   /* 1,048,576     */
+/*68K*/F5  (7) BYTE DATA(2,5,1,7,9,0,2),   /* 2,097,152     */
+/*68K*/F6  (7) BYTE DATA(4,0,3,4,9,1,4),   /* 4,194,304     */
+/*68K*/PTR (7) POINTER DATA(@F0,@F1,@F2,@F3,@F4,@F5,@F6);
+ 
+ 
+    /* DISPLAY FILES */
+ 
+    DECLARE        /* DUPLICATE BLOCK DETECTION */
+       LB BYTE INITIAL(1),                  /* NUMBER OF BYTES PER BLOCK # */
+       FIRST$ERROR BYTE INITIAL(TRUE);      /* DUPLICATE BLOCK ERROR */  
+ 
+    DECLARE        /* TOTALS */
+       KBLKS  ADDRESS INITIAL(0),    /* TOTAL NUMBER OF 1K BLKS */
+       NFCBS  ADDRESS INITIAL(0),    /* TOTAL NUMBER OF FCBS */
+       NXFCBS ADDRESS INITIAL(0),    /* TOTAL NUMBER OF XFCBS */
+       TALL   ADDRESS INITIAL(0);    /* TOTAL ALLOCATION */    
+ 
+ 
+/*  END OF DATA SEGMENT */
+ 
+DECLARE
+        LAST$DSEG$BYTE BYTE INITIAL (0);
+/* 68K */
+  DCL DUMMYP POINTER,
+      DUMMYL LONG AT(@DUMMYP);
+  DCL DUM1P POINTER,
+      DUM1L LONG AT(@DUM1P);
+  DCL DUM2P POINTER,
+      DUM2L LONG AT(@DUM2P);
+ /* */
+PLM: PROCEDURE PUBLIC;
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                * * *  PRIMITIVE FUNCTIONS  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+ 
+BOOT: PROCEDURE;
+    CALL MON1 (0,0);  /* SYSTEM RESET */
+    END BOOT;
+ 
+PRINTCHAR: PROCEDURE(CHAR);
+    DECLARE CHAR BYTE;
+    CALL MON1(2,CHAR);
+    END PRINTCHAR;
+ 
+PRINTB: PROCEDURE;
+    /* PRINT BLANK CHARACTER */
+    CALL PRINTCHAR(' ');
+    END PRINTB;
+ 
+BLANKS: PROCEDURE(B);
+    DECLARE B BYTE;
+        DO WHILE (B:=B-1) <> -1;
+        CALL PRINTB;
+        END;
+    END BLANKS;
+ 
+PRINTX: PROCEDURE(A);
+    DECLARE A POINTER;
+    DECLARE S BASED DUMMYP BYTE;
+   /*68K*/ DUMMYP=A;
+        DO WHILE S <> 0;
+        CALL PRINTCHAR(S);
+  /*68K*/ DUMMYL=DUMMYL+1;
+        END;
+    END PRINTX;
+ 
+IOVALF: PROCEDURE BYTE;
+   RETURN MON2(7,0);  /*  GET I/O BYTE */
+   END IOVALF;
+  
+SIOVALF: PROCEDURE(VALUE);
+    DECLARE VALUE BYTE;
+    CALL MON1(8,VALUE);    /* SET IOBYTE  */
+    END SIOVALF;
+  
+BREAK: PROCEDURE BYTE;
+    RETURN MON2(11,0); /* CONSOLE READY */
+    END BREAK;
+  
+TEST$BREAK: PROCEDURE;
+ 
+    IF BREAK THEN
+        DO; 
+        CALL MON1 (1,0);  /* READ CHARACTER */
+        CALL PRINTX(@(CR,LF,'** ABORTED **',0));
+        CALL BOOT;
+        END;
+    END TEST$BREAK;
+ 
+CRLF: PROCEDURE;
+    CALL PRINTCHAR(CR);
+    CALL PRINTCHAR(LF);
+    CALL TEST$BREAK;
+    END CRLF;
+ 
+PRINT: PROCEDURE(A);
+    DECLARE A POINTER;
+    /* PRINT THE STRING STARTING AT ADDRESS A UNTIL THE
+    NEXT 0 IS ENCOUNTERED */
+    CALL CRLF;
+    CALL PRINTX(A);
+    END PRINT;
+ 
+  VERSION: PROCEDURE ADDRESS;
+    /* RETURNS CURRENT CP/M VERSION # */
+    RETURN MON3(12,0);
+    END VERSION;
+ 
+GETRODISK: PROCEDURE ADDRESS;
+    /* GET THE READ-ONLY DISK VECTOR */
+    RETURN MON3(29,0);
+    END GETRODISK;
+ 
+SELECT: PROCEDURE(D);
+    DECLARE D BYTE;
+    RODISK = GETRODISK; /* READ ONLY DISK VECTOR SET */
+    CDISK = D;
+    CALL MON1(14,D);
+    END SELECT;
+ 
+OPEN: PROCEDURE(FCB);
+    DECLARE FCB POINTER;
+    DCNT = MON6(15,FCB);
+    END OPEN;
+ 
+SEARCH: PROCEDURE(FCB);
+    DECLARE FCB POINTER;
+    DECLARE FCB0 BASED FCB BYTE;
+    DCNT = MON6(17,FCB);
+    END SEARCH;
+ 
+SEARCHN: PROCEDURE;
+    DCNT = MON2(18,0);
+    END SEARCHN;
+ 
+CSELECT: PROCEDURE BYTE;
+    /* RETURN CURRENT DISK NUMBER */
+    RETURN MON2(25,0);
+    END CSELECT;
+ 
+SETDMA: PROCEDURE(DMA);
+    DECLARE DMA POINTER;
+    CALL MON5(26,DMA);
+    END SETDMA;
+ 
+GETLOGIN: PROCEDURE ADDRESS;
+    /* GET THE LOGIN VECTOR */
+    RETURN MON3(24,0);
+    END GETLOGIN;
+ 
+WRITEPROT: PROCEDURE;
+    /* WRITE PROTECT THE CURRENT DISK */
+    CALL MON1(28,0);
+    END WRITEPROT;
+ 
+SETIND: PROCEDURE(A);
+    DECLARE A POINTER;
+    /* SET FILE INDICATORS FOR CURRENT FCB */
+    CALL MON5(30,A);
+    END SETIND;
+ 
+GETUSER: PROCEDURE BYTE;
+    /* RETURN CURRENT USER NUMBER */
+    RETURN MON2(32,0FFH);
+    END GETUSER;
+ 
+SETUSER: PROCEDURE(USER);
+    DECLARE USER BYTE;
+    CALL MON1(32,USER);
+    END SETUSER;
+ 
+ 
+GETFILESIZE: PROCEDURE(FCB);
+    DECLARE FCB POINTER;
+    CALL MON5(35,FCB);
+    END GETFILESIZE;
+ 
+ 
+GETFREESP: PROCEDURE(D);
+    DECLARE D BYTE;
+ 
+    CALL MON1(46,D);
+    END GETFREESP;
+ 
+/* WE WANT KPB (KBYTES PER BLOCK) SO THAT EACH TIME WE FIND
+   A BLOCK ADDRESS WE CAN ADD KPB K TO THE KILOBYTE ACCUMULATOR
+   FOR FILE SIZE.  WE DERIVE KPB AS FOLLOWS:
+ 
+    BLKSHF        RECS/BLK        K/BLK        BLKSHF-3
+ 
+      3               8             1              0
+      4              16             2              1
+      5              32             4              2
+      6              64             8              3
+      7             128            16              4
+                                                                */
+ 
+SET$KPB: PROCEDURE;
+    DECLARE KSHF BYTE;
+ 
+    CALL BASE$DPB; /* DISK PARAMETERS SET */
+    IF (KSHF:=DPB$BYTE(BLKSHF$B)-SPKSHF) < 1 THEN
+        KPB = 1;
+    ELSE
+        KPB = SHL(DOUBLE(1),DPB$BYTE(BLKSHF$B)-SPKSHF); 
+    END SET$KPB;
+ 
+SELECT$DISK: PROCEDURE(D);
+    DECLARE D BYTE;
+    /* SELECT DISK AND SET KPB */
+    CALL SELECT(D);
+    CALL SET$KPB; /* BYTES PER BLOCK */
+    END SELECT$DISK;
+ 
+/* 68K*/
+ MOVE : PROC(C,S,D);
+   DCL C BYTE,(S,D) POINTER;
+   DCL A BASED DUM1P BYTE,B BASED DUM2P BYTE;
+     DUM1P=S; DUM2P=D;
+    DO WHILE (C:=C-1)<>255;
+     B=A;
+     DUM1L=DUM1L+1; DUM2L=DUM2L+1;
+    END;
+  END;
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                    * * *  SCANNER  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+ 
+                  /* FILL STRING @ S FOR C BYTES WITH F */
+FILL:   PROC(S,F,C);
+    DCL S POINTER,C ADDR,
+        F BYTE,
+        A BASED DUMMYP BYTE;
+/*68K*/ DUMMYP=S;
+        DO WHILE (C:=C-1)<>0FFFFH;
+        A = F;
+/*S8K*/ DUMMYL=DUMMYL+1;
+        END;
+    END FILL;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* GET NEXT INPUT VALUE INTO ACCUM */
+SCAN: PROCEDURE;
+    /* FILL ACCUM WITH NEXT INPUT VALUE */
+    DECLARE (I,B) BYTE;
+    SETACC: PROCEDURE(B);
+        DECLARE B BYTE;
+        IF I < 4 THEN 
+            ACCUM(I) = B;
+        I = I + 1;
+        END SETACC;
+ 
+    /* DEBLANK INPUT */
+        DO WHILE (B:=BUFF(IBP)) = ' ';
+        IBP = IBP + 1;
+        END;
+    /* SKIP OPTION DELIMITER */
+    IF B = '[' THEN
+        IBP = IBP + 1;
+    /* INITIALIZE ACCUM LENGTH (0-3) */
+    I = 0;
+    CALL FILL(@ACCUM,' ',4);
+        DO WHILE (B := BUFF(IBP)) > 1;
+        IF B < '!' OR B = ',' OR B = ':' OR
+           B = '[' OR B = '=' THEN BUFF(IBP) = 1;
+        ELSE
+            IBP = IBP + 1;
+        IF B <> '/' AND B <> '$' AND B <> ']' AND B <> ','
+            THEN CALL SETACC(B);
+        END;
+    IF B <> 0 THEN 
+        IBP = IBP + 1;
+    END SCAN;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PARSE AN ASSIGNMENT INTO ACCUMULATOR */
+PARSE$ASSIGN: PROCEDURE BYTE;
+    DCL B BYTE;
+    
+    CALL SCAN;
+    IF ACCUM(0) <> '=' THEN
+        RETURN FALSE;
+    CALL SCAN; 
+    RETURN TRUE;
+    END PARSE$ASSIGN;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PARSE NEXT ITEM INTO ACCUMULATOR */
+PARSE$NEXT: PROCEDURE BYTE;
+ 
+    CALL SCAN;
+    IF ACCUM(0) = ' ' THEN DO;
+        CALL SCAN;
+        IF ACCUM(0) = ' ' THEN
+            RETURN FALSE;
+        END;
+    RETURN TRUE;
+    END PARSE$NEXT;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT A DECIMAL NUMBER FROM 2 BYTE BINARY 
+                     IN A FIXED FIELD (PRECISION) */
+PDECIMAL: PROCEDURE(V,PREC);
+    /* PRINT VALUE V WITH PRECISION PREC (10,100,1000)
+    WITH LEADING ZERO SUPPRESSION */
+    DECLARE
+        V ADDRESS,    /* VALUE TO PRINT */
+        PREC ADDRESS, /* PRECISION */
+        ZEROSUP BYTE, /* ZERO SUPPRESSION FLAG */
+        D BYTE;       /* CURRENT DECIMAL DIGIT */
+    ZEROSUP = TRUE;
+        DO WHILE PREC <> 0;
+        D = V / PREC ; /* GET NEXT DIGIT */
+        V = V MOD PREC;/* GET REMAINDER BACK TO V */
+        PREC = PREC / 10; /* READY FOR NEXT DIGIT */
+        IF PREC <> 0 AND ZEROSUP AND D = 0 THEN CALL PRINTB; ELSE
+            DO; ZEROSUP = FALSE; CALL PRINTCHAR('0'+D);
+            END;
+        END;
+    END PDECIMAL;
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                   * * *  PRINT A NUMBER  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+ 
+                  /* BCD - CONVERT 16 BIT BINARY TO 
+                     7 ONE BYTE BCD DIGITS */
+BCD: PROCEDURE(VALUE);
+    DECLARE
+        (VALUE,PREC) ADDRESS,
+        I BYTE;
+ 
+    PREC = 10000;
+    I = 5;                            /* DIGITS: 4,3,2,1,0 */
+        DO WHILE PREC <> 0;
+      /* S-PL/H */ I=I-1;
+        VAL(I) = VALUE / PREC;   /* GET NEXT DIGIT */
+        VALUE = VALUE MOD PREC;       /* REMAINDER IN VALUE */
+        PREC = PREC / 10;
+        END;
+    END BCD;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT BCD NUMBER IN VAL ARRAY */
+PRINTBCD: PROCEDURE(FIXED);
+   DECLARE 
+       (FIXED, ZEROSUP, I) BYTE;
+ 
+   PCHAR: PROCEDURE(C);
+       DECLARE C BYTE;
+       IF VAL(I) = 0 THEN
+           IF ZEROSUP THEN 
+               IF I <> 0 THEN DO;
+                   IF FIXED THEN
+                       CALL PRINTB;
+                   RETURN;
+                   END;
+       /* ELSE */
+       CALL PRINTCHAR(C);
+       ZEROSUP = FALSE;
+   END PCHAR;
+ 
+   ZEROSUP = TRUE;
+   I = 7;
+       DO WHILE (I:=I-1) <> -1;
+       CALL PCHAR('0'+VAL(I));
+       IF I = 6 OR I = 3 THEN 
+           CALL PCHAR(',');
+       END;
+   END PRINTBCD;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* ADD TWO BCD NUMBERS RESULT IN SECOND */
+ADD: PROCEDURE(AP,BP);
+    DECLARE
+        (AP,BP)        POINTER,
+        A BASED AP (7) BYTE,
+        B BASED BP (7) BYTE,
+        (C,I)          BYTE;
+ 
+    C = 0;                               /* CARRY   */
+        DO I = 0 TO 6;                   /* 0 = LSB */
+        B(I) = A(I) + B(I) + C;
+        C = B(I) / 10;
+        B(I) = B(I) MOD 10;
+        END;
+    END ADD;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ P3BYTEL : PROC(BYTE3ADR,FIXED);   /* S-PL/H */
+   DCL BYTE3ADR POINTER,
+       FIXED BYTE,
+       B3 BASED BYTE3ADR (3) BYTE, L1 LONG,PREC LONG,
+       I BYTE;
+    L1=(LINT(B3(0))*256+LINT(B3(1)))*256+LINT(B3(2));
+    PREC=1000000;   I=7;
+    DO WHILE PREC<>0;
+      I=I-1;
+      VAL(I)=L1/PREC; L1=L1 MOD PREC; PREC=PREC/10;
+    END;
+    CALL PRINTBCD(FIXED);
+  END;             /* S-PL/H */
+                  /* PRINT 3 BYTE VALUE BASED AT BYTE3ADR */
+P3BYTE: PROCEDURE(BYTE3ADR,FIXED);
+   DECLARE
+      FIXED     BYTE,
+      I         BYTE,  
+      HIGH$BYTE BYTE,
+      BYTE3ADR  POINTER,
+      B3 BASED  BYTE3ADR STRUCTURE (
+          LWORD ADDRESS,
+          HBYTE BYTE);
+ 
+    CALL FILL(@VAL,0,7);
+    CALL FILL(@FAC,0,7);
+    CALL BCD(B3.LWORD);         /* PUT 16 BIT VALUE IN VAL */
+    HIGH$BYTE = B3.HBYTE;
+        DO I = 0 TO 6;                 /* FACTOR FOR BIT I */
+        IF HIGH$BYTE THEN              /* LSB IS 1 */
+            CALL ADD(PTR(I),@FAC);     /* ADD IN FACTOR */
+        HIGH$BYTE = SHR(HIGH$BYTE,1);  /* GET NEXT BIT  */
+        END;
+    CALL ADD(@FAC,@VAL);              /* ADD FACTOR TO VALUE */
+    CALL PRINTBCD(FIXED);             /* PRINT VALUE */
+    END P3BYTE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DIVIDE 3 BYTE VALUE BY 8 */
+SHR3BYTE: PROCEDURE(BYTE3ADR);
+      DCL BYTE3ADR POINTER,
+          B3 BASED BYTE3ADR STRUCTURE (
+          LWORD ADDRESS,
+          HBYTE BYTE),
+          TEMP1 BASED BYTE3ADR (2) BYTE,
+          TEMP2 BYTE;
+ 
+ /*     TEMP2  = ROR(B3.HBYTE,3) AND 11100000B;  /* GET 3 BITS */
+ /*     B3.HBYTE = SHR(B3.HBYTE,3);
+        B3.LWORD = SHR(B3.LWORD,3);
+        TEMP1(1) = TEMP1(1) OR TEMP2;   /* OR IN 3 BITS FROM HBYTE */
+ /* 68K */
+         B3.LWORD=B3.LWORD/8 OR SHL(UNSIGN(B3.HBYTE) AND 7, 13);
+         B3.HBYTE=SHR(B3.HBYTE,3);
+        END SHR3BYTE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* MULTIPLY 3 BYTE VALUE BY #RECORDS PER BLOCK */
+SHL3BYTE: PROCEDURE(BYTE3ADR);
+       DCL BYTE3ADR POINTER,
+           B3 BASED BYTE3ADR STRCT(
+          LWORD ADDRESS,
+          HBYTE BYTE),
+          TEMP1 BASED BYTE3ADR (2) BYTE;
+ 
+   /*   B3.HBYTE = (ROL(TEMP1(1),DPB$BYTE(BLKSHF$B)) AND DPB$BYTE(BLKMSK$B))
+          OR SHL(B3.HBYTE,DPB$BYTE(BLKSHF$B));
+        B3.LWORD = SHL(B3.LWORD,DPB$BYTE(BLKSHF$B));       */
+   /* 68K */
+        B3.HBYTE=SHR(B3.LWORD,16-DPB$BYTE(BLKSHF$B));
+        B3.LWORD=SHL(B3.LWORD,DPB$BYTE(BLKSHF$B));
+        END SHL3BYTE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY CURRENT DRIVE */
+SHOW$DRV: PROCEDURE;
+    CALL PRINTCHAR(CDISK+'A');
+    CALL PRINTCHAR(':');
+    END SHOW$DRV;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY CURRENT DRIVE WITH SPACE */
+SHOW$DRIVE: PROCEDURE;
+    CALL SHOW$DRV;
+    CALL PRINTB;
+    END SHOW$DRIVE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT USER NUMBER */
+SHOW$USR: PROCEDURE(USER);
+    DCL USER BYTE;
+ 
+    CALL PRINTX(@('USER :',0));
+    CALL PDECIMAL(USER,100);
+    END SHOW$USR;
+ 
+ 
+ 
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+         * * *  CP/M 2 BLOCK COUNTING ROUTINES  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+                  /* ADD # OF KILOBYTES IN ONE BLOCK 
+                     KPB = KILOBYTES PER BLOCK       */
+ADD$BLOCK: PROCEDURE(AK);
+    DECLARE AK POINTER;
+    /* ADD ONE BLOCK TO THE KILOBYTE ACCUMULATOR */
+    DECLARE KACCUM BASED AK ADDRESS; /* KILOBYTE ACCUM */
+ 
+    KACCUM = KACCUM + KPB;
+    END ADD$BLOCK;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* RETURNS THE NUMBER OF K REMAINING */
+COUNT: PROCEDURE ADDRESS;
+    DECLARE
+        KA  ADDRESS,  /* KB ACCUMULATOR */
+        (I, MAXALL)   ADDRESS;  /* LOCAL INDEX */
+    DCL  LCOUNT LONG;  /* 68K */
+/*  KA = 0;
+    ALL$BLKS = GETALL(DPB$WORD(BLKMAX$W));
+    IF (MAXALL:=DPB$WORD(BLKMAX$W)) > ALL$BLKS THEN
+        DO I = 0 TO MAXALL-ALL$BLKS;
+        CALL ADD$BLOCK(@KA);
+        END; 
+    RETURN KA;  */
+/* 68K */
+     CALL SETDMA(@LCOUNT);
+     CALL MON1(46,UNSIGN(CDISK)) ;   /* GET DISK FREE SPACE */
+     RETURN LCOUNT/8; /* K BYTE */
+    END COUNT;
+ 
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                 * * *  STATUS ROUTINES  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+                  /* DISPLAY DRIVE CHARACTERISTICS */
+DRIVESTATUS: PROCEDURE;
+      DCL B3A POINTER,
+          B3 BASED B3A STRUCTURE (
+             LWORD ADDRESS,
+             HBYTE BYTE);
+ 
+         /* PRINT 3 BYTE VALUE */
+    PV3: PROCEDURE;
+         CALL CRLF;
+         CALL P3BYTE(B3A,TRUE);
+         CALL PRINTCHAR(':');
+         CALL PRINTB;
+         END PV3;
+ 
+         /* PRINT ADDRESS VALUE V */
+     PV: PROCEDURE(V);
+         DCL V ADDRESS;
+         B3.HBYTE = 0;
+         B3.LWORD = V;
+         CALL PV3;
+         END PV;
+ 
+    /* PRINT THE CHARACTERISTICS OF THE CURRENTLY SELECTED DRIVE */
+    B3A = @BYTE3;
+    CALL PRINT(@('        ',0));
+    CALL SHOW$DRIVE;
+    CALL PRINTX(@('DRIVE CHARACTERISTICS',0));
+    B3.HBYTE = 0;
+    B3.LWORD = DPB$WORD(BLKMAX$W) + 1;       /* = # BLOCKS */
+    CALL SHL3BYTE(B3A);        /* # BLOCKS * RECORDS/BLOCK */
+    CALL PV3;
+    CALL PRINTX(@RECORD$MSG);
+    CALL PRINTX(@(' CAPACITY',0));
+    CALL SHR3BYTE(B3A);        /* DIVIDE BY 8 */
+    CALL PV3;
+    CALL PRINTX(@('KILOBYTE DRIVE  CAPACITY',0));
+    CALL PV(DPB$WORD(DIRMAX$W)+1);
+    CALL PRINTX(@('32 BYTE',0));
+    CALL PRINTX(@ENTRIES);
+    CALL PV(SHL(DPB$WORD(CHKSIZ$W),2));
+    CALL PRINTX(@('CHECKED',0));
+    CALL PRINTX(@ENTRIES);
+    CALL PV((DPB$BYTE(EXTMSK$B)+1) * 128);
+    CALL PRINTX(@RECORD$MSG);
+    CALL PRINTX(@('S / DIRECTORY ENTRY',0));
+    CALL PV(SHL(DOUBLE(1),DPB$BYTE(BLKSHF$B)));
+    CALL PRINTX(@RECORD$MSG);
+    CALL PRINTX(@('S / BLOCK',0));
+    CALL PV(DPB$WORD(SPT$W));
+    CALL PRINTX(@RECORD$MSG);
+    CALL PRINTX(@('S / TRACK',0));
+    CALL PV(DPB$WORD(OFFSET$W));
+    CALL PRINTX(@('RESERVED  TRACKS',0));
+    CALL CRLF;
+    END DRIVESTATUS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY ACTIVE USER NUMBERS */
+USERSTATUS: PROCEDURE;
+    /* DISPLAY ACTIVE USER NUMBERS */
+    DECLARE I BYTE;
+    DECLARE USER(16) BYTE;
+    CALL CRLF;
+    CALL SHOW$DRIVE;
+    CALL PRINTX(@('ACTIVE ',0));
+    CALL SHOW$USR(USER$CODE);
+    CALL CRLF;
+    CALL SHOW$DRIVE;
+    CALL PRINTX(@('ACTIVE FILES:',0));
+        DO I = 0 TO LAST(USER);
+        USER(I) = FALSE;
+        END;
+    CALL SETDMA(@MEMORY);
+    CALL SEARCH(@UFCB);
+        DO WHILE DCNT <> 255;
+        IF (I := MEMORY(SHL(DCNT AND 11B,5))) <> 0E5H THEN
+            USER(I AND 0FH) = TRUE;
+        CALL SEARCHN;
+        END;
+        DO I = 0 TO LAST(USER);
+        IF USER(I) THEN CALL PDECIMAL(I,100);
+        END;
+    CALL CRLF;
+    END USERSTATUS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY STATUS OF LOGGED IN DISKETTES */
+DISKSTATUS: PROCEDURE;
+    /* DISPLAY DISK STATUS */
+    DECLARE LOGIN ADDRESS, D BYTE;
+    LOGIN = GETLOGIN; /* LOGIN VECTOR SET */
+    D = 0;
+        DO WHILE LOGIN <> 0;
+        IF LOW(LOGIN) THEN
+            DO; CALL SELECT$DISK(D);
+            CALL DRIVESTATUS;
+            END;
+        LOGIN = SHR(LOGIN,1);
+        D = D + 1;
+        END;
+    END DISKSTATUS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* TRY TO MATCH 4 CHARACTER DEVICE IN 
+                     ACCUM WITH DEVICE IN LIST 
+                            VA = ADDRESS OF LIST
+                            V1 = # OF DEVICES IN LIST */
+MATCH: PROCEDURE(VA,VL) BYTE;
+    /* RETURN INDEX+1 TO VECTOR AT VA IF MATCH */
+    DECLARE VA POINTER,
+        V BASED VA (16) BYTE,
+        VL BYTE;
+    DECLARE (I,J,MATCH,SYNC) BYTE;
+    J,SYNC = 0;
+        DO SYNC = 1 TO VL;
+        MATCH = TRUE;
+            DO I = 0 TO 3;
+            IF V(J) <> ACCUM(I) THEN MATCH=FALSE;
+            J = J + 1;
+            END;
+        IF MATCH THEN RETURN SYNC;
+        END;
+    RETURN 0; /* NO MATCH */
+    END MATCH;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PROCESS A DEVICE REQUEST VALID DEVICES 
+                     ARE LISTED ABOVE  */
+DEVREQ: PROCEDURE BYTE;
+    /* PROCESS DEVICE REQUEST, RETURN TRUE IF FOUND */
+    /* DEVICE TABLES */
+    DECLARE
+        DEVR(*) BYTE DATA
+        (/* CONSOLE */ 'TTY:CRT:BAT:UC1:',
+         /* READER  */ 'TTY:PTR:UR1:UR2:',
+         /* PUNCH   */ 'TTY:PTP:UP1:UP2:',
+         /* LISTING */ 'TTY:CRT:LPT:UL1:');
+ 
+    DECLARE
+        (I,J,IOBYTE,ITEMS,IOVAL) BYTE;
+ 
+ 
+    PRNAME: PROCEDURE(A);
+        DECLARE A POINTER,
+            X BASED DUMMYP BYTE;
+ /*68K*/ DUMMYP=A;
+        /* PRINT DEVICE NAME AT A */
+            DO WHILE X <> ':';
+            CALL PRINTCHAR(X); DUMMYL=DUMMYL+1;
+            END;
+        CALL PRINTCHAR(':');
+        END PRNAME;
+ 
+    DEVSTATUS: PROC;
+        IOBYTE = IOVALF; J = 0;
+    /*68K*/ CALL CRLF;
+            DO I = 0 TO 3;
+            CALL PRNAME(@DEVL(SHL(I,2)));
+            CALL PRINTX(@(' IS ',0));
+            CALL PRNAME(@DEVR(SHL(IOBYTE AND 11B,2)+J));
+            J = J + 16; IOBYTE = SHR(IOBYTE,2);
+            CALL CRLF;
+            END;
+        END DEVSTATUS; 
+ 
+    VALUES: PROCEDURE;
+        CALL PRINT(@('STAT 2.2',0));
+        CALL CRLF;
+        CALL PRINT(@('READ ONLY DISK: D:=RO',0));
+        CALL PRINT(@('SET ATTRIBUTE: ',0));
+        CALL PRINTX(@FILENAME);
+        CALL PRINTX(@ATTRIBUTES);
+        CALL PRINT(@('DISK STATUS  : DSK: D:DSK:',0));
+        CALL PRINT(@('USER STATUS  : USR: D:USR:',0));
+        CALL PRINT(@('IOBYTE ASSIGN:',0));
+            DO I = 0 TO 3; /* EACH LINE SHOWS ONE DEVICE */
+            CALL CRLF;
+            CALL PRNAME(@DEVL(SHL(I,2)));
+            CALL PRINTX(@(' =',0));
+                DO J = 0 TO 12 BY 4;
+                CALL PRINTCHAR(' ');
+                CALL PRNAME(@DEVR(SHL(I,4)+J));
+                END;
+            END;
+        CALL CRLF;
+        END VALUES; 
+ 
+    ITEMS = 0;
+        DO FOREVER;
+        IF (I:=MATCH(@DEVL,8)) = 0 THEN DO;
+            IF ITEMS<>0 THEN
+                GO TO ERROR;
+            RETURN FALSE;
+            END;
+        ITEMS = ITEMS+1; /* FOUND FIRST/NEXT ITEM */
+        IF I = 5 THEN /* DEVICE STATUS REQUEST */
+            CALL DEVSTATUS;
+        ELSE IF I = 6 THEN /* LIST POSSIBLE ASSIGNMENT */
+            CALL VALUES;
+        ELSE IF I = 7 THEN /* LIST USER STATUS VALUES */
+            CALL USERSTATUS;
+        ELSE IF I = 8 THEN /* SHOW THE DISK DEVICE STATUS */
+            CALL DISKSTATUS; 
+        ELSE /* SCAN ITEM I-1 IN DEVICE TABLE */
+            DO; /* FIND BASE OF DESTINATION */
+            J = SHL(I:=I-1,4);
+            IF NOT PARSE$ASSIGN THEN
+                GO TO ERROR;
+            IF (J:=MATCH(@DEVR(J),4)-1) = 255 THEN
+                GO TO ERROR;
+            IOBYTE = 1111$1100B; /* CONSTRUCT MASK */
+                DO WHILE (I:=I-1) <> 255;
+                IOBYTE = ROL(IOBYTE,2);
+                J = SHL(J,2);
+                END;
+            IOVAL = (IOVALF AND IOBYTE) OR J;
+            CALL SIOVALF(IOVAL);
+            END;
+        /* END OF CURRENT ITEM, LOOK FOR MORE */
+        IF NOT PARSE$NEXT THEN
+            RETURN TRUE;
+        END; /* OF DO FOREVER */
+ERROR:
+    CALL PRINT(@INVALID);
+    RETURN TRUE;
+    END DEVREQ;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT THE ACTUAL BYTE COUNT */
+PRCOUNT: PROCEDURE(FIXED);
+    DECLARE FIXED BYTE;
+ 
+    IF BDOS3 THEN DO;
+        CALL SETDMA(@BYTE3);
+        CALL GETFREESP(CDISK);
+        CALL SHR3BYTE(@BYTE3);
+        END;
+    ELSE DO;
+        BYTE3.HBYTE = 0;
+        BYTE3.LWORD = COUNT;
+        END;
+    CALL P3BYTE(@BYTE3,FIXED);
+    CALL PRINTCHAR('K');
+    END PRCOUNT;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT ALLOCATION FOR CURRENT DISK */
+PRALLOC: PROCEDURE;
+    DCL
+         RO ADDRESS;
+ 
+    CALL CRLF;
+    CALL SHOW$DRIVE;
+    CALL PRINTCHAR('R');
+    IF CDISK <> 0 THEN 
+        RO = SHR(RODISK,CDISK);
+    ELSE
+        RO = RODISK;
+    IF LOW(RO) THEN
+        CALL PRINTCHAR('O'); 
+    ELSE
+        CALL PRINTCHAR('W');
+    CALL PRINTX(@(', FREE SPACE: ',0));
+    CALL PRCOUNT(TRUE);
+    END PRALLOC;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT THE STATUS OF THE DISK SYSTEM */
+PRSTATUS: PROCEDURE;
+    DECLARE LOGIN ADDRESS;
+    DECLARE D BYTE;
+    LOGIN = GETLOGIN; /* LOGIN VECTOR SET */
+    D = 0;
+        DO WHILE LOGIN <> 0;
+        IF LOW(LOGIN) THEN
+            DO; 
+            CALL SELECT$DISK(D);
+            CALL PRALLOC;
+            END;
+        LOGIN = SHR(LOGIN,1); 
+        D = D + 1;
+        END;
+    CALL CRLF;
+    END PRSTATUS;
+ 
+ 
+ 
+ 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ 
+ 
+                * * *  DISPLAY FILES  * * *
+ 
+ 
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ 
+                  /* PROCESS FILE DISPLAY OR ATTRIBUTE 
+                     ASSIGNMENT */
+GETFILE:  PROCEDURE;
+    /* PROCESS FILE REQUEST */
+ 
+    DECLARE
+        FNAM   LITERALLY '11',   
+        FEXT   LITERALLY '12',
+        FS1    LITERALLY '13',
+        FMOD   LITERALLY '14',
+        FRC    LITERALLY '15',   
+        FTYP   LITERALLY '9',
+        ROFILE LITERALLY '9',   /* READ/ONLY FILE */
+        INFILE LITERALLY '10',  /* INVISIBLE FILE */
+        ARCHIV LITERALLY '11',  /* ARCHIVED  FILE */
+        ATTRB1 LITERALLY  '1',  /* ATTRIBUTE F1'  */
+        ATTRB2 LITERALLY  '2',  /* ATTRIBUTE F2'  */
+        ATTRB3 LITERALLY  '3',  /* ATTRIBUTE F3'  */
+        ATTRB4 LITERALLY  '4';  /* ATTRIBUTE F4'  */
+ 
+    DECLARE
+/*68K*/ MEMBASE POINTER,      /* BASE FOR COLLECTING FCBS */
+/*68K*/ MEMBASEL LONG AT(@MEMBASE),
+        FCBS BASED MEMBASE (1) BYTE,
+        FCBN ADDRESS,         /* NUMBER OF FCB'S COLLECTED SO FAR */
+        FINX(FCBMAX) ADDRESS, /* INDEX VECTOR USED DURING SORT */
+        FCBR(FCBMAX) ADDRESS, /* RECORD COUNT */
+/*68K*/ FCBSA POINTER,    /* INDEX INTO FCBS */
+/*68K*/ FCBSAL LONG AT(@FCBSA),
+/*68K*/ FCBEA POINTER,    /* EXT BYTE OF FCBV */
+/*68K*/ FCBEAL LONG AT(@FCBEA),
+/*68K*/ FCBS1 POINTER,    /* S1  BYTE OF FCBV */
+/*68K*/ FCBS1L LONG AT(@FCBS1),
+/*68K*/ FCBMA POINTER,    /* MOD BYTE OF FCBV */
+/*68K*/ FCBMAL LONG AT(@FCBMA),
+        FCBE BASED FCBEA ADDRESS,     /* EXTENT COUNT IN FCBS ENTRY */
+        FCBK BASED FCBMA ADDRESS,     /* KBYTE COUNT IN FCBS ENTRY */
+        XFCB BASED FCBS1 BYTE,        /* BIT 7 = XFCB FOR FCBS ENTRY */
+        FCBV BASED FCBSA (16) BYTE;   /* TEMPLATE OVER FCBS ENTRY */
+        
+    DECLARE
+        I ADDRESS,     /* FCB COUNTER DURING COLLECTION AND DISPLAY */
+        L ADDRESS,     /* USED DURING SORT AND DISPLAY */
+        K ADDRESS,     /* " */
+        M ADDRESS,     /* " */
+        KB BYTE,       /* BYTE COUNTER */
+        LB BYTE,       /* BYTE COUNTER */
+        MB BYTE,       /* BYTE COUNTER */
+        (B,F) BYTE,    /* COUNTERS */
+        XFCBFOUND BYTE,/* TRUE MEANS XFCB FOUND */
+        WORD$BLKS BYTE, /* 2 BYTE BLOCK ADDRESSES  */
+        MATCHED BYTE;  /* USED DURING FCBS SEARCH */
+ 
+    DECLARE
+        (SCASE1,SCASE2) BYTE; /* STATUS CASE # */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY A LINE OF B DASHES */
+    DOTS: PROCEDURE(I);
+        DECLARE I BYTE;
+ 
+        CALL CRLF;
+            DO WHILE (I:=I-1) <> -1;
+            CALL PRINTCHAR('-');
+            END;
+        END DOTS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT CURRENT FILE NAME */
+    PRINTFN: PROCEDURE(A);
+        DECLARE
+            A POINTER,
+            FCBV BASED A (16) BYTE,
+            (K, LB) BYTE;
+ 
+        CALL SHOW$DRV;
+            DO K = 1 TO FNAM;
+            IF K = FTYP THEN 
+                CALL PRINTCHAR('.');
+            CALL PRINTCHAR(FCBV(K) AND 7FH);
+            END;
+        END PRINTFN;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* TEST IF ATTRIBUTE FCBV(I) IS ON */
+    ATTRIBUTE: PROCEDURE(I) BYTE;
+       DECLARE I BYTE;
+ 
+       IF ROL(FCBV(I),1) THEN
+          RETURN TRUE;
+       RETURN FALSE;
+       END ATTRIBUTE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PRINT CHARACTER C IF ATTRIBUTE(B) IS TRUE */
+    PRNT$ATTRIB: PROCEDURE(B,C);
+       DECLARE (B,C) BYTE;
+ 
+       IF ATTRIBUTE(B) THEN
+          CALL PRINTCHAR(C);
+       ELSE
+          CALL PRINTB;
+       END PRNT$ATTRIB;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+               /* BUILD AN ALLOCATION VECTOR CHECK FOR DUPPLICATE
+                  BLOCKS IN THE DIRECTORY   
+                  RETURN TRUE IF NO ERROR, FALSE OTHERWISE  */
+    ALLOCATE: PROCEDURE(BLOCK$PTR) BYTE;
+        DECLARE 
+          BLOCK$PTR POINTER,
+          BLOCK$WORD BASED BLOCK$PTR ADDRESS,
+          BLOCK$BYTE BASED BLOCK$PTR BYTE,
+          (VBYTE, VBIT) WORD,
+          AMASK BYTE;
+ 
+        IF WORD$BLKS THEN DO;
+            VBYTE = SHR(BLOCK$WORD,11) OR SHL(BLOCK$WORD  AND 0FFH, 5);
+            VBIT =  SHR(BLOCK$WORD,8) AND 7;
+            END;
+        ELSE DO;
+            VBYTE = SHR(BLOCK$BYTE,3);
+            VBIT = BLOCK$BYTE MOD 8;
+            END;
+        AMASK = 1000$0000B;
+        IF VBIT <> 0 THEN
+            AMASK = SHR(1000$0000B,VBIT);
+        IF (AMASK AND MEMORY(VBYTE)) = AMASK THEN DO;
+            IF FIRST$ERROR THEN DO;
+                FIRST$ERROR = FALSE;
+                CALL PRINT(@('BAD DIRECTORY ON ',0));
+                CALL SHOW$DRV;
+                CALL PRINT(@('SPACE ALLOCATION CONFLICT:',0));
+                END;
+            CALL CRLF;
+            CALL SHOW$USR(BFCBUSER);
+            CALL BLANKS(8);
+            CALL PRINTFN(BFCBA);
+            RETURN FALSE;
+            END;
+        MEMORY(VBYTE) = MEMORY(VBYTE) OR AMASK; 
+        RETURN TRUE;
+        END ALLOCATE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* CHECK FOR MATCHING FILE NAMES */
+    FILE$MATCH: PROCEDURE(A) BYTE;
+       DECLARE 
+           I BYTE,
+           A POINTER,
+           FCB BASED A (16) BYTE;
+ 
+           DO I=1 TO 11;
+           IF FCB(I) <> '?' THEN
+              IF (FCB(I) AND 7FH) <> (BFCB(I) AND 7FH) THEN
+                 RETURN FALSE;
+           END;
+       RETURN TRUE;
+       END FILE$MATCH;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+              /* EXAMINE BLOCK NUMBERS :
+                 ALLOC = TRUE  => CHECK FOR DUPLICATE BLOCK NUMBERS
+                 ALLOC = FALSE => COUNT KBYTES MAPPED BY FCB  */
+    COUNT$BLKS: PROCEDURE(ALLOC);
+    DCL (I,ALLOC, NO$ERROR) BYTE;
+    NO$ERROR = TRUE;
+    I = 32;
+        DO WHILE NO$ERROR AND ((I:=I-LB) >= 16);
+        MB = BFCB(I);
+        IF WORD$BLKS THEN    /* DOUBLE PRECISION INX */
+            MB = MB OR BFCB(I+1);
+        IF MB <> 0 THEN DO;  /* ALLOCATED */
+            IF ALLOC THEN
+                NO$ERROR = ALLOCATE(@BFCB(I));
+            ELSE
+                FCBK = FCBK + KPB;   /* KPB = KBYTES PER BLOCK */
+            END;
+        END;
+    END COUNT$BLKS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* CHECK NEXT FCB IN SEARCH / SEARCHN */
+    CHECK$USER: PROCEDURE;
+    DCL I BYTE;
+        DO FOREVER;
+        IF DCNT = 255 THEN
+            RETURN;
+   /*   BFCBA = SHL(DCNT,5)+BUFFA;     */
+/*68K*/ BFCBA =BUFFA;
+/*68K*/ BFCBAL=BFCBAL+LINT(SHL(DCNT,5));
+        IF BFCBUSER < 20H THEN DO;
+           CALL COUNT$BLKS(TRUE);      /* CHECK FOR DUPLICATE BLOCK */
+           IF FILE$MATCH(@FCB) THEN
+               IF (BFCBUSER AND 0FH) = USER$CODE 
+                   THEN RETURN;        /* PICK UP XFCBS AND FCBS */
+           END;
+        CALL SEARCHN;
+        END;
+    END CHECK$USER;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* SET FCBSA TO THE ITH 16 BYTE FCB IN MEMORY 
+                     SET FCBEA TO THE EXTENT BYTE OF THAT FCB   */
+    MULTI16: PROCEDURE;
+        /* UTILITY TO COMPUTE FCBS ADDRESS FROM I */
+/*      FCBEA = (FCBSA:=SHL(I,4)+MEMBASE) + FEXT;
+        FCBMA = FCBSA + FMOD;
+        FCBS1 = FCBSA + FS1;     */
+/*68K*/
+        FCBSAL=MEMBASEL+LINT(SHL(I,4));
+        FCBEAL=FCBSAL+FEXT;
+        FCBMAL=FCBSAL+FMOD;
+        FCBS1L=FCBSAL+FS1;
+/* 68K END */
+        END MULTI16;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* PARSE FILE ATTRIBUTE ASSIGNMENT */
+    SETFILESTATUS: PROCEDURE BYTE;
+            /* EVENTUALLY, SCASE1 & SCASE2
+               SET TO R/O=1, R/W=2, DIR=3, SYS=4, SIZE=5 
+               SCASE1 IS FIRST ATTRIBUTE ASSIGNMENT 
+               SCASE2 IS SECOND ATTRIBUTE ASSIGNMENT */
+ 
+        ERROR: PROCEDURE;
+            CALL PRINT(@INVALID);
+            CALL PRINT(@USE);
+            CALL PRINTX(@FILENAME);
+            CALL PRINTX(@('[SIZE] ',0));
+            CALL PRINTX(@ATTRIBUTES);
+            END ERROR;
+ 
+        IF NOT PARSE$NEXT THEN
+            RETURN FALSE;
+        IF ACCUM(0) = '=' THEN 
+            CALL SCAN;
+        IF (SCASE1 := MATCH(@ATTRIBL,5)) = 5 THEN
+            RETURN NOT (SIZESET := TRUE);
+        /* MUST BE A PARAMETER */
+        IF SCASE1 = 0 THEN 
+            CALL ERROR;
+        ELSE IF PARSE$NEXT THEN 
+            IF (SCASE2 := MATCH(@ATTRIBL,5)) = 0 THEN
+                CALL ERROR;
+        RETURN TRUE;
+        END SETFILESTATUS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* SET THE ATTRIBUTE BITS */
+    SET$ATTRIBUTES: PROCEDURE(SCASE);
+        DECLARE SCASE BYTE;  
+ 
+        DO CASE SCASE;
+        /* SET TO R/O */
+            DO;
+            FCBV(ROFILE) = FCBV(ROFILE) OR 80H;
+            CALL PRINTX(@READONLY);
+            END;
+        /* SET TO R/W */
+            DO;
+            FCBV(ROFILE) = FCBV(ROFILE) AND 7FH;
+            CALL PRINTX(@READWRITE);
+            END;
+        /* SET TO SYS */
+            DO;
+            FCBV(INFILE) = FCBV(INFILE) OR 80H;
+            CALL PRINTX(@SYSTEM);
+            END;
+       /* SET TO DIR */
+            DO;
+            FCBV(INFILE) = FCBV(INFILE) AND 7FH;
+            CALL PRINTX(@DIRECTORY);
+            END;
+       /* INVALID CASE */
+            DO;
+            CALL PRINT(@INVALID);
+            RETURN;
+            END;
+       END;
+       END SET$ATTRIBUTES;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* CHECK FOR DRIVE STATUS ASSIGNMENT */
+    COMPARE$FCB: PROC;
+        MATCHED = FALSE; I = 0;
+            DO WHILE NOT MATCHED AND I < FCBN;
+            /* COMPARE CURRENT ENTRY */
+            CALL MULTI16;
+            MATCHED = FILE$MATCH(FCBSA);
+            I = I + 1;
+            END;
+        END COMPARE$FCB;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* COPY NEXT FCB INTO FCBS ARRAY */
+    COPY$FCB: PROC;
+        /* COPY TO NEW POSITION IN FCBS */
+        FCBN = (I := FCBN) + 1;
+        CALL MULTI16;
+        /* FCBSA SET TO NEXT TO FILL */
+     /* 68K  MEMSIZE=@DCHAKI;  */
+/*68K*/ IF (FCBN > FCBMAX) OR (FCBSAL+ 16) >= MAXBL THEN
+            DO; 
+            CALL PRINT(@('TOO MANY FILES',0));
+            CALL BOOT; /* ABORT */
+            END;
+        /* SAVE INDEX TO ELEMENT FOR LATER SORT */
+        FINX(I) = I;
+            DO KB = 0 TO FNAM;
+            FCBV(KB) = BFCB(KB);
+            END;
+        FCBE,FCBK,FCBR(I) = 0;
+        END COPY$FCB;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* UPDATE STATISTICS WITH CURRENT FCB BLOCKS */
+    ADD$FCB$BLKS: PROC;
+        IF BFCB(0) <  10H THEN DO;     
+            /* NOT AN XFCB */
+ 
+            /* SET ANY ATTRIBUTE THAT IS ON */
+               DO KB=1 TO FNAM;
+               IF (BFCB(KB) AND 80H) = 80H THEN
+                  FCBV(KB) = FCBV(KB) OR 80H;  /* SET */
+               END;
+ 
+            /* RESET ARCHIVED ATTRIBUTE IF IT IS OFF */
+            IF (BFCB(ARCHIV) AND 80H) <> 80H THEN
+               FCBV(ARCHIV) = FCBV(ARCHIV) AND 7FH; /* RESET */
+ 
+           FCBE = FCBE + 1; /* EXTENT INCREMENTED */
+           NFCBS = NFCBS + 1;
+ 
+           /* RECORD COUNT */
+           FCBR(I) = FCBR(I) + BFCB(FRC)
+                + (BFCB(FEXT) AND DPB$BYTE(EXTMSK$B)) * 128;
+           /* COUNT KILOBYTES */
+           CALL COUNT$BLKS(FALSE);
+           END; 
+        ELSE IF BFCB(0) < 20H THEN DO;
+           /* XFCB */
+           XFCB = XFCB OR 80H;     /* BIT 7 = XFCB EXISTS FLAG */
+           NXFCBS = NXFCBS + 1;
+           END;
+        END ADD$FCB$BLKS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* SORT THE FILE NAMES IN ASCENDING ORDER */
+    SORT: PROCEDURE;
+        IF FCBN > 1 THEN /* REQUIRES AT LEAST TWO TO SORT */
+            DO; L = 1;
+                DO WHILE L > 0; /* BUBBLE SORT */
+                CALL TEST$BREAK;
+                L = 0;
+                    DO M = 0 TO FCBN - 2;
+                    I = FINX(M+1); CALL MULTI16; BFCBA = FCBSA; I = FINX(M);
+                    CALL MULTI16; /* SETS FCBSA, BASING FCBV */
+                        DO KB = 1 TO FNAM; /* COMPARE FOR LESS OR EQUAL */
+                        IF (B:=(BFCB(KB) AND 7FH)) 
+                            < (F:=(FCBV(KB) AND 7FH)) 
+                        THEN /* SWITCH */
+                            DO; K = FINX(M); FINX(M) = FINX(M + 1);
+                            FINX(M + 1) = K; L = L + 1; KB = FNAM;
+                            END;
+                        ELSE IF B > F THEN KB = FNAM; /* STOP COMPARE */
+                        END;
+                    END;
+                END;
+            END;
+        END SORT;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* DISPLAY THE FCBS */
+    DISPLAY: PROC;
+        DCL (WIDE, ADD, SIZECOLS) BYTE;
+ 
+        ADD, SIZECOLS = 0; 
+        IF (WIDE := (COLUMNS > 48)) THEN
+            ADD = 7;
+        IF SIZESET THEN 
+            ADD = ADD + (SIZECOLS := 10);
+        CALL PRINT(@DRIVENAME);
+        CALL SHOW$DRIVE;
+        CALL BLANKS(17+ADD);
+        CALL SHOW$USR(USER$CODE);
+        IF SIZESET THEN
+            CALL PRINT(@('     SIZE ',0));
+        ELSE
+            CALL CRLF;
+        CALL PRINTX(@(' RECS  BYTES FCBS ATTRIB',0));
+        IF WIDE THEN 
+            CALL PRINTX(@('UTES   ',0));
+        CALL PRINTX(@('   NAME',0));
+        L = 0;
+            DO WHILE L < FCBN;
+            I = FINX(L); /* I IS THE INDEX TO NEXT IN ORDER */
+            CALL MULTI16; CALL CRLF;            /* SET FCBV,FCBK,FCBE */
+            /* PRINT THE FILE LENGTH */
+            CALL MOVE(16,@FCBV(0),FCBA);
+            FCB(0) = 0;
+ 
+            /* DISPLAY SIZE */
+ 
+            IF SIZESET THEN
+                DO; 
+                CALL GETFILESIZE(FCBA);
+      /* 68K    CALL P3BYTE(RRECA,TRUE);*/ CALL P3BYTEL(RRECA,TRUE);
+                CALL PRINTB;
+                END;
+ 
+            /* DISPLAY RECORDS */
+ 
+            CALL PDECIMAL(FCBR(I),10000); /* RRRRR */
+            CALL PRINTB;
+ 
+            /* DISPLAY KBYTES INCREMENT 1-KBLOCKS (KBLKS) */
+ 
+            KBLKS = (FCBR(I) / 8) + KBLKS;
+            IF FCBR(I) MOD 8 <> 0 THEN
+                KBLKS = KBLKS + 1;
+            CALL PDECIMAL(FCBK,10000);  /* BBBBBK */
+            TALL = TALL + FCBK;
+            CALL PRINTCHAR('K'); CALL PRINTB;
+ 
+            /* IS THERE AN XFCB ? (CHECK HI-BIT OF S1 BYTE) */
+ 
+            XFCBFOUND = ATTRIBUTE(FS1);        /* SAVE FOR XFCB COLUMN */
+            XFCB = XFCB AND 7FH;        /* CLEAR BIT7 */
+ 
+            /* DISPLAY # FCBS */
+ 
+            CALL PDECIMAL(FCBE,1000);   /* EEEE */
+ 
+            CALL PRINTB;
+ 
+            /* DISPLAY ATTRIBUTES: SYS,RO,X,A,F1-F4 */
+          
+            IF ATTRIBUTE(INFILE) THEN 
+                CALL PRINTX(@('SYS',0));
+            ELSE
+                CALL PRINTX(@('DIR',0));
+            CALL PRINTB;
+            CALL PRINTCHAR('R');
+            IF ATTRIBUTE(ROFILE) THEN
+                CALL PRINTCHAR('O'); 
+            ELSE
+                CALL PRINTCHAR('W');
+            CALL PRINTB;
+            IF WIDE THEN DO;
+                /* DISPLAY # XFCBS (0 OR 1) */
+                IF XFCBFOUND THEN 
+                   CALL PRINTCHAR('X');
+                ELSE
+                   CALL PRINTB;
+                CALL PRNT$ATTRIB(ARCHIV,'A');
+                CALL PRNT$ATTRIB(ATTRB1,'1');
+                CALL PRNT$ATTRIB(ATTRB2,'2');
+                CALL PRNT$ATTRIB(ATTRB3,'3');
+                CALL PRNT$ATTRIB(ATTRB4,'4');
+                CALL PRINTB;
+                END;
+ 
+            /* DISPLAY FILENAME */
+ 
+            /* PRINT FILENAME.TYP */
+            CALL PRINTFN(FCBSA);
+ 
+            /* INCREMENT FCBS COUNTER */
+ 
+            L = L + 1;
+            END;
+        /* SKIP PAST SIZE AND RECS FIELDS */
+        CALL DOTS(39+ADD);
+        CALL PRINT(@('TOTAL:',0));
+        CALL BLANKS(SIZECOLS);
+        CALL PDECIMAL(TALL,10000);    /* TOTAL KBYTES */
+        CALL PRINTCHAR('K');
+        CALL PDECIMAL(NFCBS,10000);   /* TOTAL # FCBS */
+/*        CALL BLANKS(2);
+        CALL PRINTCHAR('(');
+        CALL PVALUE(FCBN);
+        CALL PRINTX(@(' FILE',0));
+        IF FCBN < 2 THEN
+           CALL PRINTX(@(', ',0));
+        ELSE
+           CALL PRINTX(@('S, ',0));
+        CALL PVALUE(KBLKS);
+        CALL PRINTX(@('-1K BLOCKS',0));
+        CALL PRINTCHAR(')'); */
+        END DISPLAY;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* SET FILE ATTRIBUTES */
+    SETFILEATT: PROC;
+        L = 0;
+            DO WHILE L < FCBN;
+            I = L;
+            CALL MULTI16;
+            CALL CRLF;
+            CALL PRINTFN(FCBSA);
+            CALL PRINTX(@SET$TO);
+            CALL SET$ATTRIBUTES(SCASE1-1);
+            IF SCASE2 <> 0 THEN DO;
+                CALL PRINTX(@(', ',0));
+                CALL SET$ATTRIBUTES(SCASE2-1);
+                END;
+            FCBV(0) = 0;  /* INCASE MATCHED USER # > 0 */
+            CALL SETIND(FCBSA);
+            L = L + 1;
+            END;
+        END SETFILEATT;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* MAIN ROUTINE */
+    IF (SET$ATTRIBUTE := SETFILESTATUS) THEN 
+        IF SCASE1 = 0 THEN 
+            RETURN;
+ 
+    /* READ THE DIRECTORY, COLLECT ALL COMMON FILE NAMES */
+    /* SKIP ALLOCATION VECTOR AT THE BASE OF FREE MEMORY
+       USED BY THE DUPLICATE BLOCK CHECKING ROUTINES */
+ 
+/* 68K */ I=SHR(DPB$WORD(BLKMAX$W)+7,3) ;
+/* 68K */ IF (I MOD 2)=1 THEN I=I+1;
+/* 68K */ MEMBASE = @MEMORY;
+/* 68K*/  MEMBASEL=MEMBASEL+LINT(I);
+    CALL FILL(@MEMORY,0,I);  /* CLEAR ALLOCATION VECTOR */
+    LB = 1;
+    IF (WORD$BLKS := (DPB$WORD(BLKMAX$W) > 255)) THEN 
+        LB = 2;       /* DOUBLE PRECISION BLOCK INDICES */
+    FCBN,FCB(0) = 0;
+    FCB(FEXT),FCB(FMOD) = '?'; /* QUESTION MARK MATCHES ALL */
+    CALL SEARCH(@UFCB); /* FILL DIRECTORY BUFFER */
+    CALL CHECK$USER;
+ 
+    /* COLLECT FCBS FOR DISPLAY */
+    COLLECT: /* LABEL FOR DEBUG */
+ 
+        DO WHILE DCNT <> 255;
+        /* ANOTHER ITEM FOUND, COMPARE IT FOR COMMON ENTRY */
+ /*68K  BFCBA = SHL(DCNT AND 11B,5)+BUFFA; /* DCNT MOD 4 * 32 */
+ /*68K*/
+        DUMMYP=BUFFA;
+        DUMMYL=DUMMYL+LINT(SHL(DCNT AND 11B,5));
+        BFCBA=DUMMYP;
+/* END 68K*/
+        CALL COMPARE$FCB;
+        IF MATCHED THEN 
+            I = I - 1; 
+        ELSE
+            CALL COPY$FCB;
+        /* ENTRY IS AT, OR WAS PLACED AT LOCATION I IN FCBS 
+        FCBSA = FINX(I)  */
+        CALL ADD$FCB$BLKS;
+        CALL SEARCHN; /* TO NEXT ENTRY IN DIRECTORY */
+        CALL CHECK$USER;
+        END; /* OF DO WHILE DCNT <> 255 */
+ 
+    IF NOT FIRST$ERROR THEN
+        CALL BOOT;            /* ABORT IF DUPLICATE BLOCK ERROR */
+    IF FCBN = 0 THEN 
+        CALL PRINT(@('FILE NOT FOUND',0));
+    ELSE IF NOT SET$ATTRIBUTE THEN 
+        /* DISPLAY COLLECTED DATA */
+        DO;
+        CALL SORT;
+        CALL DISPLAY;
+        CALL PRALLOC;
+        END;
+    ELSE
+        CALL SETFILEATT;
+    END GETFILE;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* RESET DRIVE (D:=RW) */
+RESET$DRV: PROCEDURE BYTE;
+    DCL B ADDRESS;
+ 
+    B = 1;
+    IF CDISK <> 0 THEN
+        B = SHL(DOUBLE(1),CDISK);
+    RETURN MON2(37,B);
+    END RESET$DRV;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* CHECK FOR DRIVE STATUS ASSIGNMENT */
+SETDRIVESTATUS: PROCEDURE;
+    DECLARE I BYTE;
+ 
+    PRDRIVE: PROC(A);
+        DCL A POINTER;
+        CALL PRINT(@DRIVENAME(1));
+        CALL SHOW$DRV;
+        CALL PRINTX(@SET$TO);
+        CALL PRINTX(A);
+        END PRDRIVE;
+ 
+    IF (I := MATCH(@ATTRIBL,2)) = 1 THEN DO;
+        CALL WRITEPROT;
+        CALL PRDRIVE(@READONLY);
+        END;
+    ELSE IF I = 2 THEN DO;
+        IF RESET$DRV <> 0 THEN
+            CALL PRINT(@('DISK RESET DENIED',0));
+        ELSE
+            CALL PRDRIVE(@READWRITE);
+        END;
+    ELSE DO;
+        CALL PRINT(@INVALID);
+        CALL PRINT(@USE);
+        CALL PRINTX(@('D:=RO',0));
+        END;
+    END SETDRIVESTATUS;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ 
+                  /* RESET DRIVE (D:=RW) */
+PARSE$IT: PROCEDURE;
+    DCL I BYTE;
+ 
+    IF (I:=MATCH(@DEVL,8)) = 8 THEN
+        CALL DRIVESTATUS;
+    ELSE IF I = 7 THEN
+        CALL USERSTATUS;
+    ELSE 
+        CALL GETFILE;
+    END PARSE$IT;
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+/*        MAIN         */
+/*68K*/
+/* INIT GLOBAL DATA FOR 68K(BUG OF LINKER)*/
+/*                                               */
+   SIZESET=0;
+   SET$ATTRIBUTE=0;
+   IBP=1;
+   DO LB=0 TO 6;
+      VAL(LB) =0;
+      FAC(LB) =0;
+   END;
+   LB=1;
+   FIRST$ERROR=TRUE;
+   KBLKS=0;
+   NFCBS=0;
+   NXFCBS=0;
+   TALL=0;
+   LAST$DSEG$BYTE=0;
+/*      INIT END           */
+ 
+/* 68K */ CALL SETDMA(@BUFF);
+ 
+ /*    VER = VERSION; */ /*SPLH*/
+    CDISK = CSELECT;
+    USER$CODE = GETUSER;
+ /* BDOS3 = (HIGH(VER) = BDOS3VER); */ BDOS3=FALSE; /*SPLH*/
+    /* SIZE DISPLAY IF $S SET IN COMMAND */
+    IF NOT PARSE$NEXT THEN 
+        CALL PRSTATUS;
+    ELSE IF ACCUM(1) = ':' THEN DO;
+        CALL SELECT$DISK(ACCUM(0)-'A');
+        IF NOT PARSE$NEXT THEN 
+            CALL PRALLOC;
+        ELSE IF ACCUM(0) = '=' THEN
+                   CALL PRINT(@('ERROR-READ ONLY STATUS NOT ALLOWED',0));
+        ELSE
+            CALL PARSE$IT;
+        END;
+    ELSE DO;
+        CALL SET$KPB;
+        IF NOT DEVREQ THEN
+            CALL GETFILE;
+        END;
+ 
+    /* SPLH */ CALL BOOT;
+ 
+    RETURN;
+ 
+    END PLM;
+  /* SPLH    MAIN START */
+    CALL PLM;
+END;
+

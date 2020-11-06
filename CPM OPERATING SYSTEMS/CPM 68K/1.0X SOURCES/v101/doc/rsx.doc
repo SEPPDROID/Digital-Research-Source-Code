@@ -1,0 +1,452 @@
+CP/M-68K		RSX IMPLEMENTATION ON CP/M-68K			V1.0
+			==============================
+
+
+	A resident system extension under CP/M-68K consists of a block
+
+of memory permanently set aside to hold a program and an executable,
+
+relocatable program which can be accessed via a trap call.  The RSX may reside
+
+anywhere outside the TPA(transient program area) and CP/M itself.  This
+
+block of memory is created by use of the BDOS call: Get/Set TPA limits.
+
+The current boundries of the TPA are re-defined to leave a section of
+
+memory available to permanently hold the RSX.  Here is a typical memory
+
+model with an existing RSX.
+
+
+
+		-------------------------------------------------
+		|						|
+		|		      BIOS			|
+		|						|
+		-------------------------------------------------
+		|						|
+		|		      BDOS			|
+		|						|
+		-------------------------------------------------
+		|						|
+		|		      CCP			|
+		|						|
+     Old Top of	-------------------------------------------------
+	TPA	|						|
+		|		      RSX			|
+		|						|
+     New Top of	-------------------------------------------------
+	TPA	|						|
+		|						|
+		|						|
+		|						|
+		|						|
+		|						|
+		|		      TPA			|
+		|						|
+		|						|
+		|						|
+		|						|
+		|						|
+		|						|
+    Base of TPA -------------------------------------------------
+		|						|
+		|	     Reserved for CP/M-68K 		|
+		|						|
+		-------------------------------------------------
+
+
+CP/M-68K		RSX IMPLEMENTATION ON CP/M-68K			V1.0
+			==============================
+
+
+	The bdos program load function is used to load the RSX program into
+
+memory.  The set exception vector function should then be used to reset a
+
+trap vector address to the beginning of the RSX.  All access  to the RSX 
+
+should be done via a trap call.  This type of access will allow the RSX to
+
+operate in supervisor mode.  Return from the RSX is then accomplished by 
+
+using the RTE instruction.  To eliminate the RSX,use the Get/Set TPA limits
+
+function to re-define the TPA to its original configuration.  Reset the trap
+
+vector address to its orginal value.  The following is an example of a
+
+transient program that loads other transient programs as RSX's,reconfigures
+
+the TPA,and passes control to the new RSX for initialization.  The RSX
+
+initialization should set an exception vector address to the beginning of
+
+the desired code segment in the RSX,and pass control back to the rsx loader
+
+via an RTS(return from subroutine) instruction.  The RSX is now accessable via
+
+a trap call.  The rsx loader can load other RSX's right below the existing RSX.
+
+The command:
+
+		A>rsx $
+
+will cause the rsx loader to reset the TPA boundries to their coldboot values
+
+as specified in the BIOS.  The RSX should also have a mechanism for reseting 
+
+the modified trap vector to its coldboot value.
+
+
+*************************************************************************
+*    rsx.s		   Link to LOADRSX.C			v1.0	*
+*			   =================				*
+*									*
+*		  Assembly Language Module Needed to			*
+*             Assist 'C' code to Load a Program as an RSX		*
+*									*
+*************************************************************************
+
+
+*
+*	Make All these labels GLOBAL
+*
+	.globl _bdos
+	.globl _push
+	.globl _main
+	.globl _reset
+	.globl _openfile
+	.globl _prt_tpa
+	.globl stack
+*
+*	Load Parameter Block Labels
+*	---------------------------
+	.globl _LPB
+	.globl _lowadr
+	.globl _hiadr
+	.globl _baspag
+	.globl _usrstk
+	.globl _flags
+*
+*	TPA Parameter Block Labels
+*	--------------------------
+	.globl _TPAB
+	.globl _low
+	.globl _high
+
+prtstr   = 9
+getmemtb = 18
+settpa   = 63
+
+*
+*	Try to open 1st parsed FCB
+*	--------------------------
+start:	link	a6,#0		*link and allocate
+	move.l	8(a6),a0	*get basepage address
+	move.l	#stack,a7	*set up my own stack
+	move.l  a7,a6		*set up a6
+	lea	$5c(a0),a1	*get 1st parsed fcb address
+	move.l	a1,-(sp)	*push fcb address
+	jsr	_openfile	*jump to open file routine
+	add.l	#4,sp		*clean off the stack
+	jsr	_main		*go to main routine
+	clr.l	d0		*prepare to exit program
+	trap	#2		*warmboot and return to CCP
+*
+*
+*	Push the needed addresses on to the stack
+*	-----------------------------------------
+*
+_push:
+	movea.l	_usrstk,a7	*set up the user stack pointer
+	move.l	_baspag,a1	*get address of user basepage
+	move.l	a1,-(sp)	*push basepage address
+	move.l	#wboot,-(sp)	*push return address
+	move.l	8(a1),-(sp)	*push address to jump to
+	rts			*jump to new program
+
+*
+*	Call the BDOS
+*	-------------
+_bdos:  
+	move.w	4(sp),d0	*get the BDOS function number
+	move.l	6(sp),d1	*get the BDOS parameter
+	trap	#2		*call the BDOS
+	rts			*return to calling code
+*
+*	Reset CP/M-68K TPA limits to original values
+*	--------------------------------------------
+_reset: 
+	move.l	#getmemtb,d0	*bios get memory region table 
+	trap	#3		*call the bios
+	add.l	#$2,d0		*skip the count
+	move.l	d0,a0		*a0 now points to tpa low address
+	move.l	(a0)+,_low	*put that address in TPAB
+	move.l	(a0),d2		*get length of tpa
+	add.l	_low,d2		*calculate top of tpa
+	move.l	d2,_high	*put that address in TPAB
+	move.w	#$FF,_TPAB	*make this permanent
+	move.w	#settpa,d0	*bdos function # for set tpa limits
+	move.l	#_TPAB,d1	*d1 gets address of TPAB
+	trap	#2		*call the bdos
+	move.w	#prtstr,d0	*bdos function # to print a string
+	move.l	#mesg,d1	*get address of string into d1
+	trap	#2		*print message by calling bdos	
+	move.l	#0,-(sp)	*push a FALSE value
+	jsr	_prt_tpa	*print TPA boundries
+wboot:
+	clr.l	d0		*prepare to warmboot
+	trap	#2		*call the bdos
+
+*
+*	DATA
+*
+	.data
+	.even
+*
+*	Load Parameter Block
+*
+_LPB:		.ds.l	1
+_lowadr:	.ds.l	1
+_hiadr:		.ds.l	1
+_baspag:	.ds.l	1
+_usrstk:	.ds.l	1
+_flags:		.dc.w	0
+*
+*	TPA Parameter Block
+*
+	.even
+
+_TPAB:	.dc.w	0
+_low:	.ds.l	1
+_high:	.ds.l	1
+	.even
+mesg:	.dc.b	13,10,'TPA limits reset to COLDBOOT values:$'
+	.bss
+	.even
+	.ds.l	200
+stack:  .ds.w	1
+*
+*	END of Assembly Language Code
+*
+	.end
+
+/*----------------------------------------------------------------------*\
+ |     loadrsx.c      LOAD A RESIDENT SYSTEM EXTENSION		v1.0	|
+ |                    ================================			|
+ |									|
+ |	Description:							|
+ |	-----------	This program loads a CP/M-68K executable	|
+ |			program into high memory and reconfigures 	|
+ |			the TPA.  The loaded program is now a		|
+ |			Resident System Extension.  Control is 		|
+ |			passed to the RSX so it can do its 		|
+ |			own initialization.				|
+ |									|
+ |	Created by:	Tom Saulpaugh					|
+ |	----------							|
+ |	Date:		11/29/82					|
+ |	----								|
+ |	Last Modified:	12/01/82					|
+ |	-------------							|
+ |									|
+ |	Include Files:  <Stdio.h> <Portab.h>				|
+ |	-------------							|
+ |	Link to:	rsx.s						|
+ |	-------								|
+ |									|
+\*----------------------------------------------------------------------*/
+
+
+/************************************************************************\
+ *		      Here are the Include Files			*
+\************************************************************************/
+					/********************************/
+#include	"stdio.h"		/* Standard I/O library		*/
+					/********************************/
+/************************************************************************\
+ *			DEFINES for Loadrsx.c				*
+\************************************************************************/
+					/********************************/
+#define		CON_OUT		2	/* Bdos console output func #	*/
+#define		PRINT_STRING	9	/* Bdos print string func #	*/
+#define		OPENFILE	15	/* Bdos open file function #	*/
+#define		CLOSE_FILE	16	/* Bdos close file funciton #	*/
+#define		READSEQ		20	/* Bdos read seq function #	*/
+#define		SETDMA		26	/* Bdos set dma address func #	*/
+#define		LOAD_PROG	59	/* Bdos load program func #	*/
+#define		SET_TPA		63	/* Bdos set tpa limits func #	*/
+#define		GET_TPA		63	/* Bdos get tap limits func #	*/
+#define		CR		(long)13/* Carriage Return		*/
+#define		LF		(long)10/* Linefeed character		*/
+#define		DMA_OFFSET	(long)0x80/* Default dma buffer offset	*/
+#define		NULLB		'\0'	/* Null Byte			*/
+					/********************************/
+#define		isupper(c)	('A' <= (c) && (c) <= 'Z')/*upper case	*/
+#define		islower(c)	('a' <= (c) && (c) <= 'z')/*lower case	*/
+#define		tolower(c)	(isupper(c) ? ((c)+040):(c))/*ltrans	*/
+#define		toupper(c)	(islower(c) ? ((c)-040):(c))/*utrans	*/
+					/********************************/
+/************************************************************************\
+ *		          GLOBAL Variables				*
+\************************************************************************/
+					/********************************/
+BYTE open = FALSE;			/* Rsx file open flag		*/
+BYTE rsxfcb[36];			/* Fcb for rsx			*/
+BYTE buf[128];				/* buffer to hold rsx header	*/
+BYTE *msg1 = "RSXloader Ver 1.1$";	/* Version Number message	*/
+BYTE *msg2 = "Unable to open file$";	/* Could not open rsx on disk	*/
+BYTE *msg3 = "Size of RSX computed$";	/* Status message to user	*/
+BYTE *msg4 = "Unable to Load RSX$";	/* Program load error message	*/
+BYTE *msg5 = "Current TPA Boundries:$";	/* Status of Current TPA size	*/
+BYTE *msg6 = "New TPA Boundries:$";	/* Status after loading of RSX	*/
+BYTE *msg7 = "Starting Address----> $";	/* Start of TPA message		*/
+BYTE *msg8 = "     Ending Address+1----> $";/* End of TPA message	*/
+EXTERN LONG LPB,lowadr,hiadr,baspag,	/* Load Parameter block		*/
+		usrstk;			/* --------------------		*/
+EXTERN UWORD flags;			/* --------------------		*/
+EXTERN UWORD TPAB;			/* TPA Parameter Block		*/
+EXTERN LONG low,high;			/* -------------------		*/
+					/********************************/
+/************************************************************************\
+ *			  External Procedures				*
+\************************************************************************/
+					/********************************/
+EXTERN UWORD bdos();			/* Calls the bdos		*/
+					/********************************/
+/************************************************************************/
+
+
+cr_lf()
+{
+	bdos(CON_OUT,CR);
+	bdos(CON_OUT,LF);
+}
+
+illegal(fcb)
+BYTE *fcb;
+{
+	REG UWORD i;
+
+	if(*++fcb == '$')
+		reset();
+	i = 1;
+	while(i++ <= 11)
+		if(*fcb++ == '?')
+			return(TRUE);
+	return(FALSE);
+}
+
+
+openfile(fcb)
+BYTE *fcb;
+{
+	REG BYTE *ptr;
+	REG UWORD i;
+
+	if(!(illegal(fcb)))
+	{
+		if(bdos(OPENFILE,fcb) <= 3)
+			open = TRUE;
+		else
+		{
+			ptr = (long)0;
+			ptr = (long)(0x9 + fcb);
+			if(*ptr == ' ')
+			{
+				*ptr++ = '6';
+				*ptr++ = '8';
+				*ptr   = 'K';
+			}
+			if(bdos(OPENFILE,fcb) <= 3)
+				open = TRUE;
+		}
+		if(open)
+		{
+			ptr = rsxfcb;
+			for(i = 0;i < 36;i++)
+				*ptr++ = *fcb++;
+		}
+	}		
+}
+
+prtnum(num)
+LONG num;
+{
+	if(num)
+	{
+		prtnum(num/10);
+		bdos(CON_OUT,('0' + (num%10)));
+	}
+}
+
+
+prt_tpa(new)
+BYTE new;
+{
+	BYTE *p;
+	if(!(new))
+		p = msg5;
+	else
+		p = msg6;
+	cr_lf();
+	bdos(PRINT_STRING,p);
+	cr_lf();
+	cr_lf();
+	bdos(PRINT_STRING,msg7);
+	if(low == 0)
+		bdos(CON_OUT,'0');
+	else
+		prtnum(low);
+	bdos(PRINT_STRING,msg8);
+	if(high == 0)
+		bdos(CON_OUT,'0');
+	else
+		prtnum(high);
+	cr_lf();
+}
+	
+
+
+main()
+{
+	REG LONG *p1,size;
+	REG UWORD i;
+
+	bdos(PRINT_STRING,msg1);
+	cr_lf();
+	if(open)
+	{
+		bdos(SETDMA,buf);
+		bdos(READSEQ,rsxfcb);
+		size = 0;
+		p1 = &buf[2];
+		for(i = 0;i <= 3;i++)
+			size += *p1++;
+		size += 2048;
+		bdos(GET_TPA,&TPAB);
+		prt_tpa(FALSE);
+		bdos(CLOSE_FILE,rsxfcb);
+		for(i = 12;i < 36;i++)
+			rsxfcb[i] = NULLB;
+		bdos(OPENFILE,rsxfcb);
+		LPB = rsxfcb;
+		lowadr = high - size;
+		hiadr = high;
+		if(bdos(LOAD_PROG,&LPB) == 0)
+		{
+			high = high - size;
+			TPAB = 0xFF;
+			bdos(SET_TPA,&TPAB);
+			prt_tpa(TRUE);
+			bdos(SETDMA,(baspag + DMA_OFFSET));
+			push();
+		}
+		else
+			bdos(PRINT_STRING,msg4);
+	}
+	else
+		bdos(PRINT_STRING,msg2);
+}

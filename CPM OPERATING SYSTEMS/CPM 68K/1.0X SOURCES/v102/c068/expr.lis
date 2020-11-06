@@ -1,0 +1,1058 @@
+1File: EXPR.C                                                              Page       1
+     1   /*#define DEBUG*/
+     2   /*
+     3   	Copyright 1982
+     4   	Alcyon Corporation
+     5   	8716 Production Ave.
+     6   	San Diego, Ca.  92121
+     7   */
+     8    
+     9   #include "parser.h"
+    10   int opdontop;
+    11   int strassign;
+    12    
+    13   /*
+    14    * expr - expression evaluator
+    15    *		This handles all the expression syntax in C.  This is a straight-
+    16    *		forward operator-stack/oppri scheme for translating infix into
+    17    *		a binary expression tree.
+    18    */
+    19   char *expr()						/* returns 0 or ptr to node*/
+    20   {
+    21   	register char *p;
+    22   	register char *opdsave, *oprsave;
+    23   	register int token, op, oppri, i, opdotsave;
+    24   	int type, sc;
+    25   	long size;
+    26    
+    27   	opdsave = opdp;
+    28   	strassign = 0;
+    29   	oprsave = opp;
+    30   	opdotsave = opdontop;
+    31   	if( !opp || !opdp ) {
+    32   		opp = opstack;
+    33   		opdp = opdstack;
+    34   	}
+    35   	else
+    36   		opp++;
+    37   	opp->o_op = STACKEND;
+    38   	opp->o_pri = STKPRI;
+    39   	opap = exprp;
+    40   	opdontop = 0;
+    41    
+    42   	while( (token=gettok()) != EOF ) {
+    43   		switch( token ) {
+    44   	/*
+    45   	 * the following are the terminal nodes of the expresion tree,
+    46   	 * note that when we see a terminal node, we push it and then go
+    47   	 * and get the next token.  When we see an operator, we need to
+    48   	 * check the operator stack to see if we can do a reduction.
+    49   	 */
+    50   		case CINT:
+    51   			if( doopd(cnalloc(INT,cvalue)) ) {
+    52   exprerr:
+    53   				if( token == SEMI || token == RCURBR )
+    54   					pbtok(token);
+    55   				error("invalid expression");
+    56   				opdp = opdsave;
+    57   				opp = oprsave;
+    58   				opdontop = opdotsave;
+    59   				return(0);
+1File: EXPR.C                                                              Page       2
+    60   			}
+    61   			continue;
+    62   	
+    63   		case CFLOAT:	/*[vlh] 3.4*/
+    64   			if( doopd(fpcnalloc(FLOAT,clvalue)) )
+    65   				goto exprerr;
+    66   			continue;
+    67   	
+    68   		case CLONG:
+    69   			if( doopd(lcnalloc(LONG,clvalue)) )
+    70   				goto exprerr;
+    71   			continue;
+    72   	
+    73   		case SYMBOL:
+    74   			if( !((p=csp)->s_attrib&SDEFINED) ) {
+    75   				if( peek(LPAREN) ) {	/*assume function call*/
+    76   					p->s_sc = EXTERNAL;
+    77   					p->s_type = FUNCTION|INT;
+    78   				}
+    79   				else if( commastop )	/*in initialization?*/
+    80   					p->s_sc = EXTERNAL;
+    81   				else
+    82   					error("undefined symbol: %.8s",p->s_symbol);
+    83   				p->s_attrib =| SDEFINED;
+    84   			}
+    85   			if (p->s_sc==EXTERNAL || function(p->t_type)) {
+    86   				if (!reducep || p->s_sc==EXTERNAL || peek(LPAREN)) {
+    87   					p = enalloc(p);
+    88   					p->t_sc = EXTERNAL;
+    89   				}
+    90   				else {	/* [vlh] 3.4 if (main).... */
+    91   					p = cnalloc(CINT,1);	/* eval function name */
+    92   				}
+    93   			}
+    94   			else
+    95   				p=snalloc(p->s_type,p->s_sc,p->s_offset,p->s_dp,p->s_ssp);
+    96   			if( doopd(p) )
+    97   				goto exprerr;
+    98   			continue;
+    99   	
+   100   		case STRING:
+   101   			outtstr(cvalue);
+   102   			if( doopd(snalloc(ARRAY|CHAR,STATIC,cvalue,0,0)) )
+   103   				goto exprerr;
+   104   			continue;
+   105   	/*
+   106   	 * do special checking for unary ops and operators that can be
+   107   	 * either unary or binary operators, such as -, &, *, etc.
+   108   	 */
+   109   		case RESWORD:
+   110   			if( cvalue != R_SIZEOF ) {
+   111   				goto exprerr;
+   112   			}
+   113   			token = SIZEOF;
+   114   		case COMPL:
+   115   		case NOT:
+   116   			if( opdontop )			/*can't have: operand unary-op*/
+   117   				goto exprerr;
+   118   			break;
+1File: EXPR.C                                                              Page       3
+   119    
+   120   		case LBRACK:
+   121   			opdontop = 0;
+   122   			break;
+   123   	
+   124   		case RBRACK:
+   125   		case RPAREN:
+   126   			if( !opdontop )		/*can't be: operator )*/
+   127   				goto exprerr;
+   128   			break;
+   129   	
+   130   		case PREINC:
+   131   			if( opdontop )			/*assume its lvalue++*/
+   132   				token = POSTINC;
+   133   			break;
+   134    
+   135   		case PREDEC:
+   136   			if( opdontop )			/*assume its lvalue--*/
+   137   				token = POSTDEC;
+   138   			break;
+   139   	
+   140   		case SUB:
+   141   			if(!opdontop) {	/*if no operand, assume unary*/
+   142   				if( peek(CINT) ) {
+   143   					cvalue = -cvalue;
+   144   					continue;
+   145   				}
+   146   				if( peek(CLONG) ) {
+   147   					clvalue = -clvalue;
+   148   					continue;
+   149   				}
+   150   				if( peek(CFLOAT) ) {	/*[vlh] 3.4*/
+   151   					if (!fflag) {		/* IEEE format */
+   152   						if (clvalue & 0x80000000)
+   153   							clvalue =& 0x7fffffff;
+   154   						else
+   155   							clvalue =| 0x80000000;
+   156   					}
+   157   					else			/* FFP format */
+   158   						if (clvalue & 0x80)
+   159   							clvalue =& 0xffffff7f;
+   160   						else
+   161   							clvalue =| 0x80;
+   162   					continue;
+   163   				}
+   164   				token = UMINUS;
+   165   			}
+   166   			break;
+   167   	
+   168   		case AND:
+   169   			if(!opdontop)
+   170   				token = ADDR;
+   171   			break;
+   172    
+   173   		case MULT:
+   174   			if( !opdontop )
+   175   				token = INDR;
+   176   			break;
+   177   	/*
+1File: EXPR.C                                                              Page       4
+   178   	 * for left parenthesis, we need to see if this is a casting operator.
+   179   	 */
+   180    
+   181   		case LPAREN:
+   182   			if( !opdontop ) {	/*see if casting or abstract declarator*/
+   183   				sc = type = 0;
+   184   				if( gettype(&sc,&type,&size) ) {
+   185   					sc = (type == STRUCT) ? dalloc(size) : cdp;
+   186   					p = snalloc(type,STATIC,0,sc,sc);
+   187   					p->t_type =| declarator(1);
+   188   					if( !next(RPAREN) )
+   189   						goto exprerr;
+   190   					if( tdp )
+   191   						p->t_type=addtdtype(tdp,p->t_type,p->t_dp,
+   192   							&(p->t_ssp));
+   193   					pushopd(p);
+   194   					token = CAST;
+   195   					if( opp->o_op == SIZEOF ) {
+   196   						opdontop++;
+   197   						continue;
+   198   					}
+   199   				}
+   200   			}
+   201   			else  /*we've seen (), look for NACALL*/
+   202   				token = (next(RPAREN)) ? MPARENS : CALL;
+   203   			break;
+   204   	
+   205   		case PERIOD:
+   206   		case APTR:
+   207   			smember++;			/*next token needs to be struct membr*/
+   208   			strucptr[smember+instruct] = csp->s_struc;
+   209   			break;
+   210   	
+   211   		}
+   212   	/*
+   213   	 * we have seen an operator, get its info and then check the operator
+   214   	 * stack.
+   215   	 */
+   216   		if( binop(token) ) {
+   217   	/*
+   218   	 * handle special binary operators, such as CAST and post-inc and
+   219   	 * post-dec.
+   220   	 */
+   221   			if(!opdontop) {
+   222   				if( token != PREDEC && token != PREINC && token != CAST )
+   223   					goto exprerr;
+   224   			}
+   225   			if( token != POSTDEC && token != POSTINC && token != MPARENS )
+   226   				opdontop = 0;				/*this fixes x++ op problem.*/
+   227   		}
+   228   		oppri = oppriority(token);
+   229   		if( commastop && token == COMMA )	/*need to stop at comma(init)*/
+   230   			oppri = COLPRI;
+   231   		if( colonstop && token == COLON )	/*need to stop at colon(case)*/
+   232   			oppri = COLPRI;
+   233   		while( 1 ) {
+   234   			if( oppri > opp->o_pri ||
+   235   					(oppri == opp->o_pri && rasop(token)) ) {
+   236   	/*
+1File: EXPR.C                                                              Page       5
+   237   	 * we have encountered a higher priority (or right-associative)
+   238   	 * operator, hence we need to stack it.
+   239   	 */
+   240   				if( ++opp >= &opstack[OPSSIZE] )
+   241   					ferror("expression too complex");
+   242   				if( token == POSTINC || token == POSTDEC )
+   243   					oppri = PSTPRI;
+   244   				else if( token == LPAREN || token == LBRACK ||
+   245   						token == CALL )
+   246   					oppri = CALPRI;
+   247   				opp->o_op = token;
+   248   				opp->o_pri = oppri;
+   249   				break;
+   250   			}
+   251   	/*
+   252   	 * we have encountered a lower priority operator, hence we need to
+   253   	 * do a reduction.
+   254   	 */
+   255   			op = opp->o_op;
+   256   			opp--;
+   257   			type = CINT;
+   258   			switch( op ) {
+   259   		
+   260   			case STACKEND:			/*we accept the expression...*/
+   261   				pbtok(token);
+   262   				if (!strassign) {
+   263   					if (!maketree(0))
+   264   						goto exprerr;
+   265   				}
+   266   				if (!(p=popopd()))
+   267   					goto exprerr;
+   268   				opdp = opdsave;
+   269   				opp = oprsave;
+   270   				opdontop = opdotsave;
+   271   				return(p);
+   272   		
+   273   			case LPAREN:			/*assure these have matching )*/
+   274   			case CALL:
+   275   				if( token != RPAREN )
+   276   					goto exprerr;
+   277   				break;
+   278    
+   279   			case MPARENS:
+   280   				if( !maketree(NACALL) )
+   281   					goto exprerr;
+   282   				continue;
+   283   		
+   284   			case LBRACK:
+   285   				if( token != RBRACK )
+   286   					goto exprerr;
+   287   				if(!maketree(ADD))	/*array[index]->*(array+index)*/
+   288   					goto exprerr;
+   289   				op = INDR;
+   290   				break;
+   291   		
+   292   			case PREINC:			/*turn these into binary operators*/
+   293   			case POSTINC:			/*which in reality they are...*/
+   294   			case PREDEC:
+   295   			case POSTDEC:
+1File: EXPR.C                                                              Page       6
+   296   				pushopd(cnalloc(INT,1));
+   297   			default:
+   298   				if(!maketree(op))
+   299   					goto exprerr;
+   300   				continue;			/*see if we can reduce some more...*/
+   301   			}
+   302   			if( op != LPAREN && !maketree(op) )
+   303   				goto exprerr;
+   304   			break;
+   305   		}
+   306   	}
+   307   	error("unexpected EOF");
+   308   	return(0);
+   309   }
+   310    
+   311   /* talloc - expression area tree node allocation
+   312    *		Allocates area and checks for overflow.*/
+   313   char *talloc(size)					/* returns pointer to node*/
+   314   int size;							/* size of node to alloc*/
+   315   {
+   316   	register char *p;
+   317    
+   318   	p = opap;
+   319   	if( p + size >= &exprarea[EXPSIZE] )
+   320   		ferror("expression too complex");
+   321   	opap = p + size;
+   322   	return(p);
+   323   }
+   324    
+   325   /*
+   326    * enalloc - external name alloc
+   327    *		Allocates an expression tree node for an external name and
+   328    *		copies symbol table info and symbol into tree node.
+   329    */
+   330   char *enalloc(sp)					/* returns - none*/
+   331   struct symbol *sp;					/* pointer to symbol table entry*/
+   332   {
+   333   	register struct extnode *ep;
+   334    
+   335   	ep = talloc(sizeof(*ep));
+   336   	ep->t_op = SYMBOL;
+   337   	ep->t_sc = sp->s_sc;
+   338   	ep->t_type = sp->s_type;
+   339   	ep->t_dp = sp->s_dp;
+   340   	ep->t_ssp = sp->s_ssp;
+   341   	ep->t_offset = sp->s_offset;
+   342   	symcopy(sp->s_symbol,ep->t_symbol);
+   343   	return(ep);
+   344   }
+   345    
+   346   /* cnalloc - constant node allocation
+   347    *		Allocates a constant tree node and fills the info fields.*/
+   348   char *cnalloc(type,value)		/* returns pointer to node*/
+   349   int type;							/* data type*/
+   350   int value;							/* constant value*/
+   351   {
+   352   	register struct conode *cp;
+   353    
+   354   	cp = talloc(sizeof(*cp));
+1File: EXPR.C                                                              Page       7
+   355   	cp->t_op = CINT;
+   356   	cp->t_type = type;
+   357   	cp->t_dp = 0;
+   358   	cp->t_ssp = 0;
+   359   	cp->t_value = value;
+   360   	return(cp);
+   361   }
+   362    
+   363   /* lcnalloc - long constant node allocation*/
+   364   /*		Allocates a constant tree node and fills the info fields.*/
+   365   char *lcnalloc(type,value)		/* returns pointer to node*/
+   366   int type;						/* data type*/
+   367   long value;						/* constant value*/
+   368   {
+   369   	register struct lconode *cp;
+   370    
+   371   	cp = talloc(sizeof(*cp));
+   372   	cp->t_op = CLONG;
+   373   	cp->t_type = type;
+   374   	cp->t_dp = 0;
+   375   	cp->t_ssp = 0;
+   376   	cp->t_lvalue = value;
+   377   	return(cp);
+   378   }
+   379    
+   380   /* fpcnalloc - floating point constant node allocation*/
+   381   /*		Allocates a constant tree node and fills the info fields.*/
+   382   char *fpcnalloc(type,value)		/*[vlh] 3.4 returns pointer to node*/
+   383   int type;						/* data type*/
+   384   long value;						/* constant value*/
+   385   {
+   386   	register struct lconode *cp;
+   387    
+   388   	cp = talloc(sizeof(*cp));
+   389   	cp->t_op = CFLOAT;
+   390   	cp->t_type = type;
+   391   	cp->t_dp = 0;
+   392   	cp->t_ssp = 0;
+   393   	cp->t_lvalue = value;
+   394   	return(cp);
+   395   }
+   396    
+   397   /* tnalloc - tree node allocation*/
+   398   /*		Allocates an operator tree node and fills the info fields*/
+   399   char *tnalloc(op,type,dp,ssp,left,right)	/* returns pointer to node*/
+   400   int op;								/* operator*/
+   401   int type;							/* operator type*/
+   402   int dp;								/* dimension pointer or other info*/
+   403   int ssp;							/* structure length pointer*/
+   404   char *left;							/* left subtree*/
+   405   char *right;						/* right subtree*/
+   406   {
+   407   	register struct tnode *tp;
+   408    
+   409   	tp = talloc(sizeof(*tp));
+   410   	tp->t_op = op;
+   411   	tp->t_type = type;
+   412   	tp->t_dp = dp;
+   413   	tp->t_ssp = ssp;
+1File: EXPR.C                                                              Page       8
+   414   	tp->t_left = left;
+   415   	tp->t_right = right;
+   416   	return(tp);
+   417   }
+   418    
+   419   /* pushopd - put operand node onto operand stack*/
+   420   /*		Checks for operand stack overflow.*/
+   421   pushopd(tp)							/* returns - none*/
+   422   struct tnode *tp;					/* pointer to tree node to push*/
+   423   {
+   424   #ifdef DEBUG
+   425   	error("pushopd %d",tp->t_op);
+   426   #endif
+   427   	if( opdp >= &opdstack[OPDSIZE] )
+   428   		ferror("expression too complex");
+   429   	*opdp++ = tp;
+   430   }
+   431    
+   432   /* popopd - pop operand stack*/
+   433   /*		Checks for stack underflow*/
+   434   char *popopd()						/* returns ptr to top operand*/
+   435   {
+   436   	register struct tnode *tp;
+   437    
+   438   	if( opdp <= &opdstack[0] )
+   439   		return(0);
+   440   	tp = *--opdp;
+   441   #ifdef DEBUG
+   442   	error("popopd: %d",tp->t_op);
+   443   #endif
+   444   	return(tp);
+   445   }
+   446    
+   447   /* doopd - handle constant or symbol node operand*/
+   448   /*		Pushes node onto operand stack and handles opdontop flag.*/
+   449   doopd(tp)						/* returns 1 if syntax error, 0 for ok*/
+   450   struct tnode *tp;				/* pointer to tree node*/
+   451   {
+   452   	pushopd(tp);
+   453   	if( opdontop )
+   454   		return(1);
+   455   	opdontop++;
+   456   	return(0);
+   457   }
+   458    
+   459   	/*
+   460   	 * This indicates if a conversion operator is needed given the types
+   461   	 * of the two operands.  The upper diagonal is applied ONLY if this
+   462   	 * is an assignment operator and the indexes are swapped so the lower
+   463   	 * diagonal is used otherwise.
+   464   	 * INT		UNSN		LONG		DOUB		PTR
+   465   	 */
+   466   char cvmap[5][5] {
+   467   	0,			UNSN_INT,	LONG_INT,	DOUB_INT,	PTR_INT,	/*INT*/
+   468   	INT_UNSN,	0,			LONG_UNSN,	DOUB_UNSN,	PTR_UNSN,	/*UNSN*/
+   469   	INT_LONG,	UNSN_LONG,	0,			DOUB_LONG,	PTR_LONG,	/*LONG*/
+   470   	INT_DOUB,	UNSN_DOUB,	LONG_DOUB,	0,			BADCONV,	/*DOUB*/
+   471   	INT_PTR,	UNSN_PTR,	LONG_PTR,	BADCONV,	PTR_PTR,	/*PTR*/
+   472   };
+1File: EXPR.C                                                              Page       9
+   473    
+   474   /*
+   475    * maketree - given operator, takes operands and builds up tree
+   476    *		This takes the given operator, allocates a node for it
+   477    *		and links up the subtrees on the operand stack.  A lot of
+   478    *		work is in inserting the proper conversions.
+   479    */
+   480   maketree(op)						/* returns success or failure */
+   481   int op;								/* new root operator*/
+   482   {
+   483   	register struct tnode *ltp, *rtp, *p;
+   484   	register int type, ltype, rtype, lconv, conv, pconv, ilen;
+   485    
+   486   #ifdef DEBUG
+   487   	error("maketree: op = %d",op);
+   488   #endif
+   489   	if( binop(op) ) {
+   490   		if(!(rtp=popopd()))
+   491   			return(0);
+   492   		rtype = (rtp=funcref(arrayref(rtp)))->t_type;
+   493   	}
+   494   	if(!(ltp=popopd()))
+   495   		return(0);
+   496   	if( op == SIZEOF ) {	/* [vlh] 3.4 ilen */
+   497   		ilen = dsize(ltp->t_type,ltp->t_dp,ltp->t_ssp);
+   498   		pushopd(cnalloc(INT,ilen));
+   499   		return(1);
+   500   	}
+   501   	if( op != ADDR ) {
+   502   		ltp = arrayref(ltp);
+   503   		if( op != CALL && op != NACALL )
+   504   			ltp = funcref(ltp);
+   505   	}
+   506   	if( specops(op,ltp,rtp) )
+   507   		return( 1 );
+   508   	ltype = ltp->t_type;
+   509   	if( lintegral(op) )
+   510   		integral(ltp,LONG);
+   511   	if( rintegral(op) )
+   512   		integral(rtp,LONG);
+   513   	if( lvalop(op) && ltp->t_op != SYMBOL && ltp->t_op != INDR &&
+   514   			ltp->t_op != BFIELD )
+   515   		error("assignable operand required");
+   516   	if( unaryop(op) ) {
+   517   		if(!unopeval(op,ltp))
+   518   			pushopd(tnalloc(op,ltype,ltp->t_dp,ltp->t_ssp,ltp));
+   519   		return;
+   520   	}
+   521   	if( ltype == STRUCT || rtype == STRUCT ) {
+   522   		if (ltype==STRUCT && rtype==STRUCT && op==ASSIGN) { /*[vlh]*/
+   523   			pushopd(ltp);
+   524   			maketree(ADDR);
+   525   			pushopd(rtp);
+   526   			maketree(ADDR);
+   527   			maketree(STASSIGN);
+   528   			strassign = 1;
+   529   			return(1);
+   530   		}
+   531   		ltype = rtype = INT;
+1File: EXPR.C                                                              Page      10
+   532   		error("illegal structure operation");
+   533   	}
+   534   	type = ltype;
+   535   	if( rtype == TYPELESS ) {
+   536   		rtp->t_type = rtype = INT;
+   537   		lconv = conv = 0;
+   538   	}
+   539   	else {
+   540   		lconv = ttoconv(ltype);
+   541   		conv = ttoconv(rtype);
+   542   		if (!asgop(op) && conv > lconv) {
+   543   			conv = cvmap[conv][lconv];
+   544   			lconv = 1;
+   545   			type = rtype;
+   546   		}
+   547   		else {
+   548   			conv = cvmap[lconv][conv];
+   549   			lconv = 0;
+   550   		}
+   551   	}
+   552   	if( asgop(op) ) {
+   553   		if( (op == ASSIGN || op == FRETURN) && (conv == INT_PTR ||
+   554   				conv == UNSN_PTR) && rtp->t_op != CINT )
+   555   			error("short assigned to pointer");
+   556   		if( op == ASSIGN || op == CAST ) {
+   557   			switch( conv ) {
+   558    
+   559   			case INT_PTR:
+   560   			case UNSN_PTR:
+   561   			case PTR_PTR:
+   562   			case PTR_LONG:
+   563   			case LONG_PTR:
+   564   				conv = 0;
+   565   				break;
+   566   			}
+   567   		}
+   568   	}
+   569   	else if( op == COLON && suptype(ltype) != 0 && ltype == rtype )
+   570   		conv = 0;
+   571   	else if( relop(op) && conv == PTR_PTR )
+   572   		conv = 0;
+   573   	pconv = 0;
+   574   	if ((relop(op) || op==FRETURN) && alltype(ltype) == (STRUCT | POINTER)
+   575   				&& (conv == INT_PTR || conv == LONG_PTR))	/* [vlh] 3.4 */
+   576   		conv = 0;	/* int compare to struct pointer, no conversion */
+   577   	if( conv == PTR_PTR ) {
+   578   		conv = 0;
+   579   		if( op == SUB ) {
+   580   			type = LONG;
+   581   			pconv++;
+   582   		}
+   583   		else if(op != FRETURN && ( (alltype(ltype) != alltype(rtype) ||
+   584   					alltype(ltype) != (POINTER|CHAR)) ) )
+   585   			conv = BADCONV;
+   586   	}
+   587   	if( conv ) {
+   588   		if( conv == BADCONV )
+   589   			error("illegal type conversion");
+   590   		else if( lconv ) {
+1File: EXPR.C                                                              Page      11
+   591   			ltp = cvopgen(ltp,type,conv,psize(rtp),op);
+   592   		}
+   593   		else {
+   594   			rtp = cvopgen(rtp,type,conv,psize(ltp),op);
+   595   		}
+   596   	}
+   597   	else if( op == CAST && rtp->t_type != CHAR ) {
+   598   		rtp->t_type = ltp->t_type;
+   599   		rtp->t_ssp = ltp->t_ssp;		/* [vlh] 3.4 */
+   600   		rtp->t_dp = ltp->t_dp;			/* [vlh] 3.4 */
+   601   	}
+   602   	if( relop(op) )
+   603   		type = INT;
+   604   	if( op == CAST )
+   605   		pushopd(rtp);
+   606   	else if(!binopeval(op,ltp,rtp)) {
+   607   		if( btype(ltype) == STRUCT || btype(rtype) != STRUCT )
+   608   			p = ltp;
+   609   		else
+   610   			p = rtp;
+   611   		pushopd(tnalloc(op,type,p->t_dp,p->t_ssp,ltp,rtp));
+   612   	}
+   613   	if( pconv && ltype != (POINTER|CHAR) ) {
+   614   		if(!(ltp=popopd()))
+   615   			return(0);
+   616   		pushopd(cvopgen(ltp,LONG,PTR_LONG,psize(ltp->t_left),op));
+   617   	}
+   618   	return(1);
+   619   }
+   620    
+   621   /* specops - handle special operators in building tree*/
+   622   specops(op,ltp,rtp)				/* returns 1 if op special, 0 otherwise*/
+   623   int op;							/* operator*/
+   624   struct tnode *ltp;				/* left subtree pointer*/
+   625   struct tnode *rtp;				/* right subtree pointer*/
+   626   {
+   627   	register int type, sr_size, sl_size;
+   628    
+   629   	type = ltp->t_type;
+   630   	switch (op) {
+   631    
+   632   	case 0:
+   633   		break;
+   634    
+   635   	default:
+   636   		return(0);
+   637    
+   638   	case APTR:							/*expr -> name*/
+   639   		integral(ltp,LONG);				/*we need to turn expr into a*/
+   640   		ltp->t_type = POINTER|STRUCT;	/*pointer to a struct, then use*/
+   641   		pushopd(ltp);					/*expr . name stuff*/
+   642   		maketree(INDR);
+   643   		ltp = popopd();					/*ltp cannot be 0*/
+   644   	case PERIOD:						/*expr . name*/
+   645   		if( !(isstel(rtp)) )
+   646   			error("invalid structure member name");
+   647   		type = rtp->t_type;
+   648   		if( array(type) ) {
+   649   			type = delspchk(type);
+1File: EXPR.C                                                              Page      12
+   650   			rtp->t_dp++;
+   651   		}
+   652   		tadjust(ltp,type,rtp->t_dp,rtp->t_ssp);
+   653   		pushopd(ltp);
+   654   		maketree(ADDR);
+   655   		pushopd(cnalloc(TYPELESS,rtp->t_offset));
+   656   		maketree(ADD);
+   657   		if( notarray(rtp->t_type) )
+   658   			maketree(INDR);
+   659   		ltp = popopd();
+   660   		if( rtp->t_sc == BFIELDCL )		/*ltp cannot be 0*/
+   661   			ltp = tnalloc(BFIELD,type,rtp->t_dp,rtp->t_ssp,ltp);
+   662   		break;
+   663    
+   664   	case QMARK:
+   665   		if( rtp->t_op != COLON )
+   666   			error("invalid ?: operator syntax");
+   667   		if( ltp->t_op == CINT && rtp->t_left->t_op == CINT &&
+   668   				rtp->t_right->t_op == CINT )
+   669   			ltp->t_value = (ltp->t_value ? rtp->t_left->t_value :
+   670   					rtp->t_right->t_value);
+   671   		else
+   672   			ltp = tnalloc(op,rtp->t_type,0,0,ltp,rtp);
+   673   		break;
+   674    
+   675   	case LAND:
+   676   	case LOR:
+   677   	case COMMA:							/*don't need conversions here*/
+   678   		ltp = tnalloc(op,INT,0,0,ltp,rtp);
+   679   		break;
+   680    
+   681   	case INDR:
+   682   		if( ltp->t_op == ADDR  )		/**& is null op*/
+   683   			ltp = ltp->t_left;
+   684   		else {
+   685   			if( function(type) )
+   686   				error("indirection on function invalid");
+   687   			ltp = tnalloc(INDR,delspchk(type),ltp->t_dp,ltp->t_ssp,ltp);
+   688   		}
+   689   		break;
+   690    
+   691   	case STASSIGN:	/*[vlh]*/
+   692   		sr_size = psize(rtp);
+   693   		sl_size = psize(ltp);
+   694   		if( sl_size >= sr_size )
+   695   			ltp = tnalloc(STASSIGN,sr_size,0,0,ltp,rtp);
+   696   		else
+   697   			error("invalid structure assignment");
+   698   		break;
+   699    
+   700   	case NACALL:
+   701   	case CALL:
+   702   		if( notfunction(type) )
+   703   			error("illegal call");
+   704   		ltp = tnalloc(op,delspchk(type),ltp->t_dp,ltp->t_ssp,ltp,rtp);
+   705   		break;
+   706    
+   707   	case ADDR:
+   708   		if( ltp->t_op == INDR ) {		/*&* is null op*/
+1File: EXPR.C                                                              Page      13
+   709   /*			ltp->t_left->t_type = addsp(type,POINTER);*/
+   710   /*			ltp->t_left->t_dp = ltp->t_dp;*/
+   711   /*			ltp->t_left->t_ssp = ltp->t_ssp;*/
+   712   			ltp = ltp->t_left;
+   713   		}
+   714   		else {
+   715   			if( ltp->t_op != SYMBOL )
+   716   				error("& operand illegal");
+   717   			else if( ltp->t_sc == REGISTER )
+   718   				error("address of register");
+   719   			ltp = tnalloc(ADDR,addsp(type,POINTER),ltp->t_dp,ltp->t_ssp,
+   720   					ltp);
+   721   		}
+   722   		break;
+   723   	}
+   724   	pushopd(ltp);
+   725   	return(1);
+   726   }
+   727    
+   728   /* cvopgen - generate a conversion operator*/
+   729   /*		Generates conversions necessary for integers, pointers and longs.*/
+   730   char *cvopgen(tp,type,conv,len,op)	/* returns pointer to conv node*/
+   731   struct tnode *tp;					/* pointer to node to do conversion*/
+   732   int type;							/* type to convert to*/
+   733   int conv;							/* specified conversion*/
+   734   long len;							/* object length [vlh] 3.4 i=>l */
+   735   int op;								/* for cast operator*/
+   736   {
+   737   	register struct tnode *rtp;
+   738   	register int cop, ilen;
+   739    
+   740   	switch(conv) {
+   741    
+   742   	case INT_PTR:
+   743   	case UNSN_PTR:
+   744   		if( op == CAST || op == FRETURN ) {
+   745   			cop = INT2L;			/*of the ptd to objects length plus*/
+   746   			if( len != 1L ) {		/*an integer to long covnversion*/
+   747   				ilen = len;
+   748   				rtp = cnalloc(INT,ilen);
+   749   				tp = tnalloc(MULT,type,0,0,tp,rtp);
+   750   			}
+   751   			break;
+   752   		}
+   753   	case PTR_LONG:						/*need to generate mult or div*/
+   754   	case LONG_PTR:						/*of the ptd to objects length*/
+   755   		if( len == 1 )
+   756   			return(tp);
+   757   		ilen = len;
+   758   		cop = (conv == PTR_LONG ? DIV : MULT);
+   759   		rtp = cnalloc(INT,ilen);
+   760   		break;
+   761    
+   762   	case INT_LONG:
+   763   	case UNSN_LONG:
+   764   		cop = INT2L;
+   765   		break;
+   766    
+   767   	case INT_DOUB:	/*[vlh] 3.4*/
+1File: EXPR.C                                                              Page      14
+   768   	case UNSN_DOUB:
+   769   		cop = INT2F;
+   770   		break;
+   771    
+   772   	case LONG_DOUB:	/*[vlh] 3.4*/
+   773   		cop = LONG2F;
+   774   		break;
+   775    
+   776   	case DOUB_LONG:	/*[vlh] 3.4*/
+   777   		cop = FLOAT2L;
+   778   		break;
+   779    
+   780   	case DOUB_INT:	/*[vlh] 3.4*/
+   781   	case DOUB_UNSN:
+   782   		cop = FLOAT2I;
+   783   		break;
+   784    
+   785   	case LONG_INT:
+   786   	case LONG_UNSN:
+   787   		cop = LONG2I;
+   788   		break;
+   789    
+   790   	default:
+   791   		error("invalid conversion");
+   792   		return(tp);
+   793   	}
+   794   	return( tnalloc(cop,type,0,0,tp,rtp) );
+   795   }
+   796    
+   797   /* tadjust - expression tree type adjustment*/
+   798   /*		Adjusts the types of subtrees to agree with the top of the tree.*/
+   799   tadjust(tp,type,dp,ssp)				/* returns - none*/
+   800   struct tnode *tp;					/* pointer to tree*/
+   801   int type;							/* type to adjust to*/
+   802   int dp;								/* dimension pointer or info*/
+   803   int ssp;							/* structure pointer*/
+   804   {
+   805   	register int op;
+   806    
+   807   	tp->t_type = type;
+   808   	if( dp >= 0 ) {
+   809   		tp->t_dp = dp;
+   810   		tp->t_ssp = ssp;
+   811   	}
+   812   	if( (op=tp->t_op) == ADDR )
+   813   		type = delspchk(type);
+   814   	else if( op == INDR )
+   815   		type = addsp(type,POINTER);
+   816   	else if( op != ADD && op != SUB )
+   817   		return;
+   818   	tadjust(tp->t_left,type,dp,ssp);
+   819   }
+   820    
+   821   /* funcref - handle tree function reference*/
+   822   /*		Turns a reference to a function into the address of the function.*/
+   823   char *funcref(tp)					/* returns pointer to node*/
+   824   struct tnode *tp;					/* pointer to old node*/
+   825   {
+   826   	if( function(tp->t_type) )
+1File: EXPR.C                                                              Page      15
+   827   		tp = tnalloc(ADDR,addsp(tp->t_type,POINTER),tp->t_dp,tp->t_ssp,tp);
+   828   	return(tp);
+   829   }
+   830    
+   831   /* arrayref - handle tree array reference*/
+   832   /*		Turns a reference to an array into the address of the array.*/
+   833   char *arrayref(tp)					/* returns pointer to tree node*/
+   834   struct tnode *tp;					/* tree node pointer*/
+   835   {
+   836   	if( array(tp->t_type) && !(isstel(tp)) ) {
+   837   		tp->t_dp++;
+   838   		pushopd(tp);
+   839   		tadjust(tp,delspchk(tp->t_type),-1,0);
+   840   		maketree(ADDR);
+   841   		tp = popopd();				/*tp cannot be 0*/
+   842   	}
+   843   	return(tp);
+   844   }
+   845    
+   846   /* integral - checks operand for integral type*/
+   847   /*		This checks for needing an integral operand.*/
+   848   integral(tp,atype)					/* returns - none*/
+   849   struct tnode *tp;					/* pointer to tree node*/
+   850   int atype;							/* alternate type allowable*/
+   851   {
+   852   	register int type;
+   853    
+   854   	if( (type=tp->t_type) != INT && type != UNSIGNED && type != CHAR &&
+   855   			!suptype(type) && type != atype )
+   856   		error("invalid operand type");
+   857   }
+   858    
+   859   /* ttoconv - maps normal type into conversion table type*/
+   860   ttoconv(type)						/* returns conversion type*/
+   861   int type;							/* type to convert*/
+   862   {
+   863   	switch(type) {
+   864    
+   865   	case CHAR:
+   866   	case INT:
+   867   		return(0);
+   868    
+   869   	case UNSIGNED:
+   870   		return(1);
+   871    
+   872   	case LONG:
+   873   		return(2);
+   874    
+   875   	case FLOAT:
+   876   	case DOUBLE:
+   877   		return(3);
+   878    
+   879   	default:
+   880   		return(4);
+   881   	}
+   882   }
+   883    
+   884   /* binopeval - does binary operator constant expression evaluation*/
+   885   /*		Does the constant expression evaluation for binary operators.*/
+1File: EXPR.C                                                              Page      16
+   886   binopeval(op,ltp,rtp)				/* returns 1 if done, 0 if not*/
+   887   int op;								/* operator to evaluate*/
+   888   struct tnode *ltp;					/* pointer to left subtree*/
+   889   struct tnode *rtp;					/* pointer to right subtree*/
+   890   {
+   891   	register int lvalue, rvalue;
+   892    
+   893   	if( ltp->t_op != CINT )
+   894   		return(0);
+   895   	lvalue = ltp->t_value;
+   896   	if( rtp->t_op != CINT )
+   897   		return(0);
+   898   	rvalue = rtp->t_value;
+   899   	switch (op) {
+   900    
+   901   	case ADD:
+   902   		lvalue =+ rvalue;
+   903   		break;
+   904    
+   905   	case SUB:
+   906   		lvalue =- rvalue;
+   907   		break;
+   908    
+   909   	case MULT:
+   910   		lvalue =* rvalue;
+   911   		break;
+   912    
+   913   	case DIV:
+   914   		lvalue =/ rvalue;
+   915   		break;
+   916    
+   917   	case MOD:
+   918   		lvalue =% rvalue;
+   919   		break;
+   920    
+   921   	case AND:
+   922   		lvalue =& rvalue;
+   923   		break;
+   924    
+   925   	case OR:
+   926   		lvalue =| rvalue;
+   927   		break;
+   928    
+   929   	case XOR:
+   930   		lvalue =^ rvalue;
+   931   		break;
+   932    
+   933   	case LSH:
+   934   		lvalue =<< rvalue;
+   935   		break;
+   936    
+   937   	case RSH:
+   938   		lvalue =>> rvalue;
+   939   		break;
+   940    
+   941   	case EQUALS:
+   942   		lvalue = (lvalue == rvalue);
+   943   		break;
+   944    
+1File: EXPR.C                                                              Page      17
+   945   	case NEQUALS:
+   946   		lvalue = (lvalue != rvalue);
+   947   		break;
+   948    
+   949   	case GREAT:
+   950   		lvalue = (lvalue > rvalue);
+   951   		break;
+   952    
+   953   	case LESS:
+   954   		lvalue = (lvalue < rvalue);
+   955   		break;
+   956    
+   957   	case GREATEQ:
+   958   		lvalue = (lvalue >= rvalue);
+   959   		break;
+   960    
+   961   	case LESSEQ:
+   962   		lvalue = (lvalue <= rvalue);
+   963   		break;
+   964    
+   965   	default:
+   966   		return(0);
+   967   	}
+   968   	ltp->t_value = lvalue;
+   969   	pushopd(ltp);
+   970   	return(1);
+   971   }
+   972    
+   973   /* unopeval - unary operator constant expression evaluation*/
+   974   /*		Does constant expression evaluation for unary operators.*/
+   975   unopeval(op,tp)						/* returns 1 if done, 0 otherwise*/
+   976   int op;								/* operator to evaluate*/
+   977   struct tnode *tp;					/* pointer to subexpression*/
+   978   {
+   979   	register int value;
+   980    
+   981   	if( tp->t_op != CINT )
+   982   		return(0);
+   983   	value = tp->t_value;
+   984   	switch( op ) {
+   985    
+   986   	case COMPL:
+   987   		value = ~ value;
+   988   		break;
+   989    
+   990   	case UMINUS:
+   991   		value = - value;
+   992   		break;
+   993    
+   994   	case NOT:
+   995   		value = ! value;
+   996   		break;
+   997    
+   998   	default:
+   999   		return(0);
+  1000   	}
+  1001   	tp->t_value = value;
+  1002   	pushopd(tp);
+  1003   	return(1);
+1File: EXPR.C                                                              Page      18
+  1004   }
+  1005    
+  1006   /* cexpr - evaluate a constant integer expression*/
+  1007   /*		Used in evaluating array bounds, bit field numbers, etc.*/
+  1008   cexpr()
+  1009   {
+  1010   	register struct tnode *tp;
+  1011   	register char *savep;
+  1012    
+  1013   	savep = exprp;
+  1014   	exprp = opap;
+  1015   	commastop++;
+  1016   	if( (tp=expr()) && tp->t_op != CINT )
+  1017   		error("constant required");
+  1018   	commastop--;
+  1019   	exprp = savep;
+  1020   	return( tp->t_value );
+  1021   }
+  1022    
+  1023   /* delspchk - delete one special reference and check if non-zero*/
+  1024   delspchk(type)						/*returns new special type*/
+  1025   int type;							/* type to modify*/
+  1026   {
+  1027   	if(!(suptype(type)))
+  1028   		error("bad indirection");
+  1029   	return( delsp(type) );
+  1030   }
+  1031    
+  1032   /* psize - return size of object ptd at by pointer*/
+  1033   long								/* [vlh] 3.4 int => long */
+  1034   psize(tp)							/* returns size of object in bytes*/
+  1035   struct tnode *tp;					/* pointer to tree node*/
+  1036   {
+  1037   	if ( !(suptype(tp->t_type)) )	/* what case ??? */
+  1038   		return(1);
+  1039   	return( dsize(delsp(tp->t_type),tp->t_dp,tp->t_ssp) );
+  1040   }

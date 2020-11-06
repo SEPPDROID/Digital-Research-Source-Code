@@ -1,0 +1,23 @@
+$ cx CREAT
+$ cx cleanup
+$ cx dup
+$ cx getc
+$ cx getchar
+$ cx GETPID
+$ cx PUTC
+$ cx putchar
+$ cx lseek
+$ cx SEEK
+$ cx UNLINK
+$ cx CLENF
+$ cx FTOA
+$ cx PRINTF
+$ cx FPRINTF
+$ cx SPRINTF
+$ cx XPRINTF
+$ cx sbrk
+$ cx strcat
+$ cx xstrcmp
+$library/create klutz *.obj
+$ copy klutz.olb lib:
+$ delete *.obj;*,*.olb;*

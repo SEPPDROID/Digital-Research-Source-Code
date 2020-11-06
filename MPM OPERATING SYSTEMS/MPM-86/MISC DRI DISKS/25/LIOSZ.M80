@@ -1,0 +1,1833 @@
+	;	File name		liosz.m80
+	;	Written by		  Toshihumi Murata
+	;				B U G   sapporo japan
+	;	1st  editing		July 13, 1983  15:27:07
+	;	Last editing		Sep. 20, 1983  16:44:12
+	;	Function		Assembler part of LIOS
+	;	Debugged(?)	by	Tomoshi Hirayama SONY
+	;				Sept. 23, 1983
+	;	Debugged	by	Steve Schmitt -- save bc in CON_IN
+	;				Oct. 26, 1983
+	; 	Modified	by	Steve Schmitt -- GENERIC
+	;				Jan. 11, 1984
+
+*include	SMC05.DEF
+
+
+
+SYSTEM	EQU	5
+SIMON	EQU	8
+
+CR	EQU	0DH
+LF	EQU	0AH
+BS	EQU	08H
+
+GMOD		EQU	0	; Full screen mode
+SMOD		EQU	1	; Split screen mode
+TMOD		EQU	2	; Text screen mode
+
+PU		EQU	0
+PD		EQU	1
+
+BLINK		EQU	40H	; blink bit mask
+
+TEXTPL		EQU	084H	; 1st plane is used as text plane
+TRANSPL		EQU	0C4H	; 2nd plane is used as trans. plane
+
+PALCOUNT	EQU	16	; The number of palettes
+
+NORMALMOD	EQU	0	; normal plot mode
+XORMOD		EQU	1	; xor plot mode
+
+WHITE		EQU	7	; White color code
+
+
+
+
+	DSEG
+
+SCR_MOD:	DB	TMOD	; Holds current screen mode
+
+ALFAX:		DB	0	; x coordinate of alpha cursor
+ALFAY:		DB	0	; y coordinate of alpha cursor
+
+BLI:		DB	0	;blink flag
+
+ALFAC:		DB	7	;character color
+
+PALMAP:		DS	PALCOUNT*3
+
+RETMAP:		DS	2*3
+
+SPLTTP:		DB	21	; text starting line number in splitscreen
+				 ;0 relative
+PEN_FLAG:	DB	1	; 0 if penup, 1 if pendown
+
+PEN_COLOR:	DB	WHITE	; Current pen color
+XOR_FLAG:	DB	0	; 1 if xor mode. 0 if normal mode
+
+
+	CSEG
+
+
+	ENTRY	BEEP
+BEEP:	PUSH	BC
+	LD	C,2
+	LD	E,7
+	CALL	SYSTEM
+	POP	BC
+	RET
+
+
+;	==================================================================
+;	==			INITIALIZATION AND MODE SETUP		==
+;	==================================================================
+
+
+;	initmode ()		/* Clears screen, sets borders, and	*/
+;				/* initializes peripherals.		*/
+;	{
+;		register int i;
+;	
+;		rslini();	/* move rom_call_routine to topmem,	*/
+;				/* and initialize resolution.		*/
+;		sndini();	/* stop sounds				*/
+;		reset_pal(PALCOUNT);
+;		g_pal(1);
+;		c_pal(1);
+;		set_bord(0);
+;		clr_scrn();
+;		txton();		/* select text plane		*/
+;		for (i = 0; i < 0x7d0; ++i)
+;			vout(i,' ');	/* clear character plane	*/
+;		for (i = 0x800; i < 0x800+0x7d0; ++i)
+;			vout(i,7);	/* clear attribute plane	*/
+;		set_curs(0,0);
+;	}
+
+
+	EXTRN	RSLINI,CLEAN
+
+	ENTRY	INITMODE
+INITMODE:
+	PUSH	BC
+	CALL	RSLINI
+	CALL	SNDINI
+;	LD	HL,PALCOUNT
+;	PUSH	HL
+;	CALL	RESET_PAL
+;	POP	DE
+;	LD	HL,1
+;	PUSH	HL
+;	PUSH	HL
+;	CALL	G_PAL
+;	POP	DE
+;	CALL	C_PAL
+;	POP	DE
+	XOR	A
+	OUT	(BKDPPT),A
+	CALL	CLEAN
+	CALL	TXTON
+
+	LD	BC,0
+	LD	A,' '
+INITM1:	OUT	(C),A
+	INC	B
+	JR	NZ,INITM1
+	INC	C
+	BIT	3,C
+	JR	Z,INITM1
+
+	LD	A,7
+INITM2:	OUT	(C),A
+	INC	B
+	JR	NZ,INITM2
+	INC	C
+	BIT	4,C
+	JR	Z,INITM2
+
+	LD	HL,0		;CURSOR HOME
+	CALL	SET_CS		 ;
+	LD	C,33		;CONTROL P DISABLE
+	LD	E,0		 ;
+	CALL	SIMON		  ;
+	POP	BC
+	RET
+
+;	grafmode ()		/* Sets resolution.			*/
+;	{
+;		scrmod = GMOD;
+;		txtoff();		/* select transparent plane	*/
+;	}
+
+	ENTRY	GRAFMODE
+GRAFMODE:
+	LD	A,GMOD
+	LD	(SCR_MOD),A
+	JP	TXTOFF
+
+
+;	textmode ()		/* Sets resolution, positions cursor to home.*/
+;	{
+;		scrmod = TMOD;
+;		clr_back(2);		/* clear background color black	*/
+;		txton();		/* select test plane		*/
+;	}
+
+	ENTRY	TEXTMODE
+TEXTMODE:
+	PUSH	BC
+	LD	A,TMOD
+	LD	(SCR_MOD),A
+	LD	A,10000B	;CLEAR BACKGROUND COLOR BLACK
+	CALL	CLR_BACK	 ;
+	CALL	TXTON
+	POP	BC
+	RET
+
+;	splitmode ()		/* Sets resolution.			*/
+;	{
+;		scrmod = SMOD;
+;		clr_back(0);	/* clear background color transparent	*/
+;		clear_wi(0,0,splittop-1,39);
+;	/*	if (alphay < splittop)
+;			set_curs(splittop,0);	*/
+;		txton();		/* select test plane		*/
+;	}
+
+	ENTRY	SPLITMODE
+SPLITMODE:
+	PUSH	BC
+	LD	A,SMOD
+	LD	(SCR_MOD),A
+	XOR	A		;CLEAR BACKGROUND COLOR TRANSPARENT
+	CALL	CLR_BACK	 ;
+	LD	A,(SPLTTP)	;D := Y1, B := X1, E := Y2, C := WIDTH
+	DEC	A		 ;
+	LD	E,A		  ;
+	LD	BC,0*100H+40	   ;
+	LD	D,0		    ;
+	CALL	P,CLEAR0	;CLEAR SCREEN IF NEEDED
+	CALL	TXTON
+	POP	BC
+	RET
+
+	ENTRY   SCRMODE 
+SCRMODE:
+	LD	a,(SCR_MOD)
+	LD	l,a
+	LD	h,0
+	OR	a
+	ret
+	
+
+
+
+;	set_split (i)	/* Sets the number of lines in the splitscreen's*/
+;	int i;		/* text window.					*/
+;	{
+;		splittop = 25-i;
+;	}
+
+	ENTRY	SET_SPLIT
+SET_SPLIT:
+	LD	HL,2
+	ADD	HL,SP
+	LD	A,(HL)
+	DEC	A		  ; Split line (0 relative)
+	LD	(SPLTTP),A	  ;
+	RET
+
+	ENTRY SPLITR
+SPLITR:
+	LD	A,(SPLTTP)
+	INC	A
+	LD	L,A
+	LD	H,0
+	OR	A
+	RET
+
+;	pendown ()		/* Sets penmode variable to not up.	*/
+;	{
+;		pen_flag = DOWN;
+;		xor_flag = 0;
+;	}
+
+;	penup ()		/* Sets the penmode variable to up.	*/
+;	{
+;		pen_flag = UP;
+;		xor_flag = 0;
+;	}
+
+	ENTRY	PEND
+	ENTRY	PENU
+PEND:
+	LD	A,PD
+	LD	(PEN_FLAG),A
+	JP	CLR_XOR
+
+PENU:	LD	A,PU		 ;
+	LD	(PEN_FLAG),A
+CLR_XOR:
+	LD 	A,NORMALMOD
+	LD	(XOR_FLAG),A
+	RET
+
+
+;	int down ()		/* Returns contents of penmode variable.*/
+;	{
+;		return pen_flag;
+;	}
+
+;	setpc (p)		/* Sets color veriable to input value.	*/
+;	int p;
+;	{
+;		pen_color = p;
+;	}
+
+	ENTRY	SETP
+SETP:	LD	HL,2
+	ADD	HL,SP
+	LD	A,(HL)
+	LD	(PEN_COLOR),A
+	RET
+
+;	int getpc ()		/* Returns current value of pen color.	*/
+;	{
+;		return pen_color;
+;	}
+;
+;	reverse()		/* Toggles XOR flag.			*/
+;	{
+;		xor_flag ^= 1;
+;	}
+
+	ENTRY	REVERSE
+REVERSE:
+	LD	A,(XOR_FLAG)
+	XOR	1
+	LD	(XOR_FLAG),A
+	RET
+
+;	set_bord (col)		/* Sets border color.			*/
+;	int col;
+;	{
+;		out(BORDPT,col);
+;	}
+
+
+
+;	int palmap[PALCOUNT][3];
+;			/*	  R  G  B				*/
+;	int palini[PALCOUNT][3]={{0, 0, 0},	/* black		*/
+;				{ 0, 0,15},	/* deep blue		*/
+;				{ 0,15, 0},	/* bright green		*/
+;				{ 0,15,15},	/* turquoise		*/
+;				{15, 0, 0},	/* red			*/
+;				{15, 0,15},	/* brilliant pink	*/
+;				{15,15, 0},	/* yellow		*/
+;				{15,15,15},	/* white		*/
+;				{ 3, 5, 4},	/* dark green		*/
+;				{ 3, 8, 4},	/* moss green		*/
+;				{14, 6, 4},	/* salmon		*/
+;				{14,10, 4},	/* tan			*/
+;				{ 3, 6, 9},	/* ash blue		*/
+;				{ 3,10,14},	/* light blue		*/
+;				{15, 8,10},	/* pale pink		*/
+;				{ 8, 9, 9}};	/* gray			*/
+
+;	set_pl (p, r, g, b)	/* Sets palette.			*/
+;	int p, r, g, b;
+;	{
+;		palmap[p][0] = r;
+;		palmap[p][1] = g;
+;		palmap[p][2] = b;
+;		stpal(p,palmap[p]);
+;	}
+	IF	FALSE
+
+
+	ENTRY	SET_PL
+SET_PL:
+	CALL	ISPALE		;DO NOTHING IF THERE'S NO PALETTE CIRCUIT
+	RET	NZ		 ;
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	A,(HL)		;A := PALETTE NUMBER
+	PUSH	AF		 ;SAVE IT
+	ADD	A,A
+	ADD	A,(HL)
+	EX	DE,HL		;DE := DESTINATION ADDRESS
+	LD	HL,PALMAP	 ;
+	ADDHLA			  ;
+	EX	DE,HL		   ;
+	PUSH	DE
+	LD	B,3
+SET_P1:	INC	HL
+	INC	HL
+	LD	A,(HL)
+	LD	(DE),A
+	INC	DE
+	DJNZ	SET_P1
+
+	POP	HL		;HL := COLOR RATIO TABLE ADDRESS
+	POP	BC		;B := PALETTE#
+	CALL	STPAL
+	POP	BC
+	RET
+
+
+
+
+;	reset_pal (p)		/* Resets palette to initial color.	*/
+;	int p;			/* Resets all if p == 16.		*/
+;	{
+;		register int i;
+;	
+;		if (p < PALCOUNT)
+;			res_pal(p);
+;		else
+;			for (i = 0; i < PALCOUNT; ++i)
+;				res_pal(i);
+;	}
+
+
+	ENTRY	RESET_PAL
+RESET_PAL:
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	A,(HL)
+	CP	PALCOUNT	;IF THE ARGUMENT WAS PALCOUNT, RESET ALL.
+	JR	NC,RP1		 ;
+	CALL	RES_PAL
+	POP	BC
+	RET
+
+RP1:	XOR	A
+PR2:	PUSH	AF
+	CALL	RES_PAL
+	POP	AF
+	INC	A
+	CP	PALCOUNT
+	JR	C,PR2
+	POP	BC
+	RET
+
+;	res_pal (p)
+;	int p;
+;	{
+;		register int k;
+;		static int *i, *j;
+;	
+;		i = palmap[p];
+;		j = palini[p];
+;		for (k = 0; k <= 2; ++k)
+;			*i++ = *j++;
+;		stpal(p,palmap[p]);
+;	}
+
+	; ACCEPTS A <= PALETTE#
+	ENTRY	RES_PAL
+RES_PAL:
+	PUSH	AF		;SAVE PALETTE#
+	LD	C,A
+	ADD	A,A		;HL := PALMAP + PALETTE# * 3
+	ADD	A,C		 ;
+	LD	C,A		  ;
+	LD	HL,PALMAP	   ;
+	ADDHLA			    ;
+	PUSH	HL		 ;SAVE PALMAP[PALETTE#]
+
+	EX	DE,HL
+	LD	A,C		;HL := PALINI[PALETTE#]
+	LD	HL,PALINI	 ;
+	ADDHLA			  ;
+	LD	BC,3		;COPY
+	LDIR			 ;
+
+	POP	HL		;HL := COLOR MAPPING TABLE ADDRESS
+	POP	BC		;B := PALETTE#
+	JP	STPAL
+
+;	int *pal (p)		/* Returns current color mapping.	*/
+;	int p;
+;	{
+;		return palmap[p];
+;	}
+
+	ENTRY	PAL
+PAL:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	A,(HL)
+	ADD	A,A
+	ADD	A,(HL)
+	LD	HL,PALMAP
+	ADDHLA
+	LD	DE,RETMAP
+	PUSH	DE
+
+	LD	BC,3*100H+0FFH
+	XOR	A
+PAL1:	LDI
+	LD	(DE),A
+	INC	DE
+	DJNZ	PAL1
+
+	POP	HL
+	OR	0FFH
+	POP	BC
+	RET
+	ENDIF
+
+
+;	int ot_scr (x, y)	/* Tests if out of screen		*/
+;	int x, y;
+;	{
+;		return (    x < 0 || x > 319 ||
+;			    y < 1 || y > 200	);
+;	}
+
+	ENTRY	OT_SCR
+OT_SCR:
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	E,(HL)		;DE := X
+	INC	HL		 ;
+	LD	D,(HL)		  ;
+	INC	HL		   ;
+	LD	C,(HL)		;BC := Y
+	INC	HL		 ;
+	LD	B,(HL)		  ;
+;
+;  Changed by T.Hirayama Sept. 22, 1983
+;
+	LD	HL,199
+	OR	A
+	SBC	HL,BC
+;
+OTSCR0:	POP	BC
+	JR	C,OTSCR1
+	LD	HL,319		;319 - DE
+	SBC	HL,DE		 ; (CY == 0)
+	JR	C,OTSCR1
+	LD	HL,0
+	AND	L		;Z := 1
+	RET
+
+OTSCR1:	LD	HL,1
+	OR	L		;Z := 0
+	RET
+
+;	==================================================================
+;	==			CHARACTER SCREEN INTERFACE		==
+;	==================================================================
+
+;	#define	CR	0x0d
+;	#define	LF	0x0a
+;	#define	BS	0x08
+;
+;	con_out (c)	/* Checks current mode, displays character at	*/
+;	char c;		/* current row and column, increments column.	*/
+;	{
+;		static int i;
+;
+;	/*	switch (c) {
+;		case CR:
+;			set_curs(alphay,0);
+;			return;
+;		case LF:
+;			if (alphay < 24)
+;				set_curs(alphay+1,alphax);
+;			else {
+;				scrl_u(0,0,24,39);
+;				set_curs(24,alphax);
+;			}
+;			return;
+;		case BS:
+;			if (alphax > 0) {
+;				set_curs(alphay,alphax-1);
+;				return;
+;			} else if (alphay > 0) {
+;					set_curs(alphay-1,39);
+;					return;
+;			}
+;			break;
+;		default:
+;			break;
+;		}		*/
+;		if (scrmod != SMOD || alphay >= splittop) {
+;		 vout(i = chradr(alphay,alphax), c);
+;		 vout(i+0x800,(scrmod == SMOD ? 0 : BLACKBACK)+bli+alphac);
+;		}
+;		set_curs(alphay,alphax+1);
+;	}
+
+	ENTRY	CON_OUT
+CON_OUT:
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	A,(HL)
+	LD	HL,(ALFAX)
+
+    IF FALSE
+	CP	CR
+	JR	NZ,CONOU1
+	LD	L,0
+	JP	SET_C5
+	
+CONOU1:	CP	LF
+	JR	NZ,CONOU4
+	LD	A,H
+	CP	24
+	JR	NC,CONOU2
+	INC	H
+	JP	SET_C5
+
+CONOU2:	LD	H,24
+	CALL	SET_CS
+	LD	BC,0*100H+40
+	LD	DE,0*100H+24
+	JP	SCRL_1
+
+
+CONOU4:	CP	BS
+	JR	NZ,CONOU7
+	INC	L
+	DEC	L
+	JR	Z,CONOU5
+	DEC	L
+	JP	SET_C5
+
+CONOU5:	INC	H
+	DEC	H
+	JR	Z,CONOU6
+	DEC	H
+	LD	L,39
+	JP	SET_C5
+
+CONOU6:	POP	BC
+	RET
+
+CONOU7:
+    ENDIF ;FALSE
+
+	LD	E,A		;E := CHARACTER CODE
+	LD	A,(SCR_MOD)
+	CP	SMOD
+	JR	NZ,CONO75
+	LD	A,(SPLTTP)
+	CP	H
+	JR	Z,CONO75
+	JR	NC,CONOU9
+CONO75:	LD	A,L
+	LD	L,H
+	LD	H,A
+	CALL	CHRADR
+	LD	B,L
+	LD	C,H
+	LD	A,E
+	OUT	(C),A
+	SET	3,C
+	LD	A,(SCR_MOD)
+	CP	SMOD
+	LD	E,0
+	JR	Z,CONOU8
+	LD	E,10000B	;background color := black
+CONOU8:	LD	A,(BLI)
+	OR	E
+	LD	E,A
+	LD	A,(ALFAC)
+	OR	E
+	OUT	(C),A
+CONOU9:	LD	HL,(ALFAX)
+	INC	L
+	JP	SET_C5
+
+
+
+;		CLR_TSCRN(l,u);
+
+	ENTRY	CLR_TSCRN
+CLR_TSCRN:
+;  by T.Hirayama Sep. 26, 1983 
+	push	bc
+	ld	a,(SCR_MOD)
+	cp	GMOD		;Do not move cursor if graphic mode.
+	jr	z,CLEAR6	 ;
+	ld	hl,0		;Move cursor to (0,0) if text mode.
+	cp	TMOD		 ;
+	jr	z,CLEAR5	  ;
+	ld	a,(SPLTTP)	   ;Move to (0,splittp) if text mode.
+	ld	h,a		    ;
+CLEAR5:				     ;
+	call	SET_CS		      ;
+CLEAR6:
+	call	SCRNBX		; SJS 01/11/84
+;	ld	bc,0*100h+40	;Clear all of the screen.
+;	ld	de,0*100h+24	 ;
+;
+;	LD	A,(SCR_MOD)	;DO NOTHING IF CURRENT MODE IS GRAPHIC MODE
+;	CP	GMOD		 ;
+;	RET	Z		  ;
+;	PUSH	BC
+;	LD	HL,0		;IF TEXT MODE H := 0 ELSE H := SPLITTOP
+;	CP	TMOD		 ;L := 0
+;	JR	Z,CLEAR5	  ;
+;	LD	A,(SPLTTP)	   ;
+;	LD	H,A		   ;
+;CLEAR5:
+;	CALL	SET_CS
+;	LD	BC,0*100H+40
+;	LD	DE,0*100H+24
+
+    IF FALSE
+	JR	CLEAR9
+
+;	clear_wi (y1, x1, y2, x2) /* Checks current mode, clears text screen,*/
+;	int y1, x1, y2, x2;	  /* maintains cursor.			*/
+;	{
+;		register int j;
+;		static int i, k, m;
+;
+;		if (scrmod == GMOD)
+;			return;
+;		m = (scrmod == TMOD ? BLACKBACK : 0) + alphac;
+;		for (i = y1; i <= y2; ++i)
+;			for (j = x1; j <= x2; ++j) {
+;				vout(k = chradr(i,j),' ');
+;				vout(k+0x800,m);
+;			}
+;	}
+
+
+	ENTRY	CLEAR_WI
+CLEAR_WI:
+	LD	A,(SCR_MOD)	;DO NOTHING IF CURRENT MODE IS GRAPHIC MODE
+	CP	GMOD		 ;
+	RET	Z		  ;
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	CALL	SCRNBX		;D := Y1, B := 0, E := Y2, C := WIDTH (40)
+CLEAR9:
+    ENDIF ;FALSE
+
+	CALL	CLEAR0
+	POP	BC
+	RET
+
+CLEAR0:	INC	E
+	LD	A,(SCR_MOD)	;IF SCRMOD == TMOD, BACKGROUND COLOR := BLACK
+	LD	L,0		 ;ELSE BACKGROUND COLOR := TRANSPARENT
+	CP	TMOD		  ;
+	JR	NZ,CLEAR1	   ;
+	LD	L,10000B	    ;
+CLEAR1:	LD	A,(ALFAC)	;A' := ATTRIBUTE BYTE
+	OR	L		 ;
+	EX	AF,AF'		  ;
+
+CLEAR2:	PUSH	BC		;SAVE PARAMETERS
+	PUSH	DE		 ;
+
+	LD	H,B		;H := X1
+	LD	L,D		 ;L := CURRENT Y
+	LD	B,C		  ;B := WIDTH
+	CALL	CHRADR
+	LD	A,' '
+CLEAR3:	PUSH	BC		;DISPLAY CHARACTER AND ATTRIBUTE
+	LD	B,L		 ;
+	LD	C,H		  ;
+	OUT	(C),A		   ;
+	SET	3,C		    ;
+	EX	AF,AF'		     ;
+	OUT	(C),A		      ;
+	EX	AF,AF'		       ;
+	RES	3,C			;
+	INC	HL			 ;
+	INC	HL			  ;
+	POP	BC			   ;
+	DJNZ	CLEAR3		;REPEAT B TIMES
+
+	POP	DE
+	POP	BC
+	INC	D
+	LD	A,D
+	CP	E
+	JR	NZ,CLEAR2
+	RET
+
+
+;	clr_back(i)
+;	int i;
+;	{
+;		register int j;
+;		static int k;
+;	
+;		k = i << 3;
+;		for (j = 0x800; j < 0x800+0x7d0; ++j, ++j)
+;			vout(j,(vin(j) & 0xe7) | k);
+;	}
+
+
+	; ACCEPTS A <= BACK MODE
+CLR_BACK:
+	LD	E,A
+	LD	BC,8+0*100H
+CLR_B1:	IN	A,(C)
+	AND	11100111B
+	OR	E
+	OUT	(C),A
+	INC	B
+	INC	B
+	JR	NZ,CLR_B1
+	INC	C
+	BIT	4,C
+	JR	Z,CLR_B1
+	RET
+
+	
+;	set_curs (row, col)	/* Moves cursor to input row and column.*/
+;	int row, col;
+;	{
+;		register unsigned i;
+;
+;		alphax = col;
+;		alphay = row;
+;		if (alphax >= 40) {
+;			alphax -= 40;
+;			++alphay;
+;		}
+;		if (alphay >= 25) {
+;			scrl_u(0,0,24,39);
+;			alphay = 24;
+;		}
+;		i = chradr(alphay,alphax);
+;		out(CRTCA,14);
+;		out(CRTCD,i>>8);
+;		out(CRTCA,15);
+;		out(CRTCD,i & 0xff);
+;	}
+
+
+	ENTRY	SET_CURS
+SET_CURS:
+	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	D,(HL)		;D := COLUMN
+	DEC	D		;MAKE 0 RELATIVE
+	INC	HL
+	INC	HL
+	LD	E,(HL)		;E := ROW
+	DEC	E		;MAKE 0 RELATIVE 
+	LD	A,E
+	SUB	40
+	JR	C,SET_C1
+	LD	D,A
+	DEC	E
+SET_C1:	LD	A,D
+	CP	25
+	JR	C,SET_C4
+	LD	D,24
+	PUSH	DE
+
+	;	scrl_u(0,0,24,39);
+
+	LD	BC,0*100H+40
+	LD	DE,0*100H+24
+	LD	HL,SET_C3
+	PUSH	HL
+	PUSH	HL
+	JR	SCRL_1
+
+SET_C3:	POP	DE
+SET_C4:	EX	DE,HL
+SET_C5:	CALL	SET_CS
+	POP	BC
+	RET
+
+	; L == X
+	; H == Y
+SET_CS:	LD	(ALFAX),HL
+	LD	A,H
+	LD	H,L
+	LD	L,A
+	CALL	CHRADR
+	LD	A,14
+	OUT	(CRTCAD),A
+	LD	A,H
+	OUT	(CRTCDT),A
+	LD	A,15
+	OUT	(CRTCAD),A
+	LD	A,L
+	OUT	(CRTCDT),A
+	RET
+
+
+
+;	scrl_u (y1, x1, y2, x2)	/* Moves text contained in input-specified */
+;	int y1, x1, y2, x2;	/* window up one line.			   */
+;	{
+;		int vin();
+;		register int j;
+;		static int i, k;
+;
+;		/* Attributes are not scrolled up.	*/
+;		for (i = y1; i < y2; ++i)
+;			for (j = x1; j <= x2; ++j) {
+;				k = chradr(i,j);
+;				vout(k,vin(k+80));
+;			}
+;		for (j = x1; j <= x2; ++j)
+;			vout(chradr(y2,j),' ');
+;	}
+
+
+	ENTRY	SCRL_U
+SCRL_U:
+	PUSH	BC
+;	LD	HL,4
+;	ADD	HL,SP
+;
+;	LD	BC,0*100H+40	;SCROLL UP (0,0)-(39,24) IF TMODE OR GMODE.
+;	LD	DE,0*100H+24	 ;SCROLL UP (0,SPLTTP)-(39,24) IF SMODE.
+;	LD	A,(SCR_MOD)	  ;
+;	CP	SMOD		   ;
+;	JR	NZ,SCRL_1	    ;
+;	LD	A,(SPLTTP)	     ;
+;	LD	D,A
+
+	CALL	SCRNBX		;D := Y1 , B := X1 , E := Y2 , C := WIDTH
+
+	LD	A,D		;CHECK IF SCROLL AREA CONTAINS ONLY 1 LINE.
+	CP	E		 ;
+	JR	Z,SCRL_5	  ;
+
+SCRL_1:	PUSH	BC		;SAVE X1 AND WIDTH
+SCRL_2:	PUSH	DE		;SAVE PARAMETERS
+	PUSH	BC		 ;
+	LD	H,B		;H := X1
+	LD	L,D		 ;L := CURRENT Y
+	LD	B,C		  ;B := WIDTH
+	CALL	CHRADR		;DE := CHARACTER ADDRESS
+	LD	E,L		 ;HL := NEXT LINE
+	LD	D,H		  ;
+	SET	3,D		   ;
+	LD	A,80		    ;
+	ADDHLA			     ;
+SCRL_3:	PUSH	BC		;MOVE UP 1 CHARACTER
+	LD	B,L		 ;
+	LD	C,H		  ;
+	IN	A,(C)		   ;
+	EX	AF,AF'		    ;
+	SET	3,C		     ;
+	IN	A,(C)		      ;
+	INC	HL		       ;
+	INC	HL			;
+	LD	B,E			 ;
+	LD	C,D			  ;
+	OUT	(C),A			   ;
+	RES	3,C			    ;
+	EX	AF,AF'			     ;
+	OUT	(C),A			      ;
+	INC	DE			       ;
+	INC	DE				;
+	POP	BC				 ;
+	DJNZ	SCRL_3		;REPEAT B TIMES
+
+	POP	BC
+	POP	DE
+	INC	D
+	LD	A,D
+	CP	E
+	JR	NZ,SCRL_2
+
+	POP	BC		;B := X1, C := WIDTH
+
+	; fill ' 's in last line
+SCRL_5:	LD	L,E		;L := Y2
+	LD	H,B		;H := X1
+	LD	E,C		;E := WIDTH
+	CALL	CHRADR
+	LD	A,' '
+SCRL_6:	LD	B,L
+	LD	C,H
+	OUT	(C),A
+	INC	HL
+	INC	HL
+	DEC	E
+	JR	NZ,SCRL_6
+	POP	BC
+	RET
+
+	;D := Y1 , B := (0) , E := Y2 , C := 40
+SCRNBX:
+	LD	HL,6		; [ret] [bc] [SCRNBX ret] on stack
+	ADD	HL,SP 
+	LD	D,(HL)		;D := Y1
+	DEC	D		;MAKE 0 RELATIVE 
+	INC	HL
+	INC	HL
+	LD	E,(HL)		;E := Y2
+	DEC	E		;MAKE 0 RELATIVE
+	LD	BC,40		;b := 0, c:= 40
+	RET
+
+
+;	int con_in ()		/* Returns character code if key hit. Returns*/
+;	{			/* 0 if not hit.			*/
+;		while (! con_stat()) {}
+;		return bdos(6,0xff);
+;	}
+
+	ENTRY	CON_IN
+CON_IN:	push	bc		; Save bc as per 'C' calling convention --SJS
+con0:	CALL	CON_STAT
+	JR	Z,con0
+	LD	C,6		;DIRECT CONSOLE INPUT
+	LD	E,0FFH		 ;
+	CALL	SYSTEM		  ;
+	CP	ESC
+	JR	NZ,CONST1
+	IN	A,(1BH)		;IF (1BH).7 == 1 THEN CTRL KEY PRESSED.
+	ADD	A,A		 ;
+	LD	A,ESC
+	JR	C,CONST1
+	XOR	A
+	JR	CONST1
+
+;	int con_stat ()		/* Returns 0 if console buffer empty. Returns*/
+;	{			/* non_0 if not empty.			*/
+;		return (in(0x1b) & 1);
+;	}
+
+	ENTRY	CON_STAT
+CON_STAT:
+	push	bc		; --SJS
+	IN	A,(1BH)
+	AND	1		;Z IS RE/SET
+CONST1:	LD	L,A
+	LD	H,0
+	OR	H
+	pop	bc		; restore bc for CON_IN and CON_STAT
+	RET
+
+
+
+
+;	==================================================================
+;	==			MISCELLANEOUS SUBROUTINES		==
+;	==================================================================
+
+;	topofmem ()
+;	{
+;		static unsigned *i;
+;
+;		return *(i = 6);
+;	}
+
+;	int chradr (y, x)	/* returns character address in (x y)	*/
+;	int y, x;
+;	{
+;		return (x<<1)+(y*80);
+;	}
+
+	; ACCEPTS X IN H, Y IN L
+	; RETURNS I/O ADDRESS IN HL
+CHRADR:	PUSH	DE
+	LD	A,H
+	LD	H,0		;HL := L * 40
+	ADD	HL,HL		 ;
+	ADD	HL,HL		  ;
+	ADD	HL,HL		   ;
+	LD	E,L		    ;
+	LD	D,H		     ;
+	ADD	HL,HL		      ;
+	ADD	HL,HL		       ;
+	ADD	HL,DE			;
+	LD	E,A		;HL += A
+	LD	D,0		 ;
+	ADD	HL,DE		  ;
+	ADD	HL,HL
+	POP	DE
+	RET
+
+;	txton ()
+;	{
+;		out(CRTCA,10);
+;		out(CRTCD,0x67);
+;		out(CRTCA,11);
+;		out(CRTCD,0x07);
+;		out(0x20,TEXTPL);	/* select test plane */
+;	}
+;
+;	txtoff ()
+;	{
+;		out(CRTCA,10);
+;		out(CRTCD,0x27);
+;		out(CRTCA,11);
+;		out(CRTCD,0x07);
+;		out(0x20,TRANSPL);	/* select transparent plane */
+;	}
+
+	ENTRY	TXTON
+TXTON:	LD	HL,TEXTPL*100H+67H
+	JR	TXTOF1
+
+	ENTRY	TXTOFF
+TXTOFF:	LD	HL,TRANSPL*100H+27H
+TXTOF1:	LD	A,H
+	OUT	(20H),A
+	LD	A,10
+	OUT	(CRTCAD),A
+	LD	A,L
+	OUT	(CRTCDT),A
+	LD	A,11
+	OUT	(CRTCAD),A
+	LD	A,07H
+	OUT	(CRTCDT),A
+	RET
+
+
+
+;	==================================================================
+;	==			PRINTER I/O  FUNCTIONS			==
+;	==================================================================
+
+	ENTRY	PRTREADY
+	ENTRY	PRT_CHAR
+
+	;--------------------------------
+	;	int prtread ()
+	;	return TRUE if printer ready else FALSE
+	;--------------------------------
+
+PRTREADY:
+	IN	A,(1DH)
+	AND	00010000B
+	JR	Z,PRTR1
+	LD	HL,0		;NOT READY
+	AND	L		 ;Z := 1
+	RET			  ;
+
+PRTR1:	LD	HL,1H		;READY
+	OR	L		 ;Z := 0
+	RET			  ;
+
+	;--------------------------------
+	;	prt_char (c)
+	;	print out c
+	;--------------------------------
+
+PRT_CHAR:
+	IN	A,(1DH)		;WAIT FOR PRINTER READY
+	AND	00010000B	 ;
+	JR	NZ,PRT_CHAR	  ;
+	LD	HL,2		;OUTPUT CHARACTER
+	ADD	HL,SP		 ;
+	LD	A,(HL)		  ;
+	OUT	(22H),A		   ;
+	LD	A,16H
+	OUT	(1CH),A
+	LD	A,06H
+	OUT	(1CH),A
+	RET
+
+;	==================================================================
+;	==			GAME I/O FUNCTIONS			==
+;	==================================================================
+
+	ENTRY	JOYIN
+	ENTRY	BUTTON
+	ENTRY	TONES
+	ENTRY	SNDINI
+
+
+
+	;--------------------------------
+	;	int button (i)
+	;	int i;		paddle number <0..1>
+	;	returns 1 if button[0] touched, 0 if not touched
+	;--------------------------------
+
+BUTTON:	CALL	pdlsub
+	AND	00010000b	;if a.4 == 0 then cy := 1 else cy := 0
+	LD	A,0
+	JR	NZ,joyin1
+	LD	A,1
+	JR	joyin1
+
+	;--------------------------------
+	;	int joyin (i)
+	;	int i;		paddle number <0..1>
+	;	RET	: 0 (not pressed or illegal)
+	;
+	;				  8  1  2
+	;				  7  +  3
+	;				  6  5  4
+	;
+	;--------------------------------
+
+joyin:	CALL	pdlsub
+	AND	00001111b
+	LD	HL,pdltbl
+	ADDHLA
+	LD	A,(HL)
+joyin1:	OR	A
+	LD	L,A
+	LD	H,0
+	RET
+
+pdltbl:	DB	0		;0000		ILLEGAL
+	DB	0		;0001		ILLEGAL
+	DB	0		;0010		ILLEGAL
+	DB	0		;0011		ILLEGAL
+	DB	0		;0100		ILLEGAL
+	DB	4		;0101	BACKWARD RIGHT
+	DB	2		;0110	FORWARD RIGHT
+	DB	3		;0111	RIGHT
+	DB	0		;1000		ILLEGAL
+	DB	6		;1001	BACKWARD LEFT
+	DB	8		;1010	FORWARD LEFT
+	DB	7		;1011	LEFT
+	DB	0		;1100		ILLEGAL
+	DB	5		;1101	BACKWARD
+	DB	1		;1110	FORWARD
+	DB	0		;1111	NOT TOUCHED
+
+	;--------------------------------
+	;	read paddle status
+	;	RET	A		: read data
+	;--------------------------------
+
+pdlsub:	LD	A,15H		;activate joystic port
+	OUT	(PADLPT),A	 ;
+	PUSH	BC
+	LD	HL,6
+	ADD	HL,SP
+	LD	A,(HL)
+	AND	00000001b	;b := 0, 1
+	CPL			 ;
+	LD	B,A		  ;
+	LD	C,PADLPT
+	IN	A,(C)
+	POP	BC
+	RET
+
+MINATT	EQU	15	;MINIMUM ATTENUATION
+
+ENVTBL:	DB	MINATT- 4	;****			0	16 msec
+	DB	MINATT- 9	;*********		1	16 msec
+	DB	MINATT-12	;************		2	16 msec
+	DB	MINATT-14	;**************		3	16 msec
+	DB	MINATT-15	;***************	4	16 msec
+	DB	MINATT-15	;***************	5	16 msec
+	DB	MINATT-14	;**************		6	16 msec
+	DB	MINATT-13	;*************		7	16 msec
+ENVTBE	EQU	$
+ENVTLN	EQU	ENVTBE-ENVTBL
+
+	;--------------------------------
+	;	tones (f, d)
+	;	int f;		hight <0..49>
+	;	int d;		duration <msec>
+	;--------------------------------
+
+TONES:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	C,(HL)		;c := hight
+	INC	HL
+	INC	HL
+	LDHLHL			;HL := duration
+	LD	A,L		;do nothing if duration is 0
+	OR	H		 ;
+	JR	Z,TONES9	  ;
+	INC	C		;wait HL msec if hight == 0
+	DEC	C		 ;
+	JR	Z,TONES8	  ;
+	PUSH	HL		;save duration
+	LD	A,C		;set hight
+	CALL	SETHI		 ;
+
+	LD	E,L		;de := HL \ 16
+	LD	D,H		 ;
+	LD	B,4		  ;
+TONES2:	SRL	D		   ;
+	RR	E		    ;
+	DJNZ	TONES2		     ;
+	INC	D		;de := MIN(de,ENVTLN)
+	DEC	D		 ;
+	JR	NZ,TONES3	  ;
+	LD	A,E		   ;
+	CP	ENVTLN		    ;
+	JR	C,TONES4	     ;
+TONES3:	LD	DE,ENVTLN	      ;
+TONES4:	LD	HL,ENVTBE	;de := ENVTBE - de
+	OR	A		 ;HL := duration
+	SBC	HL,DE		  ;
+	EX	DE,HL		   ;
+	POP	HL		    ;
+
+TONES5:	PUSH	HL		;sustain if end of table
+	LD	HL,ENVTBE	 ;
+	OR	A		  ;
+	SBC	HL,DE		   ;
+	POP	HL		    ;
+	JR	Z,TONES6	     ;
+	JR	C,TONES6	      ;
+	LD	A,(DE)		;a := attenuation
+	CALL	SETATT
+	CALL	WAI16M
+	INC	DE		;inc envelope table pointer
+	LD	A,L		;HL -= 16
+	SUB	16		 ;
+	JR	NC,TONES5	  ;
+	DEC	H		   ;
+	JR	TONES5
+
+TONES6:	LD	A,MINATT-13	;set final attenuation
+	CALL	SETATT		 ;
+TONES8:	CALL	WAIHLM		;sound length = HL msec
+	LD	A,10011111b	;tone 1 off
+	OUT	(PSGPT),A	 ;
+TONES9:	POP	BC
+	RET
+
+
+
+PSGMAX	EQU	2		;PSG NUMBER = 0,1,2
+
+
+
+	;--------------------------------
+	;	sound initialization
+	;	initializes SN76489,
+	;	clear sound,
+	;--------------------------------
+
+SNDINI:	LD	A,11111111b	;noise off
+	OUT	(PSGPT),A	 ;
+
+	; disable all TONES
+	LD	A,10011111b	;tone 1 off
+	OUT	(PSGPT),A	 ;
+	LD	A,10111111b	;tone 2 off
+	OUT	(PSGPT),A	 ;
+	LD	A,11011111b	;tone 3 off
+	OUT	(PSGPT),A	 ;
+	RET
+
+
+	;--------------------------------
+	;	set hight
+	;	acc	A	: sound hight (1..49)
+	;	dest	A
+	;--------------------------------
+
+SETHI:	PUSH	HL
+	PUSH	DE
+
+	; get tune
+	LD	D,0
+	CP	OV1
+	JR	NC,GETTU1
+	INC	D
+	CP	OV2
+	JR	NC,GETTU1
+	INC	D
+	CP	OV3
+	JR	NC,GETTU1
+	INC	D
+GETTU1:	LD	HL,TUNTBL-1
+	ADDHLA
+	LD	L,(HL)
+	LD	H,D
+	LD	A,L
+	LD	D,L
+	AND	11110000B
+	LD	L,A		;H := HL \ 16
+	ADD	HL,HL		 ;
+	ADD	HL,HL		  ;
+	ADD	HL,HL		   ;
+	ADD	HL,HL		    ;
+	LD	A,D
+	AND	00001111B
+
+	; OUTPUT DATA
+	OR	10000000b	;select tone 1
+	OUT	(PSGPT),A
+	LD	A,H
+	OUT	(PSGPT),A
+
+	POP	DE
+	POP	HL
+	RET
+
+	;--------------------------------
+	;	SET ATTENUATION
+	;	ACC	A	: ATTENUATION
+	;	DEST	A,B
+	;--------------------------------
+
+SETATT:	OR	10010000b	;select tone 1
+	OUT	(PSGPT),A
+	RET
+
+	;--------------------------------
+	;	waits HL msec
+	;	acc	: HL duration
+	;--------------------------------
+WAIHLM:	PUSH	HL
+	JR	wai161
+
+	;--------------------------------
+	;	waits 16 msec
+	;	acc	: none
+	;--------------------------------
+
+WAI16M:	PUSH	HL
+	LD	HL,16
+
+	; following program section takes 1 msec.
+WAI161:	CALL	WAI1MS		;17
+	DEC	HL		; 6
+	LD	A,L		; 4
+	OR	H		; 4
+	JR	NZ,WAI161	;12
+
+	POP	HL
+	RET
+
+	;--------------------------------
+	;	waits 1 msec
+	;	acc	: none
+	;--------------------------------
+
+WAI1MS:	PUSH	AF		;11
+	LD	A,248		; 7
+WAI1M1:	DEC	A		  ; 4
+	JR	NZ,WAI1M1	  ;12
+	POP	AF		;10
+	RET			;10
+
+	;--------------------------------
+	;	TUNE TABLE
+	;--------------------------------
+
+TUNTBL:
+	; 3xx
+	DB	0C2H		;C4
+	DB	08CH		;C4#
+	DB	059H		;D4
+	DB	029H		;D4#
+OV3	EQU	$-TUNTBL+1
+	; 2xx
+	DB	0FCH
+	DB	0D1H
+	DB	0A8H
+	DB	082H
+	DB	05EH
+	DB	03CH
+	DB	01CH
+	DB	000H
+OV2	EQU	$-TUNTBL+1
+	; 1xx
+	DB	0E1H		;C3
+	DB	0C6H
+	DB	0ADH
+	DB	094H
+	DB	07EH
+	DB	068H
+	DB	054H
+	DB	041H
+	DB	02FH
+	DB	01EH
+	DB	00EH
+OV1	EQU	$-TUNTBL+1
+	; 0xx
+	DB	0FFH
+	DB	0F0H		;C2
+	DB	0E3H
+	DB	0D6H
+	DB	0CAH
+	DB	0BFH
+	DB	0B4H
+	DB	0AAH
+	DB	0A0H
+	DB	097H
+	DB	08FH
+	DB	087H
+	DB	07FH
+	DB	078H		;C1
+	DB	071H
+	DB	06BH
+	DB	065H
+	DB	05FH
+	DB	05AH
+	DB	055H
+	DB	050H
+	DB	04BH
+	DB	047H
+	DB	043H
+	DB	03FH
+	DB	03CH		;C0
+TUNMAX	EQU	$-TUNTBL
+
+
+
+;	==================================================================
+;	==			PALETTE FUNCTIONS			==
+;	==================================================================
+
+	IF 	FALSE
+
+	ENTRY	STPAL	; stpal (p,palmap)
+			; int p <0..15>;
+			; char palmap[3] <0..15>;
+
+	ENTRY	G_PAL	; g_pal (p)
+			; int p <0..1>;
+
+	ENTRY	C_PAL	; c_pal (p)
+			; int p <0..1>;
+
+
+
+	;--------------------------------
+	;	set palette
+	;	B	: PALETTE NUMBER [0..15]
+	;	HL	: (HL) == R, (HL+1) == G, (HL+2) == B [0..15]
+	;--------------------------------
+
+
+STPAL:	CALL	ISPALE		;DO NOTHING IF THERE'S NO PALETTE
+	RET	NZ		 ;
+	LD	C,PLTDAT	;red
+	CALL	MAPOUT		 ;
+	SET	4,B		;green
+	CALL	MAPOUT		 ;
+	RES	4,B		;blue
+	SET	5,B		 ;
+MAPOUT:	LD	A,(HL)		;e := color * 16
+	INC	HL		 ;HL := next address
+    REPT 4			  ;
+	ADD	A,A		   ;
+    ENDM			    ;
+	LD	E,A		     ;
+;IN	A,(1CH)		;do nothing palette circuit not mounted
+;BIT	4,A		 ;
+;RET	NZ		  ;
+
+MAPOU1:	IN	A,(PLTMOD)	;loop while (pltmod).7 == 1
+	ADD	A,A		 ;
+	JR	C,MAPOU1	  ;
+	OUT	(C),E
+	RET
+
+	;--------------------------------
+	;	IF THERE'S A PALETTE CARD THEN RETURN Z.
+	;	ELSE RETURN NZ.
+	;--------------------------------
+
+ISPALE:	IN	A,(1CH)
+	AND	00010100B
+	RET
+
+	;--------------------------------
+	;	control c_palette on/off
+	;	arg1	: int i		1 for on, 0 for off
+	;--------------------------------
+
+C_PAL:	LD	E,110b		;enbl/dsbl palette function of character plane
+	DB	21h		; LD HL,nnnn
+	; falls through
+			;--------------------------------
+			;	control g_palette on/off
+			;	arg1	: int i		1 for on, 0 for off
+			;--------------------------------
+
+G_PAL:	LD	E,111b		;control graphics plane ad border area
+
+	CALL	ISPALE		;DO NOTHING IF THERE'S NO PALETTE CIRCUIT.
+	RET	NZ		 ;
+	LD	HL,2
+	ADD	HL,SP
+	LD	A,(HL)		;if the argument is 0 then a := 0
+	OR	A		 ;else a := 10000b
+	JR	Z,G_PAL1	  ;
+	LD	A,10000b	   ;
+G_PAL1:	OR	E
+	OUT	(PLTMOD),A
+	RET
+
+
+
+				;	INITIAL COLOR MAPPING OF SMC05
+				;
+				;	NUMBER	 R	 G	 B (%)
+PALINI:	DB	 0,  0,  0	;	 0	  0.0	  0.0	  0.0
+	DB	 0,  0, 15	;	 1	  0.0	  0.0	100.0
+	DB	 0, 15,  0	;	 2	  0.0	100.0	  0.0
+	DB	 0, 15, 15	;	 3	  0.0	100.0	100.0
+	DB	15,  0,  0	;	 4	100.0	  0.0	  0.0
+	DB	15,  0, 15	;	 5	100.0	  0.0	100.0
+	DB	15, 15,  0	;	 6	100.0	100.0	  0.0
+	DB	15, 15, 15	;	 7	100.0	100.0	100.0
+	DB	 1,  4,  1	;	 8	 22.9	 36.0	 23.7
+	DB	 1,  7,  2	;	 9	 22.9	 50.2	 25.2
+	DB	13,  5,  2	;	10	 92.9	 41.4	 23.8
+	DB	14,  9,  2	;	11	 94.1	 64.6	 25.4
+	DB	 1,  5,  8	;	12	 23.0	 42.0	 62.4
+	DB	 1,  9, 14	;	13	 23.1	 66.6	 94.1
+	DB	15,  7,  9	;	14	 98.7	 50.5	 64.6
+	DB	 8,  8,  8	;	15	 55.7	 57.0	 58.8
+
+	ENDIF
+;	==================================================================
+;	==			ON_ROM ROUTINE CALLER			==
+;	==================================================================
+
+
+
+X1	equ	0ff44h
+Y1	equ	0ff46h
+
+RCALL	macro	adr
+	CALL	romcal
+	dw	adr
+	endm
+
+
+	extrn	romcal
+
+
+
+	;--------------------------------
+	;	gwipe ()
+	;--------------------------------
+
+	ENTRY	GWIPE
+GWIPE:	CALL	@BCSAV
+	XOR	A
+	; a == color (1 byte width)
+	RCALL	00FE7H
+
+
+
+	;--------------------------------
+	;	gplot (x, y)	;all are int
+	;--------------------------------
+
+	ENTRY	GPLOT
+GPLOT:	CALL	@BCSAV
+	CALL	GPLOT0
+
+	; HL == X
+	; DE == Y
+	; C  == COLOR
+	; B == MODE
+	RCALL	00F73H
+
+	;--------------------------------
+	;	gpnt(x, y)	;all are int
+	;--------------------------------
+	
+	ENTRY GPNT
+GPNT:	CALL	@BCSAV
+	CALL	GPLOT0
+	; HL == X
+	; DE == Y
+	; C  == (not used)
+	; B  == (not used)
+
+	CALL 	GPOINT		; This subroutine returns (CY == 1, A == 0FFH)
+				; if out_of_screen. Otherwise, returns (CY==0)
+				; A = screen color (0..15)
+
+	LD	L,A		; HL := A
+	LD	H,0		 ;
+	JR	NC,GPNT2	; IF CY == 1 THEN HL := 0FFFFH
+	LD	H,A		 ;
+GPNT2:	OR	A
+	RET
+
+GPOINT: RCALL	00F9FH		; Do ROMCALL -- pops this call's return addr.
+
+	; (Jan 13, 1984	-- SJS)
+
+	;--------------------------------
+	;	gline (x1, y1, x2, y2)	;all are int
+	;--------------------------------
+
+	ENTRY	GLINE
+GLINE:	CALL	@BCSAV
+	CALL	GPLOTS
+
+	; HL == X
+	; DE == Y
+	; C  == COLOR
+	; B == MODE
+	RCALL	00E71H
+
+
+	; HL == address of 1st argument
+GPLOTS:	LD	E,(HL)		;set starting point
+	INC	HL		 ;
+	LD	D,(HL)		  ;
+	INC	HL		   ;
+	LD	(X1),DE		    ;
+	LD	E,(HL)		     ;
+	INC	HL		      ;
+	LD	D,(HL)		       ;
+	INC	HL			;
+	PUSH	HL			 ;
+	LD	HL,199			  ;
+	OR	A			   ;
+	SBC	HL,DE			    ;
+	LD	(Y1),HL			     ;
+	POP	HL			      ;
+GPLOT0:	LD	B,2		;save x and y
+GPLOT1:	LD	E,(HL)		 ;
+	INC	HL		  ;
+	LD	D,(HL)		   ;
+	INC	HL		    ;
+	PUSH	DE		     ;
+	DJNZ	GPLOT1		      ;
+
+	LD	BC,(PEN_COLOR)	;C := COLOR , B := XOR FLAG
+	INC	B
+	DEC	B
+	JR	Z,GPLOT3
+	LD	B,4
+GPLOT3:
+
+;LD	C,(HL)		;c := color
+;inc	HL		 ;
+;inc	HL		  ;
+;LD	A,(HL)		;b := 0 (w/o) or 4 (xor)
+;or	A		 ;cy := 0
+;JR	Z,GPLOT2	  ;
+;LD	A,4		   ;
+;GPLOT2:	LD	B,A		    ;
+
+	POP	DE		;de := y
+	LD	HL,199		 ;
+;  Add following instruction  Sep. 26, 1983 T.Hirayama
+	or	a		;cy :=0
+;
+	SBC	HL,DE		  ;cy == 0
+	EX	DE,HL		   ;
+	POP	HL		;HL := x
+	RET
+
+
+
+	;--------------------------------
+	;	save bc
+	;	HL := address of 1st argument
+	;--------------------------------
+
+@BCSAV:	POP	HL		;HL := return address
+	PUSH	BC		;save bc
+	LD	BC,RSUMBC	;push address of resume bc
+	PUSH	BC		 ;
+	PUSH	HL		;save return address
+	LD	HL,8		;HL := address of 1st argument
+	ADD	HL,SP		 ;
+	RET
+
+RSUMBC:	POP	BC
+	RET
+
+;	==================================================================
+;	==		I/O FUNCTIONS					==
+;	==================================================================
+
+	ENTRY	OUT
+	ENTRY	IN
+	IF	FALSE	; SJS 01/13
+	ENTRY	VOUT
+	ENTRY	VIN
+	ENDIF
+
+
+	;--------------------------------
+	;	out (adr, dat)
+	;	char adr, dat;
+	;--------------------------------
+
+OUT:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	C,(HL)
+	INC	HL
+	JR	VOUT1
+
+
+
+	;--------------------------------
+	;	int in (adr)
+	;	char adr;
+	;--------------------------------
+
+IN:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	C,(HL)
+	JP	VIN1
+
+
+
+	;--------------------------------
+	;	vout (adr, dat)
+	;	int adr;
+	;	char dat;
+	;--------------------------------
+	IF 	FALSE ;SJS	
+VOUT:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	B,(HL)		;cb := extended i/o address
+	INC	HL		 ;
+	LD	C,(HL)		  ;
+	ENDIF
+
+VOUT1:	INC	HL		   ;
+	LD	A,(HL)		;a := output data
+	OUT	(C),A
+	POP	BC
+	RET
+
+
+
+	;--------------------------------
+	;	int vin (adr)
+	;	int adr;
+	;--------------------------------
+
+	IF	FALSE
+VIN:	PUSH	BC
+	LD	HL,4
+	ADD	HL,SP
+	LD	B,(HL)		;cb := extended i/o address
+	INC	HL		 ;
+	LD	C,(HL)		  ;
+	ENDIF
+
+VIN1:	IN	A,(C)		;z is affected.
+	POP	BC
+	LD	L,A
+	LD	H,0
+	RET
+
+
+*include	TURTLE.M80
+
+	END
+

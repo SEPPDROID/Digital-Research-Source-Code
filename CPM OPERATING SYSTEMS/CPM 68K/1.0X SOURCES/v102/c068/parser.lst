@@ -1,0 +1,326 @@
+1File: PARSER.H                                                            Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /*
+     9   	C68 Parser - include file
+    10   */
+    11   #include <stdio.h>
+    12   #include <klib.h>
+    13   #undef putchar
+    14   #define putchar xputchar
+    15   #undef ferror
+    16   #define printf xprintf
+    17   #include "icode.h"
+    18    
+    19   /*symbol attribute fields*/
+    20   #define	SRESWORD	001			/*is symbol a reserved word?*/
+    21   #define	SGLOBAL		002			/*is symbol global?*/
+    22   #define	STYPEDEF	004			/*typedef declaration?*/
+    23   #define	SDEFINED	010			/*symbol defined?*/
+    24    
+    25   	/*reserved words*/
+    26   #define	R_AUTO		1
+    27   #define	R_BREAK		2
+    28   #define	R_CASE		3
+    29   #define	R_CHAR		4
+    30   #define	R_CONTINUE	5
+    31   #define	R_DO		6
+    32   #define	R_DEFAULT	7
+    33   #define	R_DOUBLE	8
+    34   #define	R_GOTO		9
+    35   #define	R_ELSE		10
+    36   #define	R_EXTERNAL	11
+    37   #define	R_FLOAT		12
+    38   #define	R_FOR		13
+    39   #define	R_IF		14
+    40   #define	R_INT		15
+    41   #define	R_LONG		16
+    42   #define	R_REGISTER	17
+    43   #define	R_RETURN	18
+    44   #define	R_SHORT		19
+    45   #define	R_SIZEOF	20
+    46   #define	R_STATIC	21
+    47   #define	R_STRUCT	22
+    48   #define	R_SWITCH	23
+    49   #define	R_TYPEDEF	24
+    50   #define	R_UNION		25
+    51   #define	R_UNSIGNED	26
+    52   #define	R_WHILE		27
+    53    
+    54   	/*
+    55   	 * mixed-mode conversions, entries in 2-d array indexed by:
+    56   	 * (int,unsn,long,doub,ptr)
+    57   	 */
+    58   #define	INT_CHAR		1
+    59   #define	UNSN_CHAR		1
+1File: PARSER.H                                                            Page       2
+    60   #define	LONG_CHAR		1
+    61   #define DOUB_CHAR		1
+    62   #define PTR_CHAR		1
+    63   #define	INT_UNSN		0		/*no conversion is generated*/
+    64   #define	INT_LONG		2
+    65   #define	INT_DOUB		3
+    66   #define	INT_PTR			4
+    67   #define	UNSN_INT		0		/*no conversion is generated*/
+    68   #define	UNSN_LONG		6
+    69   #define	UNSN_DOUB		7
+    70   #define	UNSN_PTR		8
+    71   #define	LONG_INT		9
+    72   #define	LONG_UNSN		10
+    73   #define	LONG_DOUB		11
+    74   #define	LONG_PTR		12
+    75   #define	DOUB_INT		13
+    76   #define	DOUB_UNSN		14
+    77   #define	DOUB_LONG		15
+    78   #define	PTR_INT			16
+    79   #define	PTR_UNSN		17
+    80   #define	PTR_LONG		18
+    81   #define	PTR_PTR			19
+    82   #define	BADCONV			20
+    83    
+    84   	/* miscellaneous constants */
+    85   #define	OPSSIZE		40			/*operator stack size*/
+    86   #define	OPDSIZE		80			/*operand stack size*/
+    87   #define	HSIZE		517			/*hash table size, 3.4 made prime */
+    88   #define	SYMSIZE		1024		/*size to alloc for symbol structures*/
+    89   #define	SWSIZE		256			/*max no. of cases in a switch*/
+    90   #define	DSIZE		1000		/*dimension table size*/
+    91   #define	BITSPWORD	16			/*bits per word*/
+    92   #define AREGLO		010			/*A reg flag*/
+    93   #define HICREG		2			/*highest reg # used for code generation*/
+    94   #define	BITSPCHAR	8			/*bits per char*/
+    95   #define	CHRSPWORD	2			/*chars per word*/
+    96   #define	STRSIZE		300			/*max string length*/
+    97   #define	NFARGS		40			/*max no. of args to function*/
+    98   #define	NFRSTR		20			/*max no. of forward ref struct proto*/
+    99    
+   100   	/*symbol table node*/
+   101   struct symbol {
+   102   	char s_attrib;			/* defined, resword, global, typedef */
+   103   	char s_sc;				/* auto, static, external, register */
+   104   	int s_type;				/* 4bits specified, 2 bit fields for ptr... */
+   105   	int s_dp;				/* index into dimension table */
+   106   	int s_ssp;				/* dimension table/function arg table */
+   107   	int s_offset;			/* offset inside of structure */
+   108   	char s_symbol[SSIZE];	/* symbol identifier, to SSIZE chars */
+   109   	struct symbol *s_struc;	/* if struct, ptr to parent (sys III) */
+   110   	struct symbol *s_next;	/* next symbol table entry */
+   111   };
+   112    
+   113   	/*expression tree operator node*/
+   114   struct tnode {
+   115   	int t_op;
+   116   	int t_type;
+   117   	int t_dp;
+   118   	int t_ssp;
+1File: PARSER.H                                                            Page       3
+   119   	struct tnode *t_left;
+   120   	struct tnode *t_right;
+   121   };
+   122    
+   123   	/*expression tree node for symbol - only keeps location*/
+   124   struct symnode {
+   125   	int t_op;
+   126   	int t_type;					/*data type of symbol*/
+   127   	int t_dp;					/*dimension pointer of symbol*/
+   128   	int t_ssp;					/*structure size index to dtab*/
+   129   	int t_sc;					/*storage class of symbol*/
+   130   	int t_offset;				/*offset of symbol*/
+   131   	int t_label;
+   132   };
+   133    
+   134   	/*expressioon tree node for external symbol - need to keep name*/
+   135   struct extnode {
+   136   	int t_op;
+   137   	int t_type;
+   138   	int t_dp;
+   139   	int t_ssp;
+   140   	int t_sc;
+   141   	int t_offset;
+   142   	int t_reg;
+   143   	int t_symbol[SSIZE];		/*symbol name*/
+   144   };
+   145    
+   146   	/*expression tree node for integer constant*/
+   147   struct conode {
+   148   	int t_op;
+   149   	int t_type;
+   150   	int t_dp;
+   151   	int t_ssp;
+   152   	int t_value;				/*constant value*/
+   153   };
+   154    
+   155   struct lconode {
+   156   	int t_op;
+   157   	int t_type;
+   158   	int t_dp;
+   159   	int t_ssp;
+   160   	long t_lvalue;				/*constant value*/
+   161   };
+   162    
+   163   struct swtch {
+   164   	int sw_label;
+   165   	int sw_value;
+   166   } swtab[SWSIZE];
+   167    
+   168   	/*operator and operand stack used by expr*/
+   169   struct ops {					/*operator stack*/
+   170   	int o_op;					/*operator*/
+   171   	int o_pri;					/*priority*/
+   172   } opstack[OPSSIZE], *opp;
+   173    
+   174   char *opdstack[OPDSIZE];		/*operand stack*/
+   175   char **opdp;					/*operand stack pointer*/
+   176   char *opap;						/*ptr to next available loc in exprarea*/
+   177   char *exprp;					/*place to start building expression*/
+1File: PARSER.H                                                            Page       4
+   178   int	opinfo[];					/*operator info table*/
+   179   struct tnode *frp;				/*pointer to function return info node*/
+   180   int swp;						/*current entry in switch table*/
+   181   int cswp;						/*current low switch table index*/
+   182   int	nextlabel;					/*generates unique label numbers*/
+   183   int clabel;						/*continue label*/
+   184   int blabel;						/*break label*/
+   185   int rlabel;						/*return label*/
+   186   int dlabel;						/*default label*/
+   187   int	lineno;						/*current line number of input*/
+   188   int	errcnt;						/*count of errors*/
+   189   int inclflag;					/*in include file, don't incr line #'s*/
+   190   int inclline;					/*[vlh]line# in incl file for err rpting*/
+   191   char inclfile[13];				/*[vlh]include filename for err rpting*/
+   192   int equalstop;					/*stop lex at '=', used for external init*/
+   193   int commastop;					/*stop parse @ comma(used for const expr)*/
+   194   int colonstop;					/*stop parse @ colon(used for case value)*/
+   195   int instruct;					/*set when in structure declaration*/
+   196   int smember;					/*set when seen . or ->*/
+   197   int infunc;						/*set when in function body*/
+   198   int tdflag;						/*declaration is a typedef proto*/
+   199   char *tdp;						/*points to typedef prototype*/
+   200   int localsize;					/*length of local variables*/
+   201   int naregs;						/*keeps track of ptr registers alloc'd*/
+   202   int	ndregs;						/*keep track of data registers alloc'd*/
+   203   int loadreg;					/*need to load registers...*/
+   204   int	boffset;					/*current bit offset in structure*/
+   205   int eflag;						/*[vlh] 3.4 IEEE floats */
+   206   int fflag;						/*[vlh] 3.4 FFP floats */
+   207   int xflag;						/*translate int's to long's*/
+   208   int wflag;						/*[vlh] don't generate warning mesgs*/
+   209   int reducep;					/*[vlh] if(procid); reduction*/
+   210   int peektok;					/*peeked at token*/
+   211    
+   212   	/*dimension table*/
+   213   long dtab[DSIZE];				/* [vlh] 3.4 int => long */
+   214   int cdp;						/*next entry in dtab to alloc*/
+   215    
+   216   	/*lexical analyzer values*/
+   217   int cvalue;						/*current token value if keyword or CINT*/
+   218   int	cstrsize;					/*current string size*/
+   219   long clvalue;					/*current token value if long constant*/
+   220   struct symbol *csp;				/*current token symbol ptr if SYMBOL*/
+   221   char cstr[STRSIZE];				/*current token value if CSTRING*/
+   222   struct symbol *dsp;				/*declarator symbol pointer*/
+   223    
+   224   	/* -1 -> not instruct, 0 -> unnamed struct */
+   225   struct symbol *strucptr[10];	/*[vlh] ptrs to struc symbols*/
+   226    
+   227   	/*function argument table, used to collect function parameters*/
+   228   struct farg {
+   229   	struct symbol *f_sp;
+   230   	int f_offset;
+   231   } fargtab[NFARGS];
+   232    
+   233   	/*forward referenced structure prototype names*/
+   234   struct symbol *frstab[NFRSTR];
+   235   int frstp;
+   236    
+1File: PARSER.H                                                            Page       5
+   237   	/*output buffers for intermediate code and strings*/
+   238   struct io_buf obuf, sbuf, ibuf, *obp;
+   239    
+   240   #define	stypedef(sp)	(sp->s_attrib&STYPEDEF)
+   241   #define	walign(add)	((add+1)&(~1))
+   242   #define	array(type)		((type&SUPTYP)==ARRAY)
+   243   #define	function(type)	((type&SUPTYP)==FUNCTION)
+   244   #define	pointer(type)	((type&SUPTYP)==POINTER)
+   245   #define	notarray(type)		((type&SUPTYP)!=ARRAY)
+   246   #define	notfunction(type)	((type&SUPTYP)!=FUNCTION)
+   247   #define	notpointer(type)	((type&SUPTYP)!=POINTER)
+   248   #define	btype(type)		(type&TYPE)
+   249   #define	suptype(type)	(type&SUPTYP)
+   250   #define	alltype(type)	(type&(SUPTYP|TYPE))
+   251   #define	asgop(op)		((opinfo[op]&OPASSIGN)!=0)
+   252   #define	relop(op)		((opinfo[op]&OPREL)!=0)
+   253   #define	lintegral(op)	((opinfo[op]&OPLWORD)!=0)
+   254   #define	rintegral(op)	((opinfo[op]&OPRWORD)!=0)
+   255   #define	rasop(op)		((opinfo[op]&OPRAS)!=0)
+   256   #define	binop(op)		((opinfo[op]&OPBIN)!=0)
+   257   #define	unaryop(op)		((opinfo[op]&OPBIN)==0)
+   258   #define	leaf(op)		((opinfo[op]&OPTERM)!=0)
+   259   #define	lvalop(op)		((opinfo[op]&OPLVAL)!=0)
+   260   #define	oppriority(op)	(opinfo[op]&OPPRI)
+   261   #define	makeiop(op)		(op|(0254<<8))
+   262   	/* checks for symbol with structure element storage class */
+   263   #define isstel(tp)	(tp->t_op==SYMBOL && (sesc(tp)))
+   264   #define sesc(t)		(t->t_sc==STELCL||t->t_sc==UNELCL||t->t_sc==BFIELDCL)
+   265   	/* peek at next token, if not read token put back, else delete */
+   266   	/* 1 if matched, 0 otherwise */
+   267   #define peek(tok)	( (peektok=gettok()) == tok )
+   268    
+   269   #define outcommon(sym,size)	printf("\t.comm _%.8s,%ld\n",sym,size)
+   270   #define outgoto(lab)		if( lab > 0 ) printf("\tbra L%d\n",lab)
+   271   	/* change to text segment */
+   272   #define outtext()		printf("\t.text\n")
+   273   	/* change segment to bss */
+   274   #define outbss()		printf("\t.bss\n")
+   275   	/* output global symbol references */
+   276   #define outextdef(sym)	printf("\t.globl _%.8s\n",sym)
+   277   	/* outputs reserved memory [vlh] 3.4 %d => %ld */
+   278   #define outresmem(size)	printf("\t.ds.b %ld\n",size)
+   279   	/* output padding for word alignments */
+   280   #define outpad()		printf("\t.even\n")
+   281   	/* output long constant to assembler */
+   282   #define outlcon(val)			printf("\t.dc.l %d\n",val)
+   283   	/* output label constant */
+   284   #define outclab(lab)			printf("\t.dc.l L%d\n",lab)
+   285   	/* output a label */
+   286   #define outlab(lab)				printf("\tL%d:",lab)
+   287   	/* output function label */
+   288   #define outflab(sym)			printf("\t_%.8s:\n\t~~%.8s:\n",sym,sym)
+   289   	/* output data label */
+   290   #define outdlab(sym)			printf("\t_%.8s:\n",sym)
+   291    
+   292   	/*functions returning pointers*/
+   293   char *expr();
+   294   char *talloc();
+   295   char *tnalloc();
+1File: PARSER.H                                                            Page       6
+   296   char *enalloc();
+   297   char *snalloc();
+   298   char *cnalloc();
+   299   char *lcnalloc();
+   300   char *fpcnalloc();
+   301   char *popopd();
+   302   char *cvopgen();
+   303   char *arrayref();
+   304   char *funcref();
+   305   char *install();
+   306   char *lookup();
+   307   char *balpar();
+   308   char *sbrk();
+   309    
+   310   long initlist();
+   311   long dsize();
+   312   long psize();
+   313   long dodecl();
+   314   long dlist();
+   315   long getdec();
+   316   long gethex();
+   317   long getoct();
+   318   long getfp();
+   319   long toieee();
+   320   long toffp();

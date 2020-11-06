@@ -1,0 +1,60 @@
+;**************************************************************************
+;*                                                                        *
+;*          RESET v1.00 (c) Copyright  S.J.Kay  26th April 1995           *
+;*                                                                        *
+;*   Puts Z80 Emulator into bootup mode and sets user byte to determine   *
+;*               which CP/M 3 system CPMLDR.SYS will load.                *
+;*                                                                        *
+;**************************************************************************
+
+	maclib	TPORTS.LIB
+;
+	.z80
+	aseg
+;
+bdos	equ	0005h
+;
+	org	0100h
+	.phase	0100h
+;
+	ld	hl,0080h		;parameter address
+	ld	c,(hl)
+	inc	hl
+chkchr:	ld	a,c			;characters to check
+	or	a
+	jp	z,reset
+	ld	a,(hl)			;get a character
+	dec	c
+	inc	hl
+	cp	' '			;ignore any leading spaces
+	jp	z,chkchr
+	ld	b,2			;use banked CP/M 3 system
+	cp	'B'			;banked CP/M 3 system ?
+	jp	z,setsys
+	dec	b			;use non banked CP/M 3 system
+	cp	'N'			;non banked CP/M 3 system ?
+	jp	z,setsys
+	dec	b			;use default CP/M 3 system
+	cp	'D'			;default CP/M 3 system ?
+	jp	nz,prmerr
+setsys:	ld	hl,0			;access user byte number 0
+	ld	a,b
+	ld	c,0ffh			;set user byte function
+	out	(usrbyt),a		;set user byte
+reset:	out	(rstz80),a		;reset the Z80 Emulator
+prmerr:	ld	de,errmsg
+	ld	c,09h			;BDOS print string function
+	jp	bdos
+;
+errmsg:	db	0dh, 0ah
+	db	'RESET v1.00 (c) Copyright  S.J.Kay  26th April 1995'
+	db	0dh, 0ah, 0ah
+	db	'Use:-', 0dh, 0ah
+	db	'reset n  -boots up Non banked CP/M 3', 0dh, 0ah
+	db	'reset b  -boots up Banked CP/M 3', 0dh, 0ah
+	db	'reset d  -boots up Default system', 0dh, 0ah 
+	db	'reset    -boots up same system', 0dh, 0ah
+	db	'$'
+;
+	.dephase
+	end

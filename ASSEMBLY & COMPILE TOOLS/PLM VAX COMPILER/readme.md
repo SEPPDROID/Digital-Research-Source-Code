@@ -1,0 +1,3 @@
+This archive contains the sources for a PL/M-VAX compiler and the command files necessary to build the compiler from scratch.
+
+There is indeed one PL/M file, control.plm, that is a part of the compiler. However, there is also a file, control.tmp, that looks like control.plm translated to VAX assembly, possibly by the compiler itself. My guess is therefore that as long as there is a decent FORTRAN compiler and an assembler on the VAX, the PL/M compiler should build. 

@@ -1,0 +1,2516 @@
+.tab stops 8,16,24,32,40,48,56,64,72,80
+.rm 65
+.nofill
+.title ^^C Language Under CP/M
+.da Revision 01.07
+.dat Revision 01.07
+.swap toc
+ 
+.bl 5
+.c
+C Language Under CP/M
+.c
+---------------------
+.bl 2
+.c
+Revision 01.07
+.c
+--------------
+.bl 2
+.c
+September 23, 1982
+.c
+------------------
+.bl 15
+.c
+Digital Research, Inc.
+.c
+P.O. Box 579
+.c
+Pacific Grove, CA 93950
+.c
+(408) 649-3896
+.c
+TWX 910 360 5001
+.bl 4
+.c
+************************
+.c
+* Company Confidential *
+.c
+************************
+.bl 5
+.fill
+Note: This document contains Digital Research proprietary information, and
+must not be copied or distributed for any purpose whatsoever, without
+prior written permission of Digital Research, Inc.
+.bl 1
+Address Comments to:  Steve Williams, x6082
+.break
+.swap doc
+.title ^^C Language Under CP/M
+.chapter Introduction
+.title ^^C Language Under CP/M
+.subtitle Introduction
+.page
+.hl 1 Audience
+.i 5
+This document describes the C language implementation available with 
+CP/M-68K.  
+The intent is to provide both an implementation guide, and a preliminary
+manual for early users.  The reader should be familiar with the C language
+as described by Kernighan and Ritchie in "The C Programming Language".
+.bl 1
+.subtitle Philosophy
+.hl 1 Philosophy
+.i 5
+The implementation philosophy is to provide a system which can run 
+applications written in C on other operating systems.  This usually
+means programs written to run under UNIX.  Programs which use the UNIX
+fork/exec multi-tasking primitives or which rely upon reading UNIX file
+structures directly (e.g., directories) obviously cannot be made to run
+under CP/M.  The vast majority of UNIX software, however, does not use
+fork/exec except for chaining, and does not read file structure data.  It is
+this large body of software with which CP/M C seeks compatibility.
+.subtitle Differences from PCC
+.bl 1
+.hl 1 Differences from PCC
+.i 5
+The most commonly accepted standard for the C language is the Portable C
+Compiler (pcc) written by Stephen C. Johnson, as implemented on UNIX operating
+system (Version 7).  This compiler is also used in the Zilog, ONYX, XENIX,
+Berkeley UNIX, and UNIQ systems.  The language accepted by pcc is thus
+a defacto standard among UNIX systems.
+.bl 1
+.i 5
+The CP/M C compiler differs from pcc in the following areas:
+.bl 1
+.ls
+.leb;The C "int" (default) data type is 16 bits long.  Pointers are 32 bits
+long.  Care is required to ensure that all function definitions and function
+calls which use long (32 bit ints) and pointer parameters use the proper
+declarations.
+.leb;"long", "int", and "char" register variables are assigned to "D"
+registers.  Five such registers are available in each procedure.
+.leb;Any register variable used as a pointer is assigned to an "A" register.
+There are 3 such registers available per procedure.
+.leb;Floating point is not implemented.
+.leb;Structure assignment, structure arguments, and structures returned from
+procedures are not implemented.
+.leb;All local declarations (within a function body) must precede the first
+executable statement of the function.
+.leb;Initialization of automatic variables is not supported.
+.leb;Enumeration types are not supported.
+.leb;Structure initialization is handled as if the structure were an array of
+short integers, as in UNIX version 6.
+.leb;Variable and function names must be unique in 8 characters.  External
+names must be unique in 7 characters.
+.els
+.subtitle Operating Instructions
+.bl 1
+.hl 1 Operating Instructions
+.i 5
+To compile a C program under CP/M, one uses the "c" and "clink" command files.
+Separate compilations are handled easily using this method.
+.bl 1
+The compiler command line is:
+.bl 1
+.i 5
+A>submit c file
+.bl 1
+where "file.c" is the filename.  The compiler produces "file.o" as the
+object.  The Linker is invoked as follows:
+.bl 1
+.i 5
+A>submit clink file
+.bl 1
+All libraries and header files are included automatically by the command 
+file.  Multiple files may be specified if desired.  For example, to compile
+and link files "a.c", "b.c", and "c.c", the following commands would be
+used:
+.bl 1
+.i 5
+A>submit c a
+.i 5
+A>submit c b
+.i 5
+A>submit c c
+.i 5
+A>submit clink a b c
+.bl 1
+The resulting output would be placed in file "a.68k".
+.subtitle Memory Layout
+.test page 30
+.hl 1 Memory Layout
+.i 5
+C programs under CP/M have a memory layout similar to UNIX C programs.  The
+program is divided up into three segments: "text" (instructions), "data" 
+(initialized data), and "bss" (uninitialized data).  Automatic variables are
+allocated on the stack.  These sections are arranged in memory as follows:
+.bl 1
+.nofill
+.lm 8
++----------------------------------+	TPA Low
+! Text Segment			   !
++----------------------------------+	"etext"
+! Data Segment			   !
++----------------------------------+	"edata"
+! Bss  Segment			   !
++----------------------------------+	"end"
+! Heap (grows to higher addresses) !
++----------------------------------+	"break"
+		.
+		.
+		.
++----------------------------------+
+! Stack (grows to lower addresses) !
++----------------------------------+	TPA High
+.bl 1
+.lm 0
+.fill
+There are two dynamic memory areas:  the stack and the heap.  The stack is
+used for procedure calls and automatic variables.  The heap is managed by the
+"brk", "sbrk", "malloc", and "free" procedures described later.  This area
+is used for dynamically growing data structures, such as symbol tables.
+.bl 1
+.i 5
+The locations "etext", "edata", and "end" are defined by the linkage
+editor, and may be used to determine the ending addresses of the ".text",
+".data", and ".bss" segments.  The "break" location is the first free location
+following the heap area.
+.subtitle Calling Conventions
+.hl 1 Calling Conventions
+.i 5
+Procedures are called in C via the jsr (Jump to Subroutine) instruction.  A6
+is used as the frame pointer (for referencing local storage).  Arguments are
+pushed (in reverse order) onto the A7 stack.  Word and character arguments 
+to functions occupy 16 bits on the stack.  Long and pointer arguments occupy
+32 bits.  D0 is used as the function value return register in all cases.  
+Functions which declare no return value will return garbage.
+.bl 1
+.test page 25
+.i 5
+The sequence:
+.nofill
+.bl 1
+xyz() _{
+	long	a;
+	int	b;
+	char	x;
+	register y;
+	    .
+	    .
+	    .
+	b = blivot(x,a);
+_}
+.bl 1
+Generates:
+.bl 1
+__xyz:
+	link	a6,_#-8		* space for a,b,x
+	movem.l d6-d7,-(a7)	* d7 used for "y"
+	    .			* d6 reserves space
+	    .
+	    .
+	move.l	-4(a6),(a7)	* Load Parameter "a"
+	move.b	-8(a6),d0	* Load Parameter "x"
+	ext.w	d0		* Extend to word size
+	move.w	d0,-(a7)	* Push it
+	jsr	__blivot   	* Call subroutine
+	add.l	_#2,a7		* Pop argument list
+	move.w	d0,-6(a6)	* Store return parameter
+	tst.l	(a7)+		* Purge longword
+	movem.l	(a7)+,d7	* Unsave register(s)
+	unlk	a6		* Restore frame pointer
+	rts			* Return to caller
+.bl 1
+.fill
+Note that due to the varying length of arguments on the stack, older C code
+which relied on the fact that all arguments were the same length may not work
+without modification.	
+.bl 1
+The compiler prepends an underscore ('__') character to the beginning of
+each external variable or function name.  This means that all external names
+in C must be unique in 7 characters.
+.bl 1
+The compiler generated code maintains a long word at the top of the stack
+for use in subroutine calls.  This shortens the stack popping code
+required on return from a procedure call.  The "movem.l" instruction used
+to save the registers contains an extra register to allocate this space.
+.bl 1
+Registers D3-D7 and A3-A5 are used by the compiler for register variables. 
+These registers must be saved and restored (if used) by a procedure called
+from a C program.  The compiler generated code saves only those registers
+used, as illustrated above.
+Registers D0-D2 and A0-A2 are scratch registers and may
+be modified by the called procedure.
+.subtitle Stack Frame
+.test page 25
+.hl 1 Stack Frame
+The standard C stack frame has the following appearance:
+.bl 1
+.nofill
+.lm 8
+A7 ->	+---------------------------------+
+	! Longword for procedure calls    !
+	+---------------------------------+
+	! Saved Registers		  !
+	+---------------------------------+
+	! Local variable area		  !
+	+---------------------------------+
+A6 ->	! Previous value of A6		  !
+	+---------------------------------+
+	! Return address		  !
+	+---------------------------------+
+	! Argument 1			  !
+	+---------------------------------+
+	! Argument 2			  !
+	+---------------------------------+
+			.
+			.
+			.
+.bl 1
+.fill
+.lm 0
+Arguments are either 2 or 4 bytes, depending on argument type.
+A6 is used by the compiler-generated code to reference all variables on the
+stack.
+.subtitle Command Line Interface
+.hl 1 Command Line Interface
+.i 5
+The standard C "argc/argv" interface for arguments typed on the command line
+also works under CP/M.  For instance, the command:
+.bl 1
+.lm 8
+command arg1 arg2 arg3 ... argn
+.bl 1
+.lm 0
+causes the following setup:
+.bl 1
+.lm 8
+.nofill
+argc	=	n+1
+argv[0]	->	"C Runtime"
+argv[1]	->	"arg1"
+argv[2]	->	"arg2
+	.
+	.
+	.
+argv[n]	->	"argn"
+.bl 1
+.lm 0
+.fill
+Note that the command name cannot be obtained under CP/M.  The argv[0] 
+argument will therefore always be incorrect.  
+.subtitle I/O Conventions
+.hl 1 I/O Conventions
+.i 5
+UNIX C programs use two types of file and device I/O: regular files and
+stream files.  Regular files are identified by a unique number called a
+"file descriptor".  In CP/M, this number is in the range (0-15).  Stream
+files are identified by the address of a mysterious control block hidden
+deep in the bowels of the run-time system.  (This is a USER control block,
+the file system does not rely on it).  
+.bl 1
+.i 5
+Stream files differ from regular files in that some form of intermediate
+buffering is used, making single-byte I/O much more efficient.  
+.bl 1
+.i 5
+Under UNIX, printers, terminals, etc. may be referenced as "files", using
+the special names "/dev/tty", "/dev/lp", etc.  Under CP/M, these names will
+be "CON:" for the console device, "LST:" for the listing device.
+.bl 1
+.i 5
+ASCII files under CP/M are stored with a carriage return / line feed pair
+following each line.  End of file is indicated by a control-Z (0x1a) 
+character.  C programs typically terminate lines with only a line
+feed.  This means that CP/M C library read and write operations to ASCII
+files must insert and delete carriage return characters where appropriate.
+The control-Z must be deleted on read and inserted on close for such files.
+These operations are not desirable for binary files.  An extra
+entry point has been added to all file open and creation calls to distinguish
+between ASCII and binary files.  
+.subtitle Standard Files
+.hl 1 Standard Files
+.i 5
+C programs begin execution with three files already open.  These files are
+known as the standard input, standard output and standard error files, and can
+be accessed as either stream or regular files within the C program.  The 
+following definitions are available from the <stdio.h> file:
+.bl 1
+.nofill
+.lm 8
+File		File Descriptor		Stream Name
+----		---------------		-----------
+standard input	    STDIN		   stdin
+standard output	    STDOUT		   stdout
+standard error	    STDERR		   stderr
+.bl 1
+.fill
+.lm 0
+Standard files may be closed and reopened using the usual library routines.
+In addition, I/O redirection is available from the command line.
+.subtitle I/O Redirection
+.hl 1 I/O Redirection
+.i 5
+The C program standard input and standard output may be redirected by using
+the "<" and ">" characters.  No space is allowed between the "<" or ">" and
+the filename.  The standard error file may not be redirected.
+.bl 1
+.i 5
+For example, the command:
+.bl 1
+.i 8
+test <a >lst: c d e f
+.bl 1
+executes the file "test.68k" with the standard input coming from disk file
+"a" and the standard output going to the listing device.  The argument list
+is "c d e f".
+
+.chapter Library Routines
+.page
+.c
+Library Routines
+.c
+----------------
+.bl 1
+.i 5
+The CP/M C library is a collection of routines dealing with I/O, 
+dynamic memory allocation, system traps, and data conversion.
+Specific routines are provided for running on the 68000 or 8086/88
+processors, as well as for accessing CP/M in a portable fashion.
+.bl 1
+.i 5
+The C Style Guide (Chapter 3) provides important information on writing
+C code in a portable manner.  The reader is urged to pay careful attention
+to the material found there.
+.subtitle Differences from UNIX V7
+.hl 1 Differences from UNIX V7
+.i 5
+Much emphasis has been placed on keeping the C library compatible with UNIX
+V7, to allow programs to be easily moved from UNIX to CP/M.  
+Many UNIX operating system calls and features have been simulated.
+Certain C functions available under UNIX simply cannot be implemented under
+CP/M:
+.ls
+.leb;The UNIX fork / exec, kill, lock, nice, pause, ptrace, sync, and wait 
+primitives require a multi-tasking system, and
+cannot be implemented under CP/M without unreasonable effort and poor
+performance.
+.leb;The UNIX acct system call is not implemented under CP/M.
+.leb;The UNIX alarm function (timer), "stime" (set time), "time", "ftime" and 
+"times" system calls
+are meaningless in CP/M, since CP/M
+does not require a clock.
+.leb;The UNIX "chdir" (Change Directory) system call is not implemented.
+.leb;The UNIX "dup" and "dup2" (duplicate file descriptor) functions are
+not implemented.
+.leb;The UNIX "getuid", "getgid", "geteuid", "getegid", "setuid" and "setgid"
+functions for 
+obtaining and setting the group and user IDs of a process are not implemented.
+.leb;The UNIX "indir" (indirect system call) is not available from C under
+UNIX, and is not implemented.
+.leb;The UNIX "ioctl", "stty", and "gtty" system calls for manipulating
+I/O devices are not implemented.
+.leb;The UNIX "link" call to connect one file to another is
+not implemented.
+.leb;The UNIX "chdir", "chroot",
+"mknod", "mount", "umount", "mpx", "pipe", "pkon", "pkoff",
+"profil", "sync",
+"stat", "fstat", "umask" and "utime" system calls
+are UNIX file system specific, and
+are not implemented.
+.leb;The UNIX "phys" system call is not implemented.
+.leb;The following UNIX library functions are not available under CP/M:
+.ls
+.leb;Assert -- program verification routines
+.leb;Crypt -- DES Encryption routines
+.leb;dbm -- Data base management routines
+.leb;Getenv -- environment variable support
+.leb;Getgrent, getlogin, getpw, and getpwent functions for reading the
+login file
+.leb;l3tol, ltol3 -- 3-byte to long conversion routines
+.leb;monitor -- Execution profiling routines
+.leb;itom, madd, msub, mult, mdiv, min, mout, pow, gcd, and rpow multi-word
+integer math routines
+.leb;nlist -- fetch name list values from a UNIX load module
+.leb;pkopen, pkclose, pkread, pkwrite, and pkfail -- UNIX communications
+driver simulation subroutines.
+.leb;plot -- graphics interface
+.leb;popen, pclose -- piping routines
+.leb;sleep
+.leb;system -- Execute UNIX command
+.leb;ttyslot -- Return slot number in UNIX "ttys" file of controlling
+terminal.
+.els
+.els
+The present version of the library does not contain the floating
+point routines available under UNIX. 
+.bl 1
+.i 5
+In addition to the above omissions, it was necessary to add entry points
+to file OPEN and CREATE calls to distinguish between ASCII and binary files.
+Byte level End of File is also not available for binary files.  ASCII files,
+however, are compatible with UNIX, and with the CP/M text editors and
+other CP/M utilities which use ASCII files.
+.bl 1
+.i 5
+Another incompatibility is that this documentation does not split up the
+UNIX system calls and library functions, since all calls are library 
+functions under CP/M.
+
+.subtitle abort Function
+.page
+.hl 1 abort Function
+Description:
+.bl 1
+The abort function causes the current program to terminate with a severe
+error.  The exact error is system dependent.  For the 68000, an Illegal
+Instruction Trap is used.  This invokes DDT-68K if the debugger is loaded
+with the object program.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD code;
+.bl 1
+abort(code);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+code	Is loaded into register D0 before abort
+.bl 1
+.lm 0
+Returns:
+.bl 1
+.lm 8
+The abort function never returns.
+.lm 0
+Bugs:
+.bl 1
+.lm 8
+.lm 0
+.fill
+
+.subtitle abs Function
+.page
+.hl 1 abs Function
+Description:
+The abs function takes the absolute value of a single argument.  This function
+is implemented as a macro (in <stdio.h>), so arguments with side effects
+will not work as expected.  In particular, the call:
+.bl 1
+.i 8
+a = abs(*x++);
+.bl 1
+will increment "x" twice.
+.bl 1
+.nofill
+Calling Sequence:
+.bl 1
+.lm 8
+WORD val;
+WORD ret;
+.bl 1
+ret = abs(val);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+val 	is the input value
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	is the absolute value of "val"
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle access Function
+.page
+.hl 1 access Function
+Description:
+.bl 1
+The access function checks to see whether a file may be legally accessed
+by the invoking program.  Under CP/M, the file may be accessed if it
+exists.  
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *name;
+WORD mode;
+WORD ret;
+.bl 1
+ret = access(name,mode);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	points to the null-terminate filename
+.bl 1
+mode	is 4 to check read  access
+	   2 to check write access
+	   1 to check exec  access
+	   0 to check directory path access
+	(this argument is ignored by CP/M)
+.bl 1
+.lm 0
+Returns:
+.bl 1
+.lm 8
+0	If access is allowed
+-1	If access is not permitted
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+The only real check made here is to see if the file exists.
+
+.subtitle atoi, atol Functions
+.page
+.hl 1 atoi, atol Functions
+Description:
+.bl 1
+The  "atoi" and "atol" functions convert an ASCII string to a
+integer, or long (respectively) binary number.  Strings converted
+by atoi and atol have the following format:
+.i 8
+.bl 1
+[ ...][-][+]dddddd ....
+.bl 1
+Leading spaces are ignored, and one leading sign is permitted.
+.bl 1
+.nofill
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *string;
+WORD ival;
+LONG lval,atol();
+.bl 1
+ival = atoi(string);
+lval = atol(string);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+.fill
+String is a null-terminated string containing the number to be converted.
+Conversion proceeds until digits are exhausted.
+Zero is returned if no digits are present.
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+Converted value as "ival" (int), or "lval" (long).
+.lm 0
+.bl 1
+Bugs:
+.bl 1
+There is no provision for overflow detection or reporting.
+It is not possible to limit the number of contiguous digits processed, or to
+determine the number of digits actually processed.
+
+.subtitle brk, sbrk Functions
+.page
+.hl 1 brk, sbrk Functions
+Description:
+.bl 1
+The "brk" and "sbrk" functions 
+are used to extend the "heap" portion of the user program.  
+The "brk" function sets the upper bound of the program (the "break" in
+UNIX terminology) to an absolute address.  The "sbrk" function extends the
+program by an incremental amount.  
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD brk();
+BYTE *addr,*sbrk();
+WORD incr;
+WORD ret;
+BYTE *start;
+.bl 1
+ret =  brk(addr);
+start = sbrk(incr)
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+addr	Is the desired new break address
+incr	Is the incremental number of bytes desired
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+0	Is returned for success (brk)
+-1	Is returned for failure (brk)
+.bl 1
+start	Is the beginning of the allocated area (sbrk)
+	0 is returned for failure (sbrk)
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle calloc, malloc, realloc, free Functions
+.page
+.hl 1 calloc, malloc, realloc, free Functions
+Description:
+.bl 1
+The "calloc", "malloc", "realloc" and "free" library functions manage the
+dynamic area between the ".bss" region and the stack.  
+.bl 1
+"malloc" allocates an area of contiguous bytes (aligned on a word boundary),
+and returns the address of this area.  "sbrk" is called to allocate additional
+heap space if needed.  
+.bl 1
+"calloc" allocates space for an array of elements, the size of which are
+given in bytes.
+.bl 1
+"realloc" changes the size of a block.  The address of the (possibly moved)
+block is returned.
+.bl 1
+"free" is used to release a block previously allocated by "malloc".
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD size,number;
+BYTE *addr,*malloc(),*calloc(),*realloc();
+.bl 1
+addr = malloc(size);
+addr = calloc(number,size);
+addr = realloc(addr,size);
+free(addr);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+size	Is the number of bytes desired
+number	Is the number of elements desired
+"addr"	Points to the allocated region
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+address	of the allocated region if successful
+0	if unsuccessful
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+Freeing a bogus address can have disastrous consequences.
+
+.subtitle chmod, chown Functions
+.page
+.hl 1 chmod, chown Functions
+Description:
+.bl 1
+The "chmod" and "chown" UNIX system calls allow a user under UNIX to change
+the protection and owner ID of an existing file.  These calls are treated
+as NO-OPs by CP/M (if the file exists).
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *name;
+WORD mode,owner,group,ret;
+.bl 1
+ret = chmod(name,mode);
+ret = chown(name,owner,group);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	Is the affected filename (null-terminated)
+mode	Is the new mode for the file
+owner	Is the new owner of the file
+group	Is the new group number
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	0 (success) if file exists
+	-1 if file does not exist
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle close Function
+.page
+.hl 1 close Function
+Description:
+.bl 1
+The close function is used to terminate access to a file or device.  This
+routine is used on files opened via the "open" or "creat" functions. 
+A file descriptor (not a stream) is specified for the operation.  Stream files
+are closed via the "fclose" function.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD fd,ret;
+.bl 1
+ret = close(fd);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fd	Is the file descriptor to be closed
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+0	For a successful close
+-1	For an unknown file descriptor
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle creat, creata, creatb Functions
+.page
+.hl 1 creat, creata, creatb Functions
+Description:
+.bl 1
+The creat function adds a new file to a disk directory.  The file is then
+opened for reference by file descriptor (not a stream file).  
+The creat and creata functions create an ASCII file.  "Creatb" creates a 
+binary file.
+.bl 1
+.nofill
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *name;
+WORD mode,fd;
+.bl 1
+fd = creat(name,mode);
+fd = creata(name,mode);
+fd = creatb(name,mode);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	Is the filename string (null-terminated)
+mode	Is the UNIX file mode (ignored by CP/M)
+.bl 1
+.lm 0
+Returns:
+.lm 16
+.fill
+.bl 1
+.i -8
+fd	Is the file descriptor for the opened file.  A file descriptor is
+an "int" quantity used to denote an open file in a read, write, or lseek
+call.
+.bl 1
+.i -8
+-1	Is returned if there are any errors.
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+UNIX programs which use binary files will compile successfully, but will not
+execute properly.
+
+.subtitle ctype Functions
+.page
+.hl 1 ctype Functions
+Description:
+.bl 1
+The file "<ctype.h>" defines a number of functions used to classify 
+ASCII characters.  These functions indicate whether a character belongs to
+a certain character class, returning non-zero for true and zero for false.
+.bl 1
+The functions are:
+.bl 1
+.nofill
+	isalpha(c)	c is a letter
+	isupper(c)	c is upper case
+	islower(c)	c is lower case
+	isdigit(c)	c is a digit
+	isalnum(c)	c is alphanumeric
+	isspace(c)	c is a whitespace character
+	ispunct(c)	c is a punctuation character
+	isprint(c)	c is a printable character
+	iscntrl(c)	c is a control character
+	isascii(c)	c is an ascii character (< 0x80)
+.bl 1
+.fill
+Whitespace characters are defined as the space (0x20), tab (0x09), carriage
+return (0x0d), line feed (0x0a) and form feed (0x0c) characters.  Punctuation
+characters are those characters which are not control characters and
+not alphanumeric.  Printing characters are defined as space (0x20) through
+tilde (0x7e).   A control character is less than space (0x20).	
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+_#include <ctype.h>
+.bl 1
+WORD ret;
+BYTE c; /* or WORD c; */
+.bl 1
+ret = isalpha(c);
+ret = isupper(c);
+ret = islower(c);
+ret = isdigit(c);
+ret = isalnum(c);
+ret = isspace(c);
+ret = ispunct(c);
+ret = isprint(c);
+ret = iscntrl(c);
+ret = isascii(c);
+.lm 0
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+c	Is the character to be classified
+.bl 1
+.lm 0
+.test page 5
+Returns:
+.lm 8
+.bl 1
+ret 	= 0 for False
+ret	<>0 for True
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+These functions are implemented as macros, so arguments with side effects
+(e.g., "*p++") will not function correctly in all cases.
+.bl 1
+Bogus values are returned if arguments are not ASCII characters (i.e., 
+> 0x7f).
+
+.subtitle end, etext, edata Locations
+.page
+.hl 1 end, etext, edata Locations
+Description:
+.bl 1
+The labels "end", "etext", and "edata" are defined by the linkage editor
+to be the first location past the ".bss", ".text", and ".data" regions
+respectively.  The program break location (last used location) is initially
+set to "end".  This location is altered by many library functions, however.
+The "break" may be retrieved by 'sbrk(0)'.
+
+.subtitle exit, __exit Functions
+.page
+.hl 1 exit, __exit Functions
+Description:
+.bl 1
+The "exit" function is used to pass control back to CP/M.  An optional 
+completion code may be returned.  (This is presently ignored by CP/M). 
+.bl 1
+All memory is deallocated, and any open files are closed.  Buffer flushing
+is also performed for stream output files.
+.bl 1
+"__exit" is used to return control immediately to CP/M without flushing or
+closing open files.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD code;
+.bl 1
+exit(code);
+__exit(code);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+code	is the optional return code
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+(none)
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle fclose, fflush Functions
+.page
+.hl 1 fclose, fflush Functions
+Description:
+.bl 1
+fclose and fflush are used to close and flush a stream file, respectively.
+The stream address is used to identify which stream is to be operated on.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+FILE *stream;
+.bl 1
+ret = fclose(stream);
+ret = fflush(stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+stream	Is the stream address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+0	If successful
+-1	If bad stream address or write failure
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle feof, ferror, clearerr, fileno Functions
+.page
+.hl 1 feof, ferror, clearerr, fileno Functions
+Description:
+.bl 1
+These functions deal with manipulating file streams in a system-independent
+manner.
+.bl 1
+The "feof" function returns non-zero if a specified stream is at end of
+file, and zero otherwise.
+.bl 1
+"ferror" returns non-zero when an error has occurred on a specified stream.
+"clearerr" clears this error condition.  This is useful for functions such 
+as "putw" where no error indication is returned for output failures.
+.bl 1
+"fileno" returns the file descriptor associated with an open stream.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+FILE *stream;
+WORD fd;
+.bl 1
+ret = feof(stream);
+ret = ferror(stream);
+clearerr(stream);
+fd = fileno(stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+stream	Is the stream address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is a zero or non-zero indicator
+fd	Is the returned file descriptor
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle fopen, freopen, fdopen Functions
+.page
+.hl 1 fopen, freopen, fdopen Functions
+Description:
+.bl 1
+The "fopen", "freopen", and "fdopen" functions are used to associate an I/O
+stream with a file or device.  
+.bl 1
+"fopen" and "fopena" open an existing ASCII file for I/O as a stream.
+"fopenb" opens an existing binary file for I/O as a stream.  
+.bl 1
+"freopen" and "freopa" substitute a new ASCII file in place of an open stream.
+"freopb" substitutes a new binary file in place of an open stream.
+.bl 1
+"fdopen" associates a file which was opened by file descriptor (using
+"open" or "creat") with a stream.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+FILE *fopen(),*fopena(),*fopenb();
+FILE *freopen(),*freopa(),*freopb();
+FILE *fdopen;
+FILE *stream;
+BYTE *name,*access;
+WORD fd;
+.bl 1
+stream = fopen(name,access);
+stream = fopena(name,access);
+stream = fopenb(name,access);
+stream = freopen(name,access,stream);
+stream = freopa(name,access,stream);
+stream = freopb(name,access,stream);
+stream = fdopen(fd,access);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	Is the null-terminated filename string
+.bl 1
+access	Is the access string:
+	"r"	For reading the file
+	"w"	For writing the file
+	"a"	For appending to a file
+.bl 1
+stream	Is the stream address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+stream	Stream address if open was successful
+0	If unsuccessful
+.lm 0
+.fill
+.bl 1
+.test page 10
+Bugs:
+.bl 1
+UNIX programs which use "fopen" on binary files will compile and link
+correctly, but fail to execute properly.
+
+.subtitle fread, fwrite Functions
+.page
+.hl 1 fread, fwrite Functions
+Description:
+.bl 1
+"fread" and "fwrite" are used to transfer a stream of bytes between a
+stream file and primary memory.  
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD nitems;
+BYTE *buff;
+WORD size;
+FILE *stream;
+.bl 1
+nitems =  fread(buff,size,nitems,stream);
+nitems = fwrite(buff,size,nitems,stream);
+.lm 0
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+buff	Is the primary memory buffer address
+size	Is the number of bytes in each item
+nitems	Is the number of items to transfer
+stream	Is an open stream file
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+nitems	The number of items actually read / written
+0	If an error occurred (including EOF)
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle fseek, ftell, rewind Functions
+.page
+.hl 1 fseek, ftell, rewind Functions
+Description:
+.bl 1
+The "fseek", "ftell", and "rewind" functions are used in positioning a stream
+file.  
+.bl 1
+"fseek" sets the read / write pointer to an arbitrary offset in the stream.
+"rewind" sets the read / write pointer to the beginning of the stream.
+These calls have no effect on the console device or the listing device.
+.bl 1
+The "ftell" function returns the present value of the read / write pointer 
+within the stream.  This call returns a meaningless value for non-file
+devices.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+FILE *stream;
+LONG offset,ftell();
+WORD ptrname;
+.bl 1
+ret = fseek(stream,offset,ptrname);
+ret = rewind(stream);
+offset = ftell(stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+stream	Is the stream address
+offset	Is a signed offset measured in bytes
+ptrname	Is the sense of offset:
+.bl 1
+	0	=>	from beginning of file
+	1	=>	from current position
+	2	=>	from end of file
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	0 for success; -1 for failure
+offset	present offset in stream
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+ASCII file seek and tell operations do not account for carriage returns
+which will eventually be deleted.  Control-Z characters at the end of the
+file are handled correctly.
+
+.subtitle getc, getchar, fgetc, getw, getl Functions
+.page
+.hl 1 getc, getchar, fgetc, getw, getl Functions
+Description:
+.bl 1
+The "getc", "getchar", "fgetc", "getw", and "getl"
+functions are used to perform
+input from a stream.
+.bl 1
+"getc" reads a single character from an input stream.  This function is
+implemented as a macro in <stdio.h>, and arguments should not have 
+side effects.
+.bl 1
+"getchar" reads a single character from the standard input.  It is identical
+to "getc(stdin)" in all respects.
+.bl 1
+"fgetc" is a function implementation of "getc", used to reduce object code 
+size. 
+.bl 1
+"getw" reads a word (16 bits)
+from the stream, high byte first (compatible with "read"
+function call).  No special alignment is required.
+.bl 1
+"getl" reads a long (32 bits) from the stream, in 68000 byte order.  No
+special alignment is required.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ichar;
+FILE *stream;
+WORD iword;
+LONG ilong,getl();
+.bl 1
+ichar = getc(stream);
+ichar = getchar();
+ichar = fgetc(stream);
+iword = getw(stream);
+ilong = getl(stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+stream	Is the stream address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ichar	Character read from stream
+iword	Word read from stream
+ilong	Long word read from stream
+-1	On read failures
+.lm 0
+.fill
+.test page 6
+.bl 1
+Bugs:
+.bl 1
+Error return from getchar is incompatible with UNIX version 6 and previous.
+.bl 1
+Error return from getl or 
+getw is a valid value which might occur in the
+file normally.  Use feof or ferror to detect end of file or read error.
+
+.subtitle getpass Function
+.page
+.hl 1 getpass Function
+Description:
+.bl 1
+The "getpass" function reads a password from the console device.  A prompt
+is output, and the input read without echoing.  A pointer is returned to 
+a 0-8 character null-terminated string.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *prompt;
+BYTE *getpass;
+BYTE *pass;
+.bl 1
+pass = getpass(prompt);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+prompt	Is a null-terminated prompt string
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+pass	points to the password read
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+The return value points to static data whose content is overwritten by
+each call.
+
+.subtitle getpid Function
+.page
+.hl 1 getpid Function
+Description:
+.bl 1
+The getpid function is a bogus routine which returns a phony "process id".
+This routine is strictly for UNIX compatibility, and serves no useful purpose
+under CP/M.  The return value is unpredictable in some implementations.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD pid;
+.bl 1
+pid = getpid();
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+(none)
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+pid	Phony "process id"
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle gets, fgets Functions
+.page
+.hl 1 gets, fgets Functions
+Description:
+.bl 1
+"gets" and "fgets" are used to read strings from stream files.  "fgets" reads
+a string including a newline (line feed) character.  "gets" deletes the 
+newline, and reads only from the standard input.  Both terminate the strings
+with a null character.
+.bl 1
+A maximum count is specified with fgets, but not with gets.  This maximum
+count includes the terminating null character.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *addr;
+BYTE *s;
+BYTE *gets(),*fgets();
+WORD n;
+FILE *stream;
+.bl 1
+addr = gets(s);
+addr = fgets(s,n,stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s	Is the string buffer area address
+n	Is the maximum character count
+stream	Is the input stream
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+addr	Is the string buffer address
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle index, rindex Functions
+.page
+.hl 1 index, rindex Functions
+Description:
+.bl 1
+The index and rindex functions are used to locate a given character in a
+string.  "index" returns a pointer to the first occurrence of the character,
+while "rindex" returns a pointer to the last occurrence.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE c;
+BYTE *s;
+BYTE *ptr;
+BYTE *index(),*rindex();
+.bl 1
+ptr = index(s,c);
+ptr = rindex(s,c);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s	Is a null-terminated string pointer
+c	Is the character to look for
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ptr	The desired character address
+0	If character not in the string
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle isatty Function
+.page
+.hl 1 isatty Function
+Description:
+.bl 1
+The "isatty" function can be used by a CP/M C program to determine if a
+file descriptor is attached to the CP/M console device ("CON:").
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD fd;
+WORD ret;
+.bl 1
+ret = isatty(fd);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fd	Is an open file descriptor
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+1	If fd attached to CON:
+0	Otherwise
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle lseek, tell Functions
+.page
+.hl 1 lseek, tell Functions
+Description:
+.bl 1
+"lseek" is used to position a file 
+referenced by file descriptor to an 
+arbitrary offset.  This function should not be used with stream files, due
+to the possibility of stale data in the stream buffer.
+The "fseek" function should be used instead.
+.bl 1
+"tell" is used to determine the file offset of an open file descriptor.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD fd;
+WORD ptrname;
+LONG offset,lseek(),tell(),ret;
+.bl 1
+ret = lseek(fd,offset,ptrname);
+ret = tell (fd);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fd	Is the open file descriptor
+offset	Is a signed byte offset in the file
+ptrname	Is the interpretation of "offset":
+.bl 1
+	0 => from the beginning of the file
+	1 => from the current file position
+	2 => from the end of the file
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	resulting absolute file offset
+-1	If an error occurs
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+Incompatible with versions 1-6 of UNIX
+
+.subtitle mktemp Function
+.page
+.hl 1 mktemp Function
+Description:
+.bl 1
+The "mktemp" function is used to create a temporary filename.  The calling
+argument is a character string ending in 6 "X" characters.  These characters
+are overwritten with the temporary filename.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *string;
+BYTE *mktemp();
+.bl 1
+string = mktemp(string)
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+string	Is the address of the template string
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+string	Is the original address argument
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle open, opena, openb Functions
+.page
+.hl 1 open, opena, openb Functions
+Description:
+.bl 1
+The open and opena functions open an existing ASCII 
+file by file descriptor.  The openb function opens an existing binary file.
+The file may
+be opened for reading, writing, or updating.
+.bl 1
+
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *name;
+WORD mode;
+WORD fd;
+.bl 1
+fd = open(name,mode);
+fd = opena(name,mode);
+fd = openb(name,mode);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	Is the null-terminated filename string
+.bl 1
+mode	Is the access desired:
+	0 => read only
+	1 => write only
+	2 => read/write (update)
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+fd	Is the file descriptor for accessing the file
+-1	Indicates open failure
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+UNIX programs which use binary files will compile correctly, but will not
+execute properly.
+
+.subtitle perror Function
+.page
+.hl 1 perror Function
+Description:
+.bl 1
+The "perror" function produces a short message on the standard error file
+which gives a description of the last system error encountered.  An argument
+string is printed first, then a colon, followed by the message.
+.bl 1
+The UNIX notion of an external variable, "errno", which contains the last
+error returned from the operating system is simulated.
+A list of the possible values of "errno" and of the messages printed by 
+"perror" is given in Appendix A.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *s;
+.bl 1
+perror(s);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.i 8
+s	Is the prefix string to be printed
+.bl 1
+Returns:
+.bl 1
+.i 8
+(none)
+.bl 1
+Bugs:
+.bl 1
+.lm 8
+.fill
+Many messages are "Error undefined on CP/M".
+.lm 0
+
+.subtitle printf, fprintf, sprintf Functions
+.page
+.hl 1 printf, fprintf, sprintf Functions
+Description:
+.bl 1
+The printf family of functions is used to format data for output.  "printf"
+outputs to the standard output stream.  "fprintf" outputs to an arbitrary
+stream file.  "sprintf" outputs to a string (memory).
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+BYTE *fmt;
+FILE *stream;
+BYTE *string;
+BYTE *sprintf(),rs;
+/* Args can be any type */
+.bl 1
+ret    = printf (fmt,arg1,arg2 ...);
+ret    = fprintf(stream,fmt,arg1,arg2 ...);
+rs     = sprintf(string,fmt,arg1,arg2 ...);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fmt	Is a format string with conversion specifiers
+argn	Are data arguments to be converted
+stream	Is an output stream file
+string	Is a buffer address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Number of characters output
+	-1 if error
+rs	Buffer string address
+	Null (zero) if error
+.lm 0
+.fill
+.bl 1
+Conversion Operators
+.bl 1
+The occurrence of a "%" character in the format string indicates the start of
+a conversion operator.  Values to be converted are obtained from the argument
+list in order.  Valid Conversion operators are:
+.bl 1
+.ls
+.lec 'd' Convert a binary number to decimal ASCII and insert in output stream.
+.lec 'o' Convert a binary number to octal ASCII and insert in output stream.
+.lec 'x' Convert a binary number to hexadecimal ASCII and insert in output
+stream.
+.lec 'c' Use the argument as a single ASCII character.
+.lec 's' Use the argument as a pointer to a null-terminated ASCII string, and
+insert the string into the output stream.
+.lec 'u' Convert a binary number to decimal ASCII (unsigned) and insert in
+output stream.
+.lec '%' Print a '%' character.
+.els
+Between the '%' character and the conversion operator, the following optional
+information may be present:
+.ls
+.leb;An optional minus sign which specifies that the converted output be
+left-adjusted rather than the default right adjustment.
+.leb;An optional digit string specifying a field width.  This value gives the
+minimum width of the field.  If the digit string begins with a '0' character,
+then zero padding will be done instead of blank padding.
+If an asterisk ("*") is used, the value of the width field will be taken as
+the next argument in the argument list.
+.leb;A '.' character which separates the field width from the precision
+string.
+.leb;A digit string which specifies the precision for floating point 
+conversion.  (i.e., the number of digits following the decimal point).
+If an asterisk ("*") is used, the value of the precision field will be taken
+from the next argument in the argument list.
+.leb;The character "l" or "L" which specifies that a long value (32 bits)
+is to be converted.  A capitalized conversion code will accomplish the
+same thing.
+.els
+Bugs:
+.bl 1
+
+.subtitle putc, putchar, fputc, putw, putl Functions
+.page
+.hl 1 putc, putchar, fputc, putw, putl Functions
+Description:
+.bl 1
+The "putc", "putchar", "fputc", and "putw" functions are used to output
+characters and words (16-bits) to stream files.  
+.bl 1
+The "putc" function outputs a single 8-bit character to a stream file.  This
+function is implemented as a macro in <stdio.h>, so arguments with side
+effects should not be used.  "fputc" provides the equivalent function as
+a real function.
+.bl 1
+The putchar function outputs a character to the standard output stream file.
+This function is also implemented as a macro in <stdio.h>.  Side effects
+should be avoided with putchar.
+.bl 1
+The "putw" function outputs a 16-bit word to the specified stream file.  The
+word is output high byte first, compatible with the write function call.
+.bl 1
+The "putl" function outputs a 32-bit longword to the stream file.  The bytes
+are output in 68000 order, as with the "write" function call.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE c;
+FILE *stream;
+WORD w,ret;
+LONG lret,putl(),l;
+.bl 1
+ret  = putc(c,stream);
+ret  = fputc(c,stream);
+ret  = putchar(c);
+ret  = putw(w,stream);
+lret = putl(l,stream);
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+c	Is the character to be output
+stream	Is the output stream address
+w	Is the word to be output
+l	Is the long to be output
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is the word or character output
+lret	Is the long output with putl
+-1	Indicates an output error
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+A -1 return from "putw" or "putl" is a perfectly valid integer or long
+value.  "ferror" should
+be used to detect write errors.
+
+.subtitle puts, fputs Functions
+.page
+.hl 1 puts, fputs Functions
+Description:
+.bl 1
+"puts" and "fputs" are used to output a null-terminated string to an output
+stream.  
+.bl 1
+"puts" outputs the string to the standard output, and appends a newline 
+character.
+.bl 1
+"fputs" outputs the string to a named output stream.  No newline character
+is appended.
+.bl 1
+Neither routine copies the trailing null to the output stream.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+BYTE *s;
+FILE *stream;
+.bl 1
+ret = puts(s);
+ret = fputs(s,stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s	Is the string to be output
+stream	Is the output stream
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is the last character output
+-1	Indicates an error
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+The newline incompatibility is not very elegant, but is required to be
+compatible with UNIX.
+
+.subtitle qsort Function
+.page
+.hl 1 qsort Function
+Description:
+.bl 1
+"qsort" is a quicksort routine.  The user supplies a vector of elements
+and a function to compare two elements.  The vector is returned in sorted
+order.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+BYTE *base;
+WORD number;
+WORD size;
+WORD compare();
+.bl 1
+ret = qsort(base,number,size,compare);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+base	Is the base address of the element vector
+number	Is the number of elements to sort
+size	Is the size of each element in bytes
+compare	Is the address of the comparison function
+.bl 1
+	This function is called by:
+.bl 1
+		ret = compare(a,b);
+.bl 1
+	The return is:
+.bl 1
+		< 0  if a < b
+		= 0  if a = b
+		> 0  if a > b
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+0	always
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle rand, srand Functions
+.page
+.hl 1 rand, srand Functions
+Description:
+.bl 1
+"rand" and "srand" constitute the C language random number generator.  The
+generator is initialized by calling "srand" with the seed, and random numbers
+are retrieved by calls to "rand".  The random numbers are C "int" quantities.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD seed;
+WORD rnum;
+.bl 1
+rnum = srand(seed);
+rnum = rand();
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+seed	Is an "int" random number seed
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+rnum	Desired random number
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle read Function
+.page
+.hl 1 read Function
+Description:
+.bl 1
+The "read" function is used to read data from a file opened by file descriptor
+(using "open" or "creat").  Any arbitrary number of bytes may be read, 
+starting at the current file pointer.
+.bl 1
+Under CP/M, the most efficient reads begin and end on 128-byte boundaries.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+WORD fd;
+BYTE *buffer;
+WORD bytes;
+.bl 1
+ret = read(fd,buffer,bytes);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fd	Is a file descriptor open for read
+buffer	Is the buffer address
+bytes	Is the number of bytes to be read
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Number of bytes actually read
+-1	Indicates error
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle scanf, sscanf, fscanf Functions
+.page
+.hl 1 scanf, sscanf, fscanf Functions
+Description:
+.bl 1
+The scanf family of functions is used to do input format conversions.  "scanf"
+reads from the standard input, "fscanf" reads from an open stream file, and
+"sscanf" reads from a null-terminated string.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *format,*string;
+WORD nitems;
+FILE *stream;
+/* Args can be any type */
+.bl 1
+nitems = scanf(format,arg1,arg2 ...);
+nitems = fscanf(stream,format,arg1,arg2 ...);
+nitems = sscanf(string,format,arg1,arg2 ...);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+format	Is the control string
+argn	Are pointers to converted data locations
+stream	Is an open input stream file
+string	Is a null-terminated input string
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+nitems	The number of items converted
+-1	If an I/O error occurred
+.lm 0
+.fill
+.bl 1
+Control String Format
+.bl 1
+The control string consists of:
+.ls
+.leb;Blanks, tabs, or newlines (line feeds) which match optional white
+space in the input.
+.leb;An ASCII character (not '%') which must match the next character of the
+input stream.
+.leb;Conversion specifications, which consist of a leading '%', an optional
+'*' (which suppresses assignment), and a conversion character.  The next
+input field is converted and assigned to the next argument, up to the
+next inappropriate character in the input, or until the field width is
+exhausted.
+.els
+Conversion characters indicate the interpretation of the next input field.
+Valid conversion characters are:
+.ls
+.lec '%###'A single '%' is matched in the input at this point; no conversion 
+is performed.
+.lec 'd###'A decimal ASCII integer is converted and stored where the next 
+argument points.
+.lec 'o###'An octal ASCII integer is converted.
+.lec 'x###'A hexadecimal ASCII integer is converted.
+.lec 's###'A space-terminated character string is input.  The argument pointer
+is assumed to point to a character array big enough to contain the string
+and a trailing null character (which will be added).
+.lec 'c###'A single ASCII character will be stored.  Spaces are not skipped.
+To find the next non-blank character, "%1s" should be used.
+.lec '_[##'#A string not terminated by spaces is stored.  The left bracket is
+followed by a string of characters and a right bracket.  If the first
+character following the bracket is not "_^", the input will be read up
+until the first character not between the brackets.  If the first character
+following the left bracket is "_^", then the input will be read until the
+first character which is between the brackets.
+.els
+.bl 1
+Bugs:
+.bl 1
+The success of literal matches and suppressed assignments cannot be
+determined.
+
+.subtitle setjmp, longjmp Functions
+.page
+.hl 1 setjmp, longjmp Functions
+Description:
+.bl 1
+Setjmp and longjmp are used to execute a "non-local goto".  The setjmp 
+function is called initially to specify a return location.  Longjmp may then
+be called from the procedure which invoked setjmp or any procedure which is 
+called subsequently.  Longjmp causes a simulated return from setjmp in the
+procedure which originally invoked setjmp.  A setjmp
+return value is passed from the
+longjmp call.
+The procedure invoking setjmp must not return before
+longjmp is called.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+_#include <setjmp.h>
+WORD	  xret,ret;
+jmp__buf  env;
+	.
+	.
+	.
+xret = setjmp(env);
+	.
+	.
+	.
+longjmp(env,ret);
+.lm 0
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+env	Contains the saved environment
+ret	Is the desired return value from setjmp
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+xret	0 when setjmp invoked initially
+	Copied from "ret" when longjmp called
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+Definitely kludgy.
+
+.subtitle signal Function
+.page
+.hl 1 signal Function
+Description:
+.bl 1
+The signal function connects a C function with a 68000 exception condition.  
+Each possible exception condition is indicated by a number.  The following
+exceptions are recognized:
+.ls
+.lec '4' Illegal Instruction Trap (Includes illegal instructions, privilege
+violation, and Line A and Line F traps).
+.lec '5' Trace Trap
+.lec '6' Trap Instruction other than 2 or 3 (used by BDOS and BIOS).
+.lec '8' Arithmetic traps (Zero Divide, CHK instruction, and TRAPV 
+instruction).
+.lec '10' BUSERR (non-existant memory) or addressing (boundary) error trap.
+.els
+All other values are ignored, to be compatible with UNIX.
+.bl 1
+Return from the procedure activated by the signal causes 
+resumption of normal processing.  Registers and condition codes are 
+preserved by the library routines.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret,sig;
+WORD func();
+.bl 1
+ret = signal(sig,func);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+sig	Is the signal number given above
+func	Is the address of a C function
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	0 if no error, -1 if sig out of range
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle strcat, strncat Functions
+.page
+.hl 1 strcat, strncat Functions
+Description:
+.bl 1
+Functions "strcat" and "strncat" are used for string concatenation.  "strcat"
+concatenates two null-terminated strings.  "strncat" copies at most a
+specified number of characters.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *s1,*s2,*ret;
+BYTE *strcat(),*strncat();
+WORD n;
+.bl 1
+ret = strcat(s1,s2);
+ret = strncat(s1,s2,n);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s1	Is the first string. 
+s2	Is the second string, appended to s1.
+n	Is the maximum number of characters in s1.
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is a pointer to s1
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+"strcat(s1,s1)" never terminates, and usually destroys the operating system
+in the process.
+
+.subtitle strcmp, strncmp Functions
+.page
+.hl 1 strcmp, strncmp Functions
+Description:
+.bl 1
+The "strcmp" and "strncmp" functions are used for string comparison.  "strcmp"
+uses null termination, and "strncmp" limits the comparison to a specified 
+number of characters.
+.bl 1
+.nofill
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *s1,*s2;
+WORD val,n;
+.bl 1
+val =  strcmp(s1,s2);
+val = strncmp(s1,s2,n);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s1	Is a null-terminated string address
+s2	Is a null-terminated string address
+n	Is the maximum number of characters to compare
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+val	Is the comparison result:
+.bl 1
+		< 0 => s1 < s2
+		= 0 => s1 = s2
+		> 0 => s1 > s2
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+Different machines (and compilers) 
+interpret the characters as signed or unsigned.
+
+.subtitle strcpy, strncpy Functions
+.page
+.hl 1 strcpy, strncpy Functions
+Description:
+.bl 1
+"strcpy" and "strncpy" are used to copy one null-terminated string to 
+another.  "strcpy" uses null-termination, while "strncpy" imposes a maximum
+count on the copied string.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *s1,*s2,*ret;
+BYTE *strcpy(),*strncpy();
+WORD n;
+.bl 1
+ret = strcpy(s1,s2);
+ret = strncpy(s1,s2,n);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+s1 	Is the destination string
+s2	Is the source string
+n	Is the maximum character count
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is the address of s1
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+If the count is exceeded in strncpy, the destination string is not
+null-terminated.
+
+.subtitle strlen Function
+.page
+.hl 1 strlen Function
+Description:
+.bl 1
+"strlen" returns the length of a null-terminated string.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *s;
+WORD len;
+.bl 1
+len = strlen(s);
+.lm 0
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+s	Is the string address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+len	Is the string length
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle swab Function
+.page
+.hl 1 swab Function
+Description:
+.bl 1
+The "swab" function is used to copy an area of memory to another area
+of memory.  The high and low bytes in the destination copy are reversed.
+This function may be used to copy binary data from a PDP-11 or VAX to the
+68000.  The number of bytes to swap must be even.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+BYTE *from,*to;
+WORD nbytes;
+.bl 1
+ret = swab(from,to,nbytes);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+from	Is the address of the source buffer
+to 	Is the address of the destination
+nbytes	Is the number of bytes to copy
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Always 0
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle ttyname Function
+.page
+.hl 1 ttyname Function
+Description:
+.bl 1
+"ttyname" returns a pointer to the null-terminated filename of the terminal
+device associated with an open file descriptor.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE *name,*ttyname();
+WORD fd;
+.bl 1
+name = ttyname(fd);
+.lm 0
+.bl 1
+Arguments:
+.bl 1
+.lm 8
+fd	Is an open file descriptor
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.fill
+.bl 1
+A pointer to the null-terminated string "CON:" if the file descriptor is
+open and attached to the CP/M console device.  Zero (NULL) is returned
+otherwise.
+.lm 0
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle ungetc Function
+.page
+.hl 1 ungetc Function
+Description:
+.bl 1
+"ungetc" pushes a character back onto an input stream.  The next "getc",
+"getw", or "getchar" operation will incorporate the character.  One character
+of buffering is guaranteed, provided something has been read from the stream.
+The "fseek" function erases any pushed back
+characters.
+Attempts to "ungetc" EOF (-1) are rejected.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+BYTE c;
+FILE *stream;
+WORD ret;
+.bl 1
+ret = ungetc(c,stream);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+c	Is the character to push back
+stream	Is the stream address
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	c if the character successfully pushed back
+	-1 for errors
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle unlink Function
+.page
+.hl 1 unlink Function
+Description:
+.bl 1
+The unlink function deletes a named file from the file system.  The removal
+operation fails if the file is presently open, or if the file does not 
+exist.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD ret;
+BYTE *name;
+.bl 1
+ret = unlink(name);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+name	Is the null-terminated filename
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+0	If unlink operation successful
+-1	If unlink operation failed
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+
+.subtitle write Function
+.page
+.hl 1 write Function
+Description:
+.bl 1
+The "write" function transfers data to a file open by file descriptor.
+Transfer begins at the present file pointer, as set by previous transfers or
+by the "lseek" function.  Any arbitrary number of bytes may be written to the
+file.  The number of bytes actually written is returned.  It is an error 
+condition when the number of bytes written does not match the number 
+requested.
+.bl 1
+Under CP/M, the most efficient writes begin and end on 128-byte boundaries.
+.nofill
+.bl 1
+Calling Sequence:
+.bl 1
+.lm 8
+WORD fd;
+BYTE *buffer;
+WORD bytes;
+WORD ret;
+.bl 1
+ret = write(fd,buffer,bytes);
+.bl 1
+.lm 0
+Arguments:
+.bl 1
+.lm 8
+fd	Is the open file descriptor
+buffer	Is the starting buffer address
+bytes	Is the number of bytes to write
+.bl 1
+.lm 0
+Returns:
+.lm 8
+.bl 1
+ret	Is the number of bytes actually written
+-1	For errors
+.lm 0
+.fill
+.bl 1
+Bugs:
+.bl 1
+Due to the buffering scheme used, all data is not written to the file until
+the file is closed.

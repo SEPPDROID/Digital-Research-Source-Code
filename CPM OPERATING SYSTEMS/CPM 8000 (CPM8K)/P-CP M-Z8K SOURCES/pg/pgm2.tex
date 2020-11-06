@@ -1,0 +1,336 @@
+.bp odd
+.cs 5
+.he
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.he
+.ce 2
+.tc 2  The CCP and Transient Programs
+.sh
+Section 2
+.sp 
+.sh
+The CCP and Transient Programs 
+.qs
+.sp 2
+.pp 5
+This section discusses the Console Command
+Processor (CCP), built-in and transient commands, loading and exiting 
+transient programs, and CP/M-8000 memory models. 
+.sp 2
+.he CP/M-8000 Programmer's Guide  2.1  Built-in and Transient Commands
+.tc    2.1  CCP Built-In and Transient Commands
+.sh
+2.1  CCP Built-in and Transient Commands
+.qs
+.pp
+After an initial cold start, CP/M-8000 displays a sign-on message
+at the console.  Drive A, containing the system disk, is logged
+in automatically.  The standard prompt (>), preceded by the letter
+A for the drive, is displayed on the console screen.  This prompt
+informs the user that CP/M-8000 is ready to receive a command line
+from the console. 
+.pp
+In response to the prompt, a user types the filename of a command
+file and a command tail, if required.  CP/M-8000 supports two types
+of command files, built-in commands and transient commands.
+Built-in commands are configured and reside in memory with
+CP/M-8000.  Transient commands are loaded in the TPA and do not
+reside in memory allocated to CP/M-8000.  The list below contains
+the seven built-in commands that CP/M-8000 supports. 
+.ix built-in commands
+.sp
+.in 8
+.nf
+DIR  
+DIRS  
+ERA  
+REN  
+TYPE  
+USER  
+SUBMIT
+.fi
+.in 0
+.ix transient command
+.pp
+A transient command is a machine-readable executable program file 
+in memory.  A transient command file is loaded from disk to memory.  
+Section 3 describes the format of transient command files.
+.pp
+When the user enters a command line, the CCP parses it and tries to execute
+the file specified.  The CCP assumes a file is a command file when it has
+any filetype other than .SUB.  When the user specifies only the filename but
+not the filetype, the CCP searches for and tries to execute a file with a
+matching filename and a filetype of either 8000 or three blanks.  The CCP
+searches the current user number and user number 0 for a matching file.  If
+a command file is not found, but the CCP finds a matching file with a
+filetype of SUB, the CCP executes it as a submit file. 
+.bp
+.he CP/M-8000 Programmer's Guide      2.2  Loading A Program In Memory
+.tc 2.2  Loading A Program In Memory
+.sh
+2.2  Loading A Program In Memory
+.qs
+.ix loading a program in memory
+.ix program segments
+.ix a user stack
+.ix base page
+.ix program, loading
+.pp
+Either the CCP or a transient program can load a program in
+memory with the BDOS Program Load Function (59) described in Section 4.5.
+After the program is loaded, the TPA contains, the program
+segments (text, data, and bss), a user stack, and a base page.  A
+base page exists for each program loaded in memory.  The base page
+is a 256-byte data structure that defines a program's operating
+environment.  Unlike other CP/M systems, the base page in 
+CP/M-8000 does not
+reside at a fixed absolute address prior to being loaded.  The
+BDOS Program Load Function (59) determines the absolute address
+of the base page when the program is loaded into memory.  The BDOS Program Load
+Function (59) and the CCP or the transient program initialize the
+contents of the base page and the program's stack as described
+below. 
+.sp 2
+.he CP/M-8000 Programmer's Guide      2.2  Loading A Program in Memory
+.tc         2.2.1  Base Page Initialization By The CCP
+.sh
+2.2.1  Base Page Initialization By The CCP
+.qs
+.ix base page initialization
+.pp 
+The CCP parses up to two filenames following the command in the input
+command line.  The CCP places the properly formatted FCBs in the base page.  
+The default DMA address is initialized at an offset of 0080H in the base
+page.  The default DMA buffer occupies the second half of the base page.  The
+CCP initializes the default DMA buffer to contain the command tail, as
+shown in Figure 2-1.  The CCP invokes the BDOS Program Load Function (59) to
+load the transient program before the CCP parses the command line. 
+.pp
+Program Load, Function 59, allocates space for the base page and
+initializes base page values at offsets 0000H through 0024H from the
+beginning of the base page (see Appendix C).  Values at offsets 0025H
+through 0037H are not initialized; but the space is reserved.  The CCP
+parses the command line and initializes values at offsets 0038H through
+00FFH.  Before the CCP gives control to the loaded program, the CCP pushes
+the address of the transient program's base page and a return address
+within the CCP on the user stack.  When the program is invoked, the top of
+the stack contains a return address within the CCP, which is pointed to by
+the stack pointer, register A7.  The address of the program's base page is
+located at a 4-byte offset from the stack pointer. 
+.sp 2
+.tc         2.2.2  Loading Multiple Programs
+.sh 
+2.2.2  Loading Multiple Programs 
+.qs
+.ix loading multiple programs
+.pp
+Multiple programs can reside in memory, but the CCP can load only
+one program at a time.  However, a transient program, loaded by
+the CCP, can load one or more additional programs in memory.  A
+program loads another program in memory by invoking the BDOS
+Program Load Function (59).  Normally, the CCP supplies FCBs and
+the command tail to this function.  The transient program must
+provide this information, if required, for any additional
+programs it loads when the CCP is not present. 
+.ix file, loading
+.ix multiple programs, loading
+.bp
+.tc         2.2.3  Base Page Initialization By A Transient Program
+.sh
+2.2.3  Base Page Initialization By A Transient Program
+.qs
+.pp 
+A transient program invokes the BDOS Program Load Function (59)  to
+load an additional program.  The BDOS Program Load Function allocates space
+and initializes base page values at offsets 0000H through 0024H for the 
+program as described in
+Section 2.2.1.  The transient program must initialize the base
+page values that the CCP normally supplies, such as FCBs, the DMA
+address, and the command tail, if the program being loaded requires these
+values.  The command tail contains the command parameters but not
+the command.  The format of the command tail in the base page
+consists of a 1-byte character count, followed by the characters
+in the command tail, and terminated by a null byte as shown in
+Figure 2-1.  The command tail cannot contain more than 126 bytes
+plus the character count and the terminating null character.
+.ix command tail
+.sp 3
+        Count        Characters in the Command Tail        0     
+
+       1 byte             N bytes <\b_ 126 bytes
+.sp 2
+.ce
+.sh
+Figure 2-1.  Format of the Command Tail in the DMA Buffer
+.qs
+.sp 2
+.pp
+.fi
+Unlike the CCP, a transient program does not necessarily push the address
+of its base page and a return address on the user stack before giving
+control to the program that it loads with the Program Load Function.  The
+transient program can be designed to push these addresses on the user stack
+of the program it loads if the program uses the base page. 
+.pp
+The address of the base page for the loaded program is not pushed on the
+user stack by the Program Load Function (59).  Instead, it is returned in the 
+load parameter block
+(LPB), which is used by the BDOS Program Load Function.  Appendix 
+C summarizes the offsets and contents of a base page.  Appendix B
+contains two examples, an assembly language program and a
+C language program, which illustrate how a transient program 
+loads another program with the BDOS Program Load Function (59), 
+but without the CCP.
+.sp 2
+.he CP/M-8000 Programmer's Guide       2.3  Exiting Transient Programs
+.tc    2.3 Exiting Transient Programs
+.sh
+2.3 Exiting Transient Programs
+.qs
+.ix exiting transient programs
+.pp 
+CP/M-8000 supports the two ways listed below to exit a transient 
+program and return control to the CCP. 
+.sp 2
+.in 5
+.ix transient programs, exiting
+.ti -2
+o Interactively, the user types CTRL-C at the console, the default I/O 
+device
+.bp
+.sp
+.ti -2
+o Program a return to the CCP with:
+.sp
+.in 8
+1) the BDOS System Reset Function (0)
+.sp
+.qi
+.ne 10
+.pp
+A user typing CTRL-C from the console returns control to the CCP
+only if the program uses any of the BDOS functions listed below.
+.sp
+.in 3
+.nf
+o Console Output (2)
+o Print String (9)
+o Read Console Buffer (10)
+.fi
+.sp
+.in 0
+On input, CTRL-C must be the first character that the user types
+on the line.  CTRL-C terminates execution of the main program and
+any additional programs loaded beyond the CCP level.  For example, a user
+who types CTRL-C while debugging a program terminates
+execution of the program being debugged and DDT-8000 before the
+CCP regains control. 
+.pp
+Typing CTRL-C in response to 
+the system prompt resets the status of all disks to read-write. 
+.pp
+To program a return to the CCP, specify 
+the BDOS System Reset Function (0).  (In programs written in C,
+a subroutine return from the main program to the run-time package will cause
+this function to be executed.)
+.pp
+Invoking the BDOS System Reset Function (0) described in Section 4.5 is 
+equivalent to programming a return to the CCP.  This function
+performs a warm boot, which terminates the execution of a program
+before it returns program control to the CCP.
+.ix BDOS System Reset Function (0) 
+.sp 2
+.he CP/M-8000 Programmer's Guide         2.4  Transient Program Models
+.tc    2.4  Transient Program Execution Model
+.sh
+2.4  Transient Program Execution Model
+.qs
+.pp
+The memory model shown in Figure 2-2 illustrates the normal
+configuration of the CP/M-8000 operating system after the CCP
+loads a transient program.  CP/M-8000 divides memory in two categories: 
+System and the Transient Program Area (TPA). 
+.mb 5
+.fm 1
+.pp
+CP/M-8000 System memory contains the Basic Disk Operating
+System (BDOS), the Basic I/O System (BIOS), the Console Command
+Processor (CCP), and Exception Vectors.  The bootstrap program
+initializes the memory locations in which these
+components reside.  These the remaining components can
+reside anywhere in a single memory segment, provided the BDOS and CCP are
+contiguous. 
+.ix Basic Disk Operating System (BDOS)
+.ix Basic I/O System (BIOS)
+.ix Console Command Processor (CCP)
+.ix exception vectors
+.pp
+The TPA consists of memory segments that are not
+occupied by the CP/M-8000 operating system.  A user stack, a base
+page, the three program segments: a text segment, an initialized
+data segment, and a block storage segment (bss) exist for each
+transient program loaded in the TPA.  The BDOS Program Load
+Function (59) loads a transient program in the TPA.  If memory
+locations are not specified when the transient program is linked,
+the program is loaded in the TPA as shown in Figure 2-2. 
+.sp 3
+.in 5
+.mb 6
+.fm 2
+.nf
+======================= REPLACE WITH FIGURE FROM FRED'S TALK ===========
+     High Memory
+   
+                                        BIOS                 
+  System                 CP/M-8000       BDOS                 
+                                        CCP                  
+    
+    
+                             USER STACK                   
+
+
+ Transient                   FREE MEMORY                    
+  Program                                                
+   Area      
+   (TPA)                        BSS                        
+
+                                DATA                      
+
+                                TEXT                      
+
+                              BASE PAGE                   
+
+
+  System                  EXCEPTION VECTORS              
+
+
+.fi
+.in 0
+.sp 2
+.ce
+.sh
+     Figure 2-2.  CP/M-8000 Default Memory Model
+.ix CP/M-8000 default memory model
+.qs
+.sp 2 
+.pp 
+Some systems can configure and load CP/M-8000 in such a manner that
+one or more portions of memory cannot be addressed by the
+CP/M-8000 operating system (see Figure 2-3).  CP/M-8000 cannot
+access this memory.  CP/M-8000 does not know the memory 
+exists and cannot define or configure the memory in the BIOS. 
+However, a transient program that knows this memory exists can
+access it.  Also, note that CP/M-8000 does not support or require
+memory management.
+.sp 2
+.ce
+End of Section 2
+.nx three
+

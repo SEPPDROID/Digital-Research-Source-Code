@@ -1,0 +1,285 @@
+$TITLE ("UDI Procedures to Get Command Arguments")
+$LARGE OPTIMIZE(3)
+DQ_argument: do;    /* UDI procedures to get command arguments. */
+ 
+/*************************************************************************/
+/*                                                                       */
+/*               D I S C L A I M E R   N O T I C E                       */
+/*               -------------------   -----------                       */
+/*                                                                       */
+/*  This document and/or portions of the material and data furnished     */
+/*  herewith, was developed under sponsorship of the U. S. Government.   */
+/*  Neither the U.S. nor the U.S.D.O.E., nor the Leland Stanford Junior  */
+/*  University, nor their employees, nor their respective contractors,   */
+/*  subcontractors, or their employees, makes any warranty, express or   */
+/*  implied, or assumes any liability or responsibility for accuracy,    */
+/*  completeness or usefulness of any information, apparatus, product    */
+/*  or process disclosed, or represents that its use will not infringe   */
+/*  privately-owned rights.  Mention of any product, its manufacturer,   */
+/*  or suppliers shall not, nor is it intended to, imply approval, dis-  */
+/*  approval, or fitness for any particular use.  The U. S. and the      */
+/*  University at all times retain the right to use and disseminate same */
+/*  for any purpose whatsoever.  Such distribution shall be made by the  */
+/*  National Energy Software Center at the Argonne National Laboratory   */
+/*  and only subject to the distributee furnishing satisfactory proof    */
+/*  that he has a valid license from the Intel Corporation in effect.    */
+/*									 */
+/*-----------------------------------------------------------------------*/
+/*                                                                       */
+/*		R E V I S I O N   H I S T O R Y				 */
+/*									 */
+/*    07JAN82  Alex Hunter	1. Changed default delimiter set to      */
+/*				   agree with Series III default.        */
+/*				2. Added DQ$SET$DELIMITERS procedure.    */
+/*    31JAN82  Alex Hunter      1. Added indirect command lines.         */
+/*    03FEB82  Alex Hunter      1. Changed module name.                  */
+/*    05FEB82  Alex Hunter	1. Only allow @file from invocation line.*/
+/*    07FEB82  Alex Hunter      1. Fix bug for zero-length indirect      */
+/*				   files.				 */
+/*									 */
+/*************************************************************************/
+ 
+declare %PTR literally 'POINTER';
+
+$INCLUDE (PLM$UDI:CUSTOMARY.LIT)
+$INCLUDE (PLM$UDI:ASCII.LIT)
+$INCLUDE (PLM$UDI:EXCEPT.LIT)
+$INCLUDE (PLM$UDI:EXITCODES.LIT)
+$INCLUDE (PLM$UDI:DESCRIPT.LIT)
+ 
+/**************** EXTERNAL UDI ROUTINES ********************/
+ 
+DECLARE CONNECTION literally 'WORD';
+
+DQ$ATTACH: PROCEDURE (path$p,excep$p) CONNECTION EXTERNAL;
+        DECLARE (path$p,excep$p) POINTER;
+        END;
+
+DQ$DETACH: PROCEDURE (conn,excep$p) EXTERNAL;
+        DECLARE conn CONNECTION, excep$p POINTER;
+        END;
+
+DQ$EXIT: PROCEDURE (completion$code) EXTERNAL;
+        DECLARE completion$code WORD;
+        END;
+
+DQ$OPEN: PROCEDURE (conn,access,num$buf,excep$p) EXTERNAL;
+        DECLARE conn CONNECTION, access BYTE, num$buf BYTE,
+                excep$p POINTER;
+        END;
+
+DQ$READ: PROCEDURE (conn,buf$p,count,excep$p) WORD EXTERNAL;
+        DECLARE conn CONNECTION, buf$p POINTER, count WORD,
+                excep$p POINTER;
+        END;
+ 
+/*********************************************/
+
+declare CR literally 'ASC$CR', LF literally 'ASC$LF', 
+        TAB literally 'ASC$HT';
+
+LIB%GET_FOREIGN: procedure (tail$d,prompt$d,outlen$p) external;
+        declare (tail$d,prompt$d,outlen$p) pointer;
+        end;
+
+common /command_tail/ tail (256) byte;
+declare tail$desc descriptor
+           data (size(tail)-1,DSC$K_DTYPE_T,DSC$K_CLASS_S,@tail);
+
+declare prompt (*) byte data ('$_Command_tail: ');
+declare prompt$desc descriptor
+             data (size(prompt),DSC$K_DTYPE_T,DSC$K_CLASS_S,@prompt);
+
+declare i word;
+declare initialized byte initial(FALSE);
+declare command$buf$p pointer;
+declare (command based command$buf$p) (1) byte;
+ 
+declare default$delimiter$set (*) byte data
+        (20, ',()=#!$%\~+-&|[]<>;', ASC$DEL);
+ 
+declare current$delimiter$set$p pointer initial (@default$delimiter$set);
+declare (current$delimiter$set based current$delimiter$set$p) (1) byte;
+ 
+declare indirect$buffer (4097) byte;
+declare indirect$file$name (81) byte;
+declare parsing$indirect$file byte initial (FALSE);
+declare parsing$invocation$line byte initial (FALSE);
+
+
+$subtitle ("DQ$GET$ARGUMENT -- Get Command Argument")
+DQ$GET$ARGUMENT: procedure (argument$p, excep$p) byte reentrant public;
+
+        declare (argument$p, excep$p) %PTR;
+        declare (argument based argument$p) structure (length byte,
+                                                       arg(80) byte);
+        declare (status based excep$p) word;
+        declare quote byte;
+	declare terminator byte;
+        declare conn word;
+	declare local$status word;
+	declare buffer$length word;
+	declare count word;
+	declare index word;
+
+        delimiter: procedure byte;
+		if command(i) <= 20H or
+                   FINDB(@current$delimiter$set(1),command(i),
+			 current$delimiter$set(0)) <> 0FFFFH
+                then
+                        return TRUE;
+                else
+                        return FALSE;
+                end delimiter;
+
+        putc: procedure (char);
+                declare char byte;
+
+                if argument.length < 80 then do;
+                        argument.arg(argument.length)=char;
+                        argument.length=argument.length+1;
+                        end;
+                else
+                        status = E$STRING$BUF;
+                return;
+                end putc;
+
+        status = E$OK;
+        argument.length = 0;
+
+        if not initialized then do;
+                declare outlen word;
+                call LIB%GET_FOREIGN (@tail$desc,
+                         @prompt$desc,@outlen);
+                tail(outlen)=CR;
+                command$buf$p = tail$desc.ptr;
+                i = 0;
+                initialized = TRUE;
+		parsing$invocation$line=TRUE;
+                end;
+
+rescan:
+        do while command(i)=' ' or command(i)=tab; i=i+1; end;
+ 
+        if parsing$invocation$line and command(i)='@' then
+	    do;
+		if parsing$indirect$file then
+		    call DQ$EXIT(X$bad$indirect$syntax);
+		endif
+                i=i+1;
+		parsing$indirect$file=TRUE;
+		terminator=DQ$GET$ARGUMENT(@indirect$file$name,@local$status);
+		parsing$indirect$file=FALSE;
+		if terminator<>CR then
+		    call DQ$EXIT(X$indirect$not$last);
+		endif
+		conn=DQ$ATTACH(@indirect$file$name,@local$status);
+		if local$status<>E$OK then
+		    call DQ$EXIT(X$bad$indirect$file);
+		endif
+		call DQ$OPEN(conn,1,1,@local$status);
+		if local$status<>E$OK then
+		    call DQ$EXIT(X$bad$indirect$file);
+		endif
+		buffer$length=0;
+		count=1;
+		do while count>0 and buffer$length<size(indirect$buffer);
+		    count=DQ$READ(conn,@indirect$buffer(buffer$length),
+			          size(indirect$buffer)-buffer$length,
+				  @local$status);
+                    if local$status<>E$OK then
+			call DQ$EXIT(X$bad$indirect$file);
+		    endif
+		    buffer$length=buffer$length+count;
+		enddo
+		if buffer$length>=size(indirect$buffer) then
+		    call DQ$EXIT(X$indirect$too$long);
+		endif
+		call DQ$DETACH(conn,@local$status);
+		if local$status<>E$OK then
+		    call DQ$EXIT(X$bad$indirect$file);
+		endif
+                do index=1 to buffer$length;
+                    if indirect$buffer(index-1)=CR or
+                       indirect$buffer(index-1)=LF then
+                        indirect$buffer(index-1)=' ';
+		    endif
+		enddo
+		indirect$buffer(buffer$length)=CR;
+		command$buf$p = @indirect$buffer;
+		i = 0;
+		go to rescan;
+	    enddo
+	endif
+ 
+        if delimiter then do;
+                i=i+1;
+                return command(i-1);
+                end;
+
+        if command(i)='''' or command(i)='"' then do;
+                quote = command(i);
+                do while command(i)=quote;
+                        i=i+1;
+                        do while command(i)<>quote and command(i)<>CR;
+                                call putc(command(i));
+                                i=i+1;
+                                end;
+                        if command(i)<>CR then i=i+1;
+                        if command(i)=quote then call putc(quote);
+                        end;
+                end;
+
+        else    do while not delimiter;
+                        if command(i)>='a' and command(i)<='z' then
+                                call putc(command(i)+('A'-'a'));
+                        else
+                                call putc(command(i));
+                        i=i+1;
+                        end;
+
+        do while command(i)=' ' or command(i)=tab; i=i+1; end;
+
+        if delimiter then do;
+                i=i+1;
+                return command(i-1);
+                end;
+        else
+                return ' ';
+
+        end DQ$GET$ARGUMENT;
+
+
+$subtitle ("DQ$SWITCH$BUFFER -- Change Command Buffer")
+DQ$SWITCH$BUFFER: procedure (buffer$p, excep$p) word public;
+
+        declare (buffer$p, excep$p) %PTR;
+        declare (status based excep$p) word;
+        declare OLD$I word;
+
+        command$buf$p = buffer$p;
+        OLD$I = i;   i = 0;
+        initialized = TRUE;
+	parsing$invocation$line = FALSE;
+        status = E$OK;
+        return OLD$I;
+
+        end DQ$SWITCH$BUFFER;
+
+ 
+$subtitle ("DQ$SET$DELIMITERS -- Change Delimiter Set")
+DQ$SET$DELIMITERS: procedure (delimiter$set$p, excep$p) public;
+ 
+	declare (delimiter$set$p, excep$p) %PTR;
+	declare (status based excep$p) word;
+ 
+	if delimiter$set$p = 0 then
+		current$delimiter$set$p = @default$delimiter$set;
+	else
+		current$delimiter$set$p = delimiter$set$p;
+ 
+	status = E$OK;
+ 
+end DQ$SET$DELIMITERS;
+ 
+end DQ_argument;

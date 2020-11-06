@@ -1,0 +1,598 @@
+
+include	equates.a86
+include system.a86
+		dseg
+		extrn	rlr:word
+		extrn	login_vector:word
+		extrn	readonly_vector:word
+		extrn	date_days:word
+		extrn	date_secs:byte
+		extrn	free_dirnames:word
+		extrn	free_dirdata:word
+		extrn	bdos_8087_inuse:word
+		extrn	cio_flags:word
+		extrn	comsize:word
+		extrn	ccp_dseg:word
+		extrn	sysvar_131:byte
+		extrn	sysvar_132:byte
+		extrn	sysvar_144:byte
+		extrn	search_path:byte
+		extrn	proc_count:byte
+		extrn	time_slice:byte
+		extrn	page_mode:byte
+		extrn	temp_drive:byte
+		extrn	max_x:byte
+		extrn	max_y:byte
+		extrn	bdos_ver:word
+		extrn	boot_drive:byte
+		cseg
+
+		public	misc_init
+		public	misc_main
+
+		extrn	cwd_for_drive:near
+
+		db '(C)1985,DIGITAL RESEARCH'
+
+sernumber:
+include	serial.a86
+
+misc_init:					; DATA XREF: dseg:0016o
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+misc_functions	dw offset P_RSX_default	; DATA XREF: bdos:2317o
+		dw offset S_BDOSVER
+		dw offset DRV_LOGINVEC
+		dw offset DRV_GET
+		dw offset F_DMAOFF
+		dw offset DRV_ROVEC
+		dw offset F_USERNUM
+		dw offset F_MULTISEC
+		dw offset F_ERRMODE
+		dw offset S_SYSVAR
+		dw offset F_DMASEG
+		dw offset F_DMAGET
+		dw offset T_SET
+		dw offset T_GET
+		dw offset S_SERIAL
+		dw offset P_CODE
+		dw offset proc_dupdirs
+		dw offset proc_freedirs
+		dw offset S_SYSDAT
+		dw offset S_OSVER
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+misc_main:				; DATA XREF: dseg:0014o
+		jmp	cs:misc_functions[si]
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+P_RSX_default:		; DATA XREF: bdos:22EFo
+		mov	bx, 0FFFFh
+		mov	cx, 2
+		retn	
+
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_BDOSVER:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22F1o
+		mov	bx, bdos_ver
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_OSVER:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2315o
+		mov	bx, 1012h
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_SYSVAR:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2301o
+		mov	si, dx		; Caller SCBPB
+		mov	dx, ds		; Our DS
+		push	ds
+		push	es
+		mov	ds, es:userDS	; Caller DS
+		mov	di, offset public_sysvars
+		xor	bx, bx
+		mov	bl, [si]
+		cmp	bl, 6
+		jb	sysvar_valid
+		sub	bl, 80h
+		jb	sysvar_invalid
+		mov	di, offset private_sysvars
+		cmp	bl, 13h
+		jb	sysvar_valid
+
+sysvar_invalid:				; CODE XREF: S_SYSVAR+1Aj S_SYSVAR+4Fj
+					; ...
+		mov	bx, 0FFFFh
+		jmps	s_sysvar_ret
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+sysvar_valid:				; CODE XREF: S_SYSVAR+15j S_SYSVAR+22j
+		shl	bx, 1
+		shl	bx, 1
+		mov	cx, cs:[bx+di]
+		test	ch, 80h		; Process variable?
+		jz	not_proc_var
+		mov	dx, es
+
+not_proc_var:				; CODE XREF: S_SYSVAR+33j
+		mov	di, cs:2[bx+di]
+		test	byte ptr 1[si], 0FFh
+		lea	si, 2[si]
+		jnz	sysvar_set
+		xchg	si, di
+		push	ds
+		pop	es
+
+		mov	ds, dx
+
+		jmps	sysvar_access
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+
+sysvar_set:				; CODE XREF: S_SYSVAR+42j
+		test	ch, 40h		; Read-only?
+		jnz	sysvar_invalid
+		cmp	es:proc_background, 0
+		jz	sysvar_is_fg
+		test	ch, 20h		; Owned	by FG process?
+		jnz	sysvar_invalid
+
+sysvar_is_fg:				; CODE XREF: S_SYSVAR+57j
+		mov	es, dx
+
+sysvar_access:				; CODE XREF: S_SYSVAR+4Aj
+		test	ch, 10h		; Volatile?
+		jz	sysvar_nocli
+		cli	
+
+sysvar_nocli:				; CODE XREF: S_SYSVAR+63j
+		xor	ch, ch
+		rep movsb
+		sti	
+		xor	bx, bx
+
+s_sysvar_ret:				; CODE XREF: S_SYSVAR+27j
+		pop	es
+		pop	ds
+
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+public_sysvars	dw 2001h		; DATA XREF: S_SYSVAR+Bo
+		dw offset max_x
+		dw 2001h
+		dw offset max_y
+		dw 2001h
+		dw offset page_mode
+		dw 6001h
+		dw offset xios_bh_ticks
+		dw 2001h
+		dw offset temp_drive
+		dw 1005h
+		dw offset date_days
+private_sysvars	dw 2001h		; DATA XREF: S_SYSVAR+1Co
+		dw offset xios_bh_8087
+		dw 0E001h
+		dw offset proc_pid
+		dw 801Ah
+		dw offset proc_drive
+		dw 2001h
+		dw offset sysvar_131
+		dw 20FFh
+		dw offset sysvar_132
+		dw 3002h
+		dw offset ccp_dseg
+		dw 20FFh
+		dw offset boot_drive
+		dw 3004h
+		dw offset search_path
+		dw 0E001h
+		dw offset proc_background
+		dw 6001h
+		dw offset proc_count
+		dw 2001h
+		dw offset time_slice
+		dw 2002h
+		dw offset cio_flags
+		dw 6001h
+		dw offset bdos_8087_inuse
+		dw 9004h
+		dw offset proc_onblock
+		dw 0E002h
+		dw offset proc_dirname
+		dw 2005h
+		dw offset comsize
+		dw 6001h
+		dw offset sysvar_144
+		dw 1020h
+		dw offset country_info
+		dw 1001h
+		dw offset switch_char
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_SERIAL:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:230Bo
+		push	es
+		mov	es, es:userDS
+		mov	di, dx
+		mov	si, offset sernumber+10
+		mov	cx, 3
+		db	0F3h, 2Eh	;REP CS:
+		movsw
+		pop	es
+		mov	bx, cx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+P_CODE:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:230Do
+		inc	dx
+		jz	p_code_get
+		dec	dx
+		mov	es:proc_errcode, dx
+
+p_code_get:				; CODE XREF: P_CODE+1j
+		mov	bx, es:proc_errcode
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+proc_dupdirs:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:230Fo
+		mov	si, es:proc_dirname
+		test	si, si
+		jz	proc_has_no_cwd
+		cli	
+		mov	di, free_dirnames; Take	the head of the	free list
+		mov	ax, [di]
+		mov	free_dirnames, ax
+		sti	
+		push	es
+		push	ds
+		pop	es
+;
+; Now duplicate	the entries for	each drive
+;
+
+
+dup_drvdir:				; CODE XREF: proc_dupdirs+3Cj
+		lodsw
+		push	si
+		test	ax, ax
+		jnz	dup_dirdata_cpy
+		stosw
+		jmps	dup_dirdata_nxt
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+dup_dirdata_cpy:			; CODE XREF: proc_dupdirs+1Bj
+		xchg	ax, si
+		cli	
+		mov	ax, free_dirdata
+		stosw
+		test	ax, ax
+		jz	dup_dirdata_nxt
+		push	cx
+		push	di
+		xchg	ax, di
+		mov	ax, [di]
+		mov	free_dirdata, ax
+		sti	
+		mov	cx, 5
+		rep movsw
+		pop	di
+		pop	cx
+
+dup_dirdata_nxt:			; CODE XREF: proc_dupdirs+1Ej
+					; proc_dupdirs+28j
+		sti	
+		pop	si
+		loop	dup_drvdir
+		movsw
+		movsw
+		pop	es
+
+		sub	di, 24h
+		mov	es:proc_dirname, di
+
+proc_has_no_cwd:			; CODE XREF: proc_dupdirs+7j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+proc_freedirs:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2311o
+		mov	si, es:proc_dirname
+		test	si, si
+		jz	pfd_done
+		mov	cx, 10h
+
+pfd_freedata:				; CODE XREF: proc_freedirs+22j
+		lodsw
+		xchg	ax, bx
+		test	bx, bx
+		jz	pfd_next_data
+		dec	word ptr 8[bx]	; Decrease reference count
+		jnz	pfd_next_data
+		cli	
+		mov	ax, free_dirdata; If it's 0
+		mov	[bx], ax	; Add the DIRDATA to the free list
+		mov	free_dirdata, bx
+		sti	
+
+pfd_next_data:				; CODE XREF: proc_freedirs+10j
+					; proc_freedirs+15j
+		loop	pfd_freedata
+		dec	word ptr [si]
+		jnz	pfd_done
+		sub	si, 20h
+		cli	
+		mov	bx, free_dirnames; Now free the	DIRNAMES structure
+		mov	[si], bx
+		mov	free_dirnames, si
+		sti	
+		push	ds
+		mov	ds, rlr
+
+		mov	proc_dirname, 0	; Release it from PROC
+		pop	ds
+
+
+pfd_done:				; CODE XREF: proc_freedirs+7j
+					; proc_freedirs+26j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_SYSDAT:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2313o
+		mov	es:userES, ds
+		sub	bx, bx
+		sub	ax, ax
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+nop_iret:
+		nop	
+		iret	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; Copy bits for	floating drives	from their hosts
+
+ret_drv_vector:		; CODE XREF: DRV_LOGINVEC+4j
+					; DRV_ROVEC+4j
+		mov	cx, 3
+
+rdv_float:				; CODE XREF: ret_drv_vector+23j
+		push	cx
+		add	cl, 0Ch
+		mov	al, cl
+		mov	dx, 1
+		shl	dx, cl
+		mov	cl, 0FFh
+		push	bx
+		call	cwd_for_drive
+		pop	bx
+		mov	cl, al		; Get the host drive
+		mov	ax, 1
+		shl	ax, cl
+		test	bx, ax		; Is the corresponding bit set for it?
+		jz	rdv_nofloat
+		or	bx, dx
+
+rdv_nofloat:				; CODE XREF: ret_drv_vector+1Ej
+		pop	cx
+		loop	rdv_float
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+DRV_LOGINVEC:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22F3o
+		mov	bx, login_vector
+		jmp	ret_drv_vector	; Copy bits for	floating drives	from their hosts
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+DRV_GET:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22F5o
+		mov	bl, es:proc_drive
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_DMAOFF:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22F7o
+		mov	es:word ptr proc_dma, dx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+DRV_ROVEC:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22F9o
+		mov	bx, readonly_vector
+		jmp	ret_drv_vector	; Copy bits for	floating drives	from their hosts
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_USERNUM:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22FBo
+		mov	al, dl
+		cmp	al, 0FFh
+		jnz	f_setuid
+		mov	bl, es:proc_uid
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+f_setuid:				; CODE XREF: F_USERNUM+4j
+		and	al, 0Fh
+		mov	es:proc_uid, al
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_MULTISEC:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22FDo
+		xor	bx, bx
+		or	dl, dl
+		jz	f_bad_multisec
+		cmp	dl, 81h
+		jnb	f_bad_multisec
+		mov	es:proc_multisec, dl
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+f_bad_multisec:				; CODE XREF: F_MULTISEC+4j
+					; F_MULTISEC+9j
+		dec	bx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_ERRMODE:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:22FFo
+		mov	es:proc_errmode, dl
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_DMASEG:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2303o
+		mov	es:word ptr proc_dma+2,	dx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+F_DMAGET:		; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2305o
+		mov	ax, es:word ptr proc_dma+2
+		mov	es:userES, ax
+		mov	bx, es:word ptr proc_dma
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+T_SET:					; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2307o
+		mov	si, dx
+		mov	di, offset date_days
+		cli	
+		push	es
+		push	ds
+		mov	ds, es:userDS
+		pop	es
+
+		movsw
+		movsw
+		push	es
+		pop	ds
+		pop	es
+
+		mov	date_secs, 0
+		sti	
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+T_GET:					; CODE XREF: bdos:2317u
+					; DATA XREF: bdos:2309o
+		mov	di, dx
+		mov	si, offset date_days
+		push	es
+		mov	es, es:userDS
+		cli	
+		movsw
+		movsw
+		mov	bl, date_secs
+		sti	
+		pop	es
+		retn	
+
+		end
+

@@ -1,0 +1,10 @@
+#define	strlen(x) aclenf(x)
+#define	VOID	int
+#define	MLOCAL	static
+#define	LOCAL	auto
+#define	BYTE	char
+#define	WORD	short
+#define	LONG	long
+#define	EXTERN	extern
+#define	DOUBLE	double
+#define	REG	register

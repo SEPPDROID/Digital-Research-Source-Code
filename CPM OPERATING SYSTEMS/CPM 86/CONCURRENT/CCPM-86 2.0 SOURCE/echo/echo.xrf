@@ -1,0 +1,271 @@
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE   1
+
+     1  
+     2                          
+     3  ;
+     4                          ;       ECHO - Resident System Process
+     5                          ;       Print Command tail to console
+     6                          ;
+     7  
+     8                          ;
+     9                          ;       DEFINITIONS
+    10                          ;
+    11  
+    12     00E0                 ccpmint         equ     224     ;ccpm entry interrupt
+    13     0009                 c_writebuf      equ     9       ;print string
+    14     0093                 c_detach        equ     147     ;detach console
+    15     0094                 c_setnum        equ     148     ;set default console
+    16     0086                 q_make          equ     134     ;create queue
+    17     0087                 q_open          equ     135     ;open queue
+    18     0089                 q_read          equ     137     ;read queue
+    19     008B                 q_write         equ     139     ;write queue
+    20     0091                 p_priority      equ     145     ;set priority
+    21  
+    22     0030                 pdlen           equ     48      ;length of Process
+    23                                                          ;  Descriptor
+    24  
+    25     0020                 p_cns           equ     byte ptr 020h   ;default cns
+    26     0012                 p_disk          equ     byte ptr 012h   ;default disk
+    27     0013                 p_user          equ     byte ptr 013h   ;default user
+    28     0024                 p_list          equ     byte ptr 024h   ;default list
+    29     0000                 ps_run          equ     0       ;PD run status
+    30     0002                 pf_keep         equ     2       ;PD nokill flag
+    31  
+    32     0000                 rsp_top         equ     0       ;rsp offset
+    33     0010                 rsp_pd          equ     010h    ;PD offset
+    34     0040                 rsp_uda         equ     040h    ;UDA offset
+    35     0140                 rsp_bottom      equ     140h    ;end rsp header
+    36  
+    37     0008                 qf_rsp          equ     08h     ;queue RSP flag
+    38  
+    39                          ;
+    40                          ;       CODE SEGMENT
+    41                          ;
+    42                                  CSEG
+    43                                  org 0
+    44  
+    45   0000 CDE0              ccpm:   int ccpmint
+    46   0002 C3                        ret
+    47  
+    48                          main:           ;create ECHO queue
+    49   0003 B186BAC301                mov cl,q_make ! mov dx,offset qd
+    50   0008 E8F5FF       0000         call ccpm
+    51                                          ;open ECHO queue
+    52   000B B187BA0903                mov cl,q_open ! mov dx,offset qpb
+    53   0010 E8EDFF       0000         call ccpm
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE   2
+
+    54  
+    55                                          ;set priority to normal
+    56   0013 B191BAC800                mov cl,p_priority ! mov dx,200
+    57   0018 E8E5FF       0000         call ccpm
+    58  
+    59                                          ;ES points to SYSDAT
+    60   001B 8E060000                  mov es,sdatseg
+    61  
+    62                          loop:   ;forever
+    63                                          ;read cmdtail from queue
+    64   001F B189BA0903                mov cl,q_read ! mov dx,offset qpb
+    65   0024 E8D9FF       0000         call ccpm
+    66  
+    67                                          ;set default values from PD
+    68   0027 8B1E8302                  mov bx,pdadr
+    69                          ;       mov dl,es:p_disk[bx]    ;p_disk=0-15
+    70                          ;       inc dl ! mov disk,dl    ;make disk=1-16
+    71                          ;       mov dl,es:p_user[bx]
+    72                          ;       mov user,dl
+    73                          ;       mov dl,es:p_list[bx]
+    74                          ;       mov list,dl
+    75   002B 268A5720                  mov dl,es:p_cns[bx]
+    76   002F 88161903                  mov console,dl
+    77  
+    78                                          ;set default console
+    79                          ;       mov dl,console
+    80   0033 B194E8C8FF   0000         mov cl,c_setnum ! call ccpm
+    81  
+    82                                          ;scan cmdtail and look for '$' or 0.
+    83                                          ;when found, replace w/ cr,lf,'$'
+    84  
+    85   0038 8D1E8502B024              lea bx,cmdtail ! mov al,'$' ! mov ah,0
+    86        B400
+    87   0040 8BD381C28300              mov dx,bx ! add dx,131
+    88                          nextchar:
+    89   0046 3BDA770B     0055         cmp bx,dx ! ja endcmd
+    90   004A 38077407     0055         cmp [bx],al ! je endcmd
+    91   004E 38277403     0055         cmp [bx],ah ! je endcmd
+    92   0052 43EBF1       0046             inc bx ! jmps nextchar
+    93                          endcmd:
+    94   0055 C6070D                    mov byte ptr [bx],13
+    95   0058 C647010A                  mov byte ptr 1[bx],10
+    96   005C C6470224                  mov byte ptr 2[bx],'$'
+    97  
+    98                                          ;write command tail
+    99   0060 8D168502B109              lea dx,cmdtail ! mov cl,c_writebuf
+   100   0066 E897FF       0000         call ccpm
+   101                                          ;detach console
+   102   0069 8A161903                  mov dl,console
+   103   006D B193E88EFF   0000         mov cl,c_detach ! call ccpm
+   104                                          ;done, get next command 
+   105   0072 EBAB         001F         jmps loop
+   106  
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE   3
+
+   107  
+   108                          ;
+   109                          ;       DATA SEGMENT
+   110                          ;
+   111  
+   112                                  DSEG
+   113                                  org     rsp_top
+   114  
+   115   0000 000000000000      sdatseg         dw      0,0,0
+   116   0006 000000000000                      dw      0,0,0
+   117   000C 00000000                          dw      0,0
+   118  
+   119                                  org     rsp_pd
+   120  
+   121   0010 00000000          pd              dw      0,0             ; link,thread
+   122   0014 00                                db      ps_run          ; status
+   123   0015 BE                                db      190             ; priority
+   124   0016 0200                              dw      pf_keep         ; flags
+   125   0018 4543484F2020                      db      'ECHO    '      ; name
+   126        2020
+   127   0020 0400                              dw      offset uda/10h  ; uda seg
+   128   0022 0000                              db      0,0             ; disk,user
+   129   0024 0000                              db      0,0             ; load dsk,usr
+   130   0026 0000                              dw      0               ; mem
+   131   0028 00000000                          dw      0,0             ; dvract,wait
+   132   002C 0000                              db      0,0
+   133   002E 0000                              dw      0
+   134   0030 00                                db      0               ; console
+   135   0031 000000                            db      0,0,0
+   136   0034 00                                db      0               ; list
+   137   0035 000000                            db      0,0,0
+   138   0038 000000000000                      dw      0,0,0,0
+   139        0000
+   140  
+   141                                  org     rsp_uda
+   142  
+   143   0040 0000DF010000      uda             dw      0,offset dma,0,0        ;0
+   144        0000
+   145   0048 000000000000                      dw      0,0,0,0
+   146        0000
+   147   0050 000000000000                      dw      0,0,0,0                 ;10h
+   148        0000
+   149   0058 000000000000                      dw      0,0,0,0
+   150        0000
+   151   0060 000000000000                      dw      0,0,0,0                 ;20h
+   152        0000
+   153   0068 000000000000                      dw      0,0,0,0
+   154        0000
+   155   0070 000000007D02                      dw      0,0,offset stack_tos,0  ;30h
+   156        0000
+   157   0078 000000000000                      dw      0,0,0,0
+   158        0000
+   159   0080 000000000000                      dw      0,0,0,0                 ;40h
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE   4
+
+   160  
+   161        0000
+   162   0088 000000000000                      dw      0,0,0,0
+   163        0000
+   164   0090 000000000000                      dw      0,0,0,0                 ;50h
+   165        0000
+   166   0098 000000000000                      dw      0,0,0,0
+   167        0000
+   168   00A0 000000000000                      dw      0,0,0,0                 ;60h
+   169        0000
+   170  
+   171                                  org     rsp_bottom
+   172  
+   173   0140                   qbuf            rb      131             ;Queue buffer
+   174  
+   175   01C3 0000              qd              dw      0               ;link
+   176   01C5 0000                              db      0,0             ;net,org
+   177   01C7 0800                              dw      qf_rsp          ;flags
+   178   01C9 4543484F2020                      db      'ECHO    '      ;name
+   179        2020
+   180   01D1 8300                              dw      131             ;msglen
+   181   01D3 0100                              dw      1               ;nmsgs
+   182   01D5 00000000                          dw      0,0             ;dq,nq
+   183   01D9 00000000                          dw      0,0             ;msgcnt,msgout
+   184   01DD 4001                              dw      offset qbuf     ;buffer addr.
+   185  
+   186   01DF                   dma             rb      128     
+   187  
+   188   025F CCCCCCCCCCCC      stack           dw      0cccch,0cccch,0cccch
+   189   0265 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+   190   026B CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+   191   0271 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+   192   0277 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+   193   027D 0300              stack_tos       dw      offset main     ; start offset
+   194   027F 0000                              dw      0               ; start seg
+   195   0281 0000                              dw      0               ; init flags
+   196  
+   197   0283                   pdadr           rw      1               ; QPB Buffer
+   198   0285                   cmdtail         rb      129             ; starts here
+   199   0306 0D0A24                            db      13,10,'$'
+   200  
+   201   0309 0000              qpb             db      0,0             ;must be zero
+   202   030B 0000                              dw      0               ;queue ID
+   203   030D 0100                              dw      1               ;nmsgs
+   204   030F 8302                              dw      offset pdadr    ;buffer addr.
+   205   0311 4543484F2020                      db      'ECHO    '      ;name to open
+   206        2020
+   207  
+   208   0319 00                console         db      0
+   209                          ;disk           db      0
+   210                          ;user           db      0
+   211                          ;list           db      0
+   212  
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE   5
+
+   213  
+   214                                  end
+   215  
+   216  
+   217  END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  2%
+CP/M ASM86 1.1  SOURCE: ECHO.A86                                                                             PAGE 006
+
+CCPM             0000 L    45#   50    53    57    65    80   100   103 
+CCPMINT          00E0 N    12#   45 
+CDETACH          0093 N    14#  103 
+CMDTAIL          0285 V    85    99   198#
+CONSOLE          0319 V    76   102   208#
+CS               SREG V 
+CSETNUM          0094 N    15#   80 
+CWRITEBUF        0009 N    13#   99 
+DMA              01DF V   143   186#
+DS               SREG V 
+ENDCMD           0055 L    89    90    91    93#
+ES               SREG V    60    75 
+LOOP             001F L    62#  105 
+MAIN             0003 L    48#  193 
+NEXTCHAR         0046 L    88#   92 
+PCNS             0020 N    25#   75 
+PD               0010 V   121#
+PDADR            0283 V    68   197#  204 
+PDISK            0012 N    26#
+PDLEN            0030 N    22#
+PFKEEP           0002 N    30#  124 
+PLIST            0024 N    28#
+PPRIORITY        0091 N    20#   56 
+PSRUN            0000 N    29#  122 
+PUSER            0013 N    27#
+QBUF             0140 V   173#  184 
+QD               01C3 V    49   175#
+QFRSP            0008 N    37#  177 
+QMAKE            0086 N    16#   49 
+QOPEN            0087 N    17#   52 
+QPB              0309 V    52    64   201#
+QREAD            0089 N    18#   64 
+QWRITE           008B N    19#
+RSPBOTTOM        0140 N    35#  171 
+RSPPD            0010 N    33#  119 
+RSPTOP           0000 N    32#  113 
+RSPUDA           0040 N    34#  141 
+SDATSEG          0000 V    60   115#
+SS               SREG V 
+STACK            025F V   188#
+STACKTOS         027D V   155   193#
+UDA              0040 V   127   143#

@@ -1,0 +1,126 @@
+CODE    CSEG
+CGROUP  GROUP   CODE
+DGROUP  GROUP   DATA,__pname,__tname,__lname,__xeof,_break
+
+        EXTRN   _main:NEAR
+        EXTRN   exit:NEAR 
+        PUBLIC  brk
+        PUBLIC  __BDOS
+	PUBLIC  _start
+	PUBLIC  _sav
+	PUBLIC  _ret
+	PUBLIC	_swpll
+
+  DB      'C runtime library, Copyright 1982,1983by Digital Research 86 V0.8'
+        DB      01AH
+ 
+_start: MOV     AX,DS
+        MOV     SS,AX
+        MOV     BX,6
+        MOV     SP,[BX]         ;set up ss:sp
+
+        MOV     AX,WORD PTR ?MEMRY
+        MOV     __break,AX      ;set up __break for brk()
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+        CALL    _main
+        CALL    exit
+
+_sav:	POP	DX		;RET ADDR
+	PUSH	BP
+	MOV	BP,SP
+	PUSH	DI
+	PUSH	SI
+	JMP	DX
+
+_ret:	POP	SI		;FLUSH RET ADDR
+	LEA	SI,0-4[BP]
+	MOV	SP,SI
+	POP	SI
+	POP	DI
+	POP	BP
+	RET
+
+_swpll:
+	POP	ES		;SAVE RET ADDR
+	POP	DX
+	POP	CX
+
+	POP	BX
+	POP	AX
+
+	PUSH	CX
+	PUSH	DX
+
+	PUSH	AX
+	PUSH	BX
+
+	PUSH	ES
+	RET
+
+
+
+brk:    PUSH    BP
+        MOV     BP,SP
+        PUSH    DI
+        PUSH    SI
+
+        MOV     AX,4[BP]        ;GET PARAMETER
+        MOV     BX,SP           ;GET STACK POINTER
+	SUB	BX,200H		;LEAVE SOME SLOP
+        CMP     AH,BH           ;IN THE GENERAL AREA?
+        JA      BRKOK           ;IF NOT THEN OK, LEAVE IT ALONE
+        MOV     AX,-1
+        JMP     BRKXIT
+
+BRKOK:  MOV     AX,0
+BRKXIT: POP     SI
+        POP     DI
+        POP     BP
+        RET
+
+__BDOS: ;(func,long)
+        PUSH    BP
+        MOV     BP,SP
+        PUSH    DI
+        PUSH    SI
+        MOV     CX,4[BP]
+        MOV     DX,6[BP]
+        PUSH    BP
+        INT     0E0H
+        POP     BP
+        POP     SI
+        POP     DI
+        POP     BP
+	XOR	AH,AH
+        RET
+
+DATA    DSEG    BYTE
+
+	PUBLIC	?MEMRY
+?MEMRY	RW	2
+
+_break	DSEG	BYTE COMMON
+__break RW      1
+
+__pname DSEG    BYTE COMMON
+_pname DB      'Cprogram',0
+
+__tname DSEG    BYTE COMMON
+_tname DB      'CON:',0
+
+__lname DSEG    BYTE COMMON
+_lname DB      'LST:',0
+
+__xeof  DSEG    BYTE COMMON
+_xeof  DB      01AH
+
+        END
+
+
+

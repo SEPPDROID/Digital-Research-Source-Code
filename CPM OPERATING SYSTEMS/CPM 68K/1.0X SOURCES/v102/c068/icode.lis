@@ -1,0 +1,317 @@
+1File: ICODE.C                                                             Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "parser.h"
+     9    
+    10   int bol 1;
+    11   int inittype;
+    12   int begseq;
+    13   /* int onepass; */
+    14    
+    15   /*
+    16   	This interfaces the Parser and the Code Generator, note that these
+    17   	allow you to link together the Parser and the Code Generator.
+    18   */
+    19    
+    20   /* outbdata - set up for byte data*/
+    21   outbdata()									/* returns - none*/
+    22   {
+    23   	inittype = CHAR;
+    24   	printf("\t.dc.b ");
+    25   }
+    26    
+    27   /* outc - output a constant*/
+    28   outc(type,value)							/* returns - none*/
+    29   int type;
+    30   int value;
+    31   {
+    32   	if( type == CHAR )
+    33   		outbdata();
+    34   	else
+    35   		outwdata();
+    36   	printf("%d\n",value);
+    37   }
+    38    
+    39   /* outwdata - set up for word data*/
+    40   outwdata()									/* returns - none*/
+    41   {
+    42   	inittype = INT;
+    43   	printf("\t.dc.w ");
+    44   }
+    45    
+    46   /* outdata - set up for data output*/
+    47   outdata()								/* returns - none*/
+    48   {
+    49   	inittype = INT;
+    50   	printf("\t.data\n");
+    51   }
+    52    
+    53   /* outldata - set up for long data output*/
+    54   outldata()								/* returns - none*/
+    55   {
+    56   	inittype = LONG;
+    57   	printf("\t.data\n");
+    58   }
+    59    
+1File: ICODE.C                                                             Page       2
+    60   /* outfpdata - set up for floating point data output*/
+    61   outfpdata()								/*[vlh] 3.4 returns - none*/
+    62   {
+    63   	inittype = FLOAT;
+    64   	printf("\t.data\n");
+    65   }
+    66    
+    67   /* outbentry - outputs block/function entry code*/
+    68   outbentry(nlocs,nds,nas)			/* returns - none*/
+    69   int nlocs;							/* local size*/
+    70   int nds;							/* number of D registers*/
+    71   int nas;							/* number of A registers*/
+    72   {
+    73   	if( !nds && !nas )		/* adjust for 1 arg*/
+    74   		nlocs =+ 4;
+    75   	printf("\tlink R14,#%d\n",-nlocs);
+    76   	if( nds || nas ) {
+    77   		printf("\tmovem.l R%d-R7",7-nds);	/*7 for one arg*/
+    78   		if( nas ) {
+    79   			putchar('/');
+    80   			printf("R%d-R13",14-nas);
+    81   		}
+    82   		printf(",-(sp)\n");
+    83   	}
+    84   }
+    85    
+    86   /* outbexit - output function exit code*/
+    87   outbexit(nds,nas)						/* returns - none*/
+    88   int nds;								/* number of D registers*/
+    89   int nas;								/* number of A registers*/
+    90   {
+    91   	if( nds || nas ) {
+    92   		printf("\ttst.l (sp)+\n\tmovem.l (sp)+,");	/*1 arg stuff*/
+    93   		if( nds ) {
+    94   			printf("R%d-R7",8-nds);
+    95   			if( nas )
+    96   				putchar('/');
+    97   		}
+    98   		if( nas )
+    99   			printf("R%d-R13",14-nas);
+   100   		putchar('\n');
+   101   	}
+   102   	printf("\tunlk R14\n\trts\n");
+   103   }
+   104    
+   105   /* outlocal - output local symbol for debugger*/
+   106   outlocal(type,sc,sym,val)
+   107   int type;								/* local name type*/
+   108   int sc;									/* storage type*/
+   109   char *sym;								/* symbol name*/
+   110   int val;
+   111   {
+   112   	switch( sc ) {
+   113    
+   114   	case STATIC:
+   115   		if( notfunction(type) )
+   116   			printf("\t~%.8s=L%d\n",sym,val);
+   117   		break;
+   118    
+1File: ICODE.C                                                             Page       3
+   119   	case REGISTER:
+   120   		printf("\t~%.8s=R%d\n",sym,val);
+   121   		break;
+   122    
+   123   	case AUTO:
+   124   		printf("\t~%.8s=%d\n",sym,val);
+   125   		break;
+   126   	}
+   127   }
+   128    
+   129   /* outswitch - output switch table info*/
+   130   outswitch(ncases,deflab,sp)		/* returns - none*/
+   131   int ncases;							/* number of cases in switch*/
+   132   int deflab;								/* default label*/
+   133   struct swtch *sp;						/* switch table pointer*/
+   134   {
+   135   	register int vdif, val, hval, i, tlab;
+   136   	register struct swtch *s;
+   137    
+   138   	val = sp->sw_value;
+   139   	hval = sp[ncases-1].sw_value;
+   140   	vdif = hval - val;
+   141   	if( ncases <= 4 ) {
+   142   	/*
+   143   	 *simple switch, do compares and brances, followed by branch to default
+   144   	 */
+   145   		for( s = sp; --ncases >= 0; s++ ) {
+   146   			if( !s->sw_value )
+   147   				printf("\ttst R0\n");
+   148   			else
+   149   				printf("\tcmp #%d,R0\n",s->sw_value);
+   150   			printf("\tbeq L%d\n",s->sw_label);
+   151   		}
+   152   		outgoto(deflab);
+   153   	}
+   154   	else if( vdif > 0 && vdif <= ncases*3 ) {
+   155    
+   156   	/*jump switch, uses value in R0 to index into table of labels*/
+   157    
+   158   		if( val )
+   159   			printf("\tsub #%d,R0\n",val);
+   160   		tlab = nextlabel++;
+   161   		printf("\tcmp #%d,R0\n\tbhi L%d\n",vdif,deflab);	/*check for max*/
+   162   		printf("\tasl #2,R0\n\tmove R0,R8\n\tadd.l #L%d,R8\n",tlab);
+   163   		printf("\tmove.l (R8),R8\n\tjmp (R8)\n");
+   164   		outdata();
+   165   		outlab(tlab);
+   166   		for( s = sp; val <= hval; val++ ) {
+   167   			if( val == s->sw_value ) {
+   168   				outclab(s->sw_label);
+   169   				s++;
+   170   			}
+   171   			else
+   172   				outclab(deflab);
+   173   		}
+   174   		outtext();
+   175   	}
+   176   	else {
+   177   	/*
+1File: ICODE.C                                                             Page       4
+   178   	 * direct switch, searches down table of values for match, if match
+   179   	 * found, branches to corresponding label in label table.
+   180   	 */
+   181   		tlab = nextlabel++;
+   182   		printf("\text.l R0\n\tmove.l #L%d,R8\n\tmove #%d,R1\n",tlab,ncases);
+   183   		i = nextlabel++;
+   184   		outlab(i);					/*loop label*/
+   185   		printf("\tcmp.l (R8)+,R0\n\tdbeq R1,L%d\n",i);
+   186   		printf("\tmove.l %d(R8),R8\n\tjmp (R8)\n",ncases*4);
+   187   		outdata();
+   188   		outlab(tlab);
+   189   		for( s = sp, i = ncases; --i >= 0; s++ )
+   190   			outlcon(s->sw_value);
+   191   		outlcon(0);						/* mark for default label*/
+   192   		for( s = sp, i = ncases; --i >= 0; s++ )
+   193   			outclab(s->sw_label);
+   194   		outclab(deflab);
+   195   		outtext();
+   196   	}
+   197   }
+   198    
+   199   outeof()
+   200   {
+   201   	register int c;
+   202    
+   203   	v6flush(&sbuf);
+   204   	v6flush(&obuf);
+   205   }
+   206    
+   207   /* copysfile - copy string file to end of output file*/
+   208   copysfile(fname)
+   209   char *fname;
+   210   {
+   211   	register int c;
+   212    
+   213   	close(sbuf.io_fd);
+   214   	if( fopen(fname,&sbuf,0) < 0 )		/* 3rd arg for versados */
+   215   		ferror("can't copy %s",fname);
+   216   	while( (c=getc(&sbuf)) > 0 )
+   217   		putc(c,&obuf);
+   218   	v6flush(&obuf);
+   219   }
+   220    
+   221   /* outword - output a word of data*/
+   222   outword(w)								/* word expression*/
+   223   int w;
+   224   {
+   225   	if( begseq )
+   226   		putchar(',');
+   227   	begseq++;
+   228   	printf("%d",w);
+   229   }
+   230    
+   231   /* outlong - output a long data*/
+   232   outlong(l)								/* returns - none*/
+   233   long l;									/* long data to output*/
+   234   {
+   235   	outwdata();
+   236   	outword(l.hiword);
+1File: ICODE.C                                                             Page       5
+   237   	outword(l.loword);
+   238   	outendseq();
+   239   }
+   240    
+   241   /* outfp - output floating point data*/
+   242   outfp(l)						/*[vlh] 3.4 returns - none*/
+   243   long l;							/* floating point data to output*/
+   244   {
+   245   	outwdata();
+   246   	outword(l.hiword);
+   247   	outword(l.loword);
+   248   	outendseq();
+   249   }
+   250    
+   251   outendseq()								/* returns - none*/
+   252   {
+   253   	begseq = 0;
+   254   	putchar('\n');
+   255   }
+   256    
+   257   /*
+   258    * outtstr - output text string
+   259    *		This outputs a string to the string file, this is used wherever
+   260    *		you cannot output the string directly to data space, such as in
+   261    *		the middle of expressions.
+   262    */
+   263   outtstr(lab)
+   264   int lab;
+   265   {
+   266   	char *savep;
+   267   	int sbol;
+   268    
+   269   	savep = obp;					/*save to restore later...*/
+   270   	obp = &sbuf;
+   271   	sbol = bol;
+   272   	bol = 1;
+   273   	printf("\tL%d:",lab);
+   274   	outstr();
+   275   	obp = savep;
+   276   	bol = sbol;
+   277   }
+   278    
+   279   /* outstr - output a string as a sequence of bytes*/
+   280   /*		Outputs ".dc.b <byte1>,<byte2>,...,<0>*/
+   281   outstr()
+   282   {
+   283   	register char *s;
+   284   	register int i;
+   285    
+   286   	outbdata();
+   287   	for( s = cstr, i = cstrsize; i > 0; i-- )
+   288   		outword(*s++ & 0xff);
+   289   	outendseq();
+   290   }
+   291    
+   292   /*
+   293    * putchar - handle outputting to intermediate or error files
+   294    *		This catches tabs to allow for the integration of the parser
+   295    *		and code generator into one pass.  By merely throwing away the
+1File: ICODE.C                                                             Page       6
+   296    *		tabs here, the output will be OK for the assembler.
+   297    */
+   298   putchar(c)
+   299   char c;
+   300   {
+   301   	if( !obp )
+   302   		write(1,&c,1);
+   303   	else if( c == '\t' ) {
+   304   		if( bol ) /* not used  && !onepass ) */
+   305   			putc('(',obp);					/*for code generator*/
+   306   	}
+   307   	else {
+   308   		bol = (c == '\n');
+   309   		putc(c,obp);
+   310   	}
+   311   }

@@ -1,0 +1,276 @@
+m_exp:
+	proc returns (ptr);
+	%replace
+		true  by '1'b,
+		false by '0'b;
+
+	dcl
+		lower char(26) static initial
+		('abcdefghijklmnopqrstuvwxyz');
+
+	dcl
+		accum char(128) var external,
+		scan entry(fixed);
+
+	dcl
+		m ptr;
+
+	syntax:
+		proc(n);
+		dcl
+			n fixed;
+		put edit(n,' Syntax Error at ',accum)
+			(skip,f(3),2a);
+			do while (accum ^= ';');
+			call scan(10);
+			end;
+		go to error_exit;
+		end syntax;
+
+	var:
+		proc returns(ptr);
+		if index(lower,substr(accum,1,1)) = 0 then
+			call syntax(10);
+		else
+			do;
+			put skip list('var',accum);
+			call scan(20);
+			end;
+		return (null);
+		end var;
+
+	v_tail:
+		proc returns (ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan(30);
+			return (null);
+			end;
+		if accum = ';' then
+			do;
+			call scan(40);
+			return (v_list());
+			end;
+		call syntax(20);
+		return (null);
+		end v_tail;
+
+	v_list:
+		proc returns (ptr) recursive;
+		dcl
+			(v, vt) ptr;
+		v = var();
+		vt = v_tail();
+		/* cons (v,vt) */
+		return (null);
+		end v_list;
+
+	func:
+		proc returns(ptr) recursive;
+		dcl
+			(v, e, f) ptr;
+		if accum = 'label' then
+			do;
+			call scan(50);
+			if accum ^= '[' then
+				call syntax(30);
+			else
+				do;
+				call scan(60);
+				v = var();
+				if accum ^= ';' then
+					call syntax(40);
+				else
+					do;
+					call scan(70);
+					f = func();
+					if accum ^= ']' then
+						call syntax(42);
+					else
+						do;
+						call scan(72);
+						put skip list('(LABEL v f)');
+						end;
+					return (null);
+					end;
+				end;
+			end;
+		else
+		if accum = 'lambda' then
+			do;
+			call scan(80);
+			if accum ^= '[' then
+				call syntax(50);
+			else
+				do;
+				call scan(90);
+				if accum ^= '[' then
+					call syntax(60);
+				else
+					do;
+					call scan(100);
+					if accum = ']' then
+						do;
+						call scan(110);
+						v = null;
+						end;
+					else
+					v = v_list();
+					put skip list('(v1 ... vn)');
+					if accum ^= ';' then
+						call syntax(70);
+					else
+						do;
+						call scan(120);
+						e = exp();
+						if accum ^= ']' then
+							call syntax(80);
+						else
+							do;
+							call scan(130);
+							put skip list ('(LAMBDA (V1 ... Vn) e)');
+							return(null);
+							end;
+						end;
+					end;
+				end;
+			end;
+		else
+			do;
+			v = var();
+			put skip list('VAR');
+			return (v);
+			end;
+		return (null);
+		end func;
+
+	q_tail:
+		proc returns(ptr);
+		put skip;
+			do while (accum ^= '"');
+			put list(accum);
+			call scan(140);
+			end;
+		call scan(142);
+		return (null);
+		end q_tail;
+
+	c_tail:
+		proc returns(ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan(150);
+			return (null);
+			end;
+		if accum = ';' then
+			do;
+			call scan(160);
+			return (c_list());
+			end;
+		call syntax(90);
+		return (null);
+		end c_tail;
+
+	c_list:
+		proc returns(ptr) recursive;
+		dcl
+			(p, q, r) ptr;
+		p = exp();
+		if accum ^= '-' then
+			call syntax(100);
+		else
+			do;
+			call scan(170);
+			if accum ^= '>' then
+				call syntax(110);
+			else
+				do;
+				call scan(180);
+				q = exp();
+				put skip list('(P Q)');
+				/* cons(cons(p,q),c_list)) */
+				r = c_tail();
+				return (null);
+				end;
+			end;
+		return (null);
+		end c_list;
+
+	e_tail:
+		proc returns (ptr) recursive;
+		if accum = ']' then
+			do;
+			call scan(190);
+			return (null);
+			end;
+		if accum = ';' then
+			do;
+			call scan(200);
+			return (e_list());
+			end;
+		call syntax(120);
+		return (null);
+		end e_tail;
+
+	e_list:
+		proc returns (ptr) recursive;
+		dcl
+			(e, et) ptr;
+		e = exp();
+		et = e_tail();
+		/* cons (e,et) */
+		return (null);
+		end e_list;
+
+	exp:
+		proc returns(ptr) recursive;
+		dcl
+			(f, e) ptr;
+		if accum = '"' then
+			do;
+			call scan(210);
+			e = q_tail();
+			put skip list('(QUOTE e)');
+			return (null);
+			end;
+		else
+		if accum = '[' then
+			do;
+			call scan(220);
+			e = c_list();
+			put skip list('(COND e)');
+			return (null);
+			end;
+		else
+			do;
+			f = func();
+			if accum ^= '[' then
+				do;
+				/* (lambda or label) */
+				return (null);
+				end;
+			call scan(230);
+			if accum = ']' then
+				do;
+				call scan(240);
+				e = null;
+				end;
+			else
+				e = e_list();
+			put skip list('(FUNC e)');
+			return (null);
+			end;
+		end exp;
+
+	call scan(250);
+	m = exp();
+		do while (accum ^= ';');
+		call scan(260);
+		if accum ^= ']' then
+			call syntax(130);
+		end;
+	return (m);
+	error_exit:
+	return (null);
+	end m_exp;
+

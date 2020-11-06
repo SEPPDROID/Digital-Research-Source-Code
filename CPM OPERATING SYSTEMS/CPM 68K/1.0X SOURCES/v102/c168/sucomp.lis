@@ -1,0 +1,112 @@
+1File: SUCOMP.C                                                            Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #include "cskel.h"
+    10    
+    11   /* sucomp - Sethy-Ullman expression complexity measure computation*/
+    12   /*		This is a heuristic computation of the Sethy-Ullman numbers*/
+    13   /*		for expressions.  This gives an approximation of the complexity*/
+    14   /*		of the expression.  The code generation scheme works best if*/
+    15   /*		the most complex expressions are done first.*/
+    16   sucomp(tp,nregs,flag)				/* returns - none*/
+    17   struct tnode *tp;					/* pointer to tree*/
+    18   int nregs;							/* number of registers left*/
+    19   int flag;							/* 1=>set values in tree, 0=>return*/
+    20   {
+    21   	register int su, sur, op, i;
+    22   	register struct tnode *ltp, *rtp;
+    23    
+    24   	nregs = dreg(nregs);
+    25   	if( binop(op=tp->t_op) ) {
+    26   		ltp = tp->t_left;
+    27   		rtp = tp->t_right;
+    28   	}
+    29   	else if( unaryop(op) )
+    30   		ltp = tp->t_left;
+    31   	switch( op ) {
+    32    
+    33   	case CLONG:
+    34   		if( tp->t_lvalue >= 0x8000L || tp->t_lvalue <= 0xffff8000L ) {
+    35   			su = SU_ADDR;
+    36   			break;
+    37   		}
+    38   		i = tp->t_lvalue;
+    39   	case CINT:
+    40   		if( op == CINT )
+    41   			i = tp->t_value;
+    42   		if( i == 0 )
+    43   			su = SU_ZERO;
+    44   		else if( i == 1 )
+    45   			su = SU_ONE;
+    46   		else if( i >= 1 && i <= QUICKVAL )
+    47   			su = SU_SMALL;
+    48   		else if( i >= -128 && i <= 127 )
+    49   			su = SU_QUICK;
+    50   		else
+    51   			su = SU_CONST;
+    52   		break;
+    53    
+    54   	case COMMA:
+    55   		su = max(sucomp(rtp,nregs,flag),sucomp(ltp,nregs,flag));
+    56   		su = max(su,SU_EASY);
+    57   		break;
+    58    
+    59   	case ADDR:
+1File: SUCOMP.C                                                            Page       2
+    60   		su = sucomp(ltp,nregs,flag);
+    61   		break;
+    62    
+    63   	case CFLOAT:
+    64   	case DCLONG:
+    65   	case AUTOINC:
+    66   	case AUTODEC:
+    67   		su = SU_ADDR;
+    68   		break;
+    69    
+    70   	case SYMBOL:
+    71   		if( tp->t_sc != REGISTER )
+    72   			su = SU_ADDR;
+    73   		else if( isdreg(tp->t_reg) )
+    74   			su = SU_REG;
+    75   		else
+    76   			su = SU_AREG;
+    77   		break;
+    78    
+    79   	case LDIV:
+    80   	case LMOD:
+    81   	case LMULT:
+    82   	case CALL:
+    83   		sucomp(rtp,nregs,flag);
+    84   	case NACALL:
+    85   		sucomp(ltp,nregs,flag);
+    86   		su = SU_VHARD;				/*very hard*/
+    87   		break;
+    88    
+    89   	default:
+    90   		su = sucomp(ltp,nregs,flag);
+    91   		if( binop(op) ) {
+    92   			if( su <= SU_ADDR )
+    93   				su = max(su,sucomp(rtp,nregs,flag));
+    94   			else {
+    95   				sur = sucomp(rtp,nregs+1,flag);
+    96   				if( sur > SU_ADDR && nregs > HICREG )
+    97   					su = max(su,SU_HARD);
+    98   			}
+    99   			su = max(SU_EASY,su);
+   100   		}
+   101   		else if( su <= SU_XREG )
+   102   			su = max(SU_EASY,su);
+   103   		if( isfloat(tp->t_type) )
+   104   			su = SU_VHARD;
+   105   		break;
+   106   	}
+   107   	if( flag )
+   108   		tp->t_su = su;
+   109   	return(su);
+   110   }

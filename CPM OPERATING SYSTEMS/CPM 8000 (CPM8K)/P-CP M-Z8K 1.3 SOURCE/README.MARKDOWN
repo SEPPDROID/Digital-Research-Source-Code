@@ -1,0 +1,1 @@
+These are the sources for a CP/M-8000 version from June 14, 1983. Some sources contain the version string "P-CP/M for the Olivetti M20 (Z8000) v. 1.3". Sources are in C language. Includes BIOS for the Olivetti M20 Z8000.

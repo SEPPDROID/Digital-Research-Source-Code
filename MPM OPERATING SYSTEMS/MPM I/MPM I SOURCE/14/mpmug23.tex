@@ -1,0 +1,933 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 62
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+2.4  Extended Disk Operating System Functions
+.pp
+The Extending Disk Operating System (XDOS) functions are covered in
+this section by describing the entry parameters and returned values
+for each XDOS function.  The XDOS calling conventions are identical
+to those of the BDOS which are described in
+OPERATING SYSTEM CALL CONVENTIONS in section 2.1.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 128:  ABSOLUTE MEMORY     *
+*                 REQUEST             *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  80H             *
+*                DE:  MD Address      *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+*      MD filled in                   *
+***************************************
+.pp
+The ABSOLUTE MEMORY REQUEST function allocates
+an absolute block of memory specified by the passed memory descriptor
+parameter.  This
+function allows non-relocatable programs,
+such as CP/M *.COM files based at the absolute TPA address of
+0100H, to run in
+the MP/M 1.0 environment.  The single passed parameter is the address
+of a memory descriptor.  The memory descriptor contains four bytes:
+the memory segment base page address, the memory segment page size,
+the memory segment attributes, and bank.  The only parameters
+filled in by the user
+are the base and size, the other parameters are filled in by XDOS.
+.pp
+The operation returns a "boolean" indicating whether or not the
+allocation was made.
+A returned value of FFH indicates failure to allocate the requested
+memory and a value of 0 indicates success.
+Note that base and size specify base page address and page size where
+a page is 256 bytes.
+.li
+
+    Memory Descriptor Data Structure:
+
+         PL/M:
+             Declare memory$descriptor structure (
+               base byte,
+               size byte,
+               attrib byte,
+               bank byte        );
+
+.ad
+.cp 10
+.li
+         Assembly Language:
+             MEMDES:
+                     DS      1       ; base
+                     DS      1       ; size
+                     DS      1       ; attributes
+                     DS      1       ; bank
+.ad
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 129:  RELOCATABLE MEMORY  *
+*                 REQUEST             *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  81H             *
+*                DE:  MD Address      *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+*      MD filled in                   *
+***************************************
+.PP
+The RELOCATABLE MEMORY REQUEST function allocates
+the requested contiguous memory to the calling program.  The
+single passed parameter is the address of a memory descriptor.  The
+only memory descriptor parameter filled in by the calling program is
+the
+size, the other parameters, base, attributes and bank, are filled in by
+XDOS.
+.pp
+The operation returns a boolean indicating whether or not the memory
+request could be satisifed.
+A returned value of FFH indicates failure to
+satisfy the request and a value of 0 indicates success.
+.pp
+Note that base and size specify base page address and page size where
+a page is 256 bytes.
+(See function 128: ABSOLUTE MEMORY REQUEST  for a description of
+the memory descriptor data structure.)
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 130:  MEMORY FREE         *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  82H             *
+*                DE:  MD Address      *
+*                                     *
+***************************************
+.PP
+The MEMORY FREE function releases the
+specified memory segment back to the operating system.  The passed
+parameter is the address of a memory descriptor.
+Nothing is returned as
+a result of this operation.
+(See function 128: ABSOLUTE MEMORY REQUEST  for a description of
+the memory descriptor data structure.)
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 131:  POLL                *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  83H             *
+*                 E:  Device Number   *
+*                                     *
+***************************************
+.PP
+The POLL function polls the specified device
+until a ready condition is received.  The calling process relinquishes
+the processor until the poll is satisfied, allowing other processes
+to execute.
+.pp
+Note that the POLL function is intended for use in the custom XIOS
+since an association is made in the XIOS between the device number
+and the actual code executed for the poll operation.  This does not
+exclude other uses of the poll function but it does mean that an
+application program making a poll call must be matched to a specific
+XIOS.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 132:  FLAG WAIT           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  84H             *
+*                 E:  Flag Number     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+***************************************
+.PP
+The FLAG WAIT function causes a process to
+relinquish the processor until the flag specified in the call is set.
+The flag wait operation is used in an interrupt driven
+system to cause the calling process to 'wait' until a specific
+interrupt condition occurs.
+.pp
+The operation returns a boolean indicating whether or not a successful
+FLAG WAIT was performed.  A returned value of FFH indicates that no
+flag wait occurred because another process was already waiting on
+the specified flag.  A returned value of 0 indicates success.
+.pp
+Note that flags are non-queued, which means that access to flags
+must be carefully managed.  Typically the physical interrupt handlers
+will set flags while a single process will wait on each flag.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 133:  FLAG SET            *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  85H             *
+*                 E:  Flag Number     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+***************************************
+.PP
+The FLAG SET function wakes up a waiting process.
+The FLAG SET function is usually called by an interrupt service
+routine after servicing an interrupt and determining which flag is
+to be set.
+.ti +6
+The operation returns a boolean indicating whether or not a successful
+FLAG SET was performed.  A returned value of FFH indicates that a flag
+over-run has occurred, i.e. the flag was already set when a flag set
+function was called.  A returned value of 0 indicates success.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 134:  MAKE QUEUE          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  86H             *
+*                DE:  QCB Address     *
+*                                     *
+***************************************
+.PP
+The MAKE QUEUE function sets up a queue control
+block.  A queue is configured as either circular or linked depending
+upon the message size.  Message sizes of 0 to 2 bytes use circular
+queues while message sizes of 3 or more bytes use linked queues.
+.PP
+A single parameter is passed to make a queue, the queue control block
+address.  The queue control block must contain the queue name, message
+length, number of messages, and sufficient space to accomodate the
+messages (and links if the queue is linked).
+.pp
+The queue control block data structures for both circular and linked
+queues are described in section 2.3.
+.pp
+Queues can only be created either in common memory or by
+user programs in non-banked systems.  The reason is that
+queues are all maintained on a linked list which must be
+accessible at all times.  I.E., a queue cannot reside in a
+memory segment which is bank switched.  However, a queue
+created in common memory can be accessed by all system and
+user programs.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 135:  OPEN QUEUE          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  87H             *
+*                DE:  UQCB Address    *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+***************************************
+.PP
+The OPEN QUEUE function places the actual queue
+control block address into the user queue control block.
+The result of this function is that a user program can obtain access
+to queues by knowing only the queue name, the actual address
+of the queue itself is obtained as a result of opening the queue.
+Once a queue has been opened, the queue may be read from or written to
+using the queue read and write operations.
+.PP
+The function returns a boolean indicating whether or not the open
+queue operation found the queue to be opened.  A returned value of
+0FFH indicates failure while a zero indicates success.
+.pp
+The user queue control block data structure is described in section
+2.3.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 136:  DELETE QUEUE        *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  88H             *
+*                DE:  QCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return Code     *
+***************************************
+.PP
+The DELETE QUEUE function removes the specified
+queue from the queue list.
+A single parameter is passed to delete a queue, the address of the
+actual queue.
+.PP
+The function returns a boolean indicating whether or not the delete
+queue operation deleted the queue.  A returned value of
+0FFH indicates failure, usually because some process is DQing from
+the queue.  A returned value of 0 indicates success.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 137:  READ QUEUE          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  89H             *
+*                DE:  UQCB Address    *
+*                                     *
+*  Returned   Value:                  *
+*      Message read                   *
+***************************************
+.PP
+The READ QUEUE function reads a message from
+a specified queue.  If no message is available at the queue the
+calling process relinquishes the processor until a message is posted
+at the queue.  The single passed parameter is the address of a user
+queue control block.
+When a message is available at the queue, it is copied into the
+buffer pointed to by the MSGADR field of the user queue control block.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 138:  CONDITIONAL READ    *
+*                 QUEUE               *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8AH             *
+*                DE:  UQCB Address    *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+*      Message read if available      *
+***************************************
+.PP
+The CONDITIONAL READ QUEUE function reads
+a message from a specified queue if a message is available.
+The single passed parameter is the address of a user
+queue control block.
+If a message is available at the queue, it is copied into the
+buffer pointed to by the MSGADR field of the user queue control block.
+.PP
+The operation returns a boolean indicating whether or not a
+message was available at the queue.  A returned value of
+0FFH indicates no message while a zero indicates that a message was
+available and that it was copied into the user buffer.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 139:  WRITE QUEUE         *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8BH             *
+*                DE:  UQCB Address    *
+*      Message to be sent             *
+*                                     *
+***************************************
+.PP
+The WRITE QUEUE function writes a message to
+a specified queue.  If no buffers are available at the queue, the
+calling process relinquishes the processor until a buffer is available
+at the queue.  The single passed parameter is the address of a user
+queue control block.
+When a buffer is available at the queue, the
+buffer pointed to by the MSGADR field of the user queue control block
+is copied into the actual queue.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 140:  CONDITIONAL WRITE   *
+*                 QUEUE               *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8CH             *
+*                DE:  UQCB Address    *
+*      Message to be sent             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+***************************************
+.PP
+The CONDITIONAL WRITE QUEUE function writes
+a message to a specified queue if a buffer is available.
+The single passed parameter is the address of a user
+queue control block.
+If a buffer is available at the queue, the
+buffer pointed to by the MSGADR field of the user queue control block
+is copied into the actual queue.
+.PP
+The operation returns a boolean indicating whether or not a
+buffer was available at the queue.  A returned value of
+0FFH indicates no buffer while a zero indicates that a buffer was
+available and that the user buffer was copied into it.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 141:  DELAY               *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8DH             *
+*                DE:  Number of Ticks *
+*                                     *
+***************************************
+.PP
+The DELAY function delays execution of the
+calling process for the specified number of system time units.
+Use of the delay operation avoids the typical programmed delay
+loop.  It allows other processes to use the processor while the
+specified period of time elapses.  The system time unit is typically
+60 Hz (16.67 milliseconds) but may vary according to application.
+For example it is likely that in Europe it would be 50 Hz (20
+milliseconds).
+.PP
+The delay is specifed as a 16-bit integer.  Since calling the delay
+procedure is usually asynchronous to the actual time base itself, there
+is up to one tick of uncertainty in the exact amount of time delayed.
+Thus a delay of 10 ticks gaurantees a delay of at least 10 ticks, but
+it may be nearly 11 ticks.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 142:  DISPATCH            *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8EH             *
+*                                     *
+***************************************
+.PP
+The DISPATCH operation allows the operating system
+to determine the highest priority ready process and then to give it the
+processor.  This call is provided in XDOS to allow systems without
+interrupts the capability of sharing the processor among compute
+bound processes.  Since all user processes usually run at the same
+priority, invoking the dispatch operation at various points
+in a program will allow other users to obtain the processor
+in a round-robin fashion.
+Invoking the dispatch function does not take the calling process off
+of the ready list.
+.PP
+Dispatch is intended for non-interrupt driven environments in
+which it is desirable to enable a compute bound process
+to relinquish the use of the processor.
+.pp
+Another use of the dispatch function is to safely enable interrupts
+following the execution of a disable interrupt instruction (DI).
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 143:  TERMINATE PROCESS   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  8FH             *
+*                 D:  Conditional     *
+*                      Memory Free    *
+*                 E:  Terminate Code  *
+*                                     *
+***************************************
+.PP
+The TERMINATE PROCESS function terminates
+the calling process.  The passed parameters indicate whether
+or not the process should be terminated if it is a system process
+and if the memory segment is to be released.
+A 0FFH in the E register indicates that the process should be unconditionally terminated,
+a zero indicates that only a user process is to be deleted.
+If  a user process is being terminated and Register D is  a
+0FFH, the memory segment is not released.  Thus a process
+which is a child of a parent process both executing in  the
+same  memory  segment  can terminate  without  freeing  the
+memory segment which is also occupied by the parent.
+.pp
+There are no results
+returned from this operation, the calling process simply ceases
+to exist as far as MP/M is concerned.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 144:  CREATE PROCESS      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  90H             *
+*                DE:  PD Address      *
+*                                     *
+*  Returned   Value:                  *
+*      PD filled in                   *
+***************************************
+.PP
+The CREATE PROCESS function creates one
+or more processes by placing the passed process descriptors
+on the MP/M ready list.
+.PP
+A single parameter is passed, the address of a process
+descriptor.  The first field of the process descriptor is a link
+field which may point to another process descriptor.
+.pp
+Processes can only be created either in common memory or by
+user  programs in non-banked systems.  The reason is  that
+process  descriptors  are all maintained  on  linked  lists
+which must be accessible at all times.
+.pp
+The process descriptor data structure is described in section 2.3.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 145:  SET PRIORITY        *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  91H             *
+*                 E:  Priority        *
+*                                     *
+***************************************
+.PP
+The SET PRIORITY function sets the priority of
+the calling process to that of the passed parameter.  This function
+is useful in situations where a process needs to have a high priority
+during an initialization phase, but after that is to run at a lower
+priority.
+.PP
+A single passed parameter contains the new process priority.  There
+are no results returned from setting priority.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 146:  ATTACH CONSOLE      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  92H             *
+*                                     *
+***************************************
+.PP
+The ATTACH CONSOLE function attaches the console
+specified in the CONSOLE field of the process descriptor
+to the calling process.  If the console is already attached to some
+other process,
+the calling process relinquishes the processor until the console
+is detached from that process and the calling process is the highest
+priority process waiting for the console.
+.PP
+There are no passed parameters and there are no returned results.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 147:  DETACH CONSOLE      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  93H             *
+*                                     *
+***************************************
+.PP
+The DETACH CONSOLE function detaches the console
+specified in the CONSOLE field of the process descriptor
+from the calling process.  If the console is not currently attached
+no action takes place.
+.PP
+There are no passed parameters and there are no returned results.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 148:  SET CONSOLE         *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  94H             *
+*                 E:  Console         *
+*                                     *
+***************************************
+.PP
+The SET CONSOLE function detaches the currently
+attached console and then attaches the console specified as a calling
+parameter.  If the console to be attached is already attached to
+another process descriptor, the calling process relinquishes the
+processor until the console is available.
+.PP
+A single passed parameter contains the console number to be attached.
+There are no returned results.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 149:  ASSIGN CONSOLE      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  95H             *
+*                DE:  APB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return code     *
+***************************************
+.PP
+The ASSIGN CONSOLE function directly assigns
+the console to a specified process.  This assignment is done regardless
+of whether or not the console is currently attached to some other
+process.
+A single parameter is passed to assign console which is the address
+of a data structure containing the console number for the assignment,
+an 8 character ASCII process name, and a boolean indicating whether
+or not a match with the console field of the process descriptor
+is required (true or 0FFH indicates it is required).
+.PP
+The operation returns a boolean indicating whether or not the
+assignment was made.  A returned value of 0FFH indicates failure to
+assign the console, either because a process descriptor with the
+specified name could not be found, or that a match was required and
+the console field of the process descriptor did not match the
+specified console.  A returned value of zero indicates a successful
+assignment.
+.sp 2
+.cp 24
+.li
+***************************************
+*                                     *
+*  FUNCTION 150:  SEND CLI COMMAND    *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  96H             *
+*                DE:  CLICMD Address  *
+*                                     *
+***************************************
+.PP
+The SEND CLI COMMAND function permits running
+programs to send command lines to the Command Line Interpreter.
+A single parameter is passed which is the address of a data
+structure containing the default disk/user code, console and command
+line itself (shown below).
+.pp
+The default disk/user code is the first byte of the data structure.
+The high order four bits contain the default disk drive and the low
+order four bits contain the user code.  The second byte of the data
+structure
+contains the console number for the program being executed.  The
+ASCII command line begins with the third byte and is terminated with
+a null byte.
+.PP
+There are no results returned to the calling program.
+.pp
+The following example illustrates the SEND CLI COMMAND data
+structure:
+.li
+
+    PL/M:
+        Declare CLI$command structure (
+          disk$user byte,
+          console byte,
+          command$line (129) byte);
+
+    Assembly Language:
+        CLICMD:
+        	DS	1	; default disk / user code
+        	DS	1	; console number
+        	DS	129	; command line
+.ad
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 151:  CALL RESIDENT       *
+*                 SYSTEM PROCEDURE    *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  97H             *
+*                DE:  CPB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  Return code     *
+***************************************
+.PP
+The CALL RESIDENT SYSTEM PROCEDURE function
+permits programs to call the optional resident system procedures.
+A single passed parameter is the address of a call parameter
+block data structure (shown below) which contains the address of an 8 character ASCII
+resident
+system procedure name followed by a two byte parameter to be passed
+to the resident system procedure.
+.PP
+The operation returns a 0001H if the resident system procedure called
+is not present, otherwise it returns the code passed back from
+the resident system procedure.  Typically a returned value of FFH
+indicates failure while a zero indicates success.
+.pp
+The following example illustrates the call parameter block data
+structure:
+.li
+
+    PL/M:
+        Declare CALL$PB structure (
+          Name$adr address,
+        Param address ) initial (
+          .name,0);
+
+        Declare name (8) byte initial (
+          'Proc1   ');
+
+    Assembly Language:
+        CALLPB:
+        	DW	NAME
+        	DW	0	; parameter
+
+        NAME:
+        	DB	'Proc1   '
+
+.ad
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 152:  PARSE FILENAME      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  98H             *
+*                DE:  PFCB Address    *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  Return code     *
+*      Parsed file control block      *
+***************************************
+.PP
+The PARSE FILENAME function prepares a file
+control block from an input ASCII string containing a file name
+terminated by a null or a carriage return.
+The parameter is the address of a data structure (shown below) which contains
+the address of the ASCII file name string followed by the address of
+the target file control block.
+.PP
+The operation returns an FFFFH if the input ASCII string contains an
+invalid file name.  A zero is returned if the ASCII string contains
+a single valid file name, otherwise the address of the first character
+following the file name is returned.
+.pp
+The following example illustrates the parse file name control block
+data structure:
+.li
+
+    PL/M:
+        Declare Parse$FN$CB structure (
+          File$name$adr address,
+          FCB$adr address ) initial (
+          .file$name,.fcb );
+
+        Declare file$name (128) byte;
+        Declare fcb (36) byte;
+
+    Assembly Language:
+        PFNCB:
+        	DW	FLNAME
+        	DW	FCB
+
+        FLNAME:
+        	DS	128
+        	DS	36
+
+.ad
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 153:  GET CONSOLE NUMBER  *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  99H             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Console Number  *
+***************************************
+.PP
+The GET CONSOLE NUMBER funtion obtains
+the value of the console field from the process descriptor of
+the calling program.  There are no passed parameters and the
+returned result is the console number of the calling process.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 154:  SYSTEM DATA ADDRESS *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  9AH             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  System Data Page*
+*                     Address         *
+***************************************
+.PP
+The SYSTEM DATA ADDRESS function obtains
+the base address of the system data page.  The system data page
+resides in the top 256 bytes of available memory.  It contains
+configuration information used by the MP/M loader as well as
+run time data including the submit flags.
+The contents of the system data page are described in section 3.4
+under SYSTEM DATA.
+.pp
+There are no passed parameters and the returned result is the
+base address of the system data page.
+.sp 2
+.cp 18
+.li
+***************************************
+*                                     *
+*  FUNCTION 155:  GET DATE AND TIME   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  9BH             *
+*                DE:  TOD Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Time and date                  *
+***************************************
+.PP
+The GET DATE AND TIME function obtains the
+current encoded date and time.  A single passed parameter is the
+address of a data structure (shown below) which is to contain the date and time.
+The date is represented as a 16-bit integer with day 1 corresponding
+to January 1, 1978.  The time is respresented as three bytes:
+hours, minutes and seconds, stored as two BCD digits.
+.pp
+The following example illustrates the TOD data structure:
+.li
+
+    PL/M:
+        Declare TOD structure (
+          date address,
+          hour byte,
+          min byte,
+          sec byte );
+
+    Assembly Language:
+        TOD:   	DS	2	; Date
+        	DS	1	; Hour
+        	DS	1	; Minute
+        	DS	1	; Second
+.ad
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 156:  RETURN PROCESS      *
+*                 DESCRIPTOR ADDRESS  *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  9CH             *
+*                                     *
+*  Returned   Value:                  *
+*      Register  HL:  PD Address      *
+***************************************
+.pp
+The  RETURN  PROCESS DESCRIPTOR ADDRESS function obtains  the
+address  of calling processes process  descriptor.  By  definition
+this is the head of the ready list.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 157:  ABORT SPECIFIED     *
+*                 PROCESS             *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  9DH             *
+*      Register  DE:  APB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The  ABORT  SPECIFIED PROCESS function permits a  process  to
+terminate  another specified process.  The passed parameter is the
+address  of  an  Abort Parameter Block  (ABTPB)  which  contains  the
+following data structure:
+.li
+
+    PL/M:
+        Declare Abort$paramter$block structure (
+          pdadr address,
+          termination$code address,
+          name (8) byte,
+          console byte  );
+
+    Assembly Language:
+        APB:
+                DS      2       ; process desciptor address
+                DS      2       ; termination code
+                DS      8       ; process name
+                DS      1       ; console used by process
+.ad
+.pp
+If  the process descriptor address is known it can be filled in and
+the process name and console can be omitted.  Otherwise the process
+descriptor  address field should be a zero and the process name and
+console  must be specified.  In either case the  termination  code
+must  be  supplied which is the parameter passed to  FUNCTION  143:
+TERMINATE PROCESS.
+.br
+

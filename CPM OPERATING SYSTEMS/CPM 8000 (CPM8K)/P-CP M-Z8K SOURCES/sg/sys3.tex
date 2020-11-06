@@ -1,0 +1,239 @@
+.bp odd
+.he
+.cs 5
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.ce 2
+.sh
+Section 3
+.sp
+.sh
+Bootstrap Procedures
+.qs
+.sp 3
+.tc    3.1  Bootstrapping Overview
+.sh
+3.1  Bootstrapping Overview
+.qs
+.he CP/M-8000 System Guide                 3.1  Bootstrapping Overview
+.pp 5
+Bootstrap loading is the process of bringing the CP/M-8000 operating system
+into memory and passing control to it.  Bootstrap loading is necessarily
+hardware dependent, and it is not possible to discuss all possible variations
+in this manual.  However, the manual presents a model of bootstrapping that is
+applicable to most systems.
+
+=== MASSIVE RE-WRITE NEEDED. ===
+=== 	There are three bootstrap models:
+===	The one presented here,
+===	The Olivetti version, with the whole system on the boot tracks,
+===	And the TRS-80 version, with the loader running on a Z80.
+ 
+.ix Bootstrapping loading
+.pp
+The model of bootstrapping which we present assumes that the CP/M-8000 
+operating system is to be loaded into memory from a disk in which the first 
+few tracks (typically the first two) are reserved for the operating system 
+and bootstrap routines, while the remainder of the disk contains the file 
+structure, consisting of a directory and disk files.  (The topic of disk 
+organization and parameters is discussed in Section 5.)  In our model, 
+the CP/M-8000 operating system resides in a disk file named CPM.SYS (described 
+in Section 2), and the system tracks contain a bootstrap loader program 
+(CPMLDR.SYS) which knows how to read CPM.SYS into memory and transfer 
+control to it.
+.ix CPM.SYS
+.ix bootstrap procedure
+.pp
+Most systems have a boot procedure similar to the following:
+.sp 2
+.in 8
+.ti -3
+1) When you press reset, or execute a boot command from a monitor ROM,
+the hardware loads one or more sectors beginning at track 0, sector 1, into
+memory at a predetermined address, and then jumps to that address.
+.sp
+.ti -3
+2) The code that came from track 0, sector 1, and is now executing, is 
+typically a small bootstrap routine that loads the rest of the sectors on the
+system tracks (containing CPMLDR) into another predetermined address in 
+memory, and then jumps to that address.  Note that if your hardware is 
+smart enough, steps 1 and 2 can be combined into one step.
+.sp
+.ti -3
+3) The code loaded in step 2, which is now executing, is the CP/M Cold Boot
+Loader, CPMLDR, which is an abbreviated version of CP/M-8000 itself.  CPMLDR
+now finds the file CPM.SYS, loads it, and jumps to it.  A copy of CPM.SYS is
+now in memory, executing.  This completes the bootstrapping process.  
+.mb 4
+.fm 1
+.sp
+.in 0
+.pp
+In order to create a CP/M-8000 diskette that can be booted, you need to know
+how to create CPM.SYS (see Section 2.2),  how to create the Cold Boot Loader, 
+CPMLDR, and how to put CPMLDR onto your system tracks.  You must also 
+understand your hardware enough to be able to design a method for bringing
+CPMLDR into memory and executing it.
+.ix CPMLDR
+.sp 2
+.tc    3.2  Creating the Cold Boot Loader
+.sh
+3.2  Creating the Cold Boot Loader
+.he CP/M-8000 System Guide          3.2  Creating the Cold Boot Loader
+.pp
+CPMLDR is a miniature version of CP/M-8000.  It contains stripped versions of
+the BDOS and BIOS, with only those functions which are needed to open the 
+CPM.SYS file and read it into memory.  CPMLDR will exist in at least two forms;
+one form is the information in the system tracks, the other is a file named 
+CPMLDR.SYS which is created by the linker.  The term CPMLDR is used to
+refer to either of these forms, but CPMLDR.SYS only refers to the file.
+.mb 6
+.fm 2
+.ix Cold Boot Loader, creating
+.ix CPMLDR.SYS
+.ix loader system library
+.ix LDRLIB
+.ix PUTBOOT utility
+.pp
+CPMLDR.SYS is generated using a procedure similar to that used in generating
+CPM.SYS.  That is, a loader BIOS is linked with a loader system library, named
+LDRLIB, to produce CPMLDR.SYS.  Additional modules may be linked in as required
+by your hardware.  The resulting file is then loaded onto the system tracks
+using a utility program named PUTBOOT.  
+.sp 2
+.tc         3.2.1  Writing a Loader BIOS
+.sh
+3.2.1  Writing a Loader BIOS
+.qs
+.ix Loader BIOS, writing
+.pp
+The loader BIOS is very similar to your ordinary BIOS; it just has fewer
+functions, and the entry convention is slightly different.  The differences
+are itemized below.
+.sp 2
+.in 8
+.ti -3
+1) Only one disk needs to be supported.  The loader system selects only 
+drive A.  If you want to boot from a drive other than A, your loader BIOS 
+
+should be written to select that other drive when it receives a request to
+select drive A.
+.sp
+.ti -3
+2) The loader BIOS is not called through a trap; the loader BDOS calls an entry
+point named _bios instead.  The parameters are still passed in registers, just
+as in the normal BIOS.  Thus, your Function 0 does not need to 
+initialize a trap, the code that in a normal BIOS would be the Trap 3 
+handler should have the label _bios, and you exit from your loader BIOS with
+an RTS instruction instead of an RTE.
+.ix Function 0
+.ix Trap 3 handler
+.ix BIOS
+.ix RTE
+.ix trap initialization
+.sp
+.ti -3
+3) Only the following BIOS functions need to be implemented:
+.sp
+0  (Init)    Called just once, should initialize hardware as necessary, no  return value necessary.  Note that Function 0 is called via _bios with the 
+function number equal to 0.  You do not need a separate _init entry point. 
+.sp
+4  (Conout)  Used to print error messages during boot.  If you do not want 
+error messages, this function should just be an rts.
+.sp
+9  (Seldsk)  Called just once, to select drive A. 
+.ix Init
+.ix Conout
+.ix Seldsk
+.sp
+10 (Settrk)
+.sp
+11 (Setsec)
+.sp
+12 (Setdma)
+.sp
+13 (Read)
+.sp
+16 (Sectran)
+.sp
+18 (Get MRT) Not used now, but may be used in future releases.
+.sp
+22 (Set exception)
+.ix Settrk
+.ix Setsec
+.ix Setdma
+.ix Read
+.ix Sectran
+.ix Get MRT
+.ix Set exception
+.sp
+.ti -3
+4) You do not need to include an allocation vector or a check vector, and the 
+Disk Parameter Header values that point to these can be anything.  However, 
+you still need a Disk Parameter Header, Disk Parameter Block, and directory 
+buffer.
+.ix allocation vector
+.ix Disk Parameter Header
+.ix Disk Parameter Block
+.ix directory buffer
+.in 0
+.sp
+.pp
+It is possible to use the same source code for both your normal BIOS and
+your loader BIOS if you use conditional compilation or assembly to 
+distinguish the two.
+We have done this in our example BIOS for the EXORmacs.
+.sp 2
+.tc         3.2.2  Building CPMLDR.SYS
+.sh
+3.2.2 Building CPMLDR.SYS
+.qs
+.ix CPMLDR.SYS, building
+.pp
+Once you have written and compiled (or assembled) a loader BIOS, you can build
+CPMLDR.SYS in a manner very similar to building CPM.SYS.  There is one 
+additional complication here:  the result of this step is 
+placed on the system tracks.  So, if you need a small prebooter to bring
+in the bulk of CPMLDR, the prebooter must also be included in the link
+you are about to do.  The details of what must be done are hardware dependent,
+but the following example should help to clarify the concepts involved.
+.pp
+Suppose that your hardware reads track 0, sector 1, into memory at location
+400H when reset is pressed, then jump to 400H.  Then your boot disk must
+have a small program in that sector that can load the rest of the system 
+tracks into memory and execute the code that they contain.  Suppose that you
+have written such a program, assembled it, and the assembler output is in 
+BOOT.O.  Also assume that your loader BIOS object code is in the file
+LDRBIOS.O.  Then the following command links together the code that must
+go on the system tracks.
+.ix boot disk
+.ix PUTBOOT utility
+.ti 8
+.sp
+A>\c
+.sh
+lo68 -s -T400 -uldr -o cpmldr.sys boot.o ldrlib ldrbios.o
+.pp
+Once you have created CPMLDR.SYS in this way, you can use the PUTBOOT utility
+to place it on the system tracks.  PUTBOOT is described in Section 8.
+The command to place CPMLDR on the system tracks of drive A is:
+.sp
+.ti 8
+A>\c
+.sh
+putboot cpmldr.sys a
+.pp
+PUTBOOT reads the file CPMLDR.SYS, strips off the 28-byte command file 
+header, and puts the result on the specified drive.  You can now boot from 
+this disk, assuming that CPM.SYS is on the disk.
+
+.sp 2
+.ce
+End of Section 3
+.nx four

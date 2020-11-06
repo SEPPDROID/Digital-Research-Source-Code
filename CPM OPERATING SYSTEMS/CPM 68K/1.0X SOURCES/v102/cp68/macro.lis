@@ -1,0 +1,685 @@
+1File: MACRO.C                                                             Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "preproc.h"
+     9    
+    10   #define	CSTKSIZE	20
+    11   #define FILESEP		'/'
+    12   #define NINCL		10
+    13    
+    14   #ifdef UNIX
+    15   char *stdincl "/usr/include/";		/*standard include directory*/
+    16   #endif
+    17   #ifdef VMS
+    18   char *stdincl "lib:";
+    19   #endif
+    20   #ifdef CPM
+    21   char *stdincl "";
+    22   #endif
+    23    
+    24   int clabel 1000;
+    25   int nlabel 1001;
+    26   int nincl;
+    27   char *incl[10];
+    28   char tmp[6];
+    29    
+    30   struct builtin {
+    31   	char *b_name;
+    32   	int b_type;
+    33   } btab[] {
+    34   	"define",	DEFINE,
+    35   	"include",	INCLUDE,
+    36   	"undef",	UNDEF,
+    37   	"ifdef",	IFDEF,
+    38   	"ifndef",	IFNDEF,
+    39   	"else",		ELSE,
+    40   	"endif",	ENDIF,
+    41   	"if",		IF,
+    42   	0,
+    43   };
+    44    
+    45   char *getinclude();
+    46   char cstack[CSTKSIZE];
+    47   char *cstkptr, inclname[TOKSIZE];
+    48    
+    49   /* domacro - do macro processing*/
+    50   /*		Does the macro pre-processing on the input file and leaves the*/
+    51   /*		result on the output file.*/
+    52   domacro(infile,outfile,nd)		/* returns 1 if ok, 0 otherwise*/
+    53   char *infile;						/* input file name*/
+    54   char *outfile;						/* output file name*/
+    55   int nd;								/* number of defines*/
+    56   {
+    57   	register struct builtin *bp;
+    58   	register char *l;
+    59   	register struct symbol *sp;
+1File: MACRO.C                                                             Page       2
+    60   	register int x, nonewline;	/* handle empty new lines with SOH */
+    61   	register char *p;
+    62   	filep = &filestack[0];
+    63    
+    64   	if( fopen(infile,&(filep->inbuf),0) < 0 ) { /* 3rd arg for versados */
+    65   		error("can't open source file %s\n",infile);
+    66   		return(0);
+    67   	}
+    68   	if( fcreat(outfile,&outbuf,0) < 0 ) {	/* 3rd arg for versados */
+    69   		error("can't creat %s\n",outfile);
+    70   		return(0);
+    71   	}
+    72   	for (sp= &symtab[0]; sp<= &symtab[HSIZE-1]; sp++) /*3.4*/
+    73   		sp->s_def = null;	/* clear out symbol table */
+    74   	if( !defap ) {
+    75   		defp = defap = sbrk(1024);
+    76   		defmax = defcount = 1024;
+    77   	}
+    78   	else {	/* multiple files, define area already exists */
+    79   		defcount = defmax;
+    80   		for (x = defmax, defp = defap; x>0; x--)
+    81   			*defp++ = 0;
+    82   		defp = defap;
+    83   	}
+    84   	lineno = 1;
+    85   	nonewline = defused = mfail = 0;
+    86   	pbp = &pbbuf[0];
+    87   	cstkptr = &cstack[0];
+    88   	install("Newlabel",NEWLABEL);
+    89   	install("Label",LABEL);
+    90   	while( --nd >= 0 )
+    91   		dinstall(defs[nd].ptr,defs[nd].value);
+    92   	while( getline(infile) ) {
+    93   		l = line;
+    94   		if( filep == &filestack[0] && pbp == &pbbuf[0] )
+    95   			lineno++;
+    96   		else if ( !pflag && !asflag ) {	/*[vlh] add fname & line#*/
+    97   			if (*l) {
+    98   				putc(SOH,&outbuf);
+    99   				for (p = (filep)->ifile; *p; p++)
+   100   					putc(*p,&outbuf);
+   101   				putc(SOH,&outbuf);
+   102   				itoa((filep)->lineno,tmp,5);
+   103   				for (p = tmp; *p==' '; ) p++;
+   104   				for ( ; *p; p++)
+   105   					putc(*p,&outbuf);
+   106   				putc(' ',&outbuf);
+   107   				if (!(*l)) putc(' ',&outbuf);
+   108   			}
+   109   			else nonewline++;
+   110   			(filep)->lineno++;
+   111   		}
+   112   		while( *l )
+   113   			putc(*l++,&outbuf);
+   114   		if (!nonewline) putc('\n',&outbuf);
+   115   		else nonewline = 0;
+   116   	}
+   117   	if( cstkptr != &cstack[0] )
+   118   		error("unmatched conditional");
+1File: MACRO.C                                                             Page       3
+   119   	if( defused > defmax )
+   120   		defmax = defused;
+   121   	v6flush(&outbuf);
+   122   	close(outbuf.fd);
+   123   	close(filep->inbuf.fd);
+   124   	return(mfail==0);
+   125   }
+   126    
+   127   install(name,def)
+   128   char *name;
+   129   int def;
+   130   {
+   131   	register struct symbol *sp;
+   132    
+   133   	sp = getsp(name);
+   134   	symcopy(name,sp->s_name);
+   135   	sp->s_def = defp;
+   136   	putd(def);
+   137   	putd('\0');
+   138   }
+   139    
+   140   dinstall(name,def)					/* returns - none*/
+   141   char *name;							/* macro name*/
+   142   char *def;							/* pointer to definition*/
+   143   {
+   144   	register struct symbol *sp;
+   145    
+   146   	sp = getsp(name);
+   147   	symcopy(name,sp->s_name);
+   148   	sp->s_def = defp;
+   149   	putd(NOARGS);
+   150   	if (def)			/* [vlh] character strings... */
+   151   		while(*def) putd(*def++);
+   152   	else putd('1');		/* [vlh] default define value */
+   153   	putd('\0');
+   154   }
+   155    
+   156   /* kwlook - look up the macro built-in names*/
+   157   /*		Searches thru the built-in table for the name.*/
+   158   kwlook(name)						/* returns keyword index or 0*/
+   159   char *name;							/* keyword name to lookup*/
+   160   {
+   161   	register struct builtin *bp;
+   162    
+   163   	for( bp = &btab[0]; bp->b_name; bp++ )
+   164   		if( strcmp(bp->b_name,name) == 0 )
+   165   			return(bp->b_type);
+   166   	return(0);
+   167   }
+   168    
+   169   /*
+   170    * getline - get input line handling macro statements
+   171    *		Checks for a preprocessor statement on the line and if there
+   172    *		is one there, it processes it.  Note that most of the work is
+   173    *		in determining whether we need to skip the current line or not.
+   174    *		This is all handled with the condition stack and the skip variable.
+   175    *		The skip variable is non-zero if any condition on the condition
+   176    *		stack is SKIP.
+   177    */
+1File: MACRO.C                                                             Page       4
+   178   getline(infile)						/* returns 0 for EOF, 1 otherwise*/
+   179   char *infile;						/* [vlh] for quoted include files */
+   180   {
+   181   	char token[TOKSIZE];
+   182   	register int type, i;
+   183   	register char *p;
+   184    
+   185   	initl();
+   186   	if( (type=gettok(token)) == EOF )
+   187   		return(0);
+   188   	if( type == POUND ) {
+   189   		if( (type=getntok(token)) == NEWL )
+   190   			return(1);
+   191   		switch( kwlook(token) ) {
+   192    
+   193   		case IFDEF:
+   194   			if( getntok(token) == ALPHA && lookup(token) )
+   195   				push(NOSKIP);
+   196   			else {
+   197   				push(SKIP);
+   198   				skip++;
+   199   			}
+   200   			break;
+   201    
+   202   		case IFNDEF:
+   203   			if( getntok(token) == ALPHA && lookup(token) ) {
+   204   				push(SKIP);
+   205   				skip++;
+   206   			}
+   207   			else
+   208   				push(NOSKIP);
+   209   			break;
+   210    
+   211   		case ENDIF:
+   212   			if( (i=pop()) == SKIP )
+   213   				skip--;
+   214   			else if( i != NOSKIP )
+   215   				error("invalid #endif");
+   216   			break;
+   217    
+   218   		case ELSE:
+   219   			if( (i=pop()) == SKIP ) {
+   220   				skip--;
+   221   				push(NOSKIP);
+   222   			}
+   223   			else if( i == NOSKIP ) {
+   224   				skip++;
+   225   				push(SKIP);
+   226   			}
+   227   			else
+   228   				error("invalid #else");
+   229   			break;
+   230    
+   231   		case DEFINE:
+   232   			if( !skip )			/*if in skip, don't do define*/
+   233   				dodefine();
+   234   			break;
+   235    
+   236   		case UNDEF:
+1File: MACRO.C                                                             Page       5
+   237   			if( !skip ) {		/*if in skip, don't undef*/
+   238   				if( (type=getntok(token)) == ALPHA )
+   239   					undefine(token);
+   240   			}
+   241   			break;
+   242    
+   243   		case INCLUDE:
+   244   			if( !skip )			/*if in skip, don't do include*/
+   245   				doinclude(infile);
+   246   			break;
+   247    
+   248   		case IF:
+   249   			if( cexpr() )			/*evaluate constant expression*/
+   250   				push(NOSKIP);		/*non-zero, so don't skip*/
+   251   			else {
+   252   				push(SKIP);
+   253   				skip++;
+   254   			}
+   255   			break;
+   256    
+   257   		default:
+   258   			error("invalid preprocessor command");
+   259   			break;
+   260   		}
+   261   		eatup();
+   262   	}
+   263   	else if( type == NEWL )
+   264   		;
+   265   	else if( skip )
+   266   		eatup();
+   267   	else {
+   268   		for( ; type != NEWL && type != EOF ; type = gettok(token) ) {
+   269   			if( type == ALPHA && (p=lookup(token)) )
+   270   				expand(p);
+   271   			else {
+   272   				for( p = token; *p ; )
+   273   					putl(*p++);
+   274   			}
+   275   		}
+   276   	}
+   277   	putl('\0');
+   278   	return(1);
+   279   }
+   280    
+   281   /* eatup - eat up the rest of the input line until a newline or EOF*/
+   282   /*		Does gettok calls.*/
+   283   eatup()								/* returns - none*/
+   284   {
+   285   	register int type;
+   286   	char etoken[TOKSIZE];
+   287    
+   288   	while( (type=gettok(etoken)) != NEWL && type != EOF )
+   289   		;
+   290   }
+   291    
+   292   /* putl - put a character to the current output line*/
+   293   /*		Checks for line overflow.*/
+   294   putl(c)								/* returns - none*/
+   295   int c;								/* character to put on line*/
+1File: MACRO.C                                                             Page       6
+   296   {
+   297   	if( linep < &line[LINESIZE] )
+   298   		*linep++ = c;
+   299   	else if ( !loverflow ) {
+   300   		loverflow++;
+   301   		error("line overflow");
+   302   	}
+   303   }
+   304    
+   305   /* initl - initialize current line*/
+   306   /*		Sets the line pointer and the line overflow flag.*/
+   307   initl()								/* returns - none*/
+   308   {
+   309   	*(linep= &line[0]) = '\0';
+   310   	loverflow = 0;
+   311   }
+   312    
+   313   /* putd - put a character to the define buffer*/
+   314   /*		Does dynamic allocation for define buffer*/
+   315   putd(c)								/* returns - none*/
+   316   int c;								/* character to put in buffer*/
+   317   {
+   318   	if( !defcount ) {
+   319   		if( sbrk(DEFSIZE) == -1 ) {
+   320   			error("define table overflow");
+   321   			cexit();
+   322   		}
+   323   		defcount = DEFSIZE;
+   324   	}
+   325   	defused++;
+   326   	defcount--;
+   327   	*defp++ = c;
+   328   }
+   329    
+   330   /* undefine - does undef command*/
+   331   /*		Sets the symbols definition to the null pointer*/
+   332   undefine(name)						/* returns - none*/
+   333   char *name;							/* pointer to name to undef*/
+   334   {
+   335   	register struct symbol *sp;
+   336    
+   337   	sp = getsp(name);
+   338   	if( sp->s_def )
+   339   		sp->s_def = null;
+   340   }
+   341    
+   342   /* dodefine - do #define processing*/
+   343   /*		Checks the define name, collects formal arguements and saves*/
+   344   /*		macro definition, substituting for formal arguments as it goes.*/
+   345   dodefine()							/* returns - none*/
+   346   {
+   347   	char token[TOKSIZE], *args[MAXARGS], argbuf[ARGBSIZE];
+   348   	register char *abp, *p;
+   349   	register int type, nargs, i;
+   350   	register struct symbol *sp;
+   351    
+   352   	if( (type=getntok(token)) != ALPHA ) {
+   353   		error("bad define name: %s",token);
+   354   		return;
+1File: MACRO.C                                                             Page       7
+   355   	}
+   356   	sp = getsp(token);
+   357   	symcopy(token,sp->s_name);
+   358   	sp->s_def = defp;
+   359   	nargs = 0;
+   360   	abp = argbuf;
+   361   	if( (type=gettok(token)) == LPAREN ) {
+   362   		for( ; (type=getfarg(token)) != RPAREN; nargs++ ) {
+   363   			if( nargs >= MAXARGS ) {
+   364   				error("too many arguments");
+   365   				break;
+   366   			}
+   367   			args[nargs] = abp;
+   368   			for( p = token; *abp++ = *p++; ) {
+   369   				if( abp >= &argbuf[ARGBSIZE] ) {
+   370   					error("argument buffer overflow");
+   371   					break;
+   372   				}
+   373   			}
+   374   		}
+   375   		putd(nargs);
+   376   	}
+   377   	else {
+   378   		pbtok(token);
+   379   		putd(NOARGS);
+   380   	}
+   381   	type = getntok(token);			/*get next non-white token*/
+   382   	for( ; type != NEWL && type != EOF; type = gettok(token) ) {
+   383   		if( type == ALPHA ) {
+   384   			for( i = 0; i < nargs; i++ ) {
+   385   				if( strcmp(args[i],token) == 0 )
+   386   					break;
+   387   			}
+   388   			if( i < nargs ) {		/*sub ARG marker for formal arg*/
+   389   				putd(i+1);
+   390   				putd(ARG);
+   391   				continue;
+   392   			}
+   393   		}
+   394   		else if( type == BSLASH ) {
+   395   			if( (i=ngetch()) == '\n' ) {	/*multi-line macro?*/
+   396   				if( filep == &filestack[0] && pbp == &pbbuf[0] ) {
+   397   					lineno++;
+   398   					putc('\n',&outbuf);
+   399   				}
+   400   			}
+   401   			putd(i);
+   402   			continue;
+   403   		}
+   404   		for( p = token; *p ; )
+   405   			putd(*p++);
+   406   	}
+   407   	pbtok(token);
+   408   	putd('\0');
+   409   }
+   410    
+   411   /* expand - expands the macro definition*/
+   412   /*		Checks for define recursion and #define x x problems, collects*/
+   413   /*		the actual arguments using getaarg, and then expands the macro*/
+1File: MACRO.C                                                             Page       8
+   414   /*		by pushing it onto the push back buffer, substituting arguments*/
+   415   /*		as it goes.*/
+   416   expand(sp)							/* returns - none*/
+   417   struct symbol *sp;					/* pointer to macro to expand*/
+   418   {
+   419   	char argbuf[ARGBSIZE], *args[MAXARGS], token[TOKSIZE];
+   420   	register char *p, *abp, *mdef;
+   421   	register int i, j, nargs, type;
+   422    
+   423   	if( pbflag++ > 100 ) {
+   424   		error("define recursion");
+   425   		return;
+   426   	}
+   427   	if( strcmp(sp->s_name,mdef=sp->s_def) == 0 ) {	/*handle #define x x*/
+   428   		while( *mdef )
+   429   			putl(*mdef++);
+   430   		return;
+   431   	}
+   432   	nargs = 0;
+   433   	if( *mdef == NOARGS )					/*suppress grabbing of args*/
+   434   		;
+   435   	else if( gettok(token) != LPAREN )
+   436   		pbtok(token);
+   437   	else {
+   438   		abp = &argbuf[0];
+   439   		while( (type=getaarg(token)) != EOF ) {
+   440   			if( nargs >= MAXARGS ) {
+   441   				error("too many arguments");
+   442   				return;
+   443   			}
+   444   			args[nargs++] = abp;
+   445   			for( p = token; *abp++ = *p++; ) {
+   446   				if( abp >= &argbuf[ARGBSIZE] ) {
+   447   					error("argument buffer overflow");
+   448   					return;
+   449   				}
+   450   			}
+   451   			if( type == RPAREN )
+   452   				break;
+   453   		}
+   454   	}
+   455   	if( *mdef == NEWLABEL ) {
+   456   		clabel = nlabel;
+   457   		if( !nargs )
+   458   			nlabel++;
+   459   		else
+   460   			nlabel =+ atoi(args[0]);
+   461   	}
+   462   	else if( *mdef == LABEL ) {
+   463   		if( !nargs )
+   464   			i = clabel;
+   465   		else
+   466   			i = clabel + atoi(args[0]);
+   467   		pbnum(i);
+   468   		pbtok("_L");
+   469   	}
+   470   	else {
+   471   		mdef++;						/*skip no. of args*/
+   472   		for( p = mdef + strlen(mdef) - 1; p >= mdef; p-- ) {
+1File: MACRO.C                                                             Page       9
+   473   			if( *p == ARG ) {
+   474   				if( (j= *--p) <= nargs )
+   475   					pbtok(args[j-1]);
+   476   			}
+   477   			else
+   478   				putback(*p);
+   479   		}
+   480   	}
+   481   }
+   482    
+   483   /* getfarg - get macro formal parameters*/
+   484   /*		Skips blanks and handles "," and ")".*/
+   485   getfarg(token)						/* returns token type*/
+   486   char *token;						/* token returned*/
+   487   {
+   488   	register int type;
+   489    
+   490   	if( (type=getntok(token)) == RPAREN || type == ALPHA )
+   491   		return(type);
+   492   	if( type != COMMA || (type=getntok(token)) != ALPHA )
+   493   		error("bad argument:%s",token);
+   494   	return(type);
+   495   }
+   496    
+   497   /* getntok - get next token, suppressing white space*/
+   498   /*		Merely gettok's until non-white space is there*/
+   499   getntok(token)						/* returns token type*/
+   500   char *token;						/* token returned*/
+   501   {
+   502   	register int type;
+   503    
+   504   	while( (type=gettok(token)) == WHITE )
+   505   		;
+   506   	return(type);
+   507   }
+   508    
+   509   /* getaarg - get macro actual argument*/
+   510   /*		This handles the collecting of the macro's call arguments.*/
+   511   /*		Note that you may have parenthesis as part of the macro argument,*/
+   512   /*		hence you need to keep track of them.*/
+   513   getaarg(argp)						/* returns token type*/
+   514   char *argp;							/* argument returned*/
+   515   {
+   516   	int type, plevel, i;
+   517   	register char *p, *ap;
+   518   	char token[TOKSIZE];
+   519   	
+   520   	ap = argp;
+   521   	*ap = '\0';
+   522   	plevel = 0;
+   523   	i = TOKSIZE;
+   524   	while( ((type=gettok(token)) != COMMA && type != RPAREN) || plevel ) {
+   525   		for( p = token; *ap = *p++; ap++ )
+   526   			if( --i <= 0 ) {
+   527   				error("macro argument too long");
+   528   				return(EOF);
+   529   			}
+   530   		if( type == LPAREN )
+   531   			plevel++;
+1File: MACRO.C                                                             Page      10
+   532   		else if( type == RPAREN )
+   533   			plevel--;
+   534   		else if( type == EOF ) {
+   535   			error("unexpected EOF");
+   536   			cexit();
+   537   		}
+   538   	}
+   539   	if( ap == argp )
+   540   		type = EOF;
+   541   	return(type);
+   542   }
+   543    
+   544   /* push - push a #ifdef condition value on condition stack*/
+   545   /*		Checks for stack overflow.*/
+   546   push(val)							/* returns - none*/
+   547   int val;							/* value to push*/
+   548   {
+   549   	if( cstkptr >= &cstack[CSTKSIZE] ) {
+   550   		error("condition stack overflow");
+   551   		cexit();
+   552   	}
+   553   	*cstkptr++ = val;
+   554   }
+   555    
+   556   /* pop - pop the #ifdef, etc. condition stack*/
+   557   /*		Checks for stack undeflow.*/
+   558   pop()								/* returns - top of condition stack*/
+   559   {
+   560   	if( cstkptr <= &cstack[0] )
+   561   		return(-1);
+   562   	return( *--cstkptr );
+   563   }
+   564    
+   565   /* doinclude - handle #include command*/
+   566   /*		Checks for file name or library file name and pushes file on*/
+   567   /*		include file stack.*/
+   568   doinclude(infile)					/* returns - none*/
+   569   char *infile;						/* [vlh] for quoted include files */
+   570   {
+   571   	register int type, fd;
+   572   	char token[TOKSIZE], fname[TOKSIZE];
+   573   	register char *p, *q, c, *ptr1, *ptr2;
+   574   	int i, j;
+   575    
+   576   	p = fname;
+   577   	if( (type=getntok(token)) == SQUOTE || type == DQUOTE ) {
+   578   		for( c = token[0], q = &token[1]; *q != c; )
+   579   			*p++ = *q++;
+   580   		*p = '\0';
+   581   		p = getinclude(fname,infile);
+   582   	}
+   583   	else if( type != LESS ) {
+   584   		error("bad include file");
+   585   		return;
+   586   	}
+   587   	else {
+   588   		while( (type=gettok(token))!=GREAT && type!=NEWL && type!=EOF )
+   589   			for( q = token; *p = *q++; p++ )
+   590   				;
+1File: MACRO.C                                                             Page      11
+   591   		if( type != GREAT ) {
+   592   			error("bad include file name");
+   593   			pbtok(token);
+   594   			return;
+   595   		}
+   596   		p = getinclude(fname,0L);
+   597   	}
+   598   	eatup();					/*need here...*/
+   599   	filep++;
+   600   	if( filep >= &filestack[FSTACK] )
+   601   		error("includes nested too deeply");
+   602   	else {
+   603   		if( fopen(p,&(filep->inbuf),0) < 0 )/* 3rd arg for versados */
+   604   			error("can't open include file %s\n",p);
+   605   		else {
+   606   			filep->ifd = fd;
+   607   			filep->lineno = 0;		/* [vlh] */
+   608   			doifile(p);
+   609   		}
+   610   	}
+   611   	putback('\n');				/*for eatup in domacro*/
+   612   }
+   613    
+   614   doifile(p)	/* [vlh] */
+   615   char *p;
+   616   {
+   617   	register char *iptr;
+   618   	register int ndx;
+   619    
+   620   	while ((ndx = index(p,FILESEP)) >= 0) p =+ ndx+1;
+   621   	for( iptr = filep->ifile; *p; ) *iptr++ = *p++;
+   622   	*iptr = 0;
+   623   }
+   624    
+   625   /* getinclude - get include file full pathname */
+   626   char *
+   627   getinclude(fname,parent)	/* [vlh] */
+   628   char *fname;
+   629   char *parent;				/* search parent-file home directory ? */
+   630   {
+   631   	register char *q, *t;
+   632   	register int i, fd, ndx;
+   633    
+   634   	if (parent) {	/* include filename surrounded by quotes */
+   635   		q = (filep == &filestack[0]) ? parent : (filep)->ifile;
+   636   		t = &inclname;
+   637   		while ((ndx = index(q,FILESEP)) >= 0) {
+   638   			ndx++;
+   639   			while (ndx--) *t++ = *q++;
+   640   		}
+   641   		for (q=fname; *t++ = *q++; );
+   642   		*t = 0;
+   643   		if ((fd = open(inclname,0)) >= 0) {	/* found it */
+   644   			close(fd);
+   645   			return(&inclname);
+   646   		}
+   647   	}
+   648   	for (i=0; i<nincl; i++) {
+   649   		for(t=inclname, q=incl[i]; *t++ = *q++; ) ;
+1File: MACRO.C                                                             Page      12
+   650   		for(q=fname, --t; *t++ = *q++; ) ;
+   651   		*t = 0;
+   652   		if ((fd = open(inclname,0)) >= 0) {
+   653   			close(fd);
+   654   			return(&inclname);
+   655   		}
+   656   	}
+   657   	for(t=inclname, q=stdincl; *t++ = *q++; ) ;
+   658   	for(q=fname, --t; *t++ = *q++; ) ;
+   659   	*t = 0;
+   660   	return(&inclname);
+   661   }
+   662    
+   663   pbnum(num)							/* returns - none*/
+   664   int num;
+   665   {
+   666   	register int digit;
+   667    
+   668   	do {
+   669   		digit = num % 10;
+   670   		num =/ 10;
+   671   		putback(digit+'0');
+   672   	} while( num > 0 );
+   673   }

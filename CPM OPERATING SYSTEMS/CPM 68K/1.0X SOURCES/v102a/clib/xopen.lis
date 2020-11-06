@@ -1,0 +1,187 @@
+1File: xopen.c                                                             Page       1
+     1   /****************************************************************************/
+     2   /*									    */
+     3   /*			_ o p e n   F u n c t i o n			    */
+     4   /*			---------------------------			    */
+     5   /*	Copyright 1982 by Digital Research Inc.  All rights reserved.	    */
+     6   /*									    */
+     7   /*	Function "__open" is used to parse the CP/M fcb and open or create  */
+     8   /*	the requested file.  Created files are deleted first, to avoid 	    */
+     9   /*	directory problems.						    */
+    10   /*									    */
+    11   /*	Calling Sequence:						    */
+    12   /*									    */
+    13   /*		ret = __open(ch,filnam,bdosfunc);			    */
+    14   /*									    */
+    15   /*	Where:								    */
+    16   /*		ch	Is a vacant channel number			    */
+    17   /*		filnam	Is a null-terminated CP/M filename		    */
+    18   /*		bdosfunc Is the desired BDOS function to perform	    */
+    19   /*									    */
+    20   /*	This routine may also be used to delete files as well.		    */
+    21   /*									    */
+    22   /*	Modified 26-Jun-83 (sw) for wild cards and user # support	    */
+    23   /*									    */
+    24   /****************************************************************************/
+    25   #include <portab.h>
+    26   #include <cpm.h>
+    27   #include <ctype.h>
+    28   BYTE	*_index();				/* Character locator	    */
+    29   WORD	__open(ch,filnam,bdosfunc)		/****************************/
+    30   						/*			    */
+    31   	WORD	ch;				/* Channel number	    */
+    32   REG	BYTE	*filnam;			/* -> filename		    */
+    33   	WORD	bdosfunc;			/* BDOS Function	    */
+    34   {						/****************************/
+    35   REG	FD	*fp;				/* -> ccb area		    */
+    36   REG	struct fcbtab	*fcbp;			/* -> FCB area in ccb	    */
+    37   REG	BYTE	*p;				/* Temp character pointer   */
+    38   REG	WORD	i;				/* Character index	    */
+    39   	BYTE	tokbuf[32];			/* Token temporary buffer   */
+    40   REG	WORD	xuser;				/* User number		    */
+    41   	BYTE	*get_token();			/****************************/
+    42   	fp = _getccb(ch);			/* Fetch ccb pointer	    */
+    43   	fcbp = &(fp ->fcb);			/* Fetch fcb pointer	    */
+    44   						/****************************/
+    45   	xuser = __BDOS(USER,0xFFL);		/* Fetch current user number*/
+    46   	fp->user = xuser;			/* Set it as default	    */
+    47   						/****************************/
+    48   	filnam = get_token(filnam,tokbuf,32);	/* Get the next token	    */
+    49   	if(*filnam == ':')			/* Is the delim a colon?    */
+    50   	{					/* If yes, then a drive spec*/
+    51   	  if(stuff_drive(fp,fcbp,tokbuf) == FAILURE) /* Check drive OK	    */
+    52   		return(FAILURE);		/* Return error if bad	    */
+    53   	  filnam=get_token(++filnam,tokbuf,32);	/* Get next token	    */
+    54   	}					/****************************/
+    55   						/*			    */
+    56   	if(*filnam == '*')			/* Delimiter is a "*"??	    */
+    57   	{					/*			    */
+    58   	  fill(&(fcbp->fname[0]),'?',8);	/* Yes, fill with ?'s 1st   */
+    59   	  filnam++;				/* Bump to next character   */
+1File: xopen.c                                                             Page       2
+    60   	}					/****************************/
+    61   	_strcpy(tokbuf,fcbp->fname,8);		/* Copy the file name in    */
+    62   	if(*filnam && (*filnam != '.'))		/* Check legality	    */
+    63   		return(FAILURE);		/* Not legal file name	    */
+    64   						/****************************/
+    65   	if(*filnam++ == '.')			/* If extension specified   */
+    66   	{					/*			    */
+    67   	  filnam=get_token(filnam,tokbuf,32);	/* get extension token	    */
+    68   	  if(*filnam == '*')			/* Is wildcarded ext?	    */
+    69   	    fill(&(fcbp->fname[8]),'?',3);	/* If yes, fill with ?'s    */
+    70   	  _strcpy(tokbuf,&(fcbp->fname[8]),3);	/* Copy the string	    */
+    71   	 }					/*			    */
+    72   						/****************************/
+    73   	if(bdosfunc == CREATE)			/* Creating file?	    */
+    74   	{					/*			    */
+    75   		if(_index(fcbp->fname,'?'))	/* Wild cards @!@#$!!!	    */
+    76   			return(FAILURE);	/* Just quit		    */
+    77   		if(xuser != fp->user)		/* need to change users?    */
+    78   		  __BDOS(USER,(LONG)fp->user);	/* Use user # specified	    */
+    79   						/****************************/
+    80   		__BDOS(DELETE,fcbp);		/*  delete it first	    */
+    81   	}					/****************************/
+    82   	if(xuser != fp->user)			/* Different user #??	    */
+    83   		__BDOS(USER,(LONG)fp->user);	/* Change it first	    */
+    84   						/*			    */
+    85   	i = __BDOS(bdosfunc,fcbp);		/* Do requested operation   */
+    86   	if(xuser != fp->user)			/* did we change users?	    */
+    87   		__BDOS(USER,(LONG)xuser);	/* Then change back	    */
+    88   						/*			    */
+    89   	if(bdosfunc == SEARCHF ||		/* For search first	    */
+    90   	   bdosfunc == SEARCHN)			/*  or search next	    */
+    91   		return(i);			/*  return directory index  */
+    92   	return((i<=3) ? SUCCESS : FAILURE);	/* Binary return code	    */
+    93   }						/****************************/
+    94   MLOCAL _strcpy(s,d,c)				/* Special string copy func */
+    95   REG	BYTE	*s;				/* Source string	    */
+    96   REG	BYTE	*d;				/* Destination area	    */
+    97   REG	WORD	 c;				/* Count		    */
+    98   {						/****************************/
+    99   	while ((*s) && (c))			/* 			    */
+   100   	{					/*			    */
+   101   		*d++ = toupper(*s);		/* Copy a byte		    */
+   102   		s++;				/* Up source		    */
+   103   		c--;				/* Down count		    */
+   104   	}					/*			    */
+   105   }						/****************************/
+   106    
+1File: xopen.c                                                             Page       3
+   107   /****************************************************************************/
+   108   /*									    */
+   109   /*		    G e t _ t o k e n   R o u t i n e			    */
+   110   /*		    ---------------------------------			    */
+   111   /*									    */
+   112   /*	Routine get_token takes the next token from the input string.	    */
+   113   /*									    */
+   114   /*	Calling Sequence:						    */
+   115   /*									    */
+   116   /*		ret = get_token(src,dest,len);				    */
+   117   /*									    */
+   118   /*	Where:								    */
+   119   /*									    */
+   120   /*		src	is the address of the source string		    */
+   121   /*		dest	is the address of the destination area		    */
+   122   /*		len 	is the number of bytes in "dest".		    */
+   123   /*									    */
+   124   /*		ret	is the returned address of the delimiter	    */
+   125   /*									    */
+   126   /****************************************************************************/
+   127   MLOCAL BYTE *_delim="<>.,=:+-&/\\|()[]*";	/* Delimiter set	    */
+   128   MLOCAL BYTE *get_token(src,dest,len)		/*			    */
+   129   REG	BYTE	*src;				/* -> source		    */
+   130   REG	BYTE	*dest;				/* -> destination	    */
+   131   REG	WORD	 len;				/* output area size	    */
+   132   {						/****************************/
+   133   	while(*src && (!_index(_delim,*src)) && len)/* Until done	    */
+   134   	{					/*			    */
+   135   	  *dest++ = *src++;			/* Move 1 byte		    */
+   136   	   len--;				/* Down count		    */
+   137   	}					/****************************/
+   138   	*dest = '\0';				/* Drop in null terminator  */
+   139   	return(src);				/* Return delimiter addr.   */
+   140   }						/****************************/
+   141    
+1File: xopen.c                                                             Page       4
+   142   /****************************************************************************/
+   143   /*									    */
+   144   /*		   S t u f f _ d r i v e   F u n c t i o n		    */
+   145   /*		   ---------------------------------------		    */
+   146   /*									    */
+   147   /*	Routine "stuff_drive" loads the user and drive code fields from     */
+   148   /*	the filename string.						    */
+   149   /*									    */
+   150   /*	Calling sequence:						    */
+   151   /*									    */
+   152   /*		ret = stuff_drive(fp,fcbp,src);				    */
+   153   /*									    */
+   154   /*	Where:								    */
+   155   /*									    */
+   156   /*		fp	Is the ccb address				    */
+   157   /*		fcbp	Is the FCB address within the ccb		    */
+   158   /*		src	Is the source filename string			    */
+   159   /*									    */
+   160   /****************************************************************************/
+   161   MLOCAL	WORD	stuff_drive(fp,fcbp,src)	/*			    */
+   162   REG	FD	*fp;				/* -> CCB area		    */
+   163   REG	struct fcbtab *fcbp;			/* -> FCB area		    */
+   164   REG	BYTE	*src;				/* -> Source string	    */
+   165   {						/****************************/
+   166   REG	WORD	i;				/* Accumulator		    */
+   167   	i = 0;					/* Zap to zero		    */
+   168   	while(isdigit(*src))			/* As long as source is dig.*/
+   169   	{					/*			    */
+   170   	  i = (i*10) + *src++ - '0';		/* Convert to number	    */
+   171   	  fp->user = i;				/* store user number	    */
+   172   	}					/****************************/
+   173   						/*			    */
+   174   	if(*src)				/* Drive code letter?	    */
+   175   	{					/* Here => yes		    */
+   176   	  fcbp->drive = toupper(*src)-'A'+1;	/* get drive code byte	    */
+   177   	  src++;				/* Increment source pointer */
+   178   	}					/*			    */
+   179   	if(*src || (fp->user > 15))		/* Illegal  stuff?	    */
+   180   		return(FAILURE);		/* Yes, quit		    */
+   181   	return(SUCCESS);			/* OK to continue	    */
+   182   }						/****************************/
+   183    

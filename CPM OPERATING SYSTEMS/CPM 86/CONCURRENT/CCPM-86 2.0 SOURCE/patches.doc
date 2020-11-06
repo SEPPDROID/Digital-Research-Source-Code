@@ -1,0 +1,262 @@
+Concurrent CP/M-86 version 2.0 Patch Information Documentation
+
+This document includes all changes to the archived distribution,
+as well as those patches made optionally in the field.
+
+Last modified:    14 April 83    whf
+
+
+-------------------------------------------------------------------
+Patch #1: GENCCPM and SYSTAT screen handling patches (optional).
+Distribution method: Documented in release notes 4/83.
+Patch by: Bill Fitler, 4/8/83.
+
+
+
+
+-------------------------------------------------------------------
+Patch #2: BDOS Record locking with multi-sector.
+Distribution method: Master distribution diskette #2 patched 4/13/83
+Patch by: Ray Pedrizetti, 4/11/83.
+
+
+Module:		BDOS.CON			04/13/83
+-------
+
+Error Description:
+------------------
+	The BDOS error code 8 (Record locked by another process) may
+occur when the requested records are not locked by another process.
+This error may occur for following condition, reading or writing to a
+file that has been opened in the unlocked mode, with a multi sector
+count greater than 1 and when another process has records locked outside
+of the requested range.
+
+Patch Procedure:
+----------------
+
+	A>sid86
+	12:45:46 A:SID86.CMD
+	SID86 1.01   1/4/83 
+	#rbdos.con
+	  START      END
+	580A:0000 580A:3B7F
+	#xcs
+	CS 0000 580a+8
+	DS 0000 .
+	#l2064
+	  5812:2064 CALL   1FDA
+	  5812:2067 CMP    AL,FF
+	  5812:2069 JNZ    206C
+	  5812:206B RET    
+	#a2064
+	5812:2064 call 2e37
+	5812:2067 .
+	#
+	#l2e37
+	  5812:2E37 NOP    
+	  5812:2E38 NOP    
+	  5812:2E39 NOP    
+	  5812:2E3A NOP    
+	#a2e37
+	5812:2E37 push [894]
+	5812:2E3B mov byte[894],1
+	5812:2E40 call 1fda
+	5812:2E43 pop [894]
+	5812:2E47 ret
+	5812:2E48 .
+	#
+	#wbdos.con
+	A>
+
+
+
+Module:		BDOS.CON			04/13/83
+-------
+
+Error Description:
+------------------
+	This patch improves the preformance of extending a file opened
+in the unlocked mode when the multi sector count is greater than 1.
+
+Patch Procedure:
+----------------
+
+	A>sid86
+	12:45:46 A:SID86.CMD
+	SID86 1.01   1/4/83 
+	#rbdos.con
+	  START      END
+	580A:0000 580A:3B7F
+	#xcs
+	CS 0000 580a+8
+	DS 0000 .
+	#l3c5
+	  5812:03C5 MOV    [080D],BX
+	  5812:03C9 TEST   AH,08
+	  5812:03CC JZ     03FF
+	  5812:03CE CALL   03DD
+	#a3c5
+	5812:03C5 call 2e48
+	5812:03C8 nop
+	5812:03C9 .
+	#
+	#l2e48
+	  5812:2E48 NOP    
+	  5812:2E49 NOP    
+	  5812:2E4A NOP    
+	  5812:2E4B NOP    
+	#a2e48
+	5812:2E48 mov [80d],bx
+	5812:2E4C test byte[b4a],80
+	5812:2E51 jnz 2e82
+	5812:2E53 test byte[89e],80
+	5812:2E58 jz 2e82
+	5812:2E5A push ax
+	5812:2E5B push bx
+	5812:2E5C mov si,53
+	5812:2E5F or byte[b41],80
+	5812:2E64 mov word [80d],0
+	5812:2E6A call 334
+	5812:2E6D pop ax
+	5812:2E6E cmp byte[80e],0
+	5812:2E73 jnz 2e81
+	5812:2E75 cmp byte[80d],0
+	5812:2E7A jz 2e7e
+	5812:2E7C mov al,b
+	5812:2E7E mov [80d],ax
+	5812:2E81 pop ax
+	5812:2E82 ret
+	5812:2E83 .
+	#
+	#l190c
+	  5812:190C CALL   139E
+	  5812:190F CALL   15FA
+	  5812:1912 CALL   074B
+	  5812:1915 AND    AL,40
+	#a190c
+	5812:190C call 2e83
+	5812:190F .
+	#l2e83
+	  5812:2E83 NOP    
+	  5812:2E84 NOP    
+	  5812:2E85 NOP    
+	  5812:2E86 NOP    
+	#a2e83
+	5812:2E83 cmp byte[894],1
+	5812:2E88 jnz 2e8d
+	5812:2E8A jmp 139e
+	5812:2E8D pop bx
+	5812:2E8E jmp 1912
+	5812:2E91 .
+	#
+	#wbdos.con
+	A>
+
+-------------------------------------------------------------------
+Patch #3: GENCMD.COM replacement.
+Distribution method: Master distribution diskette #2 patched 4/13/83.
+Patch by: Bill Fitler and Danny Horovitz, 4/13/83.
+Problem with GENCMD.CON (it GEN'd a short MEM.CON file) was 
+solved by using the GENCMD.COM from Danny's system.  
+We should have recompiled GENCMD.COM from source, and we did not.
+
+
+
+
+-------------------------------------------------------------------
+Patch #4: SUP.CON CLI/Program Load error return.
+Distribution method: Master distribution diskette #2 patched 4/13/83.
+Patch by: Fran Borda, 4/12/83.
+Problem with the CLI/Program Load function when it had an error:
+it used to terminate from within the CLI with no error return.
+Also, this enables the P_CHAIN function to use the chain entry in 
+program loads.
+
+
+Patch Method:
+-------------
+	A>sid86
+	#rsup.con
+	  START      END
+	nnnn:0000 nnnn:1EFF
+	#l6df
+	nnnn:06DF MOV    BYTE [0324],FF
+	nnnn:06E4 CALL   0286
+	#a6df
+	nnnn:06DF jmp 126f
+	nnnn:06E2 nop
+	nnnn:06E3 nop
+	nnnn:06E4 .
+	#l126F
+	nnnn:126F NOP
+	nnnn:1270 NOP
+	nnnn:1271 NOP
+	nnnn:1272 NOP
+	#a126f
+	nnnn:126F mov byte[324],ff
+	nnnn:1274 mov cx,10e
+	nnnn:1277 call 286
+	nnnn:127A jcxz 1281
+	nnnn:127C mov byte[324],0
+	nnnn:1281 jmp 6e7
+	nnnn:1284 .
+	#wsup.con
+	#^C
+
+
+
+
+-------------------------------------------------------------------
+Patch #5: SUBMIT.CMD Error handling.
+Distribution method: Master distribution diskette #1 patched 4/13/83.
+Patch by: Fran Borda, 4/12/83.
+Problem was that SUBMIT overwrote the returned error code.
+
+Patch method:
+-------------
+	A>sid86
+	#rsubmit.cmd
+	  START      END
+	nnnn:0000 nnnn:????
+	#l53c
+	nnnn:053c ??????
+	#a53c
+	nnnn:053C nop
+	nnnn:053D nop
+	nnnn:053E nop
+	nnnn:053F .
+	#wsubmit.cmd
+	#^C
+	A>
+
+
+
+-------------------------------------------------------------------
+Patch #6: GENCCPM.CMD generated bad CCPM.SYS file for large XIOS.
+Distribution method: Master distribution diskette #2 patched 4/13/83.
+Patch by: Bill Fitler, 4/13/83.
+GENCCPM had a problem when an XIOS was too large (>32K, plus tables).
+
+
+Patch Method:
+-------------
+	A>sid86
+	#rgenccpm.cmd
+	  START      END
+	nnnn:0000 nnnn:BB7F
+	#l2f75
+	nnnn:2F75 PUSH   FEF6[BP]
+	nnnn:2F79 POP    AX
+	nnnn:2F7A CWD
+	nnnn:2F7B MOV    FEF4[BP],DX
+	nnnn:2F7F MOV    FEF2[BP],AX
+	#a2f75
+	nnnn:2F75 mov ax,fef6[bp]
+	nnnn:2F79 xor dx,dx
+	nnnn:2F7B .
+	#wgenccpm.cmd
+	#^C
+	A>
+
+

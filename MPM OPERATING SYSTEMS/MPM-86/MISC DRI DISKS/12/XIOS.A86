@@ -1,0 +1,1579 @@
+	title	'8086 Hardware Interface'
+
+;*****************************************************
+;*
+;*	           X  I  O  S  -  8  6
+;*                 ===================
+;*
+;*	       MP/M-86 eXtended I/O System
+;*			   for
+;*	 Intel SBC 204 Floppy Diskette Interface
+;*
+;*		 Copyright (C) 1980, 1981
+;*		 Digital Research, Inc.
+;*		 Box 579, Pacific Grove
+;*		 California, 93950
+;*
+;*	The XIOS can be assembled in two forms
+;*	that are acceptable to GENSYS in building
+;*	an MP/M-86 II system.
+;*
+;*	8080 model:
+;*	-----------
+;*	  Mixed code and data.  The Code and Data
+;*	segments are the same.  The code segment
+;*	is ORG'd at 1000h relative to the System
+;*	Data Area
+;*
+;*	high	+-----------------+\
+;*		|  System Tables  | |
+;*		+-----------------+ |
+;*		|  XIOS (C and D) |  >  System Data
+;*		+-----------------+ |
+;*		|  Sysdat         | |
+;*		+-----------------+X
+;*		|  System Code    | >	System Code
+;*	low	+-----------------+/
+;*
+;*	Separate Code and Data:
+;*	----------------------
+;*
+;*	  The Code segment is separate from the
+;*	Data.  The Code is ORG'd at 0000h and the
+;*	Data is ORG'd at 1000h.
+;*
+;*	high	+-----------------+\
+;*		|  System Tables  | |
+;*		+-----------------+ |
+;*		|  XIOS Data      |  >  System Data
+;*		+-----------------+ |	   Area
+;*		|  Sysdat         | |
+;*		+-----------------+X
+;*		|  XIOS Code      | |
+;*		+-----------------+  >	System Code
+;*		|  System Code    | |     Modules
+;*	low	+-----------------+/
+;*
+;*	This XIOS is presented as an example
+;*	hardware interface to an MP/M-86 system.
+;*	In many places in the code, more efficient
+;*	methods can be used.
+;*
+;*	(Permission is hereby granted to use or
+;*	 abstract the following program in  the
+;*	 implementation of CP/M, MP/M or CP/NET
+;*	 for the 8086 or 8088  Micro-processor.)
+;*
+;*****************************************************
+;*
+;* 	REGISTER USAGE FOR XIOS INTERFACE ROUTINES:
+;*
+;*	input:	AL = function # (in entry)
+;*		CX = parameter
+;*		DX = second parameter
+;*		DS = sysdat (in entry and init)
+;*		   = CS elsewhere
+;*		ES = User's Data Area
+;*
+;*	output:	AX = return
+;*		BX = AX (in exit)
+;*		ES,DS must be preserved though call
+;*
+;*	NOTE: Some changes have been made in the
+;*		argument/return register usage from
+;*		the CP/M-86 BIOS.
+;*
+;*****************************************************
+;*
+;*	SYSTEM EQUATES
+;*
+;*****************************************************
+;
+include system.lib
+;
+;	conditional assembly switches
+;
+debug		equ	false
+;*****MDISK SUPPORT*****
+memdisk		equ	false
+;***********************
+
+cr		equ	0dh	;carriage return
+lf		equ	0ah	;line feed
+
+;*****************************************************
+;*
+;*	CHARACTER I/O EQUATES
+;*
+;*****************************************************
+;
+;
+	;base address of serial board
+serbase	equ	040h
+;
+nconsoles	equ	4
+nlists		equ	1
+;
+;
+; using Intel SBC 534 serial board
+;
+	;port address to reset entire board
+sereset		equ	serbase+0fh
+;
+	;port address to set test mode
+setestmode	equ	serbase+0eh
+;
+	;port address to enable counter/timer
+ctcenable	equ	serbase+0ch
+;
+	;port address to enable uarts
+uartenable	equ	serbase+0dh
+;
+	;counter/timer mode addresses
+ctc0to2md	equ	serbase+03h
+ctc3to5md	equ	serbase+07h
+ctc0mode	equ	036h
+ctc1mode	equ	076h
+ctc2mode	equ	0b6h
+ctc3mode	equ	036h
+;
+	;counter/timer load addresses
+	; and count values
+ctc0ld		equ	serbase+00h
+ctc1ld		equ	serbase+01h
+ctc2ld		equ	serbase+02h
+ctc3ld		equ	serbase+04h
+cnt0vall	equ	008h
+cnt0valh	equ	000h
+cnt1vall	equ	008h
+cnt1valh	equ	000h
+cnt2vall	equ	008h
+cnt2valh	equ	000h
+cnt3vall	equ	008h
+cnt3valh	equ	000h
+	;
+	;uart mode and command
+	;
+u0mode		equ	04eh
+u1mode		equ	04eh
+u2mode		equ	04eh
+u3mode		equ	04eh
+u0cmd		equ	037h
+u1cmd		equ	037h
+u2cmd		equ	037h
+u3cmd		equ	037h
+;
+; console i/o and status ports
+;	in and out status masks
+;
+	;
+	; console 0
+	;
+c0ioport    equ	0d8h
+c0stport    equ 0dah
+c0inmsk	    equ 02h
+c0outmsk    equ 01h
+	;
+	; console 1
+	;
+c1ioport	equ	serbase+02h
+c1stport	equ	serbase+03h
+c1inmsk		equ	002h
+c1outmsk	equ	001h
+	;
+	; console 2
+	;
+c2ioport	equ	serbase+04h
+c2stport	equ	serbase+05h
+c2inmsk		equ	002h
+c2outmsk	equ	001h
+	;
+	; console 3
+	;
+c3ioport	equ	serbase+06h
+c3stport	equ	serbase+07h
+c3inmsk		equ	002h
+c3outmsk	equ	001h
+	;
+	; list 0
+	;
+l0ioport	equ	serbase+00h
+l0stport	equ	serbase+01h
+l0inmsk		equ	002h
+l0outmsk	equ	081h
+;
+;
+;
+;*****************************************************
+;*
+;*	DISK I/O EQUATES
+;*
+;*    Intel iSBC 204 Disk Controller Ports
+;*
+;*****************************************************
+
+base204		equ 0a0h	;SBC204 assigned addr
+
+fdc_com		equ base204+0	;8271 FDC out command
+fdc_stat	equ base204+0	;8271 in status
+fdc_parm	equ base204+1	;8271 out parameter
+fdc_rslt	equ base204+1	;8271 in result
+fdc_rst		equ base204+2	;8271 out reset
+dmac_adr	equ base204+4	;8257 DMA base adr out
+dmac_cont	equ base204+5	;8257 out control
+dmac_scan	equ base204+6	;8257 out scan control
+dmac_sadr	equ base204+7	;8257 out scan address
+dmac_mode	equ base204+8	;8257 out mode
+dmac_stat	equ base204+8	;8257 in status
+fdc_sel		equ base204+9	;FDC select port
+fdc_segment	equ base204+10	;segment addr register 
+reset_204	equ base204+15	;reset interface
+
+max_retries	equ 10		;retries on disk i/o
+				;before perm error
+;*****MDISK SUPPORT*****
+mdiskbase	equ 2000h	;base address of mdisk
+;***********************
+
+;*****************************************************
+;*
+;*	SUP/RTM EQUATES
+;*
+;*****************************************************
+
+tracebit	equ	0100H
+
+f_dispatch  equ	142	; MPM dispatch func #
+f_terminate equ	143	; MPM terminate func #
+f_polldev   equ	131	; MPM polldevice func #
+f_flagset   equ	133	; MPM flagset func #
+
+p_flag  equ     word ptr 06H	; PD flag field
+p_name	equ	byte ptr 08H	; PD Name field
+p_cns	equ	byte ptr 020H	; PD console field
+pf_keep	equ	02H		; KEEP bit in p_flag
+
+	;flag assignments
+
+tick_flag   equ	1
+sec_flag    equ	2
+
+	;device # assignments for POLL DEV
+
+c0indev	    equ	00h	;console 0 input device
+c1indev	    equ	01h	;console 1 input device
+c2indev	    equ	02h	;console 2 input device
+c3indev	    equ	03h	;console 3 input device
+c0outdev    equ	04h	;console 0 output device
+c1outdev    equ	05h	;console 1 output device
+c2outdev    equ	06h	;console 2 output device
+c3outdev    equ	07h	;console 3 output device
+l0outdev    equ 08h	;list 0 output device
+flpy_poll_dev equ 09h	;floppy disk poll device
+
+;
+;	system data area must preceed code
+;	area for 8080 model of the XIOS
+;
+include sysdat.lib
+
+endsysdat	equ	((offset $)+0fh) AND 0fff0h
+
+	CSEG
+	org	offset endsysdat
+
+;*****************************************************
+;*
+;*	SYSTEM CODE AREA
+;*
+;*	XIOS JUMP TABLE
+;*
+;*****************************************************
+
+	jmp init	;system initialization
+	jmp entry	;xios entry point
+
+sysdat		dw	0	;Sysdat Segment
+supervisor	equ	offset $
+		rw	2
+
+;*****************************************************
+;*
+;*	UTILITY SUBROUTINES
+;*
+;*****************************************************
+
+;====
+pmsg:
+;====
+; print message on current console until null (char 0)
+;	input:	BX = address of message
+
+		;put running processes console
+		;number in DL
+
+	pushf ! cli
+	push stoppoll
+	mov stoppoll,true
+	push ds ! mov ds,sysdat	;DS = system data area
+	mov si,rlr		;SI -> current pd
+	mov dl,p_cns[si]	;DL = def console #
+	pop ds	
+ploop:
+	mov al,[bx]		; get next char
+	cmp al,0 ! jz pmsg_ret	; return if zero
+	    mov cl,al		; CL = character
+	    push dx ! push bx	; save console,posit.
+	    call conout		; print it
+	    pop bx ! pop dx	; restore posit.,cons.
+	    inc bx ! jmps ploop	; inc and loop
+pmsg_ret:
+	pop stoppoll
+	popf ! ret		; end of message
+
+
+;*****************************************************
+;*
+;*	INTERRUPT ROUTINES
+;*
+;*****************************************************
+
+	;these variables must be in code segment
+
+tickint_ss	dw	0
+tickint_sp	dw	0
+ax_save		dw	0
+zero		dw	0
+
+;=======
+tickint:
+;=======
+; Interrupt handler for tick interrupts
+
+		;save context
+	push ds ! mov ds,sysdat
+	mov tickint_ss,ss
+	mov tickint_sp,sp
+	mov ax_save,ax
+	mov ax,cs
+	mov ss,ax
+	mov sp,offset tickint_tos
+	push ax_save
+	push bx ! push cx ! push dx
+	push bp ! push si ! push di ! push es
+	mov ds,ax
+
+		; check to set second flag
+
+	dec tick_count ! jnz do_tick_flag
+	    mov tick_count,60
+	    mov dx,sec_flag
+	    mov cl,f_flagset ! call supif
+do_tick_flag:
+		; check to set tick flag
+
+	cmp clockon,true ! jne tick_done
+	    mov dx,tick_flag
+	    mov cl,f_flagset ! call supif
+
+tick_done:	;restore context
+	pop es ! pop di ! pop si ! pop bp
+	pop dx ! pop cx ! pop bx ! pop ax
+	mov ss,tickint_ss
+	mov sp,tickint_sp
+		;force dispatch
+	pop ds
+	; jmp intdisp
+
+;=======
+intdisp:
+;=======
+
+	jmpf cs:dword ptr .dispatcher
+
+;========
+int_trap:	;unknown interrupts go here ...
+;========
+;  We will terminate the process that caused this
+;  after writing a message to the process's default
+;  console.  If the process is in KEEP mode, we will
+;  force it to terminate anyway...
+;
+;  We don't need to save any registers since we are
+;  not going to return to the process.
+
+
+	mov ax,cs
+	mov ds,sysdat
+
+		; print first 6 chars of PD Name
+	mov bx,rlr
+	add bx,p_name
+	mov byte ptr 6[bx],':'
+	mov byte ptr 7[bx],0
+	call pmsg
+
+		; print Illegal Interrupt message
+	mov bx,offset int_trp
+	call pmsg
+
+		; terminate process
+	mov bx,rlr
+	and p_flag[bx],not pf_keep
+	mov cx,f_terminate
+	mov dx,0ffffh
+	int 224
+	hlt	;hard stop
+		;the terminate returned !!!!
+
+;*****************************************************
+;*
+;*	INITIALIZATION CODE AREA
+;*
+;*	Inter-Module Interface Routines
+;*
+;*****************************************************
+
+;====
+init:		; XIOS system initialization routine.
+;====
+;	The INIT routine initializes all necessary
+;	hardware
+;
+; -called from SUP init. routine with CALLF
+;
+; -Interrupt 224 is reinitialized by SUP later
+; -It is okay to turn on interrupts at any time
+; 	a STI is performed immediately after RETF
+;
+; -Current Stack has about 10 levels here.  Must do a
+;	local stack switch if more is needed.
+;
+; -If assembled (GENCMD'd) with 8080 model,
+;	CS=DS=Sysdat
+; -If assembled with separate Code and Data,
+;	CS=Code (ORGed at 0) DS=Sysdat
+;
+; -This example shows 8080 model
+;
+;	input:	DS = sysdat segment address
+;
+;-----------------------------------------------------
+;	SYSTEM INITIALIZATION AREA
+;-----------------------------------------------------
+		;Save sysdat seg addr in case we need
+		;to see system data area.  Set DS=CS
+
+	push ds			;save DS on stack for
+				;exit
+
+		;initialize segment registers
+
+	mov sysdat,ds		; save sysdat for
+				; sysdat access
+
+		;place copy of SUPMOD in data segment
+		;into Code Segment (supervisor)
+
+	mov bx,offset supmod
+	mov si,supervisor
+	mov ax,[bx] ! mov cs:[si],ax
+	mov ax,2[bx] ! mov cs:2[si],ax
+
+		;Make copy of Interrupt Routines
+		;access point to dispatcher in
+		;Code Segment
+
+	push cs ! pop ds	; DS = CS
+	cld		;set forward direction
+
+		;stack switch since we are doing
+		; i/o with polled devices when
+		; printing login message
+		; interrupts are known to be off
+		; here so no need to save flags,
+		; disable, and restore flags
+
+	mov initss,ss
+	mov initsp,sp
+	mov ax,cs ! mov ss,ax
+	mov sp,offset initstack
+
+	
+		; Setup all interrupt vectors in low
+		; memory to address trap
+
+	if not debug
+
+	push ds
+	push es		;ES must be saved
+	mov ax,0
+	mov ds,ax
+	mov es,ax 	;set ES and DS to zero
+
+		;setup interrupt 0 to trap routine
+
+	mov .0,offset int_trap
+	mov .2,CS
+	mov di,4
+	mov si,0	;then propagate
+	mov cx,510	;trap vector to
+	rep movsw	;int 255
+
+	pop es
+	pop ds		;restore DS,ES
+
+	endif
+
+;-----------------------------------------------------
+;	CHARACTER I/O INITIALIZATION
+;-----------------------------------------------------
+;
+;
+	;*********************************************
+	;*
+	;*    sbc 534 serial board initialization
+	;*
+	;*********************************************
+;
+	mov al,0
+	out sereset,al		;reset serial board
+	out setestmode,al	;set test mode to off
+	out ctcenable,al	;enable ctc addressing
+;
+		;start clock for port 0
+	mov al,ctc0mode ! out ctc0to2md,al
+	mov al,cnt0vall ! out ctc0ld,al
+	mov al,cnt0valh ! out ctc0ld,al
+;
+		;start clock for port 1
+	mov al,ctc1mode ! out ctc0to2md,al
+	mov al,cnt1vall ! out ctc1ld,al
+	mov al,cnt1valh ! out ctc1ld,al
+;
+		;start clock for port 2
+	mov al,ctc2mode ! out ctc0to2md,al
+	mov al,cnt2vall ! out ctc2ld,al
+	mov al,cnt2valh ! out ctc2ld,al
+;
+		;start clock for port 3
+	mov al,ctc3mode ! out ctc3to5md,al
+	mov al,cnt3vall ! out ctc3ld,al
+	mov al,cnt3valh ! out ctc3ld,al
+;
+	out uartenable,al	;enable uart addressing
+;
+		;initialize port 0
+	mov al,u0mode ! out l0stport,al
+	mov al,u0cmd ! out l0stport,al
+;
+		;initialize port 1
+	mov al,u1mode ! out c1stport,al
+	mov al,u1cmd ! out c1stport,al
+;
+		;initialize port 2
+	mov al,u2mode ! out c2stport,al
+	mov al,u2cmd ! out c2stport,al
+;
+		;initialize port 3
+	mov al,u3mode ! out c3stport,al
+	mov al,u3cmd ! out c3stport,al
+;
+;
+;-----------------------------------------------------
+;	DISK I/O INITIALIZATION
+;-----------------------------------------------------
+	;***** MDISK SUPPORT *****
+	if memdisk
+	;initialize MDISK
+
+	mov cx,mdiskbase
+	push es ! mov es,cx
+	mov di,0 ! mov ax,0e5e5h
+	cmp es:[di],ax ! je mdisk_end
+	    mov cx,2000h
+	    rep stos ax
+mdisk_end:
+	pop es
+	;
+	endif
+	;*************************
+
+;-----------------------------------------------------
+;	SUP/RTM INITIALIZATION
+;-----------------------------------------------------
+		;Initialize Clock Tick
+
+	if not debug
+			;set up tick interrupt vector
+			;tick causes interrupt 22
+	sub ax,ax ! push ds ! mov ds,ax
+	mov word ptr .088h,offset tick_int
+	mov word ptr .08ah,cs
+	pop ds
+			;setup ticks to occur every
+			; 1/60th of a second
+	mov tick_count,60
+	mov al,034h ! out 0d6h,al  ;PIT ch.0=mode 2
+			;set # of 1/1.2288e6 seconds
+			;20480=5000h=1/60th second
+	mov al,000h ! out 0d0h,al  ;low count
+	mov al,050h ! out 0d0h,al  ;high count
+			;set up interrupt controller
+	mov al,013h ! out 0c0h,al  ;ICW1
+	mov al,020h ! out 0c2h,al  ;ICW2
+				   ;  = base interrupt
+	mov al,00fh ! out 0c2h,al  ;ICW4,
+				   ; auto EOI,
+				   ; 8086 mode
+	mov al,0fbh ! out 0c2h,al  ;OCW2,
+				   ; interrupt mask,
+				   ; only 2
+	endif
+;-----------------------------------------------------
+;	INITIALIZATION EXIT
+;-----------------------------------------------------
+		;allow poll_device mechanism to work
+
+	mov stoppoll,false
+
+		;print optional message on Console 0
+
+	mov bx,offset signon
+	call pmsg
+
+		;restore stack
+		; all stack switches must be in
+		; critical areas (interrupts off).
+
+	pushf ! pop ax
+	cli
+	mov ss,initss
+	mov sp,initsp
+	push ax
+	popf
+
+		;return back to BDOS
+	pop ds
+	retf
+
+;*****************************************************
+;*
+;*	ENTRY POINT CODE AREA
+;*
+;*****************************************************
+;=====		==================
+entry:		; XIOS Entry Point
+;=====		==================
+; All calls to the XIOS routines enter through here
+;	with a CALLF.  Must return with a RETF
+;	input:	AL = function number
+;		CX = parameter
+;		DX = 2nd parameter
+;	output:	AX = BX = return
+
+	cld			;clear D flag
+	mov bx,cs ! mov ds,bx	; (only 8080 model)
+	mov ah,0 ! shl ax,1	;call routine
+	mov bx,ax ! call functab[bx]
+	mov bx,ax		;BX=AX
+	retf			;All Done
+
+;=====		======================
+supif:		; Supervisor Interface
+;=====		======================
+;
+;	input:	CX = function #
+;		DX = parameter
+;		DS = parameter segment if address
+;		ES = user data area
+;	output:	BX = AX = return
+;		CX = error code for RTM functions
+;		ES = return segment if address
+
+	mov ch,0
+	callf cs:dword ptr .supervisor ! ret
+
+
+;*****************************************************
+;*
+;*	MP/M XIOS functions
+;*
+;*****************************************************
+
+;*****************************************************
+;*
+;*	CHARACTER I/O CODE AREA
+;*
+;*****************************************************
+
+;=====
+const:	    ; Function 0:  Console Status
+;=====
+;	input:	CL = console device number
+;	output:	AL = 0ffh if ready
+;		   = 000h if not ready
+
+	mov ch,0 ! shl cx,1
+	mov bx,cx
+	mov dx,consttbl[bx]
+	mov bl,dh	;BL = status mask
+	mov dh,0	;DX = status port address
+
+; find input status for console device
+
+	in al,dx
+	and al,bl
+	mov al,0
+	jz badstatus
+	    mov al,0ffh
+badstatus:
+	ret
+
+;=====
+conin:	    ; Function 1:  Console Input
+;=====
+;	input:	CL = console device number
+;	output:	AL = character
+
+	mov ch,0 ! shl cx,1
+	mov bx,cx
+	mov dx,conintbl[bx]
+	mov bl,dh	;BL = poll device no.
+	mov dh,0	;DX = i/o port address
+
+; input routine for console device
+
+	mov bh,0 ! push dx
+	call rtm_poll ! pop dx
+	in al,dx
+	;and al,07fh	;CP/NET uses parity bit
+	ret
+
+;======
+conout:	    ; Function 2:  Console Output
+;======
+;	input:	CL = character
+;		DL = console device #
+;	output:	None
+
+	mov dh,0 ! shl dx,1
+	mov bx,dx
+	mov dx,conouttbl[bx]
+	mov bl,dh	;BL = poll device no.
+	mov dh,0	;DX = i/o port address
+
+; output routine for console device
+
+	push cx ! push dx
+	mov bh,0 ! call rtm_poll
+	pop dx ! pop ax
+	out dx,al ! ret
+
+;=====
+plist:	    ; Function 3: List Output
+;=====
+;	input:	CL = character
+;		DL = list device #
+;	output:	None
+
+	mov dh,0 ! shl dx,1
+	mov bx,dx
+	mov dx,louttbl[bx]
+	mov bl,dh	;BL = poll device no.
+	mov dh,0	;DX = list port address
+
+; output routine for list device
+
+	push cx ! push dx
+	mov bh,0 ! call rtm_poll
+	pop dx ! pop ax
+	out dx,al ! ret
+
+;=====
+punch:	    ; Function 4:  Punch Output
+reader:	    ; Function 5:  Reader Output
+;======
+;	PUNCH and READER devices are not supported
+;		under MP/M-86
+;	input:	CL = character
+;	output:	AL = character (control Z)
+
+	mov al,1ah ! ret		; return EOF
+
+;------
+plstst:	    ; convert poll device no.
+;------	    ; to list device no.
+
+	sub cl,nconsoles * 2
+	; fall into list status
+
+;======
+listst:	    ; Function 13:  List Status
+;======
+;	input:	CL = list device number
+;	output:	AL = 0ffh if ready
+;		   = 000h if not ready
+
+	mov ch,0 ! shl cx,1
+	mov bx,cx
+	mov dx,loutsttbl[bx]
+	mov bl,dh	;BL = status mask
+	mov dh,0	;DX = output port address
+
+;	find output status of List device
+
+	in al,dx
+	and al,bl
+	cmp al,bl
+	mov al,0ffh
+	jz gstat
+	    mov al,0
+gstat:	ret
+
+;==========
+maxconsole: ; Function 20:  Maximum Consoles
+;==========
+;	input:	None
+;	output:	AL = number of consoles
+
+	mov ax,nconsoles ! ret
+
+;=======
+maxlist:    ; Function 21:  Maximum List Devices
+;=======
+;	input:	None
+;	output:	AL = number of consoles
+
+	mov ax,nlists ! ret
+
+;*****************************************************
+;*
+;*	DISK I/O CODE AREA
+;*
+;*****************************************************
+
+;====
+HOME:	    ; Function 6:  Home
+;====
+; move selected disk to home position (Track 0)
+;	If there is Hardware home function, it should
+;	be done here otherwise, do a settrk to 0
+;	input:	None
+;	output:	None
+
+	mov trk,0	;set disk i/o to track zero
+	xor bx,bx
+	mov bl,disk	;index into disk home routine
+	shl bx,1
+	jmp dskhomtbl[bx]
+
+flpy_home:
+	mov bx,offset hom_com
+	call execute	;home drive
+hom_ret:
+	ret		; and return
+
+;======
+SELDSK:	    ; Function 7:  Select Disk
+;======
+;	input:	CL = disk to be selected
+;	output:	AX = 0 if illegal disk
+;		   = offset of DPH relative from
+;			XIOS Data Segment
+
+	xor ax,ax	;zero registers ax and bx
+	mov bx,ax
+	mov ch,0	;translate logical disk
+	mov si,cx	;to physical disk device
+	mov al,dtrntbl[si]
+	cmp al,0ffh	;valid disk select?
+	jz sel_ret	;if not valid return
+			;else compute the
+			; disk parameter address
+	    mov disk,al	;save physical drive no.
+	    mov cl,4
+	    shl al,cl	;multiply by 16
+	    add ax,offset dp_base
+	    mov bx,ax
+sel_ret:
+	mov ax,bx
+	ret
+
+;======
+SETTRK:	    ; Function 8:  Set Track
+;======
+;	input:	CX = Track Number
+;	output:	None
+
+	mov trk,cl	;we only use 8 bits of
+			; track address
+	ret
+
+;======
+SETSEC:	    ; Function 9:  Set Sector
+;======
+;	input:	CX = Sector Number
+;	output:	None
+
+	mov sect,cl	;we only use 8 bits of
+			; sector address
+	ret
+
+;======
+SETDMA:	    ; Function 10:  Set DMA Offset
+;======
+;	input:	CX = Offset of DMA buffer
+;	output:	None
+
+	mov dma_adr,CX
+	ret
+
+;*********************************************
+;*                                           *
+;*  All disk I/O parameters are setup:  the  *
+;*  Read and Write entry points transfer one *
+;*  sector of 128 bytes to/from the current  *
+;*  DMA address using the current disk drive *
+;*                                           *
+;*********************************************
+
+;====
+READ:	    ; Function 11:  Read
+;====
+;	input:	None
+;	output:	AL = 00h if no error occured
+;		   = 01h if error occured
+
+	xor bx,bx
+	mov bl,disk	;index into disk read routine
+	shl bx,1
+	jmp dskrdtbl[bx]
+
+	;***** MDISK SUPPORT *****
+	if memdisk
+	;
+mdsk_read:
+	    call mdisk_calc
+	    mov di,dma_adr ! mov si,0
+	    push es ! mov es,dma_seg
+	    push ds ! mov ds,ax
+	    mov cx,64 ! rep movs ax,ax
+	    pop ds ! pop es
+	    mov ax,0 ! ret
+	;
+	endif
+	;*************************
+
+flpy_read:
+	mov al,12h	;basic read sector command
+	jmps r_w_common
+
+	;***** MDISK SUPPORT *****
+	if memdisk
+	;
+mdisk_calc:
+	mov bh,0 ! mov bl,trk
+	mov ax,26 ! mul bx
+	mov bh,0 ! mov bl,sect
+	add ax,bx ! mov cl,3
+	shl ax,cl ! add ax,mdiskbase+1
+	ret
+	;
+	endif
+	;*************************
+
+;=====
+WRITE:	    ; Function 12:  Write
+;=====
+;	input:	CL = 0 - deferred write
+;		     1 - non-deferred write
+;		     2 - def wrt 1st sect unalloc blk
+;		     3 - non-def 1st sect unalloc blk
+;	output:	AL = 00h if no error occured
+;		   = 01h if error occured
+;		   = 02h if read/only disk
+
+	xor bx,bx
+	mov bl,disk	;index into disk write routine
+	shl bx,1
+	jmp dskwrttbl[bx]
+
+	;***** MDISK SUPPORT *****
+	if memdisk
+	;
+mdsk_write:
+	    call mdisk_calc
+	    mov di,0 ! mov si,dma_adr
+	    push es ! mov es,ax
+	    push ds ! mov ds,dma_seg
+	    mov cx,64 ! rep movs ax,ax
+	    pop ds ! pop es
+	    mov ax,0 ! ret
+	;
+	endif
+	;*************************
+
+flpy_write:
+	mov al,0ah 	;basic write sector command
+
+r_w_common:
+	mov bx,offset io_com ;point to command string
+	mov byte ptr 1[BX],al ;put command into string
+
+	;	fall into execute and return
+
+execute:  ;execute command string.
+	;[BX] points to length,
+	;	followed by Command byte,
+	;	followed by length-1 parameter bytes
+
+	mov al,80h
+	test disk,1	;A drive is even phys. drive
+	jnz exec1	;B drive is odd phys. drive
+	    mov al,40h
+exec1:	mov sel_mask,al
+	mov last_com,BX	;save command address
+			;for retries
+outer_retry:
+	;allow some retrying
+	mov rtry_cnt,max_retries
+retry:
+	mov BX,last_com
+	call send_com	;transmit command to i8271
+;	check status poll
+
+	mov BX,last_com
+	mov al,1[bx]	;get command op code
+	mov cx,0800h	;mask if it will be "int req"
+	cmp al,2ch
+	jb flpy_poll	;ok if it is an interrupt type
+	    mov cx,8080h  ;else use "not command busy"
+	    and al,0fh
+	    cmp al,0ch	  ; unless there isn't
+	    mov al,0
+	    ja exec_exit  ; any result
+			;poll for bits in CH,
+flpy_poll:		;  toggled with bits in CL
+	mov status_mask,cx
+	mov bx,flpy_poll_dev ! call rtm_poll
+			;Operation complete,
+	in al,fdc_rslt	; see if result indicates
+	and al,1eh	; an error
+	jz exec_exit	;no error, then exit
+			;some type of error occurred
+	cmp al,10h
+	jne dr_rdy	;was it a not ready drive ?
+	    ;yes, here to wait for drive ready
+	    call test_ready
+	    jnz dr_rdy	;if ready try again
+	        call test_ready
+		;if not ready twice in row,
+dr_rdy:	; then we just retry read or write
+	dec rtry_cnt
+	jnz retry	; up to 10 times
+
+;	retries do not recover from the
+;	hard error
+
+	cmp al,012h	; check if r/o disk
+	jne err_exit
+	    mov al,02h	; return r/o error code
+	    ret
+err_exit:
+	mov ah,0	;setup error table index
+	mov bx,ax	;make error code 16 bits
+	mov bx,errtbl[BX]
+	call pmsg	;print appropriate message
+	mov al,01h	;set code for permanent error
+exec_exit:
+	ret
+
+;*********************************************
+;*                                           *
+;*  The i8271 requires a read status command *
+;*  to reset a drive-not-ready after the     *
+;*  drive becomes ready                      *
+;*                                           *
+;*********************************************
+
+test_ready:
+	mov dh, 40h  	;proper mask if dr 1
+	test sel_mask,80h
+	jnz nrdy2
+	    mov dh, 04h	;mask for dr 0 status bit
+nrdy2:
+	mov bx,offset rds_com
+	call send_com
+dr_poll:
+	    in al,fdc_stat  ;get status word
+	    test al,80h
+	    jnz dr_poll ;wait for not command busy
+	in al,fdc_rslt	;get "special result"
+	test al,dh	;look at bit for this drive
+	and al,01eh
+	ret		;return status of ready
+
+;*********************************************
+;*                                           *
+;*  Send_com sends a command and parameters  *
+;*  to the i8271:  BX addresses parameters.  *
+;*  The DMA controller is also initialized   *
+;*  if this is a read or write               *
+;*                                           *
+;*********************************************
+
+send_com:
+	    in al,fdc_stat
+	    test al,80h	    ;insure command not busy
+	    jnz send_com    ;loop until ready
+
+	;check to initialize for a DMA operation
+
+	mov al,1[bx]	;get command byte
+	cmp al,12h
+	jne write_maybe	;if not read it maybe write
+	    mov cl,40h	;is a read command, go set DMA
+	    jmps init_dma
+write_maybe:
+	cmp al,0ah
+	jne dma_exit	;leave DMA if not read/write
+	    mov cl,80h	;we have write, not read
+init_dma:
+; read or write operation, setup DMA controller
+;	(CL contains proper direction bit)
+	mov al,04h
+	out dmac_mode,al    ;enable dmac
+	mov al,00
+	out dmac_cont,al    ;1st byte to ctrl port
+	mov al,cl
+	out dmac_cont,al    ;load direction register
+	mov ax,dma_adr
+	out dmac_adr,al     ;send low byte of DMA
+	mov al,ah
+	out dmac_adr,al	    ;send high byte
+	mov ax,dma_seg
+	out fdc_segment,al  ;send low byte of seg addr
+	mov al,ah
+	out fdc_segment,al  ;then high segment address
+dma_exit:
+	mov cl,[BX]	;get count
+	inc BX
+	mov al,[BX]	;get command
+	or al,sel_mask 	;merge command and drive code
+	out fdc_com,al 	;send command byte
+parm_loop:
+	dec cl
+	jz exec_exit	;no (more) parameters, return
+	inc BX		;point to (next) parameter
+parm_poll:
+	    in al,fdc_stat
+	    test al,20h	    ;"parameter register full" bit
+	    jnz parm_poll   ;idle until parm reg not full
+	mov al,[BX]
+	out fdc_parm,al	;send next parameter
+	jmps parm_loop	;see if more parameters
+
+flpy_poll_stat:
+;--------------
+; See if current operation complete
+
+	mov cx,cs:status_mask
+	in al,fdc_stat	;read status
+	and al,ch
+	xor al,cl	;isolate what we want to poll
+	mov al,0
+	jz flpy_poll_nrdy
+	    mov al,0ffh
+flpy_poll_nrdy:
+	ret
+
+;=======
+SECTRAN:    ; Function 14:  Sector Translate
+;=======
+; Translate sector number given a translate table
+; If the translate table address is 0, don't translate
+;	input:	CX = Sector Number
+;		DX = Offset of Translate Table
+;	output:	AX = Translated Sector Number
+ 
+	cmp dx,0 ! jne sectran1
+	    mov ax,cx ! ret
+sectran1:
+	mov bx,cx
+	add bx,dx	;add sector to tran table addr
+	mov bl,[bx]	;get logical sector
+	xor bh,bh
+	mov ax,bx
+	ret
+
+;=======
+SETDMAB:    ; Function 15:  Set DMA Base
+;=======
+; set DMA segment
+;	input:	CX = Segment of DMA buffer
+;	output:	None
+
+	mov dma_seg,CX
+	ret
+
+;========
+flushbuf:   ; Function 24: Flush Buffer
+;========
+;	input:	None
+;	output:	AL = 00h if no error occurs
+;		   = 01h if error occurs
+;		   = 02h if read/only disk
+
+	xor al,al	;no need to flush buffer
+	ret		;with no blocking/deblocking
+
+;*****************************************************
+;*
+;*	SUP/RTM CODE AREA
+;*
+;*****************************************************
+;--------
+rtm_poll:	;check dev, if not ready, do rtm poll
+;--------
+; Check poll condition.
+; If not ready,Call MPM Poll Device Routine
+;	input:	BX = device #	
+
+	push bx ! mov cx,bx
+	call polldev ! pop bx
+	cmp al,0ffh ! je pllret
+	    cmp stoppoll,true ! je rtm_poll
+;---------
+rtm_poll1:	; do poll_dev with no pretest
+;---------
+	    mov dx,bx ! mov cl,f_polldev
+	    jmp supif
+pllret:	ret
+
+;=======
+polldev:    ; Function 17:  Poll Device
+;=======
+;	input:	CL = device number
+;	output:	AL = 000h if not ready
+;		   = 0ffh if ready
+
+	mov bh,0 ! mov bl,cl
+	shl bx,1
+	jmp polltbl[bx]
+
+;=======
+strtclk:    ; Function 18:  Start Clock
+;=======
+; Enable Flagsets on Tick Interrupts
+;	input:	None
+;	output:	None
+
+	mov clockon,true
+	ret
+
+;=======
+stopclk:    ; Function 19:  Stop Clock
+;=======
+; Disable Flagsets on Tick Interrupts
+;	input:	None
+;	output:	None
+
+	mov clockon,false
+	ret
+
+;=======
+getsegt:    ; Function 16:  Get Segment Table
+;=======
+;	Not supported by MP/M-86
+;	input:	None
+;	output:	AX = 0ffffh
+
+	mov ax,0ffffh ! ret
+
+;=========
+selmemory:  ; Function 22:  Select Memory
+;=========
+;	input:	None
+;	output:	None
+
+	ret
+
+;====
+idle:	    ; Function 23:  Idle
+;====
+;	input:	None
+;	output:	None
+;
+; The Idle routine is called by the Idle Process.
+; Since the Idle routine has the worst priority (255)
+; in the system, It will run only when nothing else
+; can run.  This routine cannot use any resources that
+; may take it off the Ready List.  This includes any
+; kind of I/O that uses Poll Device or System Flags.
+
+	mov cl,f_dispatch
+	call supif
+	jmp idle
+
+; If all devices are Interrupt Driven then the Idle
+; Routine can be the following instead:
+;	halt ! jmp idle
+; This cannot be used if any I/O uses POLL DEVICE
+; since polling is only done during dispatches.
+
+;=====
+patch:
+;=====
+
+	nop ! nop ! nop ! nop ! nop ! nop
+	nop ! nop ! nop ! nop ! nop ! nop
+	nop ! nop ! nop ! nop ! nop ! nop
+	nop ! nop ! nop ! nop ! nop ! nop
+	nop ! nop ! nop ! nop ! nop ! nop
+	nop ! nop
+
+;*****************************************************
+;*
+;*	SYSTEM DATA AREA
+;*
+;*****************************************************
+
+endcode	rw	0
+
+	DSEG
+	org	(offset endcode + 1) and 0fffeh
+		;org to an even word offset
+		;current UDA for MPM calls
+udaseg		rw	1
+
+;-----------------------------------------------------
+;	XIOS FUNCTION TABLE
+;-----------------------------------------------------
+functab	dw	const		; 0-console status
+	dw	conin		; 1-console input
+	dw	conout		; 2-console output
+	dw	plist		; 3-list output
+	dw	punch		; 4-punch output
+	dw	reader		; 5-reader input
+	dw	HOME		; 6-home
+	dw	SELDSK  	; 7-select disk
+	dw	SETTRK  	; 8-set track
+	dw	SETSEC  	; 9-set sector
+	dw	SETDMA  	;10-set DMA offset
+	dw	READ		;11-read
+	dw	WRITE		;12-write
+	dw	listst		;13-list status
+	dw	sectran		;14-sector translate
+	dw	setdmab		;15-set DMA base
+	dw	getsegt		;16-get segment table
+	dw	polldev		;17-poll device
+	dw	strtclk		;18-start clock
+	dw	stopclk		;19-stop clock
+	dw	maxconsole	;20-maximum consoles
+	dw	maxlist		;21-max list devices
+	dw	selmemory	;22-select memory
+	dw	idle		;23-idle
+	dw	flushbuf	;24-flush buffer
+
+;-----------------------------------------------------
+		;
+		; routines to find device status
+		; on poll device calls
+		;
+polltbl		dw	const		;00-con 0 in
+		dw	const		;01-con 1 in
+		dw	const		;02-con 2 in
+		dw	const		;03-con 3 in
+		dw	const		;04-con 0 out
+		dw	const		;05-con 1 out
+		dw	const		;06-con 2 out
+		dw	const		;07-con 3 out
+		dw	plstst		;08-list 0 out
+		dw	flpy_poll_stat	;09-dsk status
+
+signon	db	cr,lf
+	db	'MP/M-86 V2.0 for SBC 8612',cr,lf,0
+
+int_trp	db	' Uninitialized Interrupt',cr,lf,0
+
+loc_stk	rw  32	;local stack for initialization
+stkbase	equ offset $
+tickint_tos	rw	0
+
+initss		rw	1
+initsp		rw	1
+		rw	32
+initstack	rw	0
+
+
+;*****************************************************
+;*
+;*	CHARACTER I/O DATA AREA
+;*
+;*****************************************************
+		;
+		org	((offset $) + 1) and 0fffeh
+		;
+		; console i/o table for
+		; status mask and port address
+		;
+consttbl	dw	(c0inmsk shl 8) or c0stport
+		dw	(c1inmsk shl 8) or c1stport
+		dw	(c2inmsk shl 8) or c2stport
+		dw	(c3inmsk shl 8) or c3stport
+		dw	(c0outmsk shl 8) or c0stport
+		dw	(c1outmsk shl 8) or c1stport
+		dw	(c2outmsk shl 8) or c2stport
+		dw	(c3outmsk shl 8) or c3stport
+		;
+		; console input table for
+		; poll device no. and port address
+		;
+conintbl	dw	(c0indev shl 8) or c0ioport
+		dw	(c1indev shl 8) or c1ioport
+		dw	(c2indev shl 8) or c2ioport
+		dw	(c3indev shl 8) or c3ioport
+		;
+		; console output table for
+		; poll device no. and port address
+		;
+conouttbl	dw	(c0outdev shl 8) or c0ioport
+		dw	(c1outdev shl 8) or c1ioport
+		dw	(c2outdev shl 8) or c2ioport
+		dw	(c3outdev shl 8) or c3ioport
+		;
+		; list i/o table for
+		; status mask and port address
+		;
+loutsttbl	dw	(l0outmsk shl 8) or l0stport
+		;
+		; list output for
+		; poll device no. and port address
+		;
+louttbl		dw	(l0outdev shl 8) or l0ioport
+
+;*****************************************************
+;*
+;*	DISK DATA AREA
+;*
+;*****************************************************
+
+errtbl  dw er0,er1,er2,er3
+	dw er4,er5,er6,er7
+	dw er8,er9,erA,erB
+	dw erC,erD,erE,erF
+
+er0 	db  cr,lf,'Null Error ??',0
+er1 	equ er0
+er2 	equ er0
+er3 	equ er0
+er4 	db  cr,lf,'Clock Error :',0
+er5 	db  cr,lf,'Late DMA :',0
+er6 	db  cr,lf,'ID CRC Error :',0
+er7 	db  cr,lf,'Data CRC Error :',0
+er8 	db  cr,lf,'Drive Not Ready :',0
+er9 	db  cr,lf,'Write Protect :',0
+erA 	db  cr,lf,'Trk 00 Not Found :',0
+erB 	db  cr,lf,'Write Fault :',0
+erC 	db  cr,lf,'Sector Not Found :',0
+erD 	equ er0
+erE 	equ er0
+erF 	equ er0
+nrdymsg	equ er8
+
+rtry_cnt db 0 	;disk error retry counter
+last_com dw 0 	;address of last command string
+dma_adr  dw 0 	;dma offset stored here
+dma_seg  dw 0 	;dma segment stored here
+sel_mask db 40h ;select mask, 40h or 80h
+
+;	Various command strings for i8271
+
+io_com	db 3	;length
+rd_wr	db 0	;read/write function code
+trk	db 0	;track #
+sect	db 0	;sector #
+
+hom_com	db 2,29h,0	;home drive command
+rds_com	db 1,2ch	;read status command
+
+status_mask	dw	0	;mask for flpy_poll
+
+
+disk		db	0	;physical disk selected
+
+	;	logical to physical disk
+	;	translation table
+	;	 A    B    C    D
+dtrntbl	db	000h,001h,0ffh,0ffh
+	;	 E    F    G    H
+	db	0ffh,0ffh,0ffh,0ffh
+	;	 I    J    K    L
+	db	0ffh,0ffh,0ffh,0ffh
+	;	 M    N    O    P
+	;*****MDISK SUPPORT*****
+	if memdisk
+	db	002h,0ffh,0ffh,0ffh
+	endif
+	;***********************
+	if not memdisk
+	db	0ffh,0ffh,0ffh,0ffh
+	endif
+
+	;	disk home routine table
+dskhomtbl	dw	flpy_home	;A drive
+		dw	flpy_home	;B drive
+	;*****MDISK SUPPORT*****
+	if memdisk
+		dw	hom_ret		;M drive
+	endif
+	;***********************
+
+	;	disk read routine table
+dskrdtbl	dw	flpy_read	;A drive
+		dw	flpy_read	;B drive
+	;*****MDISK SUPPORT*****
+	if memdisk
+		dw	mdsk_read	;M drive
+	endif
+	;***********************
+
+	;	disk write routine table
+dskwrttbl	dw	flpy_write	;A drive
+		dw	flpy_write	;B drive
+	;*****MDISK SUPPORT*****
+	if memdisk
+		dw	mdsk_write	;M drive
+	endif
+	;***********************
+
+	include singles.lib ;read in disk definitions
+
+;*****************************************************
+;*
+;*	SUP/RTM DATA AREA
+;*
+;*****************************************************
+stoppoll	dw	false	;disallows poll_device
+				;for internal printing
+				;of strings when true
+
+clockon		db	false	;if true, Tick flag is
+				;set on Tick interrupts
+
+tick_count	db	60
+;
+;	scratch area
+;
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+
+	db 0	;fill last address for GENCMD
+
+

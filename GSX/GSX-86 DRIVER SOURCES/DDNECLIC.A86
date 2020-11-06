@@ -1,0 +1,446 @@
+
+;**********************************************************************
+;*      NEC DEVICE DRIVER FOR GSX - 86                                *
+;**********************************************************************
+;	27/07/83 15:00 WF
+;
+DDRIVER CSEG
+	PUBLIC	GRRESET,GRSLV,GRSYNC,GRPITCH
+	PUBLIC	GRZOOM
+	PUBLIC	GRCSRFORM,GRCLEAR
+	PUBLIC	GRSTART
+	PUBLIC	GRTEXTW,GRWRITE,GRVECTW
+	PUBLIC	GRVECTE,GRMASK,GRTEXTE
+	PUBLIC	GRCSRO,GRGDCC1,GRGDCC
+	PUBLIC	DDINIT
+	PUBLIC	GRFXON,GRFXOFF
+BDOS	EQU	0E0H
+;
+;
+;**********************************************************************
+;Initilize 7220 chip
+DDINIT:
+	Mov	GRCOLR,0		;clear the color variable
+	Call	GRFXON			;turn on the grafix screen
+	Ret
+;
+;**********************************************************************
+;*      (X,Y) TO SCREEN MEMORY ADDRESS CONVERT                        *
+;*              INPUT  CX = XAD     OUTPUT  DX = EAD                  *
+;*                     DX = YAD             CL = DAD                  *
+;**********************************************************************
+GRXYCV:
+        MOV     AX,CX
+        AND     CX,000FH
+        PUSH    CX
+        MOV     CL,4
+        SAR     AX,CL
+        MOV     CX,Y_MAX
+        SUB     CX,DX
+        PUSH    AX
+        MOV     AX,PITCH
+        MUL     CX
+        POP     CX
+        ADD     AX,CX
+        ADD     AX,GRSAD1
+        MOV     DX,AX
+        POP     AX
+        MOV     CL,4
+        SHL     AX,CL
+        MOV     CL,AL
+        RET
+;
+;**********************************************************************
+;*      ALL SCREEN MEMORY CLEAR                                       *
+;**********************************************************************
+GRCLEAR:
+	Xor	AX,AX		;get a zero
+	Mov	GRCOLR,AX	;set the color to green
+        MOV     GRZOOMP,AL 	;set zoom to 0
+        CALL    GRZOOM          ;
+GRCLR010:
+	Xor	DX,DX		;make a zero
+        CALL    GRCSRW		;set cursor
+        MOV     GRMASK_W,0FFFFH
+        CALL    GRMASK		;set mask
+        MOV     CX,3
+GRCLR020:
+	PUSH	CX
+        MOV     GRVECTP1,2H	;DIRECTION = 2
+        MOV     GRVECTP2,7FFFH	;LENGTH = 16K
+        MOV     CX,3
+        CALL    GRVECTW		;SEND PARAMETER TO GDC
+        MOV     GRWRT,22H	;SET RESET MODE
+        MOV     GRATTRIB,022H   ;
+	MOV	GRWRTP1,0FFH
+	MOV	GRWRTP2,0FFH
+	MOV	CX,2
+        CALL    GRWRITE		;WDAT
+        POP     CX
+        LOOP	GRCLR020        ;
+        RET
+;
+;
+;
+ALCLEAR:
+	MOV	AL,1AH		;CLEAR SCREEN
+	PUSH	AX
+	PUSH	ES
+	push	DI
+	PUSH	SI
+	PUSH	DX
+	PUSH	CX
+	PUSH	BX
+	XOR	DH,DH
+	MOV	DL,AL
+	MOV	cl,2
+	INT	BDOS
+	pop	BX
+	POP	cx
+	pop	DX
+	POP	SI
+	POP	DI
+	POP	ES
+	POP	AX
+	RET
+;
+;
+;**********************************************************************
+;*      MULTI COMMAND OUTPUT ROUTINE                                  *
+;*              INPUT  BX = ADDRESS OF COMMAND AND PARAMETERS         *
+;*                     CX = NUMBER OF PARAMETERS                      *
+;**********************************************************************
+GRMOUT:
+        CALL    GRGDCC1         ; GDC STATUS CHECK
+        MOV     AL,[BX]         ;
+        OUT     GRCMD,AL        ; COMMAND OUTPUT
+        CMP     CX,0            ; IF NO PARAMETER
+        JE      GRMOUTRET       ;
+GRMOUT010:
+        INC     BX              ;
+        MOV     AL,[BX]         ;
+        OUT     GRPARA,AL       ; PARAMETER OUTPUT
+	Call	GRGDCC1		; wait till empty 
+	LOOP    GRMOUT010       ;
+GRMOUTRET:
+        RET                     ; RETURN
+;**********************************************************************
+GRRESET:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,RESETCMD     ;
+        OUT     GRCMD,AL        ; RESET COMMAND OUTPUT
+        RET
+;**********************************************************************
+GRMSTR:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,MSTRCMD      ;
+        OUT     GRCMD,AL        ; MASTER COMMAND OUTPUT
+        RET
+;**********************************************************************
+GRSLV:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,SLVCMD       ;
+        OUT     GRCMD,AL        ; SLAVE COMMAND OUTPUT
+        RET
+;**********************************************************************
+GRSTART:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,STARTCMD     ; 
+        OUT     GRCMD,AL        ; DISPLAY ENABLE
+        RET
+;**********************************************************************
+GRSTOP:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,STOPCMD      ;
+        OUT     GRCMD,AL        ; DISPLAY DISABLE
+        RET
+;**********************************************************************
+GRVECTE:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,VECTECMD     ;
+        OUT     GRCMD,AL        ; VECTOR EXECUTE
+        RET
+;**********************************************************************
+GRTEXTE:
+        CALL    GRGDCC1         ; GDC FIFO EMPTY CHECK
+        MOV     AL,TEXTECMD     ;
+        OUT     GRCMD,AL        ; TEXT EXECUTE
+        RET
+;**********************************************************************
+GRSYNC:
+        MOV     CX,8
+        MOV     BX,DASYNC
+        CALL    GRMOUT          ;
+        RET
+;**********************************************************************
+GRCSRO:
+        MOV     CX,XAD  ;
+        MOV     DX,YAD          ;
+        CALL    GRXYCV          ;
+GRCSRW:
+	PUSH	BX
+	ADD	DX,GRCOLR
+        MOV     GREAD,DX        ;
+        MOV     GRDAD,CL        ;
+	MOV	CX,3
+        MOV     BX,DACSRW       ;
+        CALL    GRMOUT
+        POP     BX
+        RET
+;**********************************************************************
+GRMASK:				;SET MASK
+        PUSH    BX
+        MOV     CX,2            ;
+        MOV     BX,DAMASK       ;
+        CALL    GRMOUT
+        POP     BX
+        RET
+;**********************************************************************
+GRWRITE:
+        PUSH    BX
+        MOV     AL,GRATTRIB     ;
+        AND     AL,03H          ; 
+	And	GRWRT,0FCH	;	mask out any old mode bits
+	Or	GRWRT,AL	;
+        MOV     BX,DAWRITE      ;
+        CALL    GRMOUT          ;
+        POP     BX
+        RET
+;*********************************************************************
+GRCSRFORM:
+        MOV     CX,3            ; NUMBER OF PARAMETERS
+        MOV     BX,DACSRFORM    ;
+        CALL    GRMOUT
+        RET
+;**********************************************************************
+GRZOOM:
+        MOV     CX,1            ; 
+        MOV     BX,DAZOOM       ;
+        CALL    GRMOUT          ;
+        RET
+;**********************************************************************
+GRPITCH:
+        MOV     CX,1            ;
+        MOV     BX,DAPITCH      ;
+        CALL    GRMOUT          ;
+        RET
+;**********************************************************************
+GRTEXTW:			;PRAM COMMAND
+        PUSH    BX
+        MOV     CX,8            ;
+        MOV     BX,DATEXTW      ;
+        CALL    GRMOUT          ;
+        POP     BX
+        RET
+;**********************************************************************
+GRVECTW:
+        PUSH    BX
+	Or	GRVECTP2,04000H	;turn on mixed mode flag
+        MOV     BX,DAVECTW      ;
+        CALL    GRMOUT          ;
+        POP     BX
+        RET
+;
+;**********************************************************************
+;*      GDC STATUS CHECK ROUTINES                                     *
+;**********************************************************************
+GRGDCC:
+        IN      AL,GRSTATUS     ; GDC STATUS READ
+        TEST    AL,08H          ;   DRAWING (DB3)
+        JNZ     GRGDCC          ; IF NOT READY
+        NOT     AL              ;   VERTICAL SYNC (DB5)
+        TEST    AL,24H          ;   FIFO EMPTY (DB2)
+        JNZ     GRGDCC          ; IF NOT READY
+        RET                     ; RETURN IF GDC IS READY
+;
+GRGDCC1:
+        IN      AL,GRSTATUS     ; GDC STATUS READ
+        TEST    AL,04H          ;   FIFO EMPTY (DB2)
+        JZ      GRGDCC1         ; IF NOT EMPTY
+        RET                     ; RETURN IF GDC FIFO IS EMPTY
+;*********************************************************************
+GRFXON:
+	Call	GRSTOP 		;DISABLE DISPLAY
+	Mov	BX,offset GRAPHICS_PARTITION
+	Mov	CX,8		;number of arguments
+	Call	GRMOUT		;send command and params
+	CALL	GRCLEAR		;CLEAR SCREEN
+	CALL	DELAY
+GRFXON1:
+	IN	AL,GRSTATUS	;GDC STATUS READ
+	TEST	AL,20H
+	JZ	GRFXON1
+	Call	GRSTART		;ENABLE DISPLAY
+	Ret
+
+
+GRFXOFF:
+	Call	GRSTOP		;DISABLE DISPLAY
+	Mov	BX,offset ALPHA_PARTITION
+	Mov	CX,8		;number of arguments
+	Call	GRMOUT
+	CALL	ALCLEAR		;CLEAR SCREEN (CHARACER MODE)
+	CALL	DELAY
+GRFXOFF1:
+	IN	AL,GRSTATUS	;GDC STATUS READ
+	TEST	AL,20H
+	JZ	GRFXOFF1
+	Call	GRSTART		;ENABLE DISPLAY
+	Ret
+;
+DELAY:
+	MOV	CX,4
+DELAY1:
+	IN	AL,GRSTATUS
+	TEST	AL,20H
+	JZ	DELAY1
+DELAY2:
+	IN	AL,GRSTATUS
+	TEST	AL,20H
+	JNZ	DELAY2
+	LOOP	DELAY1
+	RET
+;
+;**********************************************************************
+;*      GRAPHIC DISPLAY DATA AREA                                     *
+;**********************************************************************
+        DSEG
+;
+;
+	EXTRN	Y_MAX:WORD,X_MAX:WORD
+;
+	PUBLIC	GRTEXTP1,GRTEXTP2,GRATTRIB
+	PUBLIC	GRTEXTP_W
+	PUBLIC	GRVECTP1,GRVECTP2,GRVECTP4,GRVECTDC,GRVECTD
+	PUBLIC	GRVECTD2
+	PUBLIC	GRVECTD1,GRVECTDM
+	PUBLIC	GRATTRIB
+	PUBLIC	XAD,YAD
+	PUBLIC	GRCOLR
+	PUBLIC	GRWRT,GRWRTP
+	PUBLIC	GRMASK_L
+	PUBLIC	GRMASK_W
+;
+	PUBLIC	GRWRTW
+	PUBLIC	GRZOOMP
+;
+XAD             DW      0       ;
+YAD             DW      0       ;
+X_SKIP          DB      1       ;
+Y_SKIP          DB      1       ;
+GRATTRIB        DB      80H     ;
+;
+DASYNC          EQU     OFFSET $
+                DB      00H     ;
+                DB      16H     ;16 flashless mode/ 06 flash mode
+                DB      26H     ;
+                DB      46H     ;
+                DB      0EH     ;
+                DB      03H     ;
+                DB      13H     ;
+                DB      0DBH    ;
+                DB      91H     ;
+;
+DAPITCH         EQU     OFFSET $
+                DB      47H     ;
+                DB      PITCH   ;
+;
+DAZOOM          EQU     OFFSET $
+                DB      46H     ;
+GRZOOMP         DB      00H     ;
+;
+DACSRFORM       EQU     OFFSET $
+                DB      4BH     ;
+                DB      00H     ;
+                DB      40H     ;
+                DB      00H     ;
+;
+DAMASK          EQU     OFFSET $
+                DB      4AH     ;
+GRMASK_L        DB      0FFH  ;
+GRMASK_H        DB      0FFH  ;
+GRMASK_W	EQU	word ptr GRMASK_L
+;
+DACSRW          EQU     OFFSET $;SET CURSOR
+                DB      49H     ;
+GREAD           DW      0000H   ;
+GRDAD           DB      00H     ;
+GRCOLR          DW      0H
+;
+DASCROLL        EQU     OFFSET $
+                DB      70H     ;
+GRSAD1          DW      0000H   ;
+GRSL1           DW      1DB0H   ;
+GRSAD2          DW      0000H   ;
+GRSL2           DW      0000H   ;
+;
+DATEXTW         EQU     OFFSET $;PARAMETER RAM
+                DB      78H     ;
+GRTEXTP1        DB      00H
+GRTEXTP2        DB      00H
+GRTEXTP3        DB      00H
+GRTEXTP4        DB      00H     ;
+GRTEXTP5        DB      00H     ;
+GRTEXTP6        DB      00H     ;
+GRTEXTP7        DB      00H     ;
+GRTEXTP8        DB      00H     ;
+GRTEXTP_W	EQU	word ptr GRTEXTP1
+;
+DAVECTW         EQU     OFFSET $;FIGS
+                DB      4CH     ;
+GRVECTP1        DB      00H     ;
+GRVECTDC:
+GRVECTP2        DW      0000H   ;
+GRVECTD:
+GRVECTP4        DW      0000H   ;
+GRVECTD2:
+GRVECTP6        DW      0000H   ;
+GRVECTD1:
+GRVECTP8        DW      0000H   ;
+GRVECTDM:
+GRVECTP10       DW      0000H   ;
+;
+DAWRITE         EQU     OFFSET $
+GRWRT           DB      00H     ;
+GRWRTP1         DB      00H     ;
+GRWRTP2         DB      00H     ;
+GRWRTP		EQU	word ptr GRWRTP1
+;
+;
+RESETCMD        EQU     00H     ;
+STARTCMD        EQU     0DH     ;
+STOPCMD         EQU     0CH     ;
+MSTRCMD         EQU     6FH     ;
+SLVCMD          EQU     6EH     ;
+VECTECMD        EQU     6CH     ;
+TEXTECMD        EQU     68H     ;
+SCROLLCMD       EQU     70H     ;
+GRWRTW          EQU     20H     ;
+GRWRTL          EQU     30H     ;
+GRWRTH          EQU     38H     ;
+GRREADW         EQU     0A0H    ;
+GRREADL         EQU     0B0H    ;
+GRREADH         EQU     0B8H    ;
+CSRRCMD         EQU     0E0H    ;
+;
+PITCH           EQU     28H     ;
+GRCMD           EQU     0A1H     ;
+GRPARA          EQU     0A0H     ;
+GRSTATUS        EQU     0A0H     ;
+GRRDATA         EQU     0A1H     ;
+;
+GRAPHICS_PARTITION	DB	070H
+			DW	0H		;part 1 start
+			DW	5900H		;part 1 length
+			DW	0h		;part 2 start
+			DW	0H		;part 2 length
+;
+ALPHA_PARTITION		DB	070H
+			DW	0H		;part 1 start
+			DW	1900H		;part 1 length
+			DW	0h		;part 2 start
+			DW	0H		;part 2 length
+;
+                END
+
+

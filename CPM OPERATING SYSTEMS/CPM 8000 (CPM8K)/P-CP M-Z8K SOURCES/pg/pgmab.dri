@@ -1,0 +1,429 @@
+
+.bp odd
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.he
+.ce 2
+.sh
+Appendix B
+.sp
+================== REPLACE WITH go.c FROM CCP ===============
+.sh
+Transient Program Load Examples
+.sp 2
+.he CP/M-8000 Programmer's Guide    B  Transient Program Load Examples
+.fi
+.pp 5
+This appendix contains two examples, an assembly language program 
+and a C language program. Both illustrate how a transient program 
+loads another program with the BDOS Program Load Function (59) but 
+without the CCP.
+.sp 2
+Examples:								
+.sp
+.in 8
+.ti -3
+1) The example below is an AS68 assembly language program 
+that loads another program into the TPA.
+.in 0
+.po 4
+.sp 2
+.nf
+*	BDOS Function Definitions
+*
+reboot	   =	0
+printstr   =	9
+open	   =   15
+setdma	   =   26
+pgmldf     =   59
+gettpa     =   63
+
+	.text
+
+*
+*	OPEN file to be loaded
+*
+start:	link	a6,#0	        *mark stack frame
+	move.l	8(a6),a0	*get the address of the base page
+	lea	$5c(a0),a1	*get address of 1st parsed FCB in base page
+	move.l	a1,d1		*put that address in register d1
+	move.w  #open,d0	*put BDOS function number in register d0
+	trap	#2		*try to open the file to be loaded
+	cmpi	#255,d0		*test d0 for BDOS error return code
+	beq	openerr		*if d0 = 255 then goto openerr
+*
+*	Compute Address to Load File
+*
+.mb 5
+.fm 1
+	move.l  $18(a0),d2	*get starting address of bss from base page
+	move.l	$1c(a0),d3	*get length of bss
+	add.l	d2,d3		*compute first free byte of memory 
+                                *after bss
+	move.l	$20(a0),d4	*get length of free memory after bss
+        sub     #$100,d4        *leave some extra room
+	move.l	d4,d5		*save that length in register d5
+	add.l	d3,d4		*compute high end of free memory after bss
+	move.l	d3,a3		*get the starting address of free memory 
+                                *into a3
+.fi
+.po 10
+.sp 2
+.ce
+.sh
+Listing B-1.  Transient Load Program Example 1
+.qs
+.bp
+.nf
+.po 4 
+	sub     #1,d5		*adjust loop counter
+clear:  clr.b   (a3)+	        *clear out free memory
+	dbf	d5,clear	*decrement loop counter and loop until 
+*                               *negative
+*
+*	FILL the LPB
+*
+*	Low address becomes first free byte of memory after bss
+*	High address of area in which to load program becomes 
+*       the Low address plus length of free memory
+*	--------------------------------------------------------------
+*
+	move.l	d3,lowadr	*get low end of area in which to load
+*                               *program
+	move.l  d4,hiadr	*get high end of area in which to load 
+*                               *program
+	move.l	a1,LPB		*put address of open FCB into LPB
+	move.w	#pgmldf,d0	*get BDOS program load function number
+	move.l	#LPB,d1		*put address of LPB into register d1
+	trap	#2		*do the program load
+	tst	d0		*was the load successful?
+	bne	lderr		*if not then print error message
+*
+*	Set default DMA address
+*
+	move.l	baspag,d1	*d1 points to new program's base page
+	add	#$80,d1		*d1 points to default dma in base page
+	move.w	#setdma,d0	*get BDOS function number
+	trap	#2		*set the default dma address
+*
+*	Now push needed addresses on stack
+*
+        movea.l usrstk,a7       *set up user stack pointer
+        move.l  baspag,a1       *get address of base page
+        move.l  a1,-(sp)        *push base page address
+        move.l  #cmdrtn,-(sp)   *push return address
+        move.l  8(a1),-(sp)     *push address to jump to
+        rts                     *jump to new program
+*
+*	Print ERROR message
+*
+openerr:
+	move.l	#openmsg,d1	*get address of error message 
+*                               *to be printed
+	bra	print
+lderr:	move.l  #loaderr,d1	*get address of error message to 
+                                *be printed
+print:	move.w	#printstr,d0	*get BDOS function number
+	trap	#2              *print the message
+cmdrtn: move.w	#reboot,d0	*get BDOS function number
+	trap	#2              *warmboot and return to the CCP
+.fi
+.po 10
+.sp 2
+.ce
+.sh
+Listing B-1.  (continued)
+.qs
+.bp
+.nf
+.po 4
+*
+*	DATA
+*
+	.data
+	.even
+*
+*	LOAD PARAMETER BLOCK
+*
+LPB:	   .ds.l	1      *FCB address of program file
+lowadr:    .ds.l	1      *Low boundary of area in which 
+*                              *to load program
+hiadr:	   .ds.l	1      *High boundary of area in which to 
+*                              *to load program
+baspag:	   .ds.l	1      *Base page address of loaded program
+usrstk:	   .ds.l	1      *Loaded program's initial stack pointer
+flags:	   .dc.w	0      *Load program function control flags
+*
+*	TPA Parameter Block
+*
+	.even
+TPAB:	   .dc.w	0
+low:	   .ds.l	1
+high:	   .ds.l	1
+
+	.even
+
+loaderr:	.dc.b  13,10,'Program Load Error$'
+openmsg:	.dc.b  13,10,'Unable to Open File$'
+	.end
+.fi
+.po 10
+.sp 2
+.ce
+.sh
+Listing B-1.  (continued)
+.bp
+.in 8
+.ti -3
+2) The example below is a C language transient program that loads
+another program in the TPA without the assistance of the CCP.  
+The C language program calls an AS68 assembly language routine 
+to perform tasks not permitted by the C language. 
+.sp 2
+.po 4
+.nf
+/*------------------------------------------------------------*
+ |                                                            |
+ |        'C' Language Program to Load Another                |
+ |               Program into the TPA                         |
+ |                                                            |
+ *------------------------------------------------------------*/
+
+
+/*	DEFINES		*/
+
+#define		BSS_OFFSET	(long)0x18
+#define		FCB_OFFSET	(long)0x5C
+#define		BSS_LENGTH	(long)0x1C
+#define		FREE_MEMORY	(long)0x20
+#define		DMA_OFFSET	(long)0x80
+#define		ROOM		(long)0x100
+#define		NULL		'\0'
+#define		CR		(long)13
+#define		LF		(long)10
+#define		REBOOT		0
+#define		CON_OUT		2
+#define		PRINTSTR	9
+#define		OPEN		15
+#define		SETDMA		26
+#define		PGMLDF		59
+#define		GETTPA		63
+
+/* Error Messages	*/
+
+char openmsg[20] = "Unable to Open File$";
+char loadmsg[19] = "Program Load Error$";
+
+/* Load Parameter Block */
+
+extern long LPB,lowadr,hiadr,baspag,usrstk;
+extern int flags;
+/* TPA Parameter Block */
+
+
+extern int TPAB;
+extern long low,high;
+.sp 2
+.po 10
+.fi
+.ce
+.sh
+Listing B-2.  Transient Program Load Example 2
+.qs
+.sp 3
+.po 4
+.nf
+.bp
+
+openfile(baseaddr)			/********************************/
+register char	*baseaddr;              /* base page address		*/
+{					/*				*/
+	register long	*t1,*t2;	/* pointers to long word values	*/
+	register long	count;		/* long word value		*/
+	register char	*ptr1,*ptr2;	/* pointers to character values */
+					/*				*/
+					/*				*/
+	ptr1 = baseaddr + FCB_OFFSET;	/* get address of FCB		*/
+	if(bdos(OPEN,ptr1) <= 3)	/* try to open the file		*/
+	{				/*				*/
+		t1 = baseaddr +		/* set pointer to STARTING addr */
+		     BSS_OFFSET;	/* of the BSS segment		*/
+		t2 = baseaddr +		/* set pointer to LENGTH of	*/
+		     BSS_LENGTH;	/* the BSS segment		*/
+		lowadr = *t1 + *t2;	/* compute the first free byte  */
+					/* address of memory after the  */
+					/* BSS segment			*/
+		ptr2 = lowadr		/* *ptr2 now points to first	*/
+					/* free byte in memory		*/
+		t2 = baseaddr +		/* get length of free memory	*/
+		     FREE_MEMORY;	/* after the BSS segment	*/
+					/*				*/
+		hiadr = *t2 + lowadr	/* compute high end of available*/
+					/* memory			*/
+		count = *t2 - ROOM	/* Leave some extra room in Mem */
+		while(count--)		/* Clear out available Memory	*/
+			*ptr2++ = NULL; /* with NULL byte values	*/
+		LPB = ptr1;		/* first long of parameter blk  */
+					/* gets the address of the FCB	*/
+					/********************************/
+                /*------------------------------------------------------*
+                 |              If the Load is Successful               |
+                 |              =========================               |
+                 |                                                      |
+		 |      1.      Set the Default DMA address             |
+		 |	2.      Call Assembly Code to push		|
+		 |              the base page address, the              |
+                 |              return address, and the                 |
+                 |              address you wish to jump to.            |
+                 |							|
+		 *------------------------------------------------------*/
+
+		if(bdos(PGMLDF,&LPB) == 0)
+		{
+			bdos(SETDMA,(baspag + DMA_OFFSET));
+			push();
+		}
+		else
+			error(PGMLDF);	
+.sp 2
+.po 10
+.fi
+.ce
+.sh
+Listing B-2.  (continued)
+.qs
+.po 4
+.nf
+.bp
+
+	}
+	else
+		error(OPEN);
+}
+
+error(flag)
+int   flag;
+{
+	bdos(CON_OUT,CR);
+	bdos(CON_OUT,LF);
+	if(flag == OPEN)
+		bdos(PRINTSTR,openmsg);
+	else
+		bdos(PRINTSTR,loadmsg);
+	bdos(REBOOT,(long)0);
+}
+
+main()
+{
+	bdos(REBOOT,(long)0);
+}
+       **********************************************************	
+       *                                                        *
+       *        Assembly Language Module Needed to              *
+       *    Assist 'C' code to Load a Program into the TPA      *
+       *                                                        *
+       **********************************************************
+
+
+*
+*	Make All these labels GLOBAL
+*
+	.globl _bdos
+	.globl _LPB
+	.globl _lowadr
+	.globl _hiadr
+	.globl _baspag
+	.globl _usrstk
+	.globl _flags
+	.globl _TPAB
+	.globl _low
+	.globl _high
+	.globl _start
+	.globl _openfile
+	.globl _push
+	.globl _main
+
+*
+*	Get the address of the base page
+*
+.sp 2
+.po 10
+.fi
+.ce
+.sh
+Listing B-2.  (continued)
+.qs
+.po 4
+.nf
+.bp
+_start:
+	link	a6,#0		*link and allocate
+	move.l	8(a6),-(sp)	*push the address of the base page
+	jsr	_openfile	*jump to 'C' code to open the file
+*
+*	Call the BDOS
+*
+_bdos: 
+	move.w	4(sp),d0	*get the BDOS function number
+	move.l	6(sp),d1	*get the BDOS parameter
+	trap	#2		*call the BDOS
+	rts			*return	
+*
+*	Push the needed addresses on to the stack
+*
+_push:
+	movea.l	_usrstk,a7	*set up the user stack pointer
+	move.l	_baspag,a1	*get address of user base page
+	move.l	a1,-(sp)	*push base page address
+	move.l	#_main,-(sp)	*push return address
+	move.l	8(a1),-(sp)	*push address to jump to
+	rts			*jump to new program
+*
+*	DATA
+*
+	.data
+	.even
+*
+*	Load Parameter Block
+*
+_LPB:	  .ds.l  1            *FCB address of program file
+_lowadr:  .ds.l  1            *Low boundary of area in which 
+*                             *to load program
+_hiadr:	  .ds.l  1            *High boundary of area in which to 
+*                             *to load program
+_baspag:  .ds.l  1            *Base page address of loaded program
+_usrstk:  .ds.l  1            *loaded program's initial stack pointer
+_flags:	  .dc.w	 0            *Load program function control flags
+*
+*	TPA Parameter Block
+*
+	.even
+
+_TPAB:	.dc.w	0
+_low:	.ds.l	1
+_high:	.ds.l	1
+*
+*	END of Assembly Language Code
+*
+	.end
+.fi
+.po 10
+.in 0
+.sp 2
+.ce
+.sh
+Listing B-2.  (continued)
+.sp 2
+.ce
+End of Appendix B
+.bp
+.he CP/M-8000 Programmer's Guide                     End of Appendix B
+.sp 50
+.nx appc
+

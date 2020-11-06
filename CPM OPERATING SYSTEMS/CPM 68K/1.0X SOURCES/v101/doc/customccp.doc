@@ -1,0 +1,147 @@
+	Customization of the CCP.
+
+
+
+
+		The standard CP/M-68K CCP contains four different program
+
+	modules.  In order to write your own customized version of the CCP
+
+	it is only necessary to substitute your CCP for two of the four
+
+	existing modules.  However it is essential to understand the inter-
+
+	facing procedures between the four different modules and their relation-
+
+	ship to the BDOS and BIOS of CP/M-68K.
+
+
+		The four CCP program modules are:
+
+		(1)  CCPIF.O		
+
+		(2)  CCPBDOS.O
+
+		(3)  CCPLOAD.O
+
+		(4)  CCP.O
+
+
+		The first three modules of the CCP perform general CP/M
+
+	housekeeping functions.  CCPIF.O is the coldboot and warmboot interface
+
+	between the CCP,the BDOS,and the BIOS.  CCPBDOS.O is an assembly
+
+	language module that performs the BDOS function calls for the main
+
+	CCP module:  CCP.O.  CCPLOAD.O is the assembly language module that
+
+	performs the program load function for CCP.O.  CCP.O is the main module
+
+	of the CCP.  Substitute your custom CCP for modules three and four of the
+
+	standard CCP for CP/M-68K.  A description of the CCP input and output
+
+	interface requirements with modules one and two as well as the BDOS
+
+	and BIOS follow.
+
+	CCP INPUT INTERFACE
+	-------------------
+
+		The main module of the CCP is entered via a jsr(jump to sub-
+
+	routine) instruction from CCPIF.O.  Here is the exact instruction as
+
+	it appears in CCPIF.O.
+
+
+		jsr	_main		*call the CCP
+
+
+		The label _main contains the underscore character because
+
+	the C compiler places an underscore before every external variable
+
+	and function name.  CCP.O contains the function:
+
+		main()
+		{
+			/* main CCP module */
+		}
+
+	which orchestrates the function of the Console Command Processor.
+
+	This jsr instruction is the only entry point to the CCP.
+
+
+	CCP OUTPUT INTERFACE
+	--------------------
+
+
+		The CCP needs to access the BDOS to perform its function.
+
+	The module CCPBDOS.O contains assembly language instructions to
+
+	fill registers D0 and D1 with the BDOS function number and the BDOS
+
+	parameter respectively.  This module is expecting to pull off the
+
+	stack a word for the function number and a long word for the parameter.
+
+	The function is defined in the main module as follows:
+		
+		EXTERN UWORD bdos();
+
+	Here are two examples of the CCP.O to CCPBDOS.O interface:
+
+	(1)  userno = bdos(GET_USER_NO,(long)255);
+
+	(2)  move.l	#255,-(sp)
+	     move.w	#GET_USER_NO,-(sp)
+	     jsr	_bdos
+	     tst	d0		*return value in register D0
+	     move.w	d0,userno	*get return value	
+		etc.......			
+
+	The bdos will return a word value for the current user number.
+
+		In the standard CP/M-68K CCP,a warmboot occurs after the
+
+	termination of every transient program.  Upon warmboot,control is
+
+	transferred to the BDOS and eventually back to the CCP via that
+
+	jsr instruction.  Before entrance to the main module,the system
+
+	stack is reset to its orginal starting address.  CCPIF.O must be
+
+	the first module of CP/M-68K.  This module also performs coldboot
+
+	startup procedures essential to coldboot loading.  Any interface
+
+	to the BIOS is done through the BDOS direct BIOS call.  See the 
+
+	programmer's guide for details.  If you experience problems with
+
+	doubly defined global variables,use the NM68 utility to get a listing
+
+	of the system symbol table.  For example:
+
+				A>NM68 CPM.REL
+
+	will give you a listing of the CP/M-68K symbol table.  For further
+
+	details regarding the use of NM68 see the CP/M-68K programmer's guide.
+
+		Finally it is necessary that the CCP use bdos function 10 to
+
+	read in a command line from the console if you wish to make use of
+
+	bdos function 47(chain to program).  The chain to program function
+
+	traps function 10 calls and supplies the CCP with the next command
+
+	to execute from an internal buffer.
+

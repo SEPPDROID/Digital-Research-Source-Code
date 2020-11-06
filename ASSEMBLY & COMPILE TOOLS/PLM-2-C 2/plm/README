@@ -1,0 +1,189 @@
+$Id: README,v 1.4 1994/04/05 20:33:58 hays Exp $
+
+Ah, the wisdom of the ages...
+
+Introduction
+------------
+
+What you are looking at is a basic (very basic) parser for a PL/M
+language.
+
+The parser does nothing useful, and it isn't even a terribly wonderful
+example.  On the other hand, it appears that no one else has bothered
+to publish even this much, before.
+
+However, the parser does recognize a language very like PL/M-86,
+PL/M-286, or PL/M-386, as best we can determine.
+
+All the information used to derive this parser comes from published
+manuals, sold to the public.  No proprietary information, trade
+secrets, patented information, corporate assets, or skulduggery was
+used to develop this parser.  Neither of the authors has ever seen the
+source to a working PL/M compiler (or, for that matter, to a
+non-working PL/M compiler).
+
+Implementation Limits
+---------------------
+
+This PL/M parser was developed and tested on a 486DX2/66 clone PC
+running Linux.  The C code is written for an ANSI-compliant C
+compiler; GCC was used in our testing.  Also, flex and bison were
+used, not lex and yacc.  Paul Vixie's comp.sources.unix implementation
+of AVL trees was used to implement symbol table lookups.
+
+You should expect some problems if you plan on building this parser
+with a K&R style C compiler.  Using yacc and/or lex may be
+problematic, as well.
+
+This parser does not support any of the "dollar" directives of a
+proper PL/M compiler.  In fact, it will croak with the helpful message
+"parse error".  Thus, implementing include files and compiler
+directives is left as an exercise for the reader.
+
+The macro facility (aka "literally" declarations) depends on the
+lexical analysis skeleton allowing multiple characters of push-back on
+the input stream.  This is a very, very poor assumption, but, with
+flex, at least, workable for this example.  A real PL/M compiler would
+allow literals of unlimited length.  To find the offending code, grep
+for the string "very weak" in the file "plm-lex.l".
+
+No error recovery is implemented in the parser, at all.
+
+There are no shift-reduce conflicts, nor reduce-reduce conflicts.
+
+There are a couple of places in the parser where similar constructs
+cannot be distinguished, except by semantic analysis.  These are
+marked by appropriate comments in the parser source file.
+
+The "scoped literal table" implementation depends on Paul Vixie's
+(paul@vix.com) public domain AVL tree code, available as
+comp.sources.unix Volume 27, Issue 34 (`avl-subs'), at a friendly ftp
+site near you.  We use "gatekeeper.dec.com".  The benefits of using
+AVL trees for a symbol table (versus, say, hashing) are not subject to
+discussion.  We used the avl-subs source code because it is reliable
+and easy to use.
+
+This grammar has been validated against about 10,000 lines of real and
+artificial PL/M code.
+
+PL/M Quirks
+-----------
+
+PL/M has some very interesting quirks.  For example, a value is
+considered to be "true", for the purposes of an `if' test, if it is
+odd (low bit set).  Thus, the value 0x3 is true, whereas 0x4 is not.
+The language itself, given a boolean expression, generates the value
+0xff for true.  [This factoid doesn't affect the parser per se, but
+does appear to be the main pitfall for those whose hubris leads them
+to translate PL/M to C.]
+
+String constants can contain any ASCII value, excepting a single
+apostrophe, a newline, or 0x81.  The latter, presumably, has something
+to do with Kanji support.
+
+To embed a single apostrophe in a string constant, two apostrophes may
+be used.  Thus, 'k''s' is a string consisting of a letter k, a single
+apostrophe, and a letter s.  Strings are not null terminated, so our
+example string, 'k''s', requires just three bytes of storage.
+
+PL/M supports a macro language, of sorts, that is integrated into the
+language's declaration syntax:
+
+	declare Ford literally 'Edsel';
+	declare Mercury literally 'Ford';
+
+After the above declarations, any instance of the identifier "Ford"
+will be replaced with the string "Edsel", and any occurrence of the
+identifier "Mercury" will be replaced by the string "Ford", which will
+then be replaced by the string "Edsel".  The literal string can be
+more complicated, of course.  Only identifiers are subject to
+substitution - substitution does not occur inside string constants.
+
+Literal macros are parameterless, and obey the scoping rules of the
+language.  Thus, it is possible to have different values for the same
+macro in different, non-nested scopes.  [Exercise: Why can't you have
+different values for literals in nested scopes?]
+
+Keywords, of course, cannot be macro names, because they are not
+allowed as variable names.
+
+PL/M allows dollar signs ("$") to be used inside keywords,
+identifiers, and numerical constants.  PL/M is also case insensitive.
+Thus, the following two identifiers are the "same":
+
+my_very_own_variable_02346
+
+m$Y_$$$VeRy_$$O$$$$$W$$$$$$N_varIABLE$$$$$$$$$$_$02$346
+
+Loverly, eh?  Obfuscated C, stand to the side.
+
+Casting in PL/M (a relatively late addition to the language) is
+provided by a motley assortment of functions with the same names as
+the basic types to which they are casting, accepting a single argument
+of some other (or even the same) type.
+
+Note that the EBNF grammar published in what must be considered the
+definitive work, _PL/M Programmer's Guide_, Intel order number
+452161-003, Appendix C, is incorrect in several respects.  If you're
+interested in the differences, we've preserved, as much as is
+possible, the production names of that EBNF in the YACCable grammar.
+
+Some known problems with the published, Appendix C, EBNF grammar:
+
+     - One of the productions is an orphan, ("scoping_statements").
+
+     - unary minus is shown as a prefix operator, and unary plus as a
+       postfix operator ("secondary").
+ 
+     - Casting does not appear in the published grammar.
+
+     - Nested structures do not appear in the published grammar, and
+       the reference syntax for selecting a nested structure member
+       is also missing.
+
+     - The WORD type is missing from the "basic_type" production.
+
+     - The "initialization" production allows the initial value list
+       only after the INITIAL keyword, when, in fact, the initial value 
+       list may follow the DATA keyword, as well.
+
+On the other hand, the precedence of the expression operators is
+correct as written in the EBNF grammar, the dangling else problem is
+non-existent, and there are no associativity problems, as all
+operators associate left-to-right.
+
+To complicate matters, the above referenced manual may be out of
+print.  A more recent version, which covers the PL/M-386 dialect only,
+is _PL/M-386 Programmer's Guide_, Intel order number 611052-001.
+
+The latter manual has some corrections, but has some introduced errors
+in the EBNF, as well.  The problems with the unary minus and the
+"initialization" production are repaired, but the definition for a
+"binary_number" is malformed, as are the definitions for the
+"fractional_part", "string_body_element", "variable_element", and
+"if_condition" productions.
+
+We're right, they're wrong.
+
+The Authors
+-----------
+
+Gary Funck (gary@intrepid.com) was responsible for starting this
+effort.  He authored the original grammar.
+
+Kirk Hays (hays@ichips.intel.com) wrote the lexical analyzer and the
+scoped literal table implementation.  He also validated and corrected
+the grammar, and extended it to cover documented features not
+appearing in the published EBNF.
+
+Future Plans
+------------
+
+If there is enough interest (or, even if there isn't), Kirk is
+planning on producing a PL/M front end for the GNU compiler.  Contact
+him at the above Email address for further information.  Donations of
+PL/M source code of any dialect (including PL/M-80, PL/M-51, and
+PL/M-96)(yes, we already have the Kermit implementations), or a
+willingness to be a pre-alpha tester with code you cannot donate, are
+sufficient grounds to contact Kirk.
+

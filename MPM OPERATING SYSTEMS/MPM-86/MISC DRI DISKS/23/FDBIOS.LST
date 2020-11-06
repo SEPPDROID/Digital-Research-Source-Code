@@ -1,0 +1,1213 @@
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   1
+
+
+                                 title   'BIOS For iSBC86 w/ cartridge disk'
+
+                         ; BIOS for CP/M-86 using Deblocking
+
+                         ;               Configured for the Intel SBC 86/12 CPU board,
+                         ;                              the Xylogics C410 Cartridge Disk Controller
+                         ;                               (with a CDC Hawk type Cartridge drive),
+                         ;                          and the Intel SBC204 diskette controller
+
+                         ;       16 Apr '81 already!     ; JRP
+
+    00E0                 bdos_int        equ     224     ; intel approved interrupt vector
+
+    000D                 cr              equ     13      ; ascii cursor return
+    000A                 lf              equ     10      ; ascii line feed
+
+    0000                                 dseg    0000h           ; abs low memory dummy section
+
+                                         org     0               ; interrupt vectors in low memory
+
+  0000                   int0_offset     rw      1
+  0002                   int0_segment    rw      1
+
+                                         org     bdos_int*4      ; system call interrupt
+
+  0380                   bdos_offset     rw      1               ; BDOS interrupt offset &
+  0382                   bdos_segment    rw      1               ;       segment vector
+
+
+                                         cseg    ; system memory segment
+
+                                         org     0000h   ; CCP starts at offset zero
+
+                         ccp:    ; entry on cold boot
+
+  0000                                   rb      0b00h   ; 2.75k reserved for CCP
+
+                         bdos:   ; base of Basic Disk Operating System
+
+  0B00                                   rb      6       ; only need to refer to . . .
+
+                         bdos_entry: ; the BDOS entry point.
+
+                                         org     2500h   ; Start of Custom Basic Input Output System
+
+                         bios86:         ;(Enter here from Boot)
+
+                                 ; the BIOS jump vector . . .
+
+  2500 E9 3C 00                  jmp init        ; System Initialization 
+  2503 E9 00 DB                  jmp wboot       ; Warm Start - re-initialize
+  2506 E9 97 00                  jmp con_stat    ; console keyboard status
+  2509 E9 9D 00                  jmp con_in      ; console keyboard input
+  250C E9 A4 00                  jmp con_out     ; console display output
+  250F E9 BA 00                  jmp lst_out     ; system lister output
+  2512 E9 B7 00                  jmp pun_out     ; punch output
+  2515 E9 BE 00                  jmp rdr_in      ; reader input
+  2518 E9 1C 01                  jmp home        ; home current disk
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   2
+
+
+  251B E9 DC 00                  jmp seldisk     ; select a drive & return disk parameters
+  251E E9 2C 01                  jmp settrk      ; select a track
+  2521 E9 32 01                  jmp setsec      ; select a sector
+  2524 E9 38 01                  jmp setdma      ; set memory offset for disk I/O
+  2527 E9 42 02                  jmp read        ; read a sector
+  252A E9 5D 02                  jmp write       ; write a sector
+  252D E9 8E 00                  jmp lst_stat    ; printer status
+  2530 E9 36 01                  jmp sectran     ; perform logical to physical sector translation
+  2533 E9 2E 01                  jmp setdmab     ; set memory segment for disk I/O
+  2536 E9 B4 00                  jmp getsegt     ; return address of memory segment table
+  2539 E9 BA 00                  jmp getiob      ; get I/O byte value
+  253C E9 B2 00                  jmp setiob      ; set I/O byte value
+
+                         ; INIT -- first entry upon coldboot.
+
+                         init:
+                                 ; 1st, setup segment registers by propogating CS
+  253F 8C C8 8E D8 8E C0         mov ax,cs ! mov ds,ax ! mov es,ax ! mov ss,ax
+       8E D0 
+  2547 BC A2 31                  mov sp,offset end_stack
+  254A BB 7D 29 E8 8F 00         mov bx, offset signon ! call pmsg       ; display signon
+  2550 C6 06 49 2F 00            mov iobyte,0                            ; initialize IOBYTE to zero
+  2555 B8 00 00                  mov ax,0
+  2558 A2 57 2F                  mov hostact,al          ;host buffer inactive
+  255B A2 59 2F                  mov unacnt,al           ;clear unalloc count
+  255E 06                        push es
+  255F 1E                        push ds         ;save the DS register
+  2560 8E D8                     mov ds,ax
+  2562 8E C0                     mov es,ax       ;set ES and DS to zero
+                                 ;setup interrupt 0 to address trap routine
+  2564 C7 06 00 00 8D 25         mov int0_offset,offset int_trap
+  256A 8C 0E 02 00               mov int0_segment,CS
+  256E BF 04 00                  mov di,4
+  2571 BE 00 00                  mov si,0        ;then propagate
+  2574 B9 FE 01                  mov cx,255*2    ;trap vector to
+  2577 F3 A5                     rep movs ax,ax  ;all 256 interrupts
+
+                                 ; now set BDOS interrupt vector
+  2579 C7 06 80 03 06 0B         mov bdos_offset, offset bdos_entry ; jam BIOS interrupt vector
+  257F 8C 0E 82 03               mov bdos_segment, CS               ; bdos code segment same as ours
+  2583 1F                        pop ds
+  2584 07                        pop es
+  2585 E4 35                     in al,c410_reset        ; pound on c410 to get it's attention
+  2587 B9 00 00                  mov cx,0                ; insure drive zero is default
+  258A E9 73 DA                  jmp ccp
+
+
+                         ; WBOOT -- we don't need to do anything in this system. . .
+
+    0006                 wboot   equ ccp+6       ; direct reference to Console Command Processor
+                                                 ; warm entry point. 
+
+                         int_trap:       ; here on unexpected interrupts . . .
+  258D FA                        cli     ; insure no reentry...
+  258E 8C C8 8E D8 8E C0         mov ax,cs ! mov ds,ax ! mov es,ax ! mov ss,ax
+       8E D0 
+  2596 BC A2 31                  mov sp,offset end_stack
+  2599 BB E7 29                  mov bx,offset int_trap_message
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   3
+
+
+  259C E8 40 00                  call pmsg
+  259F F4                        hlt             ; then hardstop
+
+
+                         ; Customizable Console Input/Output Routines
+
+    00D8                 crt_data equ    0D8h    ; iSBC86/12 USART
+    00DA                 crt_stat equ    0DAh
+    0040                 tty_data equ    40h     ; BLC8538 port 0
+    0041                 tty_stat equ    41h
+
+    0001                 tbe     equ     00000001b       ; transmitter buffer empty when 1
+    0002                 rda     equ     00000010b       ; reciever data available when 1
+    0080                 dtr     equ     10000000b       ; data terminal ready input bit
+
+                         con_stat:
+  25A0 E4 DA 24 02 74 6F         in al,crt_stat ! and al,rda ! jz return
+  25A6 0C FF                     or al,255                       ; all bits on
+  25A8 C3                        ret
+
+                         con_in:
+  25A9 E8 F4 FF 74 FB            call con_stat ! jz con_in
+  25AE E4 D8 24 7F               in al,crt_data ! and al,127     ; remove parity
+  25B2 C3                        ret
+
+                         con_out:
+  25B3 E4 DA 24 01 74 FA         in al,crt_stat ! and al, tbe ! jz con_out
+  25B9 8A C1 E6 D8               mov al,cl ! out crt_data,al
+  25BD C3                        ret
+
+                         lst_stat:
+  25BE E4 41 24 81 3C 01         in al,tty_stat ! and al, dtr+tbe ! cmp al, tbe ! je z_ret
+       74 03 
+  25C6 0C FF C3                  or al,255 ! ret
+                         z_ret:
+  25C9 2B C0 C3                  sub ax,ax ! ret
+                         pun_out:
+                         lst_out:
+  25CC E8 EF FF 74 FB            call lst_stat ! jz lst_out
+  25D1 8A C1 E6 40               mov al,cl ! out tty_data,al
+  25D5 C3                        ret
+
+                         rdr_in:
+  25D6 E4 41 24 02 74 FA         in al,tty_stat! and al,rda ! jz rdr_in
+  25DC E4 40                     in al,tty_data
+  25DE C3                        ret
+
+
+                         pmsg: ; print message @ [BX] on console until a zero byte
+  25DF 8A 07 84 C0 74 30         mov AL,[BX] ! test AL,AL ! jz return    ; have zero, will exit
+  25E5 8A C8 E8 C9 FF            mov CL,AL ! call con_out                ; else, display char
+  25EA 43 EB F2                  inc BX ! jmps pmsg                      ; and loop till is zero
+
+
+
+                         getsegt:        ; returns address of physical memory table
+  25ED BB B7 29                  mov BX,offset seg_table
+  25F0 C3                        ret
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   4
+
+
+
+  25F1 88 0E 49 2F       setiob: mov iobyte,cl   ; we aren't using IOBYTE in this implementation,
+  25F5 C3                        ret             ;       but . . .
+                                                 ;
+  25F6 A0 49 2F          getiob: mov al,iobyte   ; we will save/return it anyway for
+  25F9 C3                        ret             ;   consistency's sake.
+
+
+
+                         ;*********************************************
+                         ;*                                           *
+                         ;*    Intel iSBC 204 Disk Controller Ports   *
+                         ;*                                           *
+                         ;*********************************************
+
+    00A0                 base204         equ 0a0h        ;SBC204 assigned address
+
+    00A0                 fdc_com         equ base204+0   ;8271 FDC out command
+    00A0                 fdc_stat        equ base204+0   ;8271 in status
+    00A1                 fdc_parm        equ base204+1   ;8271 out parameter
+    00A1                 fdc_rslt        equ base204+1   ;8271 in result
+    00A2                 fdc_rst         equ base204+2   ;8271 out reset
+    00A4                 dmac_adr        equ base204+4   ;8257 DMA base address out
+    00A5                 dmac_cont       equ base204+5   ;8257 out control
+    00A6                 dmac_scan       equ base204+6   ;8257 out scan control
+    00A7                 dmac_sadr       equ base204+7   ;8257 out scan address
+    00A8                 dmac_mode       equ base204+8   ;8257 out mode
+    00A8                 dmac_stat       equ base204+8   ;8257 in status
+    00A9                 fdc_sel         equ base204+9   ;FDC select port (not used)
+    00AA                 fdc_segment     equ base204+10  ;segment address register 
+    00AF                 reset_204       equ base204+15  ;reset entire interface
+
+    000A                 max_retries     equ 10          ; allow 10 retries on floppy
+
+                         ;       Disk Interface Primitives w/ Deblocking
+
+
+                         ;       CP/M to host disk parameters
+
+    4000                 blksiz  equ     16384           ;CP/M allocation size on Hawk
+    0200                 hostsiz equ     512             ;host disk sector size
+    000C                 hostspt equ     12              ;host disk sectors/trk
+    0004                 hostblk equ     hostsiz/128     ;CP/M sects/host buff
+    0002                 secshf  equ     2               ;log2(hostblk)
+    0030                 cpmspt  equ     hostblk * hostspt       ;CP/M sectors/track
+    0003                 secmsk  equ     hostblk-1       ;sector mask
+
+                         ;       BDOS constants on entry to write
+
+    0000                 wrall   equ     0               ;write to allocated
+    0001                 wrdir   equ     1               ;write to directory
+    0002                 wrual   equ     2               ;write to unallocated
+
+
+
+                         seldisk:
+                                 ;select disk
+  25FA B5 00 8B C1               mov ch,0 ! mov ax,cx            ; double and put in AX
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   5
+
+
+  25FE 3C 04 73 14               cmp al,4 ! jae bad_disk
+  2602 A2 4E 2F                  mov sekdisk,al          ; seek disk number
+  2605 B1 04 D3 E0               mov cl,4 ! shl ax,cl    ; times 16
+  2609 05 93 2C                  add ax,offset dpbase
+  260C 8B D8                     mov bx,ax
+  260E 80 3E 4E 2F 02 73         cmp sekdisk,2 ! jae floppy_select
+       05 
+  2615 C3                return: ret     ; we use this one from all over the place
+                                         ;       (since 8086 don't do conditional returns)
+                         bad_disk:
+  2616 BB 00 00                  mov     bx,0
+  2619 C3                        ret
+
+                         floppy_select:
+  261A C6 06 D3 2A 40 74         mov sel_mask,40h ! je return    ; drive C: is floppy zero
+       F4 
+  2621 C6 06 D3 2A 80 C3         mov sel_mask,80h ! ret
+
+                         floppy_home: ; SBC 204 requires a physical home command to keep it calibrated
+  2627 BB D8 2A                  mov bx,offset hom_com
+  262A E8 55 00                  call execute
+  262D 74 1B                     jz homed        ;home drive and return if OK
+  262F BB D8 29                  mov bx,offset bad_hom   ;else print 
+  2632 E8 AA FF                  call pmsg       ;"Home Error"
+  2635 EB 00                     jmps home       ;and retry
+
+                         home:
+                                 ;home the selected disk
+  2637 80 3E 4E 2F 02 73         cmp sekdisk,2 ! jae floppy_home
+       E9 
+  263E A0 58 2F                  mov al,hostwrt  ; check for pending write
+  2641 84 C0                     test al,al
+  2643 75 05                     jnz     homed
+  2645 C6 06 57 2F 00            mov hostact,0   ; clear host active flag
+                         homed:
+  264A B9 00 00                  mov cx,0        ; now, set track zero
+
+
+                         settrk:
+                                 ;set track given by registers CX
+  264D 89 0E 4F 2F               mov sektrk,CX           ;track to seek
+  2651 88 0E D6 2A               mov trk,cl
+  2655 C3                        ret
+
+
+                         setsec:
+                                 ;set sector given by register cl
+  2656 88 0E 51 2F               mov seksec,cl           ;sector to seek
+  265A 88 0E D7 2A               mov sect,cl
+  265E C3                        ret
+
+
+                         setdma:
+                                 ;set dma address given by CX
+  265F 89 0E 4A 2F               mov dma_offset,CX
+  2663 C3                        ret
+
+
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   6
+
+
+                         setdmab:
+                                 ; set segment address given by CX
+  2664 89 0E 4C 2F               mov dma_segment,CX
+  2668 C3                        ret
+
+                         ;       Sector logical to physical translation
+
+                         ; This version of sectran supports both software skewed disks and
+                         ; zero-origin sequentially numbered logical sectors as might be
+                         ; found on a deblocked disk.
+
+                                 ;translate sector number CX with table at [DX]
+                         sectran:
+  2669 8B D9                     mov BX,CX
+  266B 85 D2 74 06               test DX,DX ! jz no_tran ; if translate table offset is zero, don't
+  266F 03 DA 8A 1F               add BX,DX ! mov BL,[BX] ; grab translated address
+  2673 B7 00                     mov bh,0                ; for consistancies sake, mainly
+                         no_tran:
+  2675 C3                        ret
+
+
+                         floppy_READ:
+  2676 B0 12                     mov al,12h      ;basic read sector command
+  2678 EB 02                     jmps r_w_common
+
+                         floppy_WRITE:
+  267A B0 0A                     mov al,0ah      ;basic write sector command
+
+                         r_w_common:
+  267C BB D4 2A                  mov bx,offset io_com ;point to command string
+  267F 88 47 01                  mov byte ptr 1[BX],al ;put command into string
+                         ;       fall into execute and return
+
+                         execute:  ;execute command string.
+                                 ;[BX] points to length,
+                                 ;       followed by Command byte,
+                                 ;       followed by length-1 parameter bytes
+
+  2682 89 1E D1 2A               mov last_com,BX ;save command address for retries
+                         outer_retry:
+                                 ;allow some retrying
+  2686 C6 06 D0 2A 0A            mov rtry_cnt,max_retries
+                         retry:
+  268B 8B 1E D1 2A               mov BX,last_com
+  268F E8 83 00                  call send_com   ;transmit command to i8271
+                         ;       check status poll
+
+  2692 8B 1E D1 2A               mov BX,last_com
+  2696 8A 47 01                  mov al,1[bx]    ;get command op code
+  2699 B9 00 08                  mov cx,0800h    ;mask if it will be "int req"
+  269C 3C 2C                     cmp al,2ch
+  269E 72 0B                     jb exec_poll    ;ok if it is an interrupt type 
+  26A0 B9 80 80                  mov cx,8080h    ;else we use "not command busy"
+  26A3 24 0F                     and al,0fh
+  26A5 3C 0C                     cmp al,0ch      ;unless there isn't
+  26A7 B0 00                     mov al,0
+  26A9 77 30                     ja exec_exit    ;       any result
+                                                 ;poll for bits in CH,
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   7
+
+
+                         exec_poll:              ;  toggled with bits in CL
+
+  26AB E4 A0                     in al,fdc_stat  ;read status
+  26AD 22 C5                     and al,ch
+  26AF 32 C1                     xor al,cl       ;  isolate what we want to poll
+  26B1 74 F8                     jz exec_poll    ;and loop until it is done
+
+                                                 ;Operation complete,
+  26B3 E4 A1                     in al,fdc_rslt  ; see if result code indicates error
+  26B5 24 1E                     and al,1eh
+  26B7 74 22                     jz exec_exit    ;no error, then exit
+                                                 ;some type of error occurred . . .
+  26B9 3C 10                     cmp al,10h
+  26BB 74 22                     je dr_nrdy      ;was it a not ready drive ?
+                                                 ;no,
+                         dr_rdy: ; then we just retry read or write
+  26BD FE 0E D0 2A               dec rtry_cnt
+  26C1 75 C8                     jnz retry       ;  up to 10 times
+
+                         ;       retries do not recover from the
+                         ;       hard error
+
+  26C3 B4 00                     mov ah,0
+  26C5 8B D8                     mov bx,ax       ;make error code 16 bits
+  26C7 8B 9F FF 29               mov bx,errtbl[BX]
+  26CB E8 11 FF                  call pmsg       ;print appropriate message
+  26CE E8 94 02                  call uconecho   ;read upper case console character
+  26D1 3C 52                     cmp al,'R'
+  26D3 74 B1                     je outer_retry  ;retry 10 more times
+  26D5 3C 49                     cmp al,'I'
+  26D7 74 03                     je z_ret_l      ;ignore error
+  26D9 0C FF                     or al,255       ;set code for permanent error
+                         exec_exit:
+  26DB C3                        ret
+
+  26DC E9 EA FE          z_ret_l:jmp     z_ret   ; local vector
+
+                         dr_nrdy:        ;here to wait for drive ready
+  26DF E8 17 00                  call test_ready
+  26E2 75 A7                     jnz retry       ;if it's ready now we are done
+  26E4 E8 12 00                  call test_ready
+  26E7 75 A2                     jnz retry       ;if not ready twice in row,
+  26E9 BB 70 2A                  mov bx,offset nrdymsg
+  26EC E8 F0 FE                  call pmsg ;"Drive Not Ready"
+                         nrdy01:
+  26EF E8 07 00                  call test_ready
+  26F2 74 FB                     jz nrdy01       ;now loop until drive ready
+  26F4 EB 95                     jmps retry      ;then go retry without decrement
+
+                         wboot_l:                ;can't make it w/ a short leap
+  26F6 E9 0D D9                  jmp WBOOT
+
+                         ;*********************************************
+                         ;*                                           *
+                         ;*  The i8271 requires a read status command *
+                         ;*  to reset a drive-not-ready after the     *
+                         ;*  drive becomes ready                      *
+                         ;*                                           *
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   8
+
+
+                         ;*********************************************
+
+                         test_ready:
+  26F9 B6 40                     mov dh, 40h     ;proper mask if dr 1
+  26FB F6 06 D3 2A 80            test sel_mask,80h
+  2700 75 02                     jnz nrdy2
+  2702 B6 04                     mov dh, 04h     ;mask for dr 0 status bit
+                         nrdy2:
+  2704 BB DB 2A                  mov bx,offset rds_com
+  2707 E8 0B 00                  call send_com
+                         dr_poll:
+  270A E4 A0                     in al,fdc_stat  ;get status word
+  270C A8 80                     test al,80h
+  270E 75 FA                     jnz dr_poll     ;wait for not command busy
+  2710 E4 A1                     in al,fdc_rslt  ;get "special result"
+  2712 84 C6                     test al,dh      ;look at bit for this drive
+  2714 C3                        ret             ;return status of ready
+
+                         ;*********************************************
+                         ;*                                           *
+                         ;*  Send_com sends a command and parameters  *
+                         ;*  to the i8271:  BX addresses parameters.  *
+                         ;*  The DMA controller is also initialized   *
+                         ;*  if this is a read or write               *
+                         ;*                                           *
+                         ;*********************************************
+
+                         send_com:
+  2715 E4 A0                     in al,fdc_stat
+  2717 A8 80                     test al,80h     ;insure command not busy
+  2719 75 FA                     jnz send_com    ;loop until ready
+
+                                 ;see if we have to initialize for a DMA operation
+
+  271B 8A 47 01                  mov al,1[bx]    ;get command byte
+  271E 3C 12                     cmp al,12h
+  2720 75 04                     jne write_maybe ;if not a read it could be write
+  2722 B1 40                     mov cl,40h
+  2724 EB 06                     jmps init_dma   ;is a read command, go set DMA
+                         write_maybe:
+  2726 3C 0A                     cmp al,0ah
+  2728 75 20                     jne dma_exit    ;leave DMA alone if not read or write
+  272A B1 80                     mov cl,80h      ;we have write, not read
+                         init_dma:
+                         ;we have a read or write operation, setup DMA controller
+                         ;       (CL contains proper direction bit)
+  272C B0 04                     mov al,04h
+  272E E6 A8                     out dmac_mode,al    ;enable dmac
+  2730 B0 00                     mov al,00
+  2732 E6 A5                     out dmac_cont,al    ;send first byte to control port
+  2734 8A C1                     mov al,cl
+  2736 E6 A5                     out dmac_cont,al   ;load direction register
+  2738 A1 4A 2F                  mov ax,dma_offset
+  273B E6 A4                     out dmac_adr,al    ;send low byte of DMA
+  273D 8A C4                     mov al,ah
+  273F E6 A4                     out dmac_adr,al    ;send high byte
+  2741 A1 4C 2F                  mov ax,dma_segment
+  2744 E6 AA                     out fdc_segment,al ;send low byte of segment address
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE   9
+
+
+  2746 8A C4                     mov al,ah
+  2748 E6 AA                     out fdc_segment,al ;then high segment address
+                         dma_exit:
+  274A 8A 0F                     mov cl,[BX]     ;get count
+  274C 43                        inc BX
+  274D 8A 07                     mov al,[BX]     ;get command
+  274F 0A 06 D3 2A               or al,sel_mask  ;merge command and drive code
+  2753 E6 A0                     out fdc_com,al  ;send command byte
+                         parm_loop:
+  2755 FE C9                     dec cl
+  2757 74 82                     jz exec_exit    ;no (more) parameters, return
+  2759 43                        inc BX          ;point to (next) parameter
+                         parm_poll:
+  275A E4 A0                     in al,fdc_stat
+  275C A8 20                     test al,20h     ;test "parameter register full" bit
+  275E 75 FA                     jnz parm_poll   ;idle until parm reg not full
+  2760 8A 07                     mov al,[BX]
+  2762 E6 A1                     out fdc_parm,al ;send next parameter
+  2764 EB EF                     jmps parm_loop  ;go see if there are more parameters
+
+  2766 E9 0D FF          f_read: jmp     floppy_read     ; vector
+  2769 E9 0E FF          f_write:jmp     floppy_write
+
+                                 ;read the selected CP/M sector
+                         read:
+  276C 80 3E 4E 2F 02 73         cmp sekdisk,2 ! jae f_read
+       F3 
+  2773 C6 06 59 2F 00            mov unacnt,0            ; clear unallocated counter
+  2778 C6 06 60 2F 01            mov readop,1            ; read operation
+  277D C6 06 5F 2F 01            mov rsflag,1            ; must read data
+  2782 C6 06 61 2F 02            mov wrtype,wrual        ; treat as unalloc
+  2787 E9 76 00                  jmp rwoper              ; to perform the read
+
+
+                                 ; write the selected CP/M sector
+                         write:
+  278A 80 3E 4E 2F 02 73         cmp sekdisk,2 ! jae f_write
+       D8 
+  2791 C6 06 60 2F 00            mov readop,0            ; write operation
+  2796 88 0E 61 2F               mov wrtype,cl
+  279A 80 F9 02                  cmp cl,wrual            ; write unallocated?
+  279D 75 17                     jnz chkuna              ; check for unalloc
+
+                                 ; write to unallocated, set parameters
+
+  279F C6 06 59 2F 80            mov unacnt,(blksiz/128) ; next unalloc recs
+  27A4 A0 4E 2F                  mov al,sekdisk          ; disk to seek
+  27A7 A2 5A 2F                  mov unadisk,al          ; unadisk = sekdisk
+  27AA A1 4F 2F                  mov ax,sektrk
+  27AD A3 5B 2F                  mov unatrk,ax           ; unatrk = sektrk
+  27B0 A0 51 2F                  mov al,seksec
+  27B3 A2 5D 2F                  mov unasec,al           ; unasec = seksec
+
+                         chkuna:
+                                 ; check for write to unallocated sector
+
+    0000                 una     equ byte ptr [BX]       ; define name for byte at BX
+
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  10
+
+
+  27B6 BB 59 2F                  mov bx,offset unacnt            ; point "UNA" at UNACNT
+  27B9 8A 07 84 C0               mov al,una ! test al,al         ; any unalloc remain?
+  27BD 74 37                     jz alloc                ; skip if not
+
+                         ;       more unallocated records remain
+
+  27BF FE C8                     dec al          ; unacnt = unacnt-1
+  27C1 88 07                     mov una,al
+  27C3 A0 4E 2F                  mov al,sekdisk          ; same disk?
+  27C6 BB 5A 2F                  mov BX,offset unadisk
+  27C9 3A 07                     cmp al,una              ; sekdisk = unadisk?
+  27CB 75 29                     jnz alloc               ; skip if not
+
+                         ;       disks are the same
+
+  27CD A1 5B 2F                  mov AX, unatrk
+  27D0 3B 06 4F 2F               cmp AX, sektrk
+  27D4 75 20                     jnz     alloc           ; skip if not
+
+                         ;       tracks are the same
+
+  27D6 A0 51 2F                  mov al,seksec           ; same sector?
+  27D9 BB 5D 2F                  mov BX,offset unasec    ; point una at unasec
+  27DC 3A 07                     cmp al,una              ; seksec = unasec?
+  27DE 75 16                     jnz alloc               ; skip if not
+
+                         ;       match, move to next sector for future ref
+
+  27E0 FE 07                     inc una                 ; unasec = unasec+1
+  27E2 8A 07                     mov al,una              ; end of track?
+  27E4 3C 30                     cmp al,cpmspt           ; count CP/M sectors
+  27E6 72 07                     jb noovf                ; skip if below
+
+                         ;       overflow to next track
+
+  27E8 C6 07 00                  mov una,0               ; unasec = 0
+  27EB FF 06 5B 2F               inc unatrk              ; unatrk=unatrk+1
+
+                         noovf:
+                                 ; match found, mark as unnecessary read
+  27EF C6 06 5F 2F 00            mov rsflag,0            ; rsflag = 0
+  27F4 EB 0A                     jmps rwoper             ; to perform the write
+
+                         alloc:
+                                 ; not an unallocated record, requires pre-read
+  27F6 C6 06 59 2F 00            mov unacnt,0            ; unacnt = 0
+  27FB C6 06 5F 2F 01            mov rsflag,1            ; rsflag = 1
+
+                               ; jmps rwoper ;
+
+                         ;       Common code for READ and WRITE follows
+
+                         rwoper:
+                                 ; enter here to perform the read/write
+  2800 C6 06 5E 2F 00            mov erflag,0            ; no errors (yet)
+  2805 A0 51 2F                  mov al, seksec          ; compute host sector
+  2808 B1 02                     mov cl, secshf
+  280A D2 E8                     shr al,cl
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  11
+
+
+  280C A2 56 2F                  mov sekhost,al          ; host sector to seek
+
+                         ;       active host sector?
+
+  280F B0 01 86 06 57 2F         mov al,1 ! xchg al,hostact  ; always becomes 1
+  2815 84 C0                     test al,al              ; was it already?
+  2817 74 25                     jz      filhost         ; fill host if not
+
+                         ;       host buffer active, same as seek buffer?
+
+  2819 A0 4E 2F 3A 06 52         mov al,sekdisk ! cmp al,hostdisk        ; sekdisk = hostdisk?
+       2F 
+  2820 75 12                     jnz     nomatch
+
+                         ;       same disk, same track?
+
+  2822 A1 53 2F 3B 06 4F         mov ax,hosttrk ! cmp ax,sektrk  ; host track same as seek track
+       2F 
+  2829 75 09                     jnz     nomatch
+
+                         ;       same disk, same track, same buffer?
+
+  282B A0 56 2F 3A 06 55         mov al,sekhost ! cmp al,hostsec ; sekhost = hostsec?
+       2F 
+  2832 74 2B                     jz      match                   ; skip if match
+
+                         nomatch:
+                                 ; proper disk, but not correct sector
+
+  2834 A0 58 2F 84 C0            mov al, hostwrt ! test al,al    ; "dirty" buffer ?
+  2839 74 03                     jz filhost                      ; no, don't need to write
+  283B E8 72 00                  call    writehost               ; yes, we got to clear host buff
+
+                         filhost:
+                                 ; may have to fill the host buffer
+
+  283E A0 4E 2F A2 52 2F         mov al,sekdisk ! mov hostdisk,al
+  2844 A1 4F 2F A3 53 2F         mov ax,sektrk ! mov hosttrk,ax
+  284A A0 56 2F A2 55 2F         mov al,sekhost ! mov hostsec,al
+  2850 80 3E 5F 2F 00            cmp rsflag,0    ; need to read?
+  2855 74 03                     je filhost1
+
+  2857 E8 5A 00                  call read_host          ; yes, if 1 it wasn't the right one...
+
+                         filhost1:
+  285A C6 06 58 2F 00            mov hostwrt,0                   ; no pending write
+
+                         match:
+                                 ; copy data to or from buffer depending on "readop"
+
+  285F A0 51 2F                  mov al,seksec           ; mask buffer number
+  2862 25 03 00                  and ax,secmsk           ; least signif bits get masked, msb->zero
+  2865 B1 07 D3 E0               mov cl, 7 ! shl ax,cl   ; shift left 7 (mult. by 128 = 2**7)
+
+                         ;       hl has relative host buffer address
+
+  2869 05 62 2F                  add ax,offset hostbuf   ; make absolute buffer address
+  286C 8B F0                     mov si,ax               ; put in source index register
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  12
+
+
+  286E 8B 3E 4A 2F               mov di,dma_offset       ; user buffer is destination if read op.
+
+  2872 1E 06                     push DS ! push ES       ; save segment registers ***
+
+  2874 8E 06 4C 2F               mov ES,DMA_segment      ; set dest. segment to the users seg.
+                                                         ; (we will swap SI/DI, and DS/ES if write op)
+  2878 B9 40 00                  mov cx,128/2            ; length of move in words
+  287B A0 60 2F 84 C0            mov al,readop ! test al,al      ; which way?
+  2880 75 0F                     jnz     rwmove          ; skip if read
+
+                         ;       write operation, mark and switch direction
+
+  2882 C6 06 58 2F 01            mov hostwrt,1           ; hostwrt = 1 (dirty buffer now)
+  2887 87 F7                     xchg si,di              ; source/dest index swap
+  2889 8C D8 8E C0 8E 1E         mov ax,DS ! mov ES,ax ! mov DS,DMA_segment  ; setup DS,ES for write
+       4C 2F 
+
+                         rwmove:
+  2891 FC F3 A5                  cld ! rep movs AX,AX    ; move as 16 bit words
+
+  2894 07 1F                     pop ES ! pop DS         ; restore segment registers ***
+
+                         ;       data has been moved to/from host buffer
+
+  2896 80 3E 61 2F 01            cmp wrtype,wrdir        ; write type to directory?
+  289B A0 5E 2F                  mov al,erflag           ; in case of errors
+  289E 75 0F                     jnz return_rw           ; no further processing
+
+                         ;       clear host buffer for directory write
+
+  28A0 84 C0                     test al,al              ; errors?
+  28A2 75 0B                     jnz return_rw           ; skip if so
+  28A4 C6 06 58 2F 00            mov hostwrt,0           ; buffer written
+  28A9 E8 04 00                  call writehost
+  28AC A0 5E 2F                  mov al,erflag
+                         return_rw:                      ; no cond. returns, so local label here
+  28AF C3                        ret
+
+                         ; /***********************************************************/
+
+                         ;       Hardware Dependant coding follows for disk controller
+
+    000A                 retry_count     equ     10      ; should be plenty
+
+
+                                 ; Port addresses for Xylogics C410
+
+
+    0030                 c410            equ     30h     ; Xylogics 410 Controller is at 30-35
+
+    0030                 c410_iopbsl     equ     c410+0  ; low segment IOPB
+    0031                 c410_iopbsh     equ     c410+1  ; high segment IOPB
+    0032                 c410_iopbol     equ     c410+2  ; low offset IOPB
+    0033                 c410_iopboh     equ     c410+3  ; high offset IOPB
+    0034                 c410_stcmd      equ     c410+4  ; status/command port (writing 80h starts C410)
+    0035                 c410_reset      equ     c410+5  ; input to perform controller reset
+
+
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  13
+
+
+                         ; Xylogics C410 Cartridge Disk Interface uses the
+                         ;       following IOPB format:
+                         ;
+                                     ; Note that we will always use [BX] as the pointer to the IOPB
+
+    0000                 c410_cmnd       equ     byte ptr 0[BX]  ; command byte
+    0001                 c410_imode      equ     byte ptr 1[BX]  ; interrupt mode
+    0002                 c410_status     equ     byte ptr 2[BX]  ; controller status
+    0003                 c410_errc       equ     byte ptr 3[BX]  ; error code
+    0004                 c410_throt      equ     byte ptr 4[BX]  ; throttle byte
+    0005                 c410_drive      equ     byte ptr 5[BX]  ; drive select (0-3)
+    0006                 c410_head       equ     byte ptr 6[BX]  ; head/platter select (0-3)
+    0007                 c410_sect       equ     byte ptr 7[BX]  ; sector select (0-12)
+    0008                 c410_cyl        equ     word ptr 8[BX]  ; cylinder (0-413)
+    000A                 c410_scnt       equ     word ptr 10[BX] ; sector count (0-alot)
+    000C                 c410_DMA_offset equ     word ptr 12[BX] ; offset address for DMA
+    000E                 c410_DMA_segment equ    word ptr 14[BX] ; segment address for DMA
+    0010                 c410_ivec       equ     word ptr 16[BX] ; interrupt vector (if c410 INTA's)
+    0012                 c410_chain      equ     word ptr 18[BX] ; IOPB chain address
+
+
+                                 ; Commands (byte 0) are:
+                                 ;               x0 - Nop
+                                 ;               x1 - Write Sector(s)
+                                 ;               x2 - Read Sector(s)
+                                 ;               x3 - Write Check
+                                 ;               x4 - Read Check
+                                 ;               x5 - Seek
+                                 ;               x6 - Drive Recalibrate
+                                 ;               x7 - Write Format Sequential
+                                 ;               x8 - Read Header, Data, & CRC
+                                 ;               x9 - Read Drive Status
+                                 ;               xA - Write Header, Data, & CRC
+                                 ;               xB-xF  <not used, illegal>
+                                 ;
+                                 ;   "x" - Bit 7 = 1 enables status reporting
+                                 ;         Bit 6 = 1 enables Segment addressing
+                                 ;         Bit 5 = 1 enables command Chaining
+                                 ;         Bit 4 = 1 disables all interrupts
+
+                                 ; Interrupt Mode (byte 1) should be 00 for no interrupts
+                                 ; Status (byte 2) bit 7 = 1 means busy or not ready
+                                 ; Error Code (byte 3) (see messages below)
+                                 ; Throttle (byte 4) should be 80h for full speed 16 bit transfers
+                                 ; Drive, Head, Sector, Cylinder, Count, DMA segment/offset as
+                                 ;       desired...
+
+                         ;  /***************************************************************/
+
+
+                         ;       WRITEhost performs the actual sector write to
+                         ;       the host disk, and READhost reads it.
+
+
+                         write_host:
+  28B0 B2 D1                     mov dl,0D1h     ; code for Write, status enabled, no interrupts
+  28B2 EB 02                     jmps read_or_write
+
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  14
+
+
+                         ;
+                         read_host:
+  28B4 B2 D2                     mov dl,0D2h     ; code for Read,
+
+                         read_or_write:  ; common read and write code
+
+                           ;  First, setup the IOPB for the Xylogics C410 Hawk Controller
+
+  28B6 BB 35 2F                  mov BX,offset(IOPB)             ; point base to IOPB
+
+  28B9 33 C9                     xor CX,CX                       ; convenient zero
+  28BB 88 17                     mov c410_cmnd, DL               ; store command byte
+  28BD 88 4F 01                  mov c410_imode,CL               ; no interrupts, thank you
+  28C0 C6 47 04 80               mov c410_throt,80h              ; full steam, word DMA
+  28C4 88 4F 05                  mov c410_drive,cl               ; only have one drive so it is 0
+
+  28C7 A0 52 2F 24 01            mov AL,host_disk ! and AL,1     ; CP/M disk A: or B: (Top or Bottom)
+  28CC D0 E0 D0 E0 8A F0         shl AL,1 ! shl al,1 ! mov DH,AL ; * 4 and save platter bit
+  28D2 A1 53 2F 24 01 0A         mov AX,host_trk ! and AL,1 ! or AL,DH  ; track mod 2 is side
+       C6 
+  28D9 88 47 06                  mov c410_head,AL                ; head number is from both of them
+
+  28DC A0 55 2F 88 47 07         mov AL,host_sec ! mov c410_sect,AL  ; host sector number
+  28E2 A1 53 2F D1 E8            mov AX,host_trk ! shr AX,1      ; cylinder is track/2
+  28E7 89 47 08                  mov c410_cyl,AX
+  28EA C7 47 0A 01 00            mov c410_scnt,1                 ; always transfer a single sector
+  28EF C7 47 0C 62 2F            mov c410_DMA_offset,offset hostbuf  ; always transfer to/from hostbuf
+  28F4 8C 5F 0E                  mov c410_DMA_segment,DS         ; which is in current data segment
+  28F7 89 4F 10                  mov c410_ivec,CX                ; zero interrupt vector
+  28FA 89 4F 12                  mov c410_chain,CX               ; no chain address, either
+
+                                         ; now, the IOPB is set up for the operation.
+
+                         retry_rw:
+  28FD B1 0A                     mov cl,retry_count
+                         rw_retry:
+  28FF E4 35                     in al,c410_reset                ; first, blast controller clear.
+                         rw_ready:
+  2901 E4 34 24 81               in al,c410_stcmd ! and al,81h   ; insure ready and not busy
+  2905 3C 01 75 F8               cmp al,01h ! jnz rw_ready       ; loop until drive 0 is ready
+                                                                 ; then tell controller where IOPB is.
+  2909 8C C8 E6 30               mov ax,CS ! out c410_iopbsl,al  ; low byte/
+  290D 8A C4 E6 31               mov al,ah ! out c410_iopbsh,al  ;       high byte of segment address
+  2911 8A C3 E6 32               mov al,BL ! out c410_iopbol,al  ; low byte/
+  2915 8A C7 E6 33               mov al,BH ! out c410_iopboh,al  ;       high byte of offset
+
+  2919 B0 80 E6 34               mov al,80h ! out c410_stcmd,al  ; start IOPB
+                         rw_done:
+  291D E4 34 A8 80               in al,c410_stcmd ! test al,80h  ; wait for not busy
+  2921 75 FA                     jnz rw_done
+  2923 A8 40 74 38               test al,40h ! jz good_return    ; test for errors
+  2927 FE C9 75 D4               dec cl ! jnz rw_retry           ; do operation several times . . .
+
+                         ; here, got a permanent error, report it...
+
+  292B 53                        push BX                         ; have to save IOPB address
+  292C 8A 47 03                  mov al,c410_errc                ; get C410's error code
+  292F 3C 19 72 02 B0 19         cmp al,19h ! jb goterr ! mov al,19h ; max error code is 19h
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  15
+
+
+  2935 98 D1 E0          goterr: cbw ! shl ax,1                  ; make a word, and multiply by 2
+  2938 8B F0                     mov si,ax                       ; put in SI so can be index
+  293A BB 61 2C E8 9F FC         mov BX,offset fatal_msg ! call pmsg
+  2940 8B 9C DD 2A               mov BX,err_tab[SI]              ; get address of error message
+  2944 E8 98 FC                  call pmsg
+  2947 BB 6F 2C E8 92 FC         mov bx,offset retry_msg ! call pmsg
+  294D 5B                        pop BX  ; restore pointer to IOPB
+  294E E8 14 00                  call uconecho
+  2951 3C 52 74 A8               cmp al,'R' ! je retry_rw
+  2955 3C 49 74 06               cmp al,'I' ! je good_return
+  2959 C6 06 5E 2F 01            mov erflag,1
+  295E C3                        ret
+                         good_return:
+  295F C6 06 5E 2F 00            mov erflag,0
+  2964 C3                        ret
+
+                         uconecho:
+  2965 E8 41 FC 50 8A C8         call conin ! push ax ! mov cl,al ! call conout ! pop ax ; read and echo
+       E8 45 FC 58 
+  296F 24 5F                     and al,5Fh              ; crude lower to upper case
+  2971 3C 03 74 05               cmp al,03h ! je wbootx  ; check for ^C
+  2975 3C 43 74 01               cmp al,'C' ! je wbootx
+  2979 C3                        ret
+
+  297A E9 89 D6          wbootx: jmp     wboot   ; extend the range of short jumps
+
+
+    297D                 here equ offset $
+
+                                 DSEG ! org here   ; offset same as CS
+
+
+  297D 0D 0A 0D 0A 43 50 sign_on         db      cr,lf,cr,lf,'CP/M 86 Version 1.0'
+       2F 4D 20 38 36 20 
+       56 65 72 73 69 6F 
+       6E 20 31 2E 30 
+  2994 0D 0A 0D 0A 20 58                 db      cr,lf,cr,lf,' Xylogics Hawk Configuration',cr,lf,0
+       79 6C 6F 67 69 63 
+       73 20 48 61 77 6B 
+       20 43 6F 6E 66 69 
+       67 75 72 61 74 69 
+       6F 6E 0D 0A 00 
+
+
+                         ; Memory Segment Table used by system to describe memory
+                         ;       (address and length expressed in 16 byte "paragraphs")
+
+  29B7 02                seg_table       db      2       ; we have 2 segments
+  29B8 5B 03                             dw      tpa_seg ;1st seg starts after BIOS
+  29BA A5 04                             dw      tpa_len ;and extends to 08000
+  29BC 00 10                             dw      1000h   ; starting at 10000 absolute
+  29BE 00 30                             dw      3000h   ; 192k long
+  29C0 00 00 00 00 00 00                 dw 0,0,0,0,0,0,0,0,0,0,0,0      ; room for 8 entries
+       00 00 00 00 00 00 
+       00 00 00 00 00 00 
+       00 00 00 00 00 00 
+
+
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  16
+
+
+  29D8 0D 0A 48 6F 6D 65 bad_hom         db      cr,lf,'Home Error',cr,lf,0
+       20 45 72 72 6F 72 
+       0D 0A 00 
+  29E7 0D 0A 49 6E 74 65 int_trap_message db     cr,lf,'Interrupt Trap Halt',cr,lf,0
+       72 72 75 70 74 20 
+       54 72 61 70 20 48 
+       61 6C 74 0D 0A 00 
+
+  29FF 1F 2A 1F 2A 1F 2A errtbl  dw er0,er1,er2,er3
+       1F 2A 
+  2A07 2F 2A 3F 2A 4C 2A         dw er4,er5,er6,er7
+       5D 2A 
+  2A0F 70 2A 84 2A 96 2A         dw er8,er9,erA,erB
+       AB 2A 
+  2A17 BB 2A 1F 2A 1F 2A         dw erC,erD,erE,erF
+       1F 2A 
+
+  2A1F 0D 0A 4E 75 6C 6C er0     db  cr,lf,'Null Error ??',0
+       20 45 72 72 6F 72 
+       20 3F 3F 00 
+    2A1F                 er1     equ er0
+    2A1F                 er2     equ er0
+    2A1F                 er3     equ er0
+  2A2F 0D 0A 43 6C 6F 63 er4     db  cr,lf,'Clock Error :',0
+       6B 20 45 72 72 6F 
+       72 20 3A 00 
+  2A3F 0D 0A 4C 61 74 65 er5     db  cr,lf,'Late DMA :',0
+       20 44 4D 41 20 3A 
+       00 
+  2A4C 0D 0A 49 44 20 43 er6     db  cr,lf,'ID CRC Error :',0
+       52 43 20 45 72 72 
+       6F 72 20 3A 00 
+  2A5D 0D 0A 44 61 74 61 er7     db  cr,lf,'Data CRC Error :',0
+       20 43 52 43 20 45 
+       72 72 6F 72 20 3A 
+       00 
+  2A70 0D 0A 44 72 69 76 er8     db  cr,lf,'Drive Not Ready :',0
+       65 20 4E 6F 74 20 
+       52 65 61 64 79 20 
+       3A 00 
+  2A84 0D 0A 57 72 69 74 er9     db  cr,lf,'Write Protect :',0
+       65 20 50 72 6F 74 
+       65 63 74 20 3A 00 
+  2A96 0D 0A 54 72 6B 20 erA     db  cr,lf,'Trk 00 Not Found :',0
+       30 30 20 4E 6F 74 
+       20 46 6F 75 6E 64 
+       20 3A 00 
+  2AAB 0D 0A 57 72 69 74 erB     db  cr,lf,'Write Fault :',0
+       65 20 46 61 75 6C 
+       74 20 3A 00 
+  2ABB 0D 0A 53 65 63 74 erC     db  cr,lf,'Sector Not Found :',0
+       6F 72 20 4E 6F 74 
+       20 46 6F 75 6E 64 
+       20 3A 00 
+    2A1F                 erD     equ er0
+    2A1F                 erE     equ er0
+    2A1F                 erF     equ er0
+    2A70                 nrdymsg equ er8
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  17
+
+
+
+  2AD0 00                rtry_cnt db 0   ;disk error retry counter
+  2AD1 00 00             last_com dw 0   ;address of last command string
+
+  2AD3 40                sel_mask db 40h ;select mask, 40h or 80h
+
+                         ;       Various command strings for i8271
+
+  2AD4 03                io_com  db 3    ;length
+  2AD5 00                rd_wr   db 0    ;read/write function code
+  2AD6 00                trk     db 0    ;track #
+  2AD7 00                sect    db 0    ;sector #
+
+  2AD8 02 29 00          hom_com db 2,29h,0      ;home drive command
+  2ADB 01 2C             rds_com db 1,2ch        ;read status command
+
+
+  2ADD 0F 2B 1C 2B 2E 2B err_tab dw      err0,err1,err2,err3,err4,err5,err6,err7,err8,err9
+       36 2B 44 2B 4F 2B 
+       59 2B 5D 2B 6A 2B 
+       75 2B 
+  2AF1 86 2B 9B 2B AB 2B         dw      errA,errB,errC,errD,errE,errF,err10,err12,err13
+       BA 2B C6 2B D0 2B 
+       DC 2B EF 2B F5 2B 
+  2B03 FF 2B 0D 2C 23 2C         dw      err14,err15,err16,err17,err18,err19
+       33 2C 48 2C 56 2C 
+
+  2B0F 43 61 6E 27 74 20 err0    db      'Can''t Happen',0
+       48 61 70 70 65 6E 
+       00 
+  2B1C 49 6E 74 65 72 72 err1    db      'Interrupt Pending',0
+       75 70 74 20 50 65 
+       6E 64 69 6E 67 00 
+  2B2E 50 65 6E 64 69 6E err2    db      'Pending',0
+       67 00 
+  2B36 42 75 73 79 20 43 err3    db      'Busy Conflict',0
+       6F 6E 66 6C 69 63 
+       74 00 
+  2B44 57 72 69 74 65 20 err4    db      'Write Seek',0
+       53 65 65 6B 00 
+  2B4F 52 65 61 64 20 53 err5    db      'Read Seek',0
+       65 65 6B 00 
+  2B59 43 52 43 00       err6    db      'CRC',0
+  2B5D 44 69 73 6B 20 41 err7    db      'Disk Address',0
+       64 64 72 65 73 73 
+       00 
+  2B6A 44 72 69 76 65 20 err8    db      'Drive Seek',0
+       53 65 65 6B 00 
+  2B75 46 6F 72 6D 61 74 err9    db      'Format Interlock',0
+       20 49 6E 74 65 72 
+       6C 6F 63 6B 00 
+  2B86 44 72 69 76 65 20 errA    db      'Drive Sector Address',0
+       53 65 63 74 6F 72 
+       20 41 64 64 72 65 
+       73 73 00 
+  2B9B 57 72 69 74 65 20 errB    db      'Write Data Late',0
+       44 61 74 61 20 4C 
+       61 74 65 00 
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  18
+
+
+  2BAB 52 65 61 64 20 44 errC    db      'Read Data Late',0
+       61 74 61 20 4C 61 
+       74 65 00 
+  2BBA 57 72 69 74 65 20 errD    db      'Write Check',0
+       43 68 65 63 6B 00 
+  2BC6 53 6C 61 76 65 20 errE    db      'Slave Ack',0
+       41 63 6B 00 
+  2BD0 44 4D 41 20 54 69 errF    db      'DMA Timeout',0
+       6D 65 6F 75 74 00 
+  2BDC 41 63 6B 20 52 65 err10   db      'Ack Reset',0
+       73 65 74 00 
+  2BE6 49 4E 54 41 20 42 err11   db      'INTA Bus',0
+       75 73 00 
+  2BEF 53 65 65 6B 20 00 err12   db      'Seek ',0
+  2BF5 44 72 69 76 65 20 err13   db      'Drive Ack',0
+       41 63 6B 00 
+  2BFF 57 72 69 74 65 20 err14   db      'Write Protect',0
+       50 72 6F 74 65 63 
+       74 00 
+  2C0D 55 6E 69 6D 70 6C err15   db      'Unimplemented Command',0
+       65 6D 65 6E 74 65 
+       64 20 43 6F 6D 6D 
+       61 6E 64 00 
+  2C23 44 72 69 76 65 20 err16   db      'Drive Not Ready',0
+       4E 6F 74 20 52 65 
+       61 64 79 00 
+  2C33 53 65 63 74 6F 72 err17   db      'Sector Count is Zero',0
+       20 43 6F 75 6E 74 
+       20 69 73 20 5A 65 
+       72 6F 00 
+  2C48 44 72 69 76 65 20 err18   db      'Drive Faulted',0
+       46 61 75 6C 74 65 
+       64 00 
+  2C56 49 6D 70 6F 73 73 err19   db      'Impossible',0
+       69 62 6C 65 00 
+
+  2C61 0D 0A 42 49 4F 53 fatal_msg db    cr,lf,'BIOS Fatal ',0
+       20 46 61 74 61 6C 
+       20 00 
+  2C6F 20 45 72 72 6F 72 retry_msg db    ' Error, Retry (R) or Cancel (C) ? ',7,0 ; 7=bleep
+       2C 20 52 65 74 72 
+       79 20 28 52 29 20 
+       6F 72 20 43 61 6E 
+       63 65 6C 20 28 43 
+       29 20 3F 20 07 00 
+
+
+  2C93 00 00 00 00 00 00 dpbase  dw      0,0,0,0
+       00 00 
+  2C9B 0B 2D D3 2C 8B 2D         dw      dirbuf,hard_diskdef,csv0,alv0
+       0B 2E 
+  2CA3 00 00 00 00 00 00         dw      0,0,0,0
+       00 00 
+  2CAB 0B 2D D3 2C 31 2E         dw      dirbuf,hard_diskdef,csv1,alv1
+       B1 2E 
+  2CB3 F1 2C 00 00 00 00         dw      skew6,0,0,0
+       00 00 
+  2CBB 0B 2D E2 2C D7 2E         dw      dirbuf,flop_diskdef,csv2,alv2
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  19
+
+
+       E7 2E 
+  2CC3 F1 2C 00 00 00 00         dw      skew6,0,0,0
+       00 00 
+  2CCB 0B 2D E2 2C 06 2F         dw      dirbuf,flop_diskdef,csv3,alv3
+       16 2F 
+
+  2CD3 30 00             hard_diskdef    dw      48
+  2CD5 07 7F 07                          db      7,127,7
+  2CD8 2F 01 FF 01 80 00                 dw      303,511,128,512/4,2
+       80 00 02 00 
+
+  2CE2 1A 00             flop_diskdef    dw      26
+  2CE4 03 07 00                          db      3,7,0
+  2CE7 F2 00 3F 00 C0 00                 dw      242,63,192,64/4,2
+       10 00 02 00 
+
+  2CF1 01 07 0D 13       skew6   db      1,7,13,19
+  2CF5 19 05 0B 11               db      25,5,11,17
+  2CF9 17 03 09 0F               db      23,3,9,15
+  2CFD 15 02 08 0E               db      21,2,8,14
+  2D01 14 1A 06 0C               db      20,26,6,12
+  2D05 12 18 04 0A               db      18,24,4,10
+  2D09 10 16                     db      16,22
+
+                         ;       Uninitialized RAM data areas
+
+  2D0B                   dirbuf          rs      128     ; CP/M V2 directory buffer
+
+  2D8B                   csv0            rs      512/4           ; one byte per dir entry
+  2E0B                   alv0            rs      (304+7)/8       ; one bit per block
+
+  2E31                   csv1            rs      512/4
+  2EB1                   alv1            rs      (304+7)/8
+
+  2ED7                   csv2            rs      64/4
+  2EE7                   alv2            rs      (243+7)/8
+
+  2F06                   csv3            rs      64/4
+  2F16                   alv3            rs      (243+7)/8
+
+
+  2F35                   IOPB            rs      20      ; Xylogics C410 IO Parameter Block
+
+  2F49                   iobyte          rb      1
+
+  2F4A                   dma_offset      rw      1
+  2F4C                   dma_segment     rw      1
+
+  2F4E                   sek_disk        rb      1               ; seek disk number
+  2F4F                   sek_trk         rw      1               ; seek track number
+  2F51                   sek_sec         rb      1               ; seek sector number
+
+  2F52                   host_disk       rb      1               ; host disk number
+  2F53                   host_trk        rw      1               ; host track number
+  2F55                   host_sec        rb      1               ; host sector number
+
+  2F56                   sek_host        rb      1               ; seek shr secshf
+  2F57                   host_act        rb      1               ; host active flag
+
+ASM86 VER 1.0   SOURCE: FDBIOS.A86    BIOS For iSBC86 w/ cartridge d                                         PAGE  20
+
+
+  2F58                   host_wrt        rb      1               ; host written flag
+
+  2F59                   una_cnt         rb      1               ; unalloc rec cnt
+  2F5A                   una_disk        rb      1               ; last unalloc disk
+  2F5B                   una_trk         rw      1               ; last unalloc track
+  2F5D                   una_sec         rb      1               ; last unalloc sector
+
+  2F5E                   erflag          rb      1               ; error reporting
+  2F5F                   rsflag          rb      1               ; read sector flag
+  2F60                   readop          rb      1               ; 1 if read operation
+  2F61                   wrtype          rb      1               ; write operation type
+  2F62                   hostbuf         rs      hostsiz         ; host buffer
+
+                         ;       sseg overlaps CSEG and DSEG
+
+  3162                                   rw      32      ;  temp stack space for wboot
+    31A2                 end_stack       equ offset $
+
+    31A2                 last_offset     equ offset $
+
+    035B                 tpa_seg         equ     (last_offset+1024+15)/16
+    04A5                 tpa_len         equ     800h - tpa_seg
+
+  31A2 00                        db      0       ; fill last address for GENCMD
+
+                                 end
+
+
+END OF ASSEMBLY. NUMBER OF ERRORS:   0
+
+  3162                                   rw      32      ;  temp stack sp

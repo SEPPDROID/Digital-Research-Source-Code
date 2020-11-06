@@ -1,0 +1,2649 @@
+
+;************************************************************************
+;*				DEVICE DRIVER				*
+;*			FOR NCR DM V  WITH NEC 7220			*
+;************************************************************************
+;
+;01/SEPTEMBER/1983 10:00 WF bar error corrected  
+;13/oktober  /1983 10:30 wf input locator sample mode error corrected 
+;14/dezember /1983 15:30 wf erweiterung fuer language translation	
+;
+;LINK86 DDDMVc,DDNECLIc,NECASCIc,ddtrans
+;
+DGROUP	GROUP	DATA
+DDRIVER	CSEG
+;
+;
+;
+;
+	EXTRN	GRRESET:NEAR,GRSLV:NEAR,GRSYNC:NEAR,GRPITCH:NEAR
+	EXTRN	GRZOOM:NEAR,GRSTART:NEAR,GRCSRO:NEAR
+	EXTRN	GRCSRFORM:NEAR,GRCLEAR:NEAR
+	EXTRN	GRTEXTW:NEAR,GRWRITE:NEAR,GRVECTW:NEAR
+	EXTRN	GRVECTE:NEAR,GRMASK:NEAR
+	EXTRN	GRTEXTE:NEAR,GRGDCC1:NEAR,GRGDCC:NEAR
+	EXTRN	GRCSRO:NEAR
+	EXTRN	DDINIT:NEAR
+	EXTRN	GRFXON:NEAR,GRFXOFF:NEAR
+;
+BDOS	EQU	0E0H
+SBDOS	EQU	222		;SPEZIAL OUTPUT TO CPM OPERATING SYSTEM
+;
+;
+GRCMD	EQU	0A1H
+GRWRTW	EQU	020H
+;
+;	
+;The following equates are for BP addressing the arguments
+;passed into the GIOS device driver
+;
+OLD_BP		EQU	0
+CONTRL_O	EQU	2			;offset control array
+CONTRL_S	EQU	4			;segment control array
+CONTRL		EQU	dword ptr CONTRL_O
+INTIN_O		EQU	6			;offset integer	in array
+INTIN_S		EQU	8			;integer in array
+INTIN		EQU	dword ptr INTIN_O
+PTSIN_O		EQU	10			;offset points in array
+PTSIN_S		EQU	12			;segment points in array
+PTSIN		EQU	dword ptr PTSIN_O
+INTOUT_O	EQU	14			;offset of integer out array
+INTOUT_S	EQU	16			;segment of integer out array
+INTOUT		EQU	dword ptr INTOUT_O
+PTSOUT_O	EQU	18			;offset pts out array
+PTSOUT_S	EQU	20			;segment pts out array
+PTSOUT		EQU	dword ptr PTSOUT_O
+;
+;The following equates are for integer array indexing
+W_1		EQU	word ptr 0
+W_2		EQU	word ptr 2
+W_3		EQU	word ptr 4
+W_4		EQU	word ptr 6
+W_5		EQU	word ptr 8
+W_6		EQU	word ptr 10
+W_7		EQU	word ptr 12
+W_8		EQU	word ptr 14
+W_9		EQU	word ptr 16
+W_10		EQU	word ptr 18
+	Eject
+
+; Upon entry to the driver from GSX, Ds:Dx points to the parameter block.
+; All other registers are undefined.
+
+; The driver should use its own stack, to avoid overflowing the Gdos caller's.
+
+
+DDDMV:
+	Mov	Ax,Sp			; Save caller's stack
+	Mov	Bx,Ss
+
+	Pushf
+	Pop	SI
+	Cli				; watch out for old chips
+	Mov	Cx,Seg DriverStack	; Point stack at our area
+	Mov	Ss,Cx
+	Mov	Sp,Offset DriverStackTop
+	Push	SI
+	Popf
+
+; Now in driver's stack
+
+	Push	Bx			; Preserve caller' stack base
+	Push	Ax			;  and offset
+	Push	DS			; and his DS
+; Put the parameter block on the stack for Bp addressing.
+
+	Mov	Si,Dx			; Point Ds:Si at parameter block
+	Add	Si,18			; Point at last word
+	Mov	Cx,10			; 10 words of pointers
+	Std				; Work down in address
+
+ParamPushLoop:
+	LODSW				;Get a parameter pointer word
+	Push	Ax			; Push onto my stack
+	Loop	ParamPushLoop		; Loop until all 5 Dword Ptrs pushed
+
+	Push	Bp			; Point Bp at Contrl offset, preserving
+	Mov	Bp,Sp			;  the caller's for politeness
+
+; Point Ds to our data segment
+
+	Mov	Ax,Seg Function_Table	; Segment base of our data
+	Mov	Ds,Ax			; No further need for caller's Ds
+
+;The following routine does a computed call based on the function op code
+;passed in CONTRL(1)
+
+	Cld				;make the direction flag 'normal'
+	Les	DI,CONTRL[BP]		;ES:DI -> control array
+	Mov	ES:W_3[DI],0		;clear contrl(3)
+	Mov	BX,ES:[DI]		;get the function number into BX
+	Cmp	BX,MAX_FUNCTION		;asking for nonexistant function
+	Ja	NO_FUNCTION
+	Shl	BX,1			;make it a word pointer
+	Call	FUNCTION_TABLE[BX]	;call the proper routine
+NO_FUNCTION:
+	Pop	BP			;restore the old BP
+
+	Add	Sp,20			; Remove parameter block from stack
+
+	Pop	DS			; recover the DS
+	Pop	Ax			; Ax <- caller's Sp
+	Pop	Bx			; Bx <- caller's Ss
+
+	Pushf				; watch out for old chips
+	Pop	SI
+	Cli
+	Mov	Ss,Bx			; Return to caller's stack
+	Mov	Sp,Ax			; Pair not interruptable on 8086/88
+	Push	SI
+	Popf
+	Retf				; Return to driver caller
+
+	Eject
+
+;The following routine sets up all of the default information for a driver
+;and returns all of the device characteristics
+;ENTRY:
+;	SS:BP -> stacked long pointers
+;	ES:DI -> CONTRL(1)
+;
+;EXIT:
+;	CONTRL(3) = 6
+;	CONTRL(5) = 45
+;	INTOUT(1) - INTOUT(45) set up
+F_OPEN_WORKSTATION:
+	Mov	ES:W_3[DI],6		;set up CONTRL(3)
+	Mov	ES:W_5[DI],45		;set up CONTRL(5)
+	CALL	GETCOL_FROM_HARDW	;GET COLOR INDICATOR FROM HARDWARE
+	push	es
+	push	ds
+	push	si
+	push	di
+	call	get_lang_trans		;language translation table
+	pop	di
+	pop	si
+	pop	ds
+	pop	es
+	Les	DI,INTOUT[BP]		;point at the output array
+	Mov	SI,offset X_MAX		;point to top of structure
+	Mov	CX,45			;number of words to move
+	Rep	MOVSW
+	Les	DI,PTSOUT[BP]		;point at the output array
+	Mov	SI,offset OPEN_WORKSTATION_PTSOUT
+	Mov	CX,12
+	Rep	MOVSW
+;
+	Push	DS			;save our data segment
+	Mov	AX,DS			;get our data segment
+	Mov	ES,AX			;into the extra segment
+	Mov	DI,offset WORKSTATION_ID	;point at the variables
+	Lds	SI,INTIN[BP]		;point at the default values
+	Mov	CX,10			;words to move
+	Rep	MOVSW
+	Mov	AL,1
+	Mov	CX,5
+	Mov	DI,offset INPUT_MODE
+	Rep	STOSB			;initilize all input modes to request
+	Pop	DS			;recover our DS
+	Mov	CX,28			;get the number of words to move
+	Mov	SI,offset DEFAULT_COLOR_DATA
+	Mov	DI,offset COLOR_REQUEST_ARRAY
+	MOV	AX,NUMBER_COLORS
+	CMP	AX,8
+	JE	F_OPEN_1		;JUMP IF COLOR
+	MOV	SI,OFFSET DEFAULT_MONO_DATA
+F_OPEN_1:
+ 	Rep	MOVSW			;move them in
+	Mov	NEC_MODE,MODE_REP	;set up the defaults
+	Mov	POLYMARKER_NEC_SIZE,0
+	Mov	TEXT_NEC_DIRECTION,2
+	Mov	TEXT_NEC_SIZE,0
+	Mov	INCREMENT_BIAS,0	;make graphic cursor move slowly
+	MOV	CL,0
+	MOV	AL,0FFH
+	CALL	CPM_SPEZIAL_OUT		;SET GRAPHIC FLAG
+	Call	DDINIT			;wake up the 7220
+	RET
+;
+;The following routine returns the color capability flag and sets
+;    the number of predefined color and color pallette
+;
+;
+GETCOL_FROM_HARDW:
+	PUSH	ES			;SAVE EXTRA SEGMENT
+	PUSH	BX
+	MOV	BX,0FF9H
+	MOV	AX,0
+	MOV	ES,AX			;SET EXTRA SEGMENT --> 0
+	OUT	011H,AL			;ROMSELECT
+	MOV	AX,ES:[BX]		;GET COLOR INDICATOR
+	OUT	10H,AL			;RAMSELECT
+	POP	BX
+	POP	ES			;GET ORIGINAL EXTRA SEGMENT
+	CMP	AL,'C'
+	JNE	GETCOL_MONO		;JUMP IF MONOCHROME HARDWARE
+	MOV	NUMBER_COLORS,8		;PREDEFINED COLOR = 8
+	MOV	PALLETTE_COLORS,8	;PALLETTE COLOR = 8
+	MOV	COLOR_CAP_FLAG,1	;
+	JMP	GETCOL_END
+GETCOL_MONO:
+	MOV	NUMBER_COLORS,2		;PREDEFINED COLORS = 2
+	MOV	PALLETTE_COLORS,2	;PALLETTE COLOR = 2
+	MOV	COLOR_CAP_FLAG,0
+GETCOL_END:
+	RET
+get_lang_trans:
+	push	es
+	mov	cl,0fh
+	mov	dx,offset fcb_trans
+	call	fbdos
+	inc	al
+	jnz	get_ready
+	mov	text_conversion_table,0
+	pop	es
+	ret
+get_ready:
+	mov	ax,ds
+	mov	dx,ax
+	mov	cl,33h
+	call	fbdos		;set dma base address
+	mov	dx,offset text_conversion_table
+get_loop:
+	push	dx
+	mov	cl,1ah		;set dma address to conversion table
+	call	fbdos
+	mov	cl,14h
+	mov	dx,offset fcb_trans
+	call	fbdos
+	pop	dx
+	cmp	al,1
+	jz	get_end
+	add	dx,128
+	jmp	get_loop
+get_end:
+	mov	cl,16		;close file
+	mov	dx,offset fcb_trans
+	call	fbdos
+	mov	fcb_trans+15,0
+	mov	fcb_trans+32,0
+	mov	ax,offset text_conversion_table
+	mov	si,ax
+	push	ds
+	pop	es	
+get_end_1:
+	push	si
+	lodsw		;get 1. vli
+	cmp	al,1ah
+	jz	end_reached
+	cmp	al,0dh
+	jnz	end_reached	;no vli found
+	mov	bx,0
+get_end_2:
+	lodsb
+	cmp	al,0dh
+	jz	end_string_reached
+	cmp	al,1ah
+	jz	end_string_reached
+	inc	bx		;counter + 1
+	jmp	get_end_2
+end_string_reached:
+	pop	di
+	mov	ax,bx		;get string length
+	stosw
+	add	di,bx		;pointer to next string
+	push	di
+	pop	si
+	jmp	get_end_1
+end_reached:
+	pop	di
+	mov	ax,0
+	stosw			;last vli = 0
+	mov	cx,bx
+	cmp	cx,0
+	jz	end_reached_2
+end_reached_1:
+	stosb
+	loop	end_reached_1	;clear one more string
+	stosw		
+end_reached_2:
+	pop	es
+	ret
+	;
+;	
+;The following closes a workstation
+F_CLOSE_WORKSTATION:
+	MOV	CL,0
+	MOV	AL,0
+	CALL	CPM_SPEZIAL_OUT		;RESET GRAPHIC FLAG
+	CALL	GRFXOFF			;RESET TO NORMAL MODE
+	MOV	CURCOL,1
+	MOV	CURROW,1
+	RET
+;
+;The following routine clears the graphics screen
+F_CLEAR_WORKSTATION:
+	Call	GRCLEAR
+	Ret
+;
+;The following routine updates any pending graphics
+F_UPDATE_WORKSTATION:
+	Ret
+;
+;The following routine is the escape code processor
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTROL(1)   escape op-code
+;
+;EXIT:
+;	from selected routine
+;
+F_ESCAPE:
+	Mov	BX,ES:W_6[DI]		;get the opcode
+	Cmp	BX,LAST_ESCAPE_CODE	;too big ?
+	Jbe	DO_ESCAPE		;no then leap
+	SUB 	BX,31
+	CMP	BX,23
+	JBE	DO_ESCAPE
+	Ret				;else just return
+DO_ESCAPE:
+	Shl	BX,1			;make it a word pointer
+	Jmp	ESCAPE_TABLE[BX]	;leap to it
+;
+F_ESCAPE_0:
+	Mov	SI,offset ID_STRING
+	Lodsw				;get the count
+	Mov	ES:W_5[DI],AX		;set size
+	Les	DI,INTOUT[BP]
+	Mov	CX,AX
+	Rep	MOVSW			;copy the ID
+	Ret
+;
+F_ESCAPE_1:				;inquire addressable character cels
+	Les	DI,INTOUT[BP]		;point at the output array
+	Mov	ES:W_1[DI],24		;24 rows
+	Mov	ES:W_2[DI],80		;80 columns
+	Ret
+;
+F_ESCAPE_2:
+	MOV	CL,0
+	MOV	AL,0FFH
+	CALL	CPM_SPEZIAL_OUT		;SET GRAPHIC FLAG
+	Call	GRFXON			;turn on the grafix screen
+	RET
+;
+F_ESCAPE_3:
+	MOV	CL,0
+	MOV	AL,0
+	CALL	CPM_SPEZIAL_OUT		;RESET GRAPHIC FLAG
+	Call	GRFXOFF			;turn off the grafix
+	MOV	CURCOL,1
+	MOV	CURROW,1
+	RET
+;
+F_ESCAPE_4:				;cursor up
+	MOV	AL,CURROW
+	CMP	AL,1
+	JE	ESCAPE_DONE				;CURSOR JUST ON TOP
+	DEC	AL
+	MOV	CURROW,AL
+	Mov	AL,0BH			;VT
+	Jmps	ESCAPE_CHAR_OUT
+;
+F_ESCAPE_5:				;cursor down
+	MOV	AL,CURROW
+	CMP	AL,24
+	JNC	ESCAPE_DONE		;CURSOR JUST ON BOTTOM LINE
+	INC	AL
+	MOV	CURROW,AL
+	Mov	AL,0AH			;LF
+	Jmps	ESCAPE_CHAR_OUT
+;
+F_ESCAPE_6:				;cursor forward
+	MOV	AL,CURCOL
+	CMP	AL,80
+	JNC	ESCAPE_DONE		;CURSOR JUST ON RIGHT SIDE
+	INC	AL
+	MOV	CURCOL,AL
+	Mov	AL,0CH			;FF
+	Jmps	ESCAPE_CHAR_OUT
+;
+F_ESCAPE_7:
+	MOV	AL,CURCOL
+	CMP	AL,1
+	JE	ESCAPE_DONE		;CURSOR JUST ON LEFT SIDE
+	DEC	AL
+	MOV	CURCOL,AL
+	Mov	AL,08H			;cursor backward
+	Jmps	ESCAPE_CHAR_OUT
+;
+F_ESCAPE_8:	
+	MOV	CURCOL,1
+	MOV	CURROW,1
+	Mov	AL,01EH			;cursor home
+ESCAPE_CHAR_OUT:
+	Call	PUT_CHAR
+ESCAPE_DONE:
+	Ret
+;
+F_ESCAPE_9:				;erase to end of page
+	MOV	AL,1AH
+	JMPS	ESCAPE_CHAR_OUT
+;	Mov	SI,offset ERASE_END_SCREEN
+;	Jmps	ESCAPE_STRING_OUT
+;
+F_ESCAPE_10:				;erase to end of line
+	Mov	AL,017H
+	Jmps	ESCAPE_CHAR_OUT
+;
+F_ESCAPE_11:				;direct cursor address
+	Mov	SI,offset ADM3A_CURSOR_POSITION	;point at the string
+	Les	DI,INTIN[BP]		;point at input string
+	Mov	AX,ES:W_1[DI]		;get the row
+	CMP	AL,0
+	JZ	F_ESCAPE_11_1		;JUMP IF OUT OF RANGE
+	CMP	AL,25
+	JNC	F_ESCAPE_11_1		;JUMP IF OUT OF RANGE
+	MOV	CURROW,AL		;UPDATE CURRENT ROW	
+	Add	AL,01FH			;20HEX is row 0
+	Mov	ADM3A_ROW,AX		;stash it
+F_ESCAPE_11_1:
+	Mov	AX,ES:W_2[DI]		;get the column
+	CMP	AL,0
+	JZ	F_ESCAPE_11_2		;JUMP IF OUT OF RANGE
+	CMP	AL,81
+	JNC	F_ESCAPE_11_2		;JUMP IF OUT OF RANGE
+	MOV	CURCOL,AL	
+	Add	AL,01FH			;20Hex is col 0
+	Mov	ADM3A_COL,AX		;stash it
+F_ESCAPE_11_2:
+	Jmps	ESCAPE_STRING_OUT	;do it	
+;
+F_ESCAPE_12:			;output cursor addressable text
+	Mov	CX,ES:W_4[DI]		;get the string count
+	Push	DS			;save our data segment
+	Lds	SI,INTIN[BP]		;point at the string
+	pop	es
+	push	es
+	mov	ax,offset text_buffer
+	mov	di,ax
+	push	cx	
+F_ESCAPE_12_LOOP:
+	LODSW				;GET NEXT CHARACTER
+	stosb
+	loop	F_ESCAPE_12_LOOP
+	pop	cx
+	pop	ds
+	mov	ax,offset text_buffer
+	mov	di,ax
+	mov	ax,offset text_conversion_table
+	mov	si,ax
+	mov	ax,0
+text_comp:
+	lodsw
+	cmp	al,0
+	jz	text_equal_1		;jump if end of table reached
+	cmp	ax,cx			
+	jz	text_compare		;jump if length of string equal
+text_comp_1:
+	add	si,ax			;
+	lodsw
+	add	si,ax			;pointer to next entry
+	jmp	text_comp
+text_compare:
+	push	cx			;length
+	push	si			;start of string
+	PUSH	DI
+	rep	cmpsb
+	POP 	DI
+	pop	si
+	pop	cx
+	jz	text_equal
+	mov	ax,cx			;pointer to next entry
+	jmp	text_comp_1
+text_equal:
+	add	si,cx
+	lodsw				;get vli of translated text
+	mov	cx,ax
+	jmp	text_equal_2
+text_equal_1:
+	push	di
+	pop	si
+text_equal_2:
+	lodsb				;	
+	CALL	PUT_CHAR		;DRAW CHARACTER
+	MOV	AL,CURCOL
+	CMP	AL,80
+	JZ	F_ESCAPE_12_END		;END OF LINE REACHED
+	INC	AL
+	MOV	CURCOL,AL
+	LOOP	text_equal_2
+F_ESCAPE_12_END:	
+	Ret
+;
+F_ESCAPE_13:
+	Mov	SI,offset ANSI_REVERSE_ON
+	Jmps	ESCAPE_STRING_OUT
+;
+F_ESCAPE_14:
+	Mov	SI,offset ANSI_REVERSE_OFF
+ESCAPE_STRING_OUT:
+	Lodsw				;first word is count
+	Mov	CX,AX			;get it into CX
+ESCAPE_STRING_OUT_LOOP:
+	Lodsw				;get next character
+	Call	ESCAPE_CHAR_OUT		;send it
+	Loop	ESCAPE_STRING_OUT_LOOP
+	Ret
+;
+F_ESCAPE_15:				;inquire current cursor address
+	LES	DI,INTOUT[BP]
+	MOV	AL,CURROW
+	MOV	AH,0
+	MOV	ES:W_1[DI],AX
+	MOV	AL,CURCOL
+	MOV	ES:W_2[DI],AX
+	Ret
+;
+F_ESCAPE_16:				;inquire tablet status
+	Les	DI,INTOUT[BP]
+	Mov	ES:W_1[DI],0		;not available
+	Ret
+;
+F_ESCAPE_17:
+	Ret
+;
+F_ESCAPE_18:				;place cursor
+	Les	DI,PTSIN[BP]
+	Mov	AX,ES:W_1[DI]		;get X
+	Mov	XAD,AX
+	Mov	LAST_CURSOR_X,AX
+	Mov	AX,ES:W_2[DI]		;get y
+	Mov	YAD,AX
+	Mov	LAST_CURSOR_Y,AX
+TOGGLE_INPUT_CURSOR:
+	Push	TEXT_FONT
+	Push	XAD
+	Push	YAD
+	Push	word ptr NEC_MODE
+	Mov	NEC_MODE,MODE_COM	;set mode to XOR
+	Mov	NEC_COLOR,7		;select white for cursor
+	Mov	TEXT_FONT,1		;select normal font
+	Mov	CURRENT_CHARACTER,012H	;select cursor character
+	Mov	GRZOOMP,2		;select size
+	Call	GRZOOM
+	Sub	XAD,13
+	Sub	YAD,13
+	Call	DISPLAY_CHARACTER
+	Pop	word ptr NEC_MODE
+	Pop	YAD
+	Pop	XAD
+	Pop	TEXT_FONT
+	Ret	
+;
+F_ESCAPE_19:				;remove cursor
+	Mov	AX,LAST_CURSOR_X
+	Mov	XAD,AX
+	Mov	AX,LAST_CURSOR_Y
+	Mov	YAD,AX
+	Jmps	TOGGLE_INPUT_CURSOR
+
+F_ESCAPE_51:
+	MOV	SI,OFFSET ANSI_HALF_INT_ON
+	JMP	ESCAPE_STRING_OUT
+F_ESCAPE_52:
+	MOV	SI,OFFSET ANSI_HALF_INT_OFF
+	JMP	ESCAPE_STRING_OUT
+F_ESCAPE_53:
+	MOV	SI,OFFSET ANSI_BLINKING_ON
+	JMP	ESCAPE_STRING_OUT
+F_ESCAPE_54:
+	MOV	SI,OFFSET ANSI_STANDARD_VIDEO
+	JMP	ESCAPE_STRING_OUT
+;
+;
+;The following routine does the poly line function based on the endpoint data
+;passed in PTSIN
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+;	
+;
+F_POLYLINE:
+	Mov	BX,POLYLINE_COLOR
+	Mov	AL,COLOR_MAP_TABLE[BX]	;look up the color
+	Mov	NEC_COLOR,AL		;save the mapped color
+	Mov	BX,POLYLINE_TYPE	;get the type index
+	Shl	BX,1			;make it a word pointer
+	Mov	AX,POLYLINE_TABLE[BX]	;look up the line type
+F_POLY_1:
+	Mov	GRTEXTP_W,AX		;drop into the structure
+	Call	GRTEXTW			;only needs the first 2 bytes
+	Mov	AX,0FFFFH		;get a mask
+	Mov	GRMASK_W,AX		;drop the mask into the structure
+	Call	GRMASK			;set up the mask values
+	Mov	GRWRT,GRWRTW		;set base mode to write
+	Les	DI,CONTRL[BP]
+	Mov	CX,ES:W_2[DI]		;get the number of vertices
+	Dec	CX			;make it zero relative
+	Jnz	DO_POLYLINE
+	Ret				;if the bozo sent us only one vertex
+DO_POLYLINE:
+	Les	DI,PTSIN[BP]		;ES:DI -> input vertices
+	Mov	AX,ES:W_1[DI]		;get initial X
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]		;get initial Y
+	Mov	YAD,AX
+PLYLP:	ADD	DI,4			; POINT AT NEXT PAIR
+PLYLP_1:
+	Push	CX			;save the loop count
+	MOV	CX,ES:W_1[DI]		;next X
+	MOV	AX,CX
+	SUB	CX,XAD			; DELTA X
+	MOV	NXTX,AX
+	JZ	XZER
+	JNC	XPOS
+	NEG	CX			; ABS(DEL X)
+	MOV	XSGN,0			; WAS NEGATIVE
+	JMP	DELY
+XZER:	MOV	XSGN,2
+	JMP	DELY
+XPOS:	MOV	XSGN,1
+DELY:	MOV	DX,ES:W_2[DI]		;next Y
+	MOV	AX,DX
+	SUB	DX,YAD
+	MOV	NXTY,AX
+	JZ	YZER
+	JNC	YPOS
+	NEG	DX			; GET ABS(DEL Y)
+	MOV	YSGN,0			; WAS NEGATIVE
+	CMP	XSGN,2
+	JNE	DELDEL
+	MOV	XSGN,1
+	JMPS	DELDEL
+YZER:	MOV	AL,XSGN
+	MOV	YSGN,AL
+	JMPS	DELDEL
+YPOS:	MOV	YSGN,1
+	CMP	XSGN,2
+	JNE	DELDEL
+	MOV	XSGN,0
+DELDEL:	CMP	CX,DX			; ABS(DELX) - ABS(DEL Y)
+	JC	DELNEG
+	MOV	AL,0
+	JMPS	GETDIR
+DELNEG:	MOV	AL,2
+	XCHG	CX,DX			; DELX MUST BE GREATER THAN DELY
+GETDIR:	ADD	AL,XSGN
+	ADD	AL,AL
+	ADD	AL,YSGN
+	MOV	BX,offset DIRTBL
+	XLAT	DIRTBL
+	OR	AL,8			; SET UP LINE DRAW COMMAND
+	MOV	GRVECTP1,AL
+	MOV	GRVECTDC,CX		; DRAW PARM DC
+	AND	GRVECTDC,3FFFH
+	ADD	DX,DX			; 2 * ABS (DEL Y)
+	MOV	GRVECTD1,DX
+	MOV	AX,DX
+	SUB	AX,CX			; 2 * ABS(DEL Y) - ABS(DEL X)
+	MOV	GRVECTD,AX
+	AND	GRVECTD,3FFFH
+	SUB	AX,CX			; 2* ABS(DELY) - 2 * ABS(DEL X)
+	MOV	GRVECTD2,AX
+	AND	GRVECTD2,3FFFH
+	CALL	CVECTE			;COLOR VECTOR EXECUTE
+	MOV	AX,NXTX
+	MOV	XAD,AX
+	MOV	AX,NXTY
+	MOV	YAD,AX
+	Pop	CX			;recover the loop counter
+	Dec	CX			;can,t use loop instruction, too far
+	Jz	POLYLINE_DONE
+	Jmp	PLYLP
+POLYLINE_DONE:
+	Ret
+;
+;The following rotuine does the poly marker function
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+F_POLYMARKER:
+	Mov	CX,ES:W_2[DI]		;get the number of markers
+	Jcxz	POLYMARKER_DONE		;if bozo sent us no coordinates
+	Push	CX			;save the count
+	Mov	NEC_DIRECTION,2		;set the direction to normal
+	Mov	AX,0FFFFH		;get a mask of all ones
+	Mov	GRMASK_W,AX
+	Call	GRMASK			;set the mask values
+	Mov	GRWRT,GRWRTW		;set base mode to write
+	Mov	BX,POLYMARKER_COLOR	;get the color index
+	Mov	AL,COLOR_MAP_TABLE[BX]	;get the color
+	Mov	NEC_COLOR,AL		;set up the color for the 7220
+	Mov	AX,POLYMARKER_TYPE	;get the type of marker
+	Add	AL,010H			;markers start at 10H
+	Mov	CURRENT_CHARACTER,AL	;drop it into the character
+	Mov	AL,POLYMARKER_NEC_SIZE	;get the size of the marker
+	Mov	GRZOOMP,AL		;drop it into the structure
+	Call	GRZOOM			;set the size
+	Les	DI,PTSIN[BP]		;point at the points in array
+	Pop	CX			;recover the counter
+	Push	TEXT_FONT		;save the current font
+	Mov	TEXT_FONT,1		;set it to normal
+POLYMARKER_LOOP:
+	Mov	BL,GRZOOMP		;get the scale factor
+	Inc	BL			;make it one relative
+	Xor	BH,BH			;clear the top
+	Shl	BX,1			;X 2
+	Shl	BX,1			;X 4
+	Mov	AX,ES:W_1[DI]		;get the next X
+	Sub	AX,BX			;bias character into the center
+	Mov	XAD,AX			;save the new XAD
+	Mov	AX,ES:W_2[DI]		;get next Y
+	Sub	AX,BX
+	Mov	YAD,AX			;stash it
+	Add	DI,4			;point DI at next pair
+	Push	CX
+	Push	ES
+	Push	DI
+	Call	DISPLAY_CHARACTER
+	Pop	DI
+	Pop	ES
+	Pop	CX
+	Loop	POLYMARKER_LOOP
+POLYMARKER_DONE:
+	Pop	TEXT_FONT		;recover the font
+	Ret
+;
+;	
+;The following routine displays the text at INTIN(1) with a length in CONTRL(4)
+;at the position in PTSIN(1),PTSIN(2) with the current text color,scale,direction
+;
+;ENTRY:
+;	SS:BP -> stacked long pointers
+;	ES:DI -> CONTRL(1)
+;EXIT:
+;
+F_TEXT:
+	Push	ES
+	Push	DI
+	Mov	AL,TEXT_NEC_SIZE	;get the size value
+	Mov	GRZOOMP,AL		;set up the parameter
+	Call	GRZOOM			;set the zoom factor
+	Pop	DI
+	Pop	ES
+	Mov	GRWRT,GRWRTW		;set the mode to write
+	Mov	BX,TEXT_COLOR		;get the color for the text
+	Mov	AL,COLOR_MAP_TABLE[BX]	;look it up
+	Mov	NEC_COLOR,AL
+	Mov	CX,ES:W_4[DI]		;get the length into CX
+	Jcxz	F_TEXT_DONE		;if zero length then leap
+	Les	DI,PTSIN[BP]		;ES:DI -> points in array
+	Mov	AX,ES:W_1[DI]		;get X address
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]		;and Y address
+	Mov	YAD,AX
+
+	Mov	BL,GRZOOMP		;get the zoom factor
+	Inc	BL			;make it one relative
+	Mov	AL,TEXT_NEC_DIRECTION	;get the text direction code
+	Mov	NEC_DIRECTION,AL	;drop into the 7220 direction
+	Xor	AH,AH			;zero the high byte
+	Shl	AL,1
+	Shl	AL,1			;make a dword pointer
+	Add	AX,offset BASELINE_TABLE
+	Mov	SI,AX			;point at word pair
+	Lodsw				;get X bias
+	Imul	BL			;scale the base line bias
+	Add	XAD,AX			;zap it
+	Lodsw
+	Imul	BL
+	Add	YAD,AX
+
+	Les	DI,INTIN[BP]		;ES:DI -> string data
+
+DO_DISPLAY_STRING:
+	Mov	AL,ES:[DI]		;get the next character
+	Inc	DI			;bump the pointer
+	Inc	DI			;by a word value
+DO_DISPLAY_ONE_CHARACTER:
+	PUSH	ES
+	Push	DI
+	Push	CX			;save the count and the index
+	Mov	CURRENT_CHARACTER,AL	;save the character
+;
+	Call	DISPLAY_CHARACTER
+;
+SCALE_CURSOR:
+	Mov	BL,GRZOOMP		;get our current zoom factor
+	Inc	BL			;make it 1 relative
+	Mov	AL,TEXT_NEC_DIRECTION	;get the 7220 direction code
+	Xor	AH,AH
+	Shl	AL,1
+	Shl	AL,1			;make it a dword offset
+	Add	AX,offset INCREMENT_TABLE	;point at the proper pair
+	Mov	SI,AX			;put it in an index register
+	Lodsw				;get the value
+	Imul	BL			;scale it
+	Add	XAD,AX			;adjust the X address
+	Lodsw
+	Imul	BL
+	Add	YAD,AX			;adjust the Y address
+
+	Pop	CX
+	Pop	DI
+	Pop	ES
+	Loop	DO_DISPLAY_STRING		;till done
+F_TEXT_DONE:
+	Ret	
+;
+;
+;the following routine displays the character at CURRENT_CHARACTER
+;in the color specified in NEC_COLOR, at the CURRENT XAD,YAD
+;
+DISPLAY_CHARACTER:
+	Mov	AL,CURRENT_CHARACTER	;get the character
+	Xor	AH,AH			;parinoia strikes deep
+	Mov	BX,8			;calculate the bias
+	Mul	BL			;find the start of the character bits
+	Add	AX,offset CHARACTER_BIT_TABLE
+	Mov	SI,AX			;index into SI
+	Mov	DI,offset GRTEXTP1	;point DI to output structure
+	Push	ES			;save both the segments
+	Mov	AX,DS			;get the data segment
+	Mov	ES,AX			;into the extra segment
+	Mov	CX,4			;8 byte transfer but words go faster
+	Rep	Movsw			;do the move
+	Pop	ES
+;
+	Mov	GRVECTP2,7		;always a 7 for text word ptr
+	Mov	AH,NEC_NORMAL_CHAR	;get bit for normal character
+	Cmp	TEXT_FONT,1		;is it normal set
+	Jle	SET_CHARACTER_FONT
+	Mov	AH,NEC_SLANT_CHAR	;else set 2 is slanted
+SET_CHARACTER_FONT:
+	Mov	AL,NEC_DIRECTION	;get the 7220 dirction code
+	Or	AL,AH			;mark as character write
+	Mov	GRVECTP1,AL		;drop into the data structure
+	Mov	GRVECTP4,8
+;
+DISPLAY_PATTERN:
+	Mov	GRCOLR,GPLANE		;set the plane
+	Mov	AL,NEC_MODE		
+	Test	NEC_COLOR,BIT_GREEN
+	Jnz	CHAR_GRN		;if color then leap
+	Cmp	AL,MODE_REP
+	Jnz	TRY_CHAR_BLU
+	Mov	AL,MODE_RES
+CHAR_GRN:
+	Call	DO_DISPLAY_PATTERN
+TRY_CHAR_BLU:
+	MOV	AX,NUMBER_COLORS
+	CMP	AX,2
+	JE	DO_DISPLAY_PATTERN_DONE		;JUMP IF MONOCHROME
+	Mov	GRCOLR,BPLANE
+	Mov	AL,NEC_MODE
+	Test	NEC_COLOR,BIT_BLUE
+	Jnz	CHAR_BLU
+	Cmp	AL,MODE_REP
+	Jnz	TRY_CHAR_RED
+	Mov	AL,MODE_RES
+CHAR_BLU:
+	Call	DO_DISPLAY_PATTERN
+TRY_CHAR_RED:
+	Mov	GRCOLR,RPLANE
+	Mov	AL,NEC_MODE
+	Test	NEC_COLOR,BIT_RED
+	Jnz	DO_DISPLAY_PATTERN
+	Cmp	AL,MODE_REP
+	Jnz	DO_DISPLAY_PATTERN_DONE
+	Mov	AL,MODE_RES
+DO_DISPLAY_PATTERN:
+	Cmp	AL,MODE_REP
+	Jnz	DDP_SAVE_MODE
+	Mov	AL,MODE_SET
+DDP_SAVE_MODE:
+	Mov	GRATTRIB,AL		;save the write mode
+	Mov	CX,0			;command only
+	Call	GRWRITE			;set the writing mode
+	Call	GRCSRO			;put the cursor in the proper page
+	Call	GRTEXTW			;set up the pattern registers
+
+	Mov	CX,5			;5 byte write
+	Call	GRVECTW			;send out this stuff
+	Call	GRTEXTE			;do a write
+DO_DISPLAY_PATTERN_DONE:
+	Ret
+;
+;The following routine fills the area described by the input data in PTSIN
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;
+F_FILLED_AREA:
+	Mov	BX,FILL_COLOR
+	Mov	AL,COLOR_MAP_TABLE[BX]
+	Mov	NEC_COLOR,AL
+	Mov	GRWRT,GRWRTW		;mode to write
+	Mov	GRMASK_W,0FFFFH
+	Call	GRMASK
+	Mov	GRWRTP,0FFFFH
+	les	si,contrl[bp]
+	mov	ax,es:word ptr 2[si]
+	mov	num,ax
+	sub	ax,1
+	mov	numsav,ax	; save number of vertices
+	Mov	AX,FILL_INTERIOR	;get interior style
+	Cmp	AX,0
+	Jnz	DO_FILL			;if solid then leap
+	Jmp	FILL_OUTLINE
+DO_FILL_PATTERN:
+	MOV	BX,FILL_STYLE
+	ADD	BX,8
+	JMPS	DO_FILL_1
+DO_FILL:
+	Mov	BX,0			;index if solid
+	CMP	AX,2
+	JE	DO_FILL_PATTERN
+	Cmp	AX,1			;test for solid
+	Jz	DO_FILL_1		;yes then leap
+	Mov	BX,FILL_STYLE
+DO_FILL_1:
+	Mov	CL,3
+	Shl	BX,CL
+	Add	BX,offset CHARACTER_BIT_TABLE
+	Mov	FILL_MASK_BASE,BX	;save it for later
+
+
+	mov minY,1000 ! mov maxY,0		; impossible min's and max's
+
+		; search for biggest and smallest X and Y's
+
+	les si,PTSIN[BP]			; reference PTSIN
+	mov cx,num				; total number of points
+linelp:
+	add si,2				; skip X coord
+
+	lods es:word ptr [si] ! cmp ax,miny		; see if Y is smallest
+	jnl domaxy
+	mov miny,ax
+domaxy:
+	cmp ax,maxy
+	jng minmax_iterate
+	mov maxy,ax
+minmax_iterate:
+	loop linelp				; iterate til done
+
+	mov ax,miny ! mov f1,ax			; F1 is raster counter
+	mov bx,maxy ! sub bx,ax			; maxy-miny gives...
+	mov count,bx				;  is number of lines
+	Jnz	RASTER_LOOP			; if any lines
+	Jmp	FILL_OUTLINE			;else just outline
+    ; For each raster line......
+raster_loop:
+	mov jint,0				; intersection index
+	mov cx,numsav				; for J = num-1 to 1 by -1
+	Les	SI,PTSIN[BP]
+    ; For each vertice....
+
+vertice_loop:
+	push cx
+	lea di,4[si]				; addr(PTSIN((J+1)*2)
+	push si
+	call compute_intercept
+	pop si
+	add si,4
+	pop cx
+	loop vertice_loop
+
+; Now, connect last and first 
+
+	les di,ptsin[BP]
+	call compute_intercept
+
+; Now, fill between each pair of X intercepts of this raster line
+
+	mov ax,jint				; get number of X intercepts
+	shr ax,1				; jint/2 # of pairs
+	jz nxtpt				; no pairs, nothing to fill
+	mov I,ax				; is the loop index
+
+; F1 is the raster line (Y)
+; SCRATCH(0:i) has X coord pairs
+
+	mov	SI,f1
+	mov	yad,SI
+	And	SI,7
+	Neg	SI
+	Add	SI,7			;point to wrong end of character
+	Add	SI,FILL_MASK_BASE
+	Mov	AL,[SI]
+	Mov	AH,AL
+	mov	bx,offset scratch
+drwlp:
+	Push	AX
+	Push	BX	
+	Mov	CX,[BX]
+	Mov	XAD,CX
+	And	CX,0FH
+	Ror	AX,CL
+	Mov	GRTEXTP_W,AX		;set up pattern
+
+	Mov	AX,2[BX]
+	Sub	AX,XAD			;get delta
+
+	Mov	GRVECTDC,AX
+	Neg	AX
+	Mov	GRVECTD,AX
+	Shl	AX,1
+	Mov	GRVECTD2,AX
+	Mov	GRVECTD1,0
+	Mov	GRVECTP1,0AH		;vector  dir 2
+	Call	GRTEXTW
+	Call	CVECTE
+	Pop	BX
+	Pop	AX
+NXT_PAIR:
+	Add	BX,4
+	Dec	I			;count down loop
+	Jz	NXTPT
+	Jmp	DRWLP	
+;
+nxtpt:	inc	f1
+	dec	count
+	jz	FILL_OUTLINE
+	jmp	RASTER_LOOP
+;
+;
+FILL_OUTLINE:
+	Mov	AX,0FFFFH		;line style of solid
+	Call	F_POLY_1
+
+	Les	DI,PTSIN[BP]
+	Mov	AX,ES:W_1[DI]		;get first X
+	Mov 	XAD,AX
+	MOv	AX,ES:W_2[DI]
+	Mov	YAD,AX
+	Mov	BX,NUMSAV
+	Shl	BX,1
+	Shl	BX,1			;BX -> at last pair
+	Add	DI,BX
+	Mov	CX,1
+	Call	PLYLP_1
+f_fill_exit:
+no_int:					; here for short jumps...
+	ret
+	
+
+
+compute_intercept:	; ES:SI -> x1, y1 ;  ES:DI -> x2,y2, F1 = Y
+
+	mov bx,es:2[di] ! sub bx,es:2[si]	; compute Y2-Y1
+	jz no_int				; no horizontals allowed
+
+	mov ax,f1				; get Y
+	mov cx,ax ! sub cx,es:2[si]		; Y - Y1
+	sub ax,es:2[di]				; Y - Y2
+	xor ax,cx ! jns no_int			; if signs equal, not on line
+				; here if Y is within line segment
+
+				; compute hi and lo intercepts
+				; and insert them into the list
+	mov ax,es:0[di] ! sub ax,es:0[si]	; X2 - X1
+	shl cx,1 				; (Y-Y1)*2 so we can half round
+	imul cx					; (x2-x1) * (y-y1+1/2)*2
+	idiv bx					; / (y2-y1)
+	inc ax ! sar ax,1			; +1/2 and half round
+	add ax,es:0[si]				; + X1 is X intercept
+
+; insert AX into SCRATCH before first greater element
+; 	(this maintains the list in sorted order)
+
+
+insert_list:
+	Push	ES
+	mov bx,es:0[si] ! mov cx,es:0[di]	; get X1 and X2
+	cmp bx,cx ! jng no_swap_1		; insure BX is smaller of two
+	xchg bx,cx				; no, swap 'em
+no_swap_1:
+	cmp ax,bx ! jnl il_1	; see if AX is left of endpoint
+	mov ax,bx		; yes, limit it to edge
+il_1:
+	cmp ax,cx ! jng il_2	; see if AX is right of other end
+	mov ax,cx		; yes, limit to other edge	
+il_2:
+	mov bx,ds ! mov es,bx	; insure destination in our data segment
+	mov di,offset scratch	; point to start of list
+	mov cx,JINT		; get length of list
+	jcxz insert_store	; if list empty, skip scan
+scanloop:
+	scasw ! jl scanmatch	; see if less than this one
+	loop scanloop		; no, try next	
+	jmps insert_store	; greater than all, just add to end
+scanmatch:			; have match, move rest of list out one
+	mov di,jint		; get current length
+	shl di,1		; *2 is length of word array
+	add di,offset scratch	; destination is end of scratch
+	lea si,(-2)[di]		; source is last element
+	std ! rep movsw ! cld	; move rest of list (backwards)
+insert_store:
+	stosw 			; store intercept
+	inc JINT		; bump length
+	Pop	ES
+	ret
+;
+;
+;The following routine fills a cell array with the data and attributes passed
+;in CONTRL & PTSIN
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL array
+F_CELL_ARRAY:
+	Push	word ptr NEC_MODE		;save the current writing mode
+	Mov	BX,ES:W_9[DI]			;get the selected writing mode
+	And	BX,3				;mask into reality
+	Mov	AL,MODE_MAP_TABLE[BX]		;get the nec mode
+	Mov	NEC_MODE,AL			;save it
+	Mov	BX,ES:W_8[DI]			;get the row count
+	Mov	SI,ES:W_7[DI]			;get the element count
+	Mov	CA_ELEMENT_COUNT,SI		;save it
+	Mov	AX,ES:W_6[DI]			;get the row length
+	Mov	CA_ROW_LENGTH,AX		;save it for later
+
+	Les	DI,PTSIN[BP]			;point at input vertices
+	Mov	AX,ES:W_4[DI]			;get the upper Y
+	Mov	YAD,AX				;save it
+	Mov	CX,ES:W_2[DI]			;get lower Y
+	Sub	AX,CX				;calculate delta Y
+	Xor	DX,DX
+	Div	BX				;divide for repeat count
+	Mov	CA_REP_COUNT_Y,AX		;save the Y rep count
+
+	Mov	CX,ES:W_1[DI]			;get left X
+	Mov	CA_XAD,CX			;save it
+	Mov	AX,ES:W_3[DI]			;get right X
+	Sub	AX,CX				;compute DELTA X
+	Xor	DX,DX				;clear AX
+	Div	SI				;calculate X repeat count
+	Inc	AX
+	Mov	GRVECTDC,AX			;set up draw count 
+	Neg	AX
+	Mov	GRVECTD,AX
+	Shl	AX,1
+	Mov	GRVECTD2,AX
+	Mov	GRVECTD1,0
+	Mov	GRVECTP1,0AH			;vector direction 2
+	Mov	GRTEXTP_W,0FFFFH		;line style to solid
+	Call	GRTEXTW
+
+	Les	DI,CONTRL[BP]
+	Mov	CX,ES:W_8[DI]			;get the row count
+	Les	DI,INTIN[BP]			;point at the cell array
+F_CELL_ARRAY_Y_LOOP:
+	Push	CX				;stack the row count
+	Mov	CX,CA_REP_COUNT_Y		;get the Y repeat count
+DO_NEXT_CA_Y:
+	Push	CX
+	Mov	BX,0				;zero the element counter
+	Mov	CX,CA_ELEMENT_COUNT		;get the X element count
+	Mov	AX,CA_XAD
+	Mov	XAD,AX
+DO_NEXT_CA_X:
+	Mov	SI,ES:[DI+BX]			;get the next element
+	Mov	AX,NUMBER_COLORS		;get max color
+	DEC	AX
+	Cmp	SI,AX				;above the max
+	Jbe	DO_CA_COLOR			;no then leap
+	Mov	SI,AX				;else stick at max
+DO_CA_COLOR:
+	Mov	AL,COLOR_MAP_TABLE[SI]		;get the nec color
+	Mov	NEC_COLOR,AL			;save it for line draw
+	Push	ES
+	Push	DI
+	Push	BX
+	Push	CX
+	Call	CVECTE
+	Pop	CX
+	Pop	BX
+	Pop	DI
+	Pop	ES
+	Inc	BX				;bump the element pointer
+	Inc	BX				;by a word
+	Mov	AX,GRVECTDC			;get the vector length
+	Add	XAD,AX				;move the XAD
+	Loop	DO_NEXT_CA_X			;if not the last element
+	Dec	YAD				;move down on Y axis
+	Pop	CX				;get the Y repeat count
+	Loop	DO_NEXT_CA_Y			;if not last then loop
+	Pop	CX
+	Add	DI,CA_ROW_LENGTH		;move to the next row
+	Add	DI,CA_ROW_LENGTH		;its a word array
+	Loop	F_CELL_ARRAY_Y_LOOP
+F_CELL_ARRAY_DONE:
+	Pop	word ptr NEC_MODE		;restore the writing mode
+	Ret
+;
+;The following routine dispacthes to the selected generlized drawing primitive
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+F_GENERALIZED_DRAWING_PRIMITIVE:
+	Mov	BX,ES:W_6[DI]			;get the GDP op code
+	Cmp	BX,LAST_GDP			;too big ?
+	Jbe	DO_GDP				;no the lets do it
+	Ret
+DO_GDP:
+	Push	BX				;save the pointer
+	Mov	GRWRT,GRWRTW			;set mode to write
+	Mov	GRMASK_W,0FFFFH
+	Call	GRMASK
+	Pop	BX
+	Shl	BX,1
+	Jmp	GDP_TABLE[BX]			;leap to the routine
+;
+F_GDP_BAR:
+	Push	word ptr GRZOOMP
+	Mov	GRZOOMP,0
+	Call	GRZOOM
+	Pop	word ptr GRZOOMP
+
+	MOV	BX,FILL_COLOR			;get the color
+	Mov	AL,COLOR_MAP_TABLE[BX]
+	Mov	NEC_COLOR,AL
+	Mov	AX,FILL_INTERIOR		;get the interior type
+	Cmp	AX,0				;is it hollow ?
+	Jnz	FILLED_BAR
+	Jmp	HOLLOW_BAR			;yes then leap
+FILL_PATTERN:
+	MOV	BX,FILL_STYLE
+	ADD	BX,8
+	JMPS	DO_BAR
+FILLED_BAR:
+	Mov	BX,0				;first style is BLOT
+	CMP	AX,2				;IS IT PATTERN
+	JE	FILL_PATTERN
+	Cmp	AX,1				;is it solid ?
+	Jz	DO_BAR
+	Mov	BX,FILL_STYLE			;get the style index
+;
+DO_BAR: 
+	Mov	CX,3
+	Shl	BX,CL				;mul by 8
+	Mov	SI,offset CHARACTER_BIT_TABLE	;point at the character table
+	Add	SI,BX
+	MOV	DI,OFFSET GRTEXTP1
+	MOV	AX,DS
+	MOV	ES,AX
+	MOV	CX,4
+	Rep	MOVSW
+;
+	Les	DI,PTSIN[BP]			;ES:DI -> input data
+	Mov	AX,ES:W_1[DI]
+	Mov	XAD,AX				;set up start X
+	Mov	CX,ES:W_3[DI]
+	Sub	CX,AX				;delta X
+	MOV	AX,ES:W_2[DI]
+	Mov	YAD,AX
+	Mov	DX,ES:W_4[DI]
+	SUB	DX,AX				; DELTA Y
+	CMP	DX,0
+	JE	DO_BAR_3D
+	CMP	DX,1
+	JE	DO_BAR_3
+	Dec	DX				;-1
+DO_BAR_3:
+	MOV	GRVECTDC,DX
+	MOV	GRVECTD,CX
+	Mov	GRVECTP1,012H			;area fill dir 2
+	Call	DISPLAY_PATTERN			;go do it
+;
+HOLLOW_BAR:
+	Mov	GRTEXTP_W,0FFFFH		;set up the outline style
+	Call	GRTEXTW
+	Les	DI,PTSIN[BP]			;ES:DI -> input data
+	Mov	AX,ES:W_1[DI]
+	Mov	XAD,AX				;set up start X
+	Mov	CX,ES:W_3[DI]
+	Sub	CX,AX				;delta X
+	MOV	AX,ES:W_2[DI]
+	Mov	YAD,AX
+	Mov	DX,ES:W_4[DI]
+	SUB	DX,AX				; DELTA Y
+	CMP	DX,0
+	JE	DO_BAR_1D
+	CMP	DX,1
+	JE	DO_BAR_1
+	Dec	DX				;-1
+DO_BAR_1:
+	CMP	CX,0
+	JE	DO_BAR_1C
+	CMP	CX,1
+	JE	DO_BAR_2		;DPAR,D2PAR,DMPAR SHOULD NOT TO BE 0 
+	Dec	CX				;-1
+DO_BAR_2:
+	MOV	GRVECTD2,DX
+	MOV	GRVECTD,CX
+	Mov	GRVECTDM,CX
+	Mov	GRVECTP1,042H			;rectangle dir 2
+	Mov	GRVECTDC,3
+	Mov	GRVECTD1,-1
+	Call	CVECTE
+	Ret
+DO_BAR_1D:
+	INC	DX
+	JMPS	DO_BAR_1
+DO_BAR_1C:
+	INC	CX
+	JMPS	DO_BAR_2
+DO_BAR_3D:
+	INC	DX
+	JMPS	DO_BAR_3
+;
+F_GDP_ARC:
+	Ret
+;
+F_GDP_PIESLICE:
+	Ret
+;
+F_GDP_CIRCLE:
+	Mov	GRTEXTP_W,0FFFFH	;set up the line style
+	Call	GRTEXTW
+	Mov	BX,FILL_COLOR		;get the color index
+	Mov	AL,COLOR_MAP_TABLE[BX]
+	Mov	NEC_COLOR,AL		;save the selected color
+	Call	DO_GDP_CIRCLE		;do the selected size
+	Cmp	FILL_INTERIOR,0		;is it hollow ?
+	Jz	GDP_CIRCLE_DONE		;yes then leap
+FILL_CIRCLE_LOOP:
+	Les	DI,PTSIN[BP]		;point at the points in
+	Cmp	ES:W_5[DI],0		;is radius zero ?
+	Jz	GDP_CIRCLE_DONE		;yes then leap
+	Dec	ES:W_5[DI]		;else lets do the next one
+	Call	DO_GDP_CIRCLE
+	Jmps	FILL_CIRCLE_LOOP
+GDP_CIRCLE_DONE:
+	Ret
+;
+DO_GDP_CIRCLE:
+	Les	DI,PTSIN[BP]		;point to the points in array
+	Mov	BX,ES:W_5[DI]		;get the radius
+	Mov	AX,0B505H		;pick up 1/1.41 (0B505H)
+	Inc	BX
+	Mul	BX
+	Mov	GRVECTDC,DX		;stash it in the structure
+	Dec	BX			;R-1
+	Mov	GRVECTD,BX		;stash it in the structure
+	Shl	BX,1			;2(R-1)
+	Mov	GRVECTD2,BX		;stash it in the structure
+	Mov	GRVECTD1,-1		;set up the constants
+	Mov	GRVECTDM,0
+GDP_CIRCLE_LOOP:
+	Mov	AX,ES:W_1[DI]		;get the center X
+	Add	AX,ES:W_5[DI]		;add in the radius
+	Mov	XAD,AX			;save it
+	Mov	AX,ES:W_2[DI]		;get center Y
+	Mov	YAD,AX
+	Mov	GRVECTP1,27H		;arc 7
+	Call	CVECTE
+	Mov	GRVECTP1,24H		;arc 4
+	Call	CVECTE
+	Les	DI,PTSIN[BP]
+	Mov	AX,ES:W_1[DI]
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]
+	Add	AX,ES:W_5[DI]
+	Mov	YAD,AX
+	Mov	GRVECTP1,21H		;arc 1
+	Call	CVECTE
+	Mov	GRVECTP1,26H		;arc 6
+	Call	CVECTE
+	Les	DI,PTSIN[BP]
+	Mov	AX,ES:W_1[DI]
+	Sub	AX,ES:W_5[DI]
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]
+	Mov	YAD,AX
+	Mov	GRVECTP1,23H		;arc 3
+	Call	CVECTE
+	Mov	GRVECTP1,20H		;arc 0
+	Call	CVECTE
+	Les	DI,PTSIN[BP]
+	Mov	AX,ES:W_1[DI]
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]
+	Sub	AX,ES:W_5[DI]
+	Mov	YAD,AX
+	Mov	GRVECTP1,25H		;arc 5
+	Call	CVECTE
+	Mov	GRVECTP1,22H		;arc 2
+	Call	CVECTE
+	Ret
+
+;
+F_GDP_PGC:
+	Ret
+;
+;The following routine sets the character height in device units
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+;EXIT:
+;	CONTRL(3) = 2
+;	PTSOUT(1) - PTSOUT(4) filled with arguments
+F_SET_CHARACTER_HEIGHT:
+	Mov	ES:W_3[DI],2		;set up contrl(3)
+	Les	DI,PTSIN[BP]		;ES:DI -> PTSIN(1)
+	Mov	AX,ES:W_2[DI]		;get the requested character height
+	Inc	AX			;make it one relative
+	Mov	BL,7			;height of character in pixels
+	Div	BL			;compute nearest size
+	Xor	AH,AH			;zero the remainder
+	Cmp	AX,0			;min height ?
+	Jz	SET_CHARACTER_HEIGHT	;yes then leap
+	Dec	AX			;round down
+	Mov	BX,AX			;get size into BX
+	Mov	AX,15			;get the max size
+	Cmp	BX,AX			;too big
+	Ja	SET_CHARACTER_HEIGHT
+	Mov	AX,BX			;else get the size
+SET_CHARACTER_HEIGHT:
+	Mov	TEXT_NEC_SIZE,AL	;and save it
+	Inc	AX			;make it one relative to scale
+	Mov	BX,AX			;put in BX to multiply
+	Les	DI,PTSOUT[BP]		;get the output array pointer
+	Mov	AX,5			;characters are 5 pixels wide
+	Mul	BL			;scale by size
+	Mov	ES:W_1[DI],AX		;report the scaled character width
+	Mov	AX,7
+	Mul	BL
+	Mov	ES:W_2[DI],AX		;report scaled character height
+	Mov	AX,8
+	Mul	BL
+	Mov	ES:W_3[DI],AX		;report scaled cell width
+	Mov	ES:W_4[DI],AX		;report scaled cell height
+	Ret
+;
+;The following routine sets the character up vector
+;based on the angle of rotation passed in INTIN(1) in 1/10 of degrees
+;ENTRY:
+;	SS:BP ->  stacked long word pointers
+;	ES:DI ->  CONTRL(1)
+;	INTIN(1) = Theta in 1/10 degrees
+;EXIT:
+;	INTOUT(1) = Theta selected
+F_SET_CHARACTER_UP_VECTOR:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested direction
+	Add	AX,225			;bias by 1/2 octent
+	Xor	DX,DX			;clear DH
+	Mov	BX,450			;pick up 45 degrees
+	Div	BX			;chug chug chug
+	Add	AX,2			;bias into nec land
+	And	AX,07H			;mask into reality
+	Mov	TEXT_NEC_DIRECTION,AL	;save the computed nec direction code
+	Shl	AX,1			;make it a word pointer
+	Add	AX,offset ROTATION_MAP_TABLE
+	Mov	SI,AX
+	Lodsw				;get the direction in 1/10 degrees
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output array
+	Mov	ES:[DI],AX		;drop in the result
+	Ret
+;
+;The following routine set the color map value for the index requested in INTIN(1)
+;based on the values requested in INTIN(2) - INTIN(4)
+;ENTRY:
+;	SS:BP -> stacked arguments
+;	ES:DI -> CONTRL(1)
+;EXIT:
+;
+F_SET_COLOR_REPRESENTATION:
+	Les	DI,INTIN[BP]		;get the long pointer
+	Mov	BX,ES:[DI]		;get the color index
+	MOV	AX,NUMBER_COLORS
+	DEC	AX
+	CMP	AX,1
+	JE	F_S_C_R_DONE		;JUMP IF MONOCHROME
+	Cmp	BX,AX			;is it too big ?
+	Ja	F_S_C_R_DONE		;yes then do nothing
+	Mov	AX,6			;get bytes per index for request array
+	Mul	BL			;scale the index
+	Mov	SI,AX			;put it in SI
+	Add	SI,offset COLOR_REQUEST_ARRAY
+	Mov	DX,BIT_RED		;DH will accumulate DL is first mask
+	Mov	CX,3			;how many colors
+F_S_C_R_LOOP:
+	Inc	DI
+	Inc	DI			;point at the next value
+	Mov	AX,ES:[DI]		;get it
+	Mov	[SI],AX			;drop it into the request array
+	Inc	SI			;and bump the pointer
+	Inc	SI
+	Cmp	AX,500			;is it over 50%
+	Jb	F_S_C_R_NEXT		;no then leap
+	Or	DH,DL			;else set the bit
+F_S_C_R_NEXT:
+	Shl	DL,1			;move the bit
+	Loop	F_S_C_R_LOOP
+	Mov	COLOR_MAP_TABLE[BX],DH	;move the color into the map
+F_S_C_R_DONE:
+	Ret
+;
+;The following routine sets the poly line type
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_SET_POLYLINE_TYPE:
+	Les	DI,INTIN[BP]		;point at the input array
+	Mov	AX,ES:W_1[DI]		;get the requested line style
+	Cmp	AX,7			;OK ?
+	Jbe	SET_POLYLINE_TYPE
+	Mov	AX,7
+SET_POLYLINE_TYPE:
+	Les	DI,INTOUT[BP]		;point at the output array
+	Mov	POLYLINE_TYPE,AX	;save the selected line type
+	Mov	ES:[DI],AX		;and return it
+	Ret
+;
+;The following routine sets the polyline width
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_SET_POLYLINE_WIDTH:
+	Mov	ES:W_3[DI],1		;say one end point
+	Les	DI,PTSOUT[BP]		;point at the output array
+	Mov	ES:W_1[DI],1		;we support only one size
+	Mov	ES:W_2[DI],0		;clear the Y value
+	Ret
+;
+;The following routine sets the poly line color index
+;ENTRY:
+;	SS:SP -> stacked long word pointers
+F_SET_POLYLINE_COLOR_INDEX:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested color index
+	CALL	CHECK_COLOR_INDEX
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output array
+	Mov	POLYLINE_COLOR,AX	;save the index
+	Mov	ES:[DI],AX		;drop it into the output array
+	Ret
+;
+;The following routine sets the poly marker type
+;ENTRY:
+;	SS:SP -> stacked long word pointers
+F_SET_POLYMARKER_TYPE:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested marker
+	CMP	AX,0
+	JE	SET_MARKER_TYPE_1	;OUT OF RANGE	
+	Cmp	AX,5			;max marker
+	Jbe	SET_MARKER_TYPE
+SET_MARKER_TYPE_1:
+	Mov	AX,3
+SET_MARKER_TYPE:
+	Les	DI,INTOUT[BP]		;point at the output array
+	Mov 	POLYMARKER_TYPE,AX	;save the selected type
+	Mov	ES:[DI],AX		;and return the selected value
+	Ret
+;
+;The following routine sets the poly marker scale
+;ENTRY:
+;	SS:SP -> stacked long word pointers
+F_SET_POLYMARKER_SCALE:
+	Mov	ES:W_3[DI],1		;set up contrl(3)
+	Les	DI,PTSIN[BP]		;ES:DI -> PTSIN(1)
+	Mov	AX,ES:W_2[DI]		;get the requested marker height
+	Inc	AX			;make it one relative
+	Mov	BL,7			;height of marker in pixels
+	Div	BL			;compute nearest size
+	Xor	AH,AH			;zero the remainder
+	Cmp	AX,0			;too small ?
+	Jz	SET_MARKER_HEIGHT	;yes
+	Dec	AX			;make 0 relative
+	Mov	BX,AX			;get size into BX
+	Mov	AX,15			;get the max size
+	Cmp	BX,AX			;too big
+	Ja	SET_MARKER_HEIGHT
+	Mov	AX,BX			;else get the size
+SET_MARKER_HEIGHT:
+	Mov	POLYMARKER_NEC_SIZE,AL	;and save it
+	Inc	AX			;make it one relative to scale
+	Mov	BX,AX			;put in BX to multiply
+	Mov	AX,7			;heigth of character in pixels
+	Mul	BL			;scale
+	Les	DI,PTSOUT[BP]		;get the output array pointer
+	Mov	ES:W_1[DI],0		;clear it
+	Mov	ES:W_2[DI],AX		;report the scaled marker heigth
+	Ret
+;
+;The following routine sets the polymarker color index
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_SET_POLYMARKER_COLOR_INDEX:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested color index
+	CALL	CHECK_COLOR_INDEX
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output array
+	Mov	POLYMARKER_COLOR,AX	;save the index
+	Mov	ES:[DI],AX		;drop it into the output array
+	Ret
+;
+;The followung routine sets the text font selected
+;based on the font passed in INTIN(1)
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+;	INTIN(1) = requested font
+;EXIT:
+;	INTOUT(1) = selected font number
+F_SET_TEXT_FONT:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested font
+	Les	DI,INTOUT[BP]		;point at the output array
+	Cmp	AX,2			;2 ?
+	Jz	SELECT_TEXT_FONT	;yes then leap
+	Mov	AX,1
+SELECT_TEXT_FONT:
+	Mov	TEXT_FONT,AX		;save the selected font
+	Mov	ES:[DI],AX		;and return it
+	Ret
+;
+;The following routine sets the text color
+;based on the color passed in INTIN(1)
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;	ES:DI -> CONTRL(1)
+;	INTIN(1) = requested color
+;EXIT:
+;	INTOUT(1) = selected color
+F_SET_TEXT_COLOR_INDEX:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input array
+	Mov	AX,ES:[DI]		;get the requested color index
+	CALL	CHECK_COLOR_INDEX
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output array
+	Mov	TEXT_COLOR,AX		;save the index
+	Mov	ES:[DI],AX		;drop it into the output array
+	Ret
+;
+;The following routine sets the fill interior variable
+;ENTRY:
+;	SS:SP -> stacked long word pointers
+;	ES:DI -> CONTROL(1)
+;EXIT:
+;	INTOUT(1) set to interior selected
+F_SET_FILL_INTERIOR_STYLE:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input
+	Mov	AX,ES:[DI]		;get requested interior
+	Cmp	AX,3			;OK
+	Jbe	SET_FILL_INTERIOR
+	Mov	AX,0			;force hollow
+SET_FILL_INTERIOR:
+	Mov	FILL_INTERIOR,AX	;save it
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output
+	Mov	ES:[DI],AX
+	Ret
+;
+;The following routine sets the fill style variable
+;ENTRY:
+;	SS:SP -> stacked long pointers
+;EXIT:
+;	INTOUT(1) set to style selected
+F_SET_FILL_STYLE_INDEX:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input
+	Mov	AX,ES:[DI]		;get the requested style
+	CMP	AX,0
+	JE	SET_FILL_STYLE_IND1	;OUT OF RANGE
+	Cmp	AX,8			;OK ?
+	Jbe	SET_FILL_STYLE_INDEX
+SET_FILL_STYLE_IND1:
+	Mov	AX,1			;force solid style
+SET_FILL_STYLE_INDEX:
+	Mov	FILL_STYLE,AX
+	Les	DI,INTOUT[BP]
+	Mov	ES:[DI],AX
+	Ret
+;
+;The following routine sets the fill color variable
+;ENTRY:
+;	SS:SP -> stackes long word pointers
+;EXIT:
+;	INTOUT(1) set to color
+F_SET_FILL_COLOR_INDEX:
+	Les	DI,INTIN[BP]		;ES:DI -> integer input
+	Mov	AX,ES:[DI]		;get the requested color
+	CALL	CHECK_COLOR_INDEX
+	Les	DI,INTOUT[BP]		;ES:DI -> integer output array
+	Mov	FILL_COLOR,AX		;save the index
+	Mov	ES:[DI],AX		;drop it into the output array
+	Ret
+;
+;The following reports the current color representation
+;ENTRY:
+;	SS:BP -> stackes long word pointers
+F_INQUIRE_COLOR_REPRESENTATION:
+	Les	DI,INTIN[BP]			;point at the input array
+	Mov	CX,3				;3 colors R,G,B
+	Mov	AX,ES:W_1[DI]			;get the color index
+	Mov	BX,ES:W_2[DI]			;get the mode
+	Les	DI,INTOUT[BP]			;point at the output array
+	Stosw					;set the output color index
+	Xchg	AX,BX
+	Cmp	AX,0				;requested ?
+	Jz	I_C_R_REQUESTED			;yes then leap
+	Mov	DL,COLOR_MAP_TABLE[BX]		;get the current map value
+	Mov	DH,BIT_RED
+I_C_R_REALIZED:
+	Xor	AX,AX				;get a 0
+	Test	DL,DH				;bit set ?
+	Jz	I_C_R_REAL			;no then leap
+	Mov	AH,10H
+I_C_R_REAL:
+	Stosw
+	Shl	DH,1				;move the mask
+	Loop	I_C_R_REALIZED
+	Ret
+
+I_C_R_REQUESTED:
+	Mov	AL,6
+	Mul	BL
+	Mov	SI,offset COLOR_REQUEST_ARRAY
+	Add	SI,AX				;SI -> requested values
+	Rep	Movsw				;move the words
+	Ret
+;
+;
+CHECK_COLOR_INDEX:
+	MOV	BX,NUMBER_COLORS		;GET NUMBER OF COLORS
+	DEC	BX
+	CMP	AX,BX
+	JBE	COLOR_INDEX_OK
+	MOV	AX,BX				;SET MAX NUMBER OF COLORS
+COLOR_INDEX_OK:
+	RET
+;
+;
+;
+;
+;The following routine reports the pixel data at the selected cell array
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_INQUIRE_CELL_ARRAY:
+	Ret
+;
+;The following routine gets input from the locator device
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;
+;For sample mode
+;EXIT:
+;	CONTRL(3)	CONTRL(5)
+;VALID KEY	1		1
+;INVALID KEY	0		1
+;NO KEY		0		0
+;NEVER RETURN	1		0
+;
+F_INPUT_LOCATOR:
+	Cmp	LOCATOR_MODE,1		;request mode input
+	Jnz	INPUT_LOCATOR_SAMPLE	;no then leap
+	Les	DI,PTSIN[BP]		;point at starting X,Y
+	Mov	AX,ES:W_1[DI]		;get X
+	Mov	XAD,AX
+	Mov	AX,ES:W_2[DI]		;get Y
+	Mov	YAD,AX
+F_INPUT_LOCATOR_REQUEST_LOOP:
+	Call	TOGGLE_INPUT_CURSOR	;make a cursor
+	Call	GET_CHAR_NO_ECHO
+	Push	AX			;save the character
+	Call	TOGGLE_INPUT_CURSOR	;cursor off
+	Pop	AX
+	Push	AX
+	Call	CHECK_LOCATOR_KEY	;move the stuff
+	Pop	AX
+	Jz	F_INPUT_LOCATOR_REQUEST_LOOP ;valid then loop
+	Mov	BX,1			;return code of success
+	Mov	CX,1			;on pair of coordinates
+F_INPUT_LOCATOR_DONE:
+	Les	DI,INTOUT[BP]		;point at integer out array
+	Xor	AH,AH			;zero the high byte
+	Mov	ES:W_1[DI],AX		;send the terminator back
+	Les	DI,PTSOUT[BP]		;point at points out array
+	Mov	AX,XAD			;get X
+	Mov	ES:W_1[DI],AX		;send X back
+	Mov	AX,YAD			;get Y
+	Mov	ES:W_2[DI],AX		;send Y back
+	Les	DI,CONTRL[BP]		;point at CONTROL array
+	Mov	ES:W_3[DI],CX		;number of pairs 0 or 1
+	Mov	ES:W_5[DI],BX		;mark as successful or not
+	Ret
+;
+INPUT_LOCATOR_SAMPLE:
+	Call	CON_STAT		;get status
+	Mov	BX,0			;un successfull code
+	Mov	CX,0			;no pairs
+	Or	AX,AX
+	Jz	F_INPUT_LOCATOR_DONE	;no key then leap
+	Call	GET_CHAR		;get the key
+	Push	AX
+	CAll	CHECK_LOCATOR_KEY
+	Pop	AX
+	Mov	BX,1			;success at getting a key
+	Mov	CX,1			;valid key
+	Jz	F_INPUT_LOCATOR_DONE	;if valid then leap
+	Mov	CX,0			;invalid key
+	Jmps	F_INPUT_LOCATOR_DONE	;leave
+;
+;The following routine checks the key code in AX for a valid key cursor key
+;and moves the XAD,YAD with wrap around check
+;It returns AX,0 if the key was valid
+;
+CHECK_LOCATOR_KEY:
+	Mov	SI,0			;bias for UP
+	Cmp	AL,05H			;up ?
+	Jz	CHECK_GRAPHIC_CURSOR
+	Mov	SI,8
+	Cmp	AL,018H
+	Jz	CHECK_GRAPHIC_CURSOR
+	Mov	SI,16
+	Cmp	AL,04H
+	Jz	CHECK_GRAPHIC_CURSOR
+	Mov	SI,24
+	Cmp	AL,013H
+	Jz	CHECK_GRAPHIC_CURSOR
+	Cmp	AL,017H				;toggle speed ?
+	Jnz	CHECK_GRAPHIC_CURSOR_DONE	;no then return invalid
+	Xor	INCREMENT_BIAS,100B		;toggle bias
+	Jmps	CHECK_GRAPHIC_CURSOR_OK		;send back a zero
+CHECK_GRAPHIC_CURSOR:
+	Add	SI,INCREMENT_BIAS
+	Mov	AX,CURSOR_INCREMENT_TABLE[SI]
+	Add	XAD,AX
+	Inc	SI
+	Inc	SI
+	Mov	AX,CURSOR_INCREMENT_TABLE[SI]
+	Add	YAD,AX
+	Mov	AX,X_MAX
+	Cmp	XAD,AX
+	Jle	I_L_X_0
+	Mov	XAD,AX
+I_L_X_0:
+	CMP	XAD,0
+	Jge	I_L_Y
+	Mov	XAD,0
+I_L_Y:
+	Mov	AX,Y_MAX
+	Cmp	YAD,AX
+	Jle	I_L_Y_0
+	Mov	YAD,AX
+I_L_Y_0:
+	Cmp	YAD,0
+	Jge	CHECK_GRAPHIC_CURSOR_OK
+	Mov	YAD,0
+CHECK_GRAPHIC_CURSOR_OK:
+	Xor	AX,AX
+CHECK_GRAPHIC_CURSOR_DONE:
+	Or	AX,AX				;set flags
+	Ret
+;
+;The following routine gets input from the valuator device
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_INPUT_VALUATOR:
+	Les	DI,INTIN[BP]		;point at input data
+	Mov	CX,ES:W_2[DI]		;get the initial value
+	Cmp	VALUATOR_MODE,1		;request mode
+	Jnz	INPUT_VALUATOR_SAMPLE	;no then leap
+INPUT_VALUATOR_REQUEST_LOOP:
+	Push	CX
+	Call	GET_CHAR_NO_ECHO	;get a character
+	Pop	CX
+	Call	CHECK_VALUATOR_KEY	;see it ok
+	Jz	INPUT_VALUATOR_REQUEST_LOOP	;yes then loop
+	Mov	BX,1			;always OK
+INPUT_VALUATOR_DONE:
+	Les	DI,INTOUT[BP]		;point at the output array
+	Mov	ES:W_1[DI],CX		;save the current value
+	Les	DI,CONTRL[BP]
+	Mov	ES:W_5[DI],BX		;set or clear success flag
+	Ret
+;
+INPUT_VALUATOR_SAMPLE:
+	Push	CX
+	Call	CON_STAT		;any one home ?
+	Pop	CX
+	Mov	BX,0			;un successful
+	Or	AL,AL
+	Jz	INPUT_VALUATOR_DONE	;no then leap
+	Push	CX
+	Call	GET_CHAR
+	Pop	CX
+	Call	CHECK_VALUATOR_KEY
+	Mov	BX,1
+	Jz	INPUT_VALUATOR_DONE
+	Mov	BX,0			;no successful
+	Jmps	INPUT_VALUATOR_DONE
+;
+CHECK_VALUATOR_KEY:
+	Cmp	AL,'+'
+	Jnz	C_V_K_1
+	Inc	CX			;bump count
+	Jmps	C_V_K_OK
+C_V_K_1:
+	Cmp	AL,'-'
+	Jnz	C_V_K_DONE
+	Dec	CX
+	Xor	AX,AX
+C_V_K_DONE:
+	Or	AX,AX
+C_V_K_OK:
+	Ret
+;
+;The following routine gets input from the choice device
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+;
+F_INPUT_CHOICE:
+	MOV	CL,1
+	MOV	AL,0FFH
+	CALL	CPM_SPEZIAL_OUT			;SET CONFIG FLAG
+	Mov	ES:W_5[DI],0			;mark as unsuccessful
+	Cmp	CHOICE_MODE,1			;request mode ?
+	Jz	INPUT_CHOICE_REQUEST		;yes then leap
+INPUT_CHOICE_SAMPLE:
+	Call	CON_STAT			;any body home ?
+	Jz	INPUT_CHOICE_DONE		;no key then leap
+	Call	GET_CHAR			;get the character
+	Mov	BX,1				;say we got a chatacter
+	Mov	CX,AX
+	SUB	CX,0DFH
+	Cmp	AX,0E0H
+	Jb	I_C_S_BAD			;if invalid then leap
+	Cmp	AX,0F3H
+	Jbe	INPUT_CHOICE_SAVE		;if valid then leap
+I_C_S_BAD:
+	Mov	CX,0
+INPUT_CHOICE_SAVE:
+	Les	DI,CONTRL[BP]			;point at the contrl array
+	Mov	ES:W_5[DI],BX			;report success or failure
+	Les	DI,INTOUT[BP]
+	Mov	ES:W_1[DI],CX			;return the code 1 relative
+INPUT_CHOICE_DONE:
+	MOV	CL,1
+	MOV	AL,0
+	CALL	CPM_SPEZIAL_OUT			;RESET CONFIG FLAG
+	Ret
+
+INPUT_CHOICE_REQUEST:
+	Call	GET_CHAR_NO_ECHO
+	Mov	BX,1
+	Mov	CX,AX
+	SUB	CX,0DFH
+	Cmp	AX,0E0H				;valid ?
+	Jb	I_C_R_BAD			;no then leap
+	Cmp	AX,0F3H
+	Jbe	INPUT_CHOICE_SAVE		;valid then leap
+I_C_R_BAD:
+	Mov	CX,0
+	Mov	BX,0
+	Jmps	INPUT_CHOICE_SAVE
+;
+;The following routing gets input from the string device
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_INPUT_STRING:
+	Les	DI,INTIN[BP]			;point to integer in array
+	Mov	CX,ES:W_2[DI]			;get max length
+	Mov	AX,ES:W_3[DI]			;get echo mode
+	Les	DI,INTOUT[BP]			;point at the output string
+	Xor	BX,BX				;clear the character count
+	Or	AX,AX				;set flags
+	Jz	INPUT_STRING_NO_ECHO
+INPUT_STRING_ECHO:
+	Cmp	STRING_MODE,1			;request ?
+	Jz	I_S_E				;yes then leap
+	Call	CON_STAT			;any characters
+	Or	AL,AL
+	Jz	INPUT_STRING_DONE		;no the leap
+I_S_E:
+	Call	GET_CHAR_ECHO
+	Cmp	AL,0DH				;done ?
+	Jz	INPUT_STRING_DONE
+	Xor	AH,AH
+	Stosw					;save char as an integer
+	Inc	BX
+	Loop	INPUT_STRING_ECHO
+	Jmps	INPUT_STRING_DONE
+;
+INPUT_STRING_NO_ECHO:
+	Cmp	STRING_MODE,1			;request ?
+	Jz	I_S_N_E				;yes then leap
+	Call	CON_STAT			;any characters
+	Or	AL,AL
+	Jz	INPUT_STRING_DONE		;no then leap
+I_S_N_E:
+	Call	GET_CHAR_NO_ECHO
+	Cmp	AL,0DH				;done ?
+	Jz	INPUT_STRING_DONE
+	Xor	AH,AH
+	Stosw					;save char as an integer
+	Inc	BX
+	Loop	INPUT_STRING_NO_ECHO
+INPUT_STRING_DONE:
+	Les	DI,CONTRL[BP]
+	Mov	ES:W_5[DI],BX			;save the length
+	Ret
+;
+;The following routine sets the writing mode
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_SET_WRITING_MODE:
+	Les	DI,INTIN[BP]			;point at the input parameter
+	Mov	BX,ES:[DI]			;get the requested writing mode
+	Mov	AX,1				;get the default mode
+	Cmp	BX,0
+	Jz	SET_WRITING_MODE		;if to low then set the mode
+	Cmp	BX,4
+	Ja	SET_WRITING_MODE		;if to high then set the mode
+	Mov	AX,BX				;else get the selected mode
+SET_WRITING_MODE:
+	Les	DI,INTOUT[BP]			;point at the output array
+	Mov	ES:[DI],AX			;and return the selected  mode
+	Mov	BX,AX
+	Mov	AL,MODE_MAP_TABLE[BX]		;get the magic byte
+	Mov	NEC_MODE,AL			;save it for later
+	Ret
+;
+;The following routine sets the input mode
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_SET_INPUT_MODE:
+	Les	DI,INTIN[BP]
+	Mov	BX,ES:W_1[DI]			;get device pointer
+	Mov	AX,ES:W_2[DI]			;get the mode
+	Cmp	AX,2				;sample ?
+	Jz	SET_INPUT_MODE			;yes then leap
+	Mov	AX,1				;else force request
+SET_INPUT_MODE:
+	Mov	SI,offset INPUT_MODE		;point at the table
+	Cmp	BX,4				;device out of range
+	Jbe	SAVE_INPUT_MODE			;no then leap
+	Mov	BX,0				;point to dummy
+SAVE_INPUT_MODE:
+	Add	SI,BX				;point SI
+	Mov	[SI],AL				;save the selected mode
+	Les	DI,INTOUT[BP]			;point at integer output array
+	Mov	ES:W_3[DI],AX			;send back the mode
+	Ret
+;
+;The following routine writes an item to the meta file
+;ENTRY:
+;	SS:BP -> stacked long word pointers
+F_WRITE_ITEM_TO_METAFILE:
+	Ret
+;
+;The following routine draws a vector in the selected color with the arguments
+;placed at VECDAT
+;
+CVECTE:	Mov     GRCOLR,GPLANE
+	Mov	AL,NEC_MODE
+	Test	NEC_COLOR,BIT_GREEN	;any green ?
+	Jnz	DO_GRN_VEC		;yes then do it
+	Cmp	AL,MODE_REP		;replace mode ?
+	Jnz	TRY_BLU_VEC		;no then leap
+	Mov	AL,MODE_RES		;else get clear mode
+DO_GRN_VEC:
+	Call	DO_VECTOR_WRITE
+TRY_BLU_VEC:
+	MOV	AX,NUMBER_COLORS
+	CMP	AX,2
+	JE	VECTOR_WRITE_DONE	;JUMP IF MONOCHROME
+	MOV     GRCOLR,BPLANE
+	Mov	AL,NEC_MODE
+	Test	NEC_COLOR,BIT_BLUE
+	Jnz	DO_BLU_VEC
+	Cmp	AL,MODE_REP
+	Jnz	TRY_RED_VEC
+	Mov	AL,MODE_RES
+DO_BLU_VEC:
+	Call	DO_VECTOR_WRITE
+TRY_RED_VEC:
+	MOV     GRCOLR,RPLANE
+	Mov	AL,NEC_MODE
+	Test	NEC_COLOR,BIT_RED
+	Jnz	DO_VECTOR_WRITE
+	Cmp	AL,MODE_REP
+	Jnz	VECTOR_WRITE_DONE
+	Mov	AL,MODE_RES
+DO_VECTOR_WRITE:
+	Cmp	AL,MODE_REP
+	Jnz	DVW_SAVE_MODE
+	Mov	AL,MODE_SET
+DVW_SAVE_MODE:
+	Mov	GRATTRIB,AL	;stash the writing mode
+	Mov	CX,0		;command only
+	Call	GRWRITE		;set the writing mode
+	Call	GRCSRO		;set us in the right page
+	Mov	CX,11		;# of fig parms
+	Call	GRVECTW		;load 'em up
+	Call	GRVECTE		;draw it
+VECTOR_WRITE_DONE:
+	Ret
+;
+F_RETURN:
+	Ret
+;
+CON_STAT:
+	Push	ES
+	Push	DI
+	Push	SI
+	Push	DX
+	Push	CX
+	Push	BX
+	Mov	CL,6
+	Mov	DX,0FEH
+	Int	BDOS
+	Pop	BX
+	Pop	CX
+	Pop	DX
+	Pop	SI
+	Pop	DI
+	Pop	ES
+	Ret
+
+fbdos:
+	Push	ES
+	Push	DI
+	Push	SI
+	Push	DX
+	Push	CX
+	Push	BX
+	Int	BDOS
+	Pop	BX
+	Pop	CX
+	Pop	DX
+	Pop	SI
+	Pop	DI
+	Pop	ES
+	Ret
+;
+;The following routine gets a character using function 6 DIO
+GET_CHAR_NO_ECHO:
+	Call	CON_STAT
+	Or	AL,AL			;set flag
+	Jz	GET_CHAR_NO_ECHO
+GET_CHAR:
+	Push	ES
+	Push	DI
+	Push	SI
+	Push	DX
+	Push	CX
+	Push	BX
+	Mov	CL,6			;BDOS direct I/O
+	Mov	DX,0FFH			;input character
+	Int	BDOS			;ring CP/M-86 bell
+	Pop	BX
+	Pop	CX
+	Pop	DX
+	Pop	SI
+	Pop	DI
+	Pop	ES
+	Ret
+;
+GET_CHAR_ECHO:
+	Call	GET_CHAR_NO_ECHO
+	PUSH	CX
+	PUSH	AX
+	PUSH	SI
+	PUSH	DX
+	PUSH	BX
+	MOV	CX,1			;CHARACTER LENGTH
+	CALL	DO_DISPLAY_ONE_CHARACTER
+	POP	BX
+	POP	DX
+	POP	SI
+	POP	AX
+	POP	CX
+	RET
+;
+;
+;
+
+PUT_CHAR:
+	Push	AX			;save the character
+	Push	ES
+	Push	DI
+	Push	SI
+	Push	DX
+	Push	CX
+	Push	BX
+	XOR	DH,DH
+	Mov	DL,AL
+	Mov	CL,6
+	Int	BDOS
+	Pop	BX
+	Pop	CX
+	Pop	DX
+	Pop	SI
+	Pop	DI
+	Pop	ES
+	Pop	AX			;restore the character
+	Ret
+;
+CPM_SPEZIAL_OUT:
+	Push	AX			;save the character
+	Push	ES
+	Push	DI
+	Push	SI
+	Push	DX
+	Push	CX
+	Push	BX
+	Int	SBDOS
+	Pop	BX
+	Pop	CX
+	Pop	DX
+	Pop	SI
+	Pop	DI
+	Pop	ES
+	Pop	AX			;restore the character
+	Ret
+;*********************************************************************
+;*     GRAPHIC DISPLAY DATA AREA                                     *
+;*********************************************************************
+;
+        DSEG
+
+MAX_X	EQU	639
+MAX_Y	EQU	399
+;
+	PUBLIC	X_MAX,Y_MAX
+;
+	EXTRN	GRTEXTP1:BYTE,GRTEXTP2:BYTE,GRATTRIB:BYTE
+	EXTRN	GRTEXTP_W:WORD
+	EXTRN	GRVECTP1:BYTE,GRVECTDC:WORD,GRVECTD:WORD
+	EXTRN	GRVECTD2:WORD
+	EXTRN	GRVECTD1:WORD,GRVECTDM:WORD
+	EXTRN	GRATTRIB:BYTE
+	EXTRN	XAD:WORD,YAD:WORD
+	EXTRN	GRCOLR:WORD
+	EXTRN	GRWRT:BYTE,GRWRTP:WORD
+	EXTRN	GRMASK_L:BYTE
+	EXTRN	GRMASK_W:WORD
+	EXTRN	GRVECTP2:WORD,GRVECTP4:WORD
+	EXTRN	GRZOOMP:BYTE
+	extrn	text_conversion_table:byte
+;
+	EXTRN	CHARACTER_BIT_TABLE:BYTE
+;
+;
+;
+FUNCTION_TABLE	DW	offset F_RETURN				;no function 0
+		DW	offset F_OPEN_WORKSTATION		;function 1
+		DW	offset F_CLOSE_WORKSTATION		;function 2
+		DW	offset F_CLEAR_WORKSTATION		;function 3
+		DW	offset F_UPDATE_WORKSTATION		;function 4
+		DW	offset F_ESCAPE				;function 5
+		DW	offset F_POLYLINE			;function 6
+		DW	offset F_POLYMARKER			;function 7
+		DW	offset F_TEXT				;function 8
+		DW	offset F_FILLED_AREA			;function 9
+		DW	offset F_CELL_ARRAY			;function 10
+		DW	offset F_GENERALIZED_DRAWING_PRIMITIVE	;function 11
+		DW	offset F_SET_CHARACTER_HEIGHT		;function 12
+		DW	offset F_SET_CHARACTER_UP_VECTOR	;function 13
+		DW	offset F_SET_COLOR_REPRESENTATION	;function 14
+		DW	offset F_SET_POLYLINE_TYPE		;function 15
+		DW	offset F_SET_POLYLINE_WIDTH		;function 16
+		DW	offset F_SET_POLYLINE_COLOR_INDEX	;function 17
+		DW	offset F_SET_POLYMARKER_TYPE		;function 18
+		DW	offset F_SET_POLYMARKER_SCALE		;function 19
+		DW	offset F_SET_POLYMARKER_COLOR_INDEX	;function 20
+		DW	offset F_SET_TEXT_FONT			;function 21
+		DW	offset F_SET_TEXT_COLOR_INDEX		;function 22
+		DW	offset F_SET_FILL_INTERIOR_STYLE	;function 23
+		DW	offset F_SET_FILL_STYLE_INDEX		;function 24
+		DW	offset F_SET_FILL_COLOR_INDEX		;function 25
+		DW	offset F_INQUIRE_COLOR_REPRESENTATION	;function 26
+		DW	offset F_INQUIRE_CELL_ARRAY		;function 27
+		DW	offset F_INPUT_LOCATOR			;function 28
+		DW	offset F_INPUT_VALUATOR			;function 29
+		DW	offset F_INPUT_CHOICE			;function 30
+		DW	offset F_INPUT_STRING			;function 31
+		DW	offset F_SET_WRITING_MODE		;function 32
+		DW	offset F_SET_INPUT_MODE			;function 33
+		DW	offset F_WRITE_ITEM_TO_METAFILE		;function 34
+MAX_FUNCTION	EQU	34				;last valid function code
+;
+LAST_ESCAPE_CODE	EQU		19		;0 relative code number
+ESCAPE_TABLE	DW	offset F_ESCAPE_0
+		DW	offset F_ESCAPE_1
+		DW	offset F_ESCAPE_2
+		DW	offset F_ESCAPE_3
+		DW	offset F_ESCAPE_4
+		DW	offset F_ESCAPE_5
+		DW	offset F_ESCAPE_6
+		DW	offset F_ESCAPE_7
+		DW	offset F_ESCAPE_8
+		DW	offset F_ESCAPE_9
+		DW	offset F_ESCAPE_10
+		DW	offset F_ESCAPE_11
+		DW	offset F_ESCAPE_12
+		DW	offset F_ESCAPE_13
+		DW	offset F_ESCAPE_14
+		DW	offset F_ESCAPE_15
+		DW	offset F_ESCAPE_16
+		DW	offset F_ESCAPE_17
+		DW	offset F_ESCAPE_18
+		DW	offset F_ESCAPE_19
+		DW	offset F_ESCAPE-51
+		DW	offset F_ESCAPE_52
+		DW	offset F_ESCAPE_53
+		DW	offset F_ESCAPE_54
+;
+LAST_GDP		EQU	7			;0 relative number of last
+GDP_TABLE		DW	offset F_RETURN		;no GDP 0
+			DW	offset F_GDP_BAR
+			DW	offset F_GDP_ARC
+			DW	offset F_GDP_PIESLICE
+			DW	offset F_GDP_CIRCLE
+			DW	offset F_GDP_PGC
+			DW	offset F_RETURN
+			DW	offset F_RETURN
+;
+ID_STRING		DW	length ID_TEXT
+ID_TEXT			DW	'0','.','2',' ','N','C','R',' ','D','M','V',' ','4','/','1','8','/','8','3'
+;
+ERASE_END_SCREEN	DW	2,01BH,059H
+ANSI_REVERSE_ON		DW	3,01BH,'G','4'
+ANSI_REVERSE_OFF	DW	3,01BH,'G','0'
+ANSI_HALF_INT_ON	DW	2,01BH,029H
+ANSI_HALF_INT_OFF	DW	2,01BH,028H
+ANSI_BLINKING_ON	DW	3,01BH,'G','2'
+ANSI_STANDARD_VIDEO	DW	3,01BH,'G','0'
+ADM3A_CURSOR_POSITION	DW	4,01BH,'='
+ADM3A_ROW		DW	0
+ADM3A_COL		DW	0
+;
+;The following 10 word variables should not be disturbed
+;because a Rep MOVSW is used to initilize them during F_OPEN_WORKSTATION
+WORKSTATION_ID		DW	0
+POLYLINE_TYPE		DW	0
+POLYLINE_COLOR		DW	0
+POLYMARKER_TYPE		DW	0
+POLYMARKER_COLOR	DW	0
+TEXT_FONT		DW	0
+TEXT_COLOR		DW	0
+FILL_INTERIOR		DW	0
+FILL_STYLE		DW	0
+FILL_COLOR		DW	0
+;
+;
+DIRTBL			DB	6,5,1,2,7,4,0,3
+NXTX            	DW      0
+NXTY            	DW      0
+XSGN			DB	0
+YSGN			DB	0
+;
+CURRENT_CHARACTER	DB	0
+POLYMARKER_NEC_SIZE	DB	0
+;
+TEXT_NEC_DIRECTION	DB	2
+TEXT_NEC_SIZE		DB	0		;0 - 15
+;
+NEC_DIRECTION		DB	2		;0-7 NEC 7220 driection
+NEC_MODE		DB	0		;
+NEC_COLOR		DB	0		;RBG from look up table
+;
+CA_REP_COUNT_Y		DW	0
+CA_ELEMENT_COUNT	DW	0
+CA_ROW_LENGTH		DW	0
+CA_XAD			DW	0
+;
+LAST_CURSOR_X		DW	0
+LAST_CURSOR_Y		DW	0
+;
+CURROW			DB	1		;CURRENT ROW	
+CURCOL			DB	1		;        COLUMN 
+;
+CURSOR_X		DW	0		;for locator input
+CURSOR_Y		DW	0
+;
+INCREMENT_BIAS		DW	0
+;
+CURSOR_INCREMENT_TABLE	DW	0
+			DW	1
+			DW	0
+			DW	10
+
+			DW	0
+			DW	-1
+			DW	0
+			DW	-10
+
+			DW	1
+			DW	0
+			DW	10
+			DW	0
+
+			DW	-1
+			DW	0
+			DW	-10
+			DW	0
+
+;
+INPUT_MODE		DB	0		;no device 0 dummy entry
+LOCATOR_MODE		DB	0
+VALUATOR_MODE		DB	0
+CHOICE_MODE		DB	0
+STRING_MODE		DB	0
+;
+NEC_NORMAL_CHAR		EQU	010H		;for normal graphics character
+NEC_SLANT_CHAR		EQU	090H		;for italics
+;
+GPLANE			EQU	0		;high address for plane
+RPLANE			EQU	4000H
+BPLANE			EQU	8000H
+;
+BIT_RED			EQU	0001B
+BIT_GREEN		EQU	0010B
+BIT_BLUE		EQU	0100B
+;
+MODE_REP		EQU	020H	;replace all bits with the pattern
+MODE_COM		EQU	021H	;xor all bits with pattern
+MODE_RES		EQU	022H	;reset 1 bits to 0
+MODE_SET		EQU	023H	;set 1 bits to 1
+;
+;
+POLYLINE_TABLE	DW   1111111111111111B	;NO STYLE 0
+ 	 	DW   1111111111111111B	;SOLID
+		DW   0000000011111111B	;STYLE 2 DASHED
+     		DW   1000100010001000B	;STYLE 3 DOTTED
+        	DW   0001100011111111B	;STYLE 4 DASHDOT
+		DW   0010010011111111B
+     		DW   1100110011001100B
+        	DW   1010101010101010B
+ 	        DW   1100000011000000B
+;
+;
+DEFAULT_COLOR_DATA	DW	0,0,0				;black R,G,B
+			DW	1000,0,0			;red
+			DW	0,1000,0			;green
+			DW	0,0,1000			;blue
+			DW	0,1000,1000			;cyan
+			DW	1000,1000,0			;yellow
+			DW	1000,0,1000			;magenta
+			DW	1000,1000,1000			;white
+;
+			DB	0				;black
+			DB	BIT_RED				;red
+			DB	BIT_GREEN			;green
+			DB	BIT_BLUE			;blue
+			DB	BIT_GREEN+BIT_BLUE		;cyan
+			DB	BIT_GREEN+BIT_RED		;yellow
+			DB	BIT_BLUE+BIT_RED		;magenta
+			DB	BIT_BLUE+BIT_RED+BIT_GREEN	;white
+
+;
+DEFAULT_MONO_DATA	DW	0,0,0				;black R,G,B
+			DW	1000,0,0			;red
+			DW	0,1000,0			;green
+			DW	0,0,1000			;blue
+			DW	0,1000,1000			;cyan
+			DW	1000,1000,0			;yellow
+			DW	1000,0,1000			;magenta
+			DW	1000,1000,1000			;white
+;
+			DB	0
+			DB	0FFH
+			DB	0FFH
+			DB	0FFH
+			DB	0FFH
+			DB	0FFH
+			DB	0FFH
+			DB	0FFH
+;
+COLOR_REQUEST_ARRAY	DW	0,0,0				;black R,G,B
+			DW	1000,0,0			;red
+			DW	0,1000,0			;green
+			DW	0,0,1000			;blue
+			DW	0,1000,1000			;cyan
+			DW	1000,1000,0			;yellow
+			DW	1000,0,1000			;magenta
+			DW	1000,1000,1000			;white
+;
+COLOR_MAP_TABLE		DB	0				;black
+			DB	BIT_RED				;red
+			DB	BIT_GREEN			;green
+			DB	BIT_BLUE			;blue
+			DB	BIT_GREEN+BIT_BLUE		;cyan
+			DB	BIT_GREEN+BIT_RED		;yellow
+			DB	BIT_BLUE+BIT_RED		;magenta
+			DB	BIT_BLUE+BIT_RED+BIT_GREEN	;white
+;
+MODE_MAP_TABLE		DB	MODE_REP	;replace (no mode 0)
+			DB	MODE_REP	;replace
+			DB	MODE_SET	;overstrike (set)
+			DB	MODE_COM	;complement (xor)
+			DB	MODE_RES	;erase    (reset)
+;
+ROTATION_MAP_TABLE	DW	2700		;nec 0
+			DW	3150		;nec 1
+			DW	0		;nec 2
+			DW	450		;nec 3
+			DW	900		;nec 4
+			DW	1350		;nec 5
+			DW	1800		;nec 6
+			DW	2250		;nec 7
+;
+;The following table of words are base scale values for the 8 different
+;possible drawing directions of graphic text. They are ordered X,Y
+;
+INCREMENT_TABLE		DW	0,-8		;0
+			DW	8,-8		;1
+			DW	8,0		;2
+			DW	8,8		;3
+			DW	0,8		;4
+			DW	-8,8		;5
+			DW	-8,0		;6
+			DW	-8,-8		;7
+;
+BASELINE_TABLE		DW	-1,0		;0
+			DW	-1,-1		;1
+			DW	0,-1		;2
+			DW	1,-1		;3
+			DW	1,0		;4
+			DW	1,1		;5
+			DW	0,1		;6
+			DW	-1,1		;7
+;
+FILL_MASK_BASE		DW	0
+;
+ix	rw	1
+jx	rw	1
+maxy	rw	1
+miny	rw	1
+count	rw	1
+jint	rw	1
+i	rw	1
+j	rw	1
+num	rw	1
+numsav	rw	1
+f1	rw	1
+scratch	rw	100			;max intersections
+;
+;OPEN_WORKSTATION_INTOUT
+X_MAX			DW	MAX_X		;max width 0 relative
+Y_MAX			DW	MAX_Y		;max height 0 relative
+			DW	1		;not precisely scaled
+			DW	320		;width of pixel in micrometers
+			DW	320		;height of pixel in micrometers
+			DW	16		;number of character heights
+			DW	8		;number of line types
+			DW	1		;number of line widths
+			DW	5		;number of marker types
+			DW	16		;number of marker sizes
+			DW	2		;number of fonts
+			DW	8		;number of patterns
+			DW	8		;number of hatch styles
+NUMBER_COLORS		DW	0		;number of predefined colors
+			DW	2		;number of GDP's
+			DW	1		;GDP 1
+			DW	4		;GDP 2
+			DW	-1		;GDP 3
+			DW	-1		;GDP 4
+			DW	-1		;GDP 5
+			DW	-1		;GDP 6
+			DW	-1		;GDP 7
+			DW	-1		;GDP 8
+			DW	-1		;GDP 9
+			DW	-1		;GDP 10
+			DW	3		;GDP attributes 1
+			DW	3		;GDP attributes 2
+			DW	-1		;GDP attributes 3
+			DW	-1		;GDP attributes 4
+			DW	-1		;GDP attributes 5
+			DW	-1		;GDP attributes 6
+			DW	-1		;GDP attributes 7
+			DW	-1		;GDP attributes 8
+			DW	-1		;GDP attributes 9
+			DW	-1		;GDP attributes 10
+COLOR_CAP_FLAG		DW	0		;color capability
+			DW	1		;text rotation
+			DW	1		;fill capability
+			DW	0		;pixel operation
+PALLETTE_COLORS		DW	2		;number of colors in pallette
+			DW	1		;number of locator devices
+			DW	1		;number of valuator devices
+			DW	1		;number of choice devices
+			DW	1		;number of  string devices
+			DW	2		;type input/output
+;
+OPEN_WORKSTATION_PTSOUT	DW	0
+			DW	7		;min character height
+			DW	0
+			DW	112		;max character height
+			DW	1		;min line width
+			DW	0
+			DW	1		;max line width
+			DW	0
+			DW	0
+			DW	7		;min marker height
+			DW	0
+			DW	112		;max marker height
+;
+text_buffer		rs	80		;text buffer for language
+						; translation	Eject
+fcb_trans		db	0
+			db	'TRANSLAT'
+			db	'DAT'
+			db	0
+			db	0
+			db	0
+			db	0
+			rs	16
+			db	0
+			db	0,0,0
+;
+;
+
+	Sseg				; Driver stack
+
+DriverStack	Rs	512		; Adjust before shipping
+DriverStackTop	Rs	0
+
+	End
+

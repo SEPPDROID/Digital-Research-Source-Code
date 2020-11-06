@@ -1,0 +1,542 @@
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE HEXOUT
+OBJECT MODULE PLACED IN OUTP.OBJ
+COMPILER INVOKED BY:  :F0: OUTP.PLM DEBUG OPTIMIZE(2) DATE(10/5/81) PAGEWIDTH(100) XREF
+
+
+
+              $title ('HEX OUTPUT MODULE')
+   1          hexout:
+              do;
+
+              /*
+
+                modified  3/28/81  R. Silberstein
+                modified  3/30/81  R. Silberstein
+                modified  4/9/81   R. Silberstein
+
+              */
+
+              /*
+                      This is the module to produce the (hex-)output
+                      from the assembler. The interface to other modules
+                      goes through the subroutine
+
+                             EMITCODEBYTE (outputbyte,segmenttype).
+
+                      This routine outputs one byte of generated code of
+                      a specified segment type (code,data,stack,extra).
+
+                      The subroutine also updates the value of the current
+                      instruction pointer of the current segment (CIP),
+                      and prints the output code on the print line.
+              */
+
+              $include (:f1:macro.lit)
+          =   $nolist
+              $include (:f1:struc.lit)
+          =   $nolist
+              $include (:f1:outp.lit)
+          =   $nolist
+              $include (:f1:subr2.ext)
+          =   $nolist
+              $include (:f1:files.ext)
+          =   $nolist
+              $include (:f1:global.ext)
+          =   $nolist
+
+
+  84   1      dcl
+              empty       lit '0ffh',  /* buffer empty value */
+              recordlimit lit '30',    /* max no of bytes pr record */
+              loccip      addr,        /* local copy of instruction pointer */
+              startfound  byte,        /* true if start record sent */
+              gtyp        byte,        /* incomming byte type */
+              gbyt        byte,        /* incomming byte */
+              curtyp      byte,        /* current byte type */
+              sum         byte,        /* used to compute check sum */
+              buffer (35) byte,        /* record buffer (RECORDLIMIT+5) */
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   2
+
+
+              recordlg    byte at (.buffer(0)),
+              recordtype  byte at (.buffer(3)),
+              offsetaddr  addr at (.buffer(1)),
+              bufpt       byte,        /* buffer index */
+
+                     /* Record type conversion table */
+                     /*   ( to be changed later ??? ) */
+
+              rectyp$I$tab(12) byte data
+
+                (0ffh,eoftype,0ffh,starttype,INTELdata,INTELdata,
+                 INTELdata,INTELdata,INTELsegment,INTELsegment,INTELsegment,
+                 INTELsegment),
+
+              rectyp$D$tab(12) byte data
+
+                (0ffh,eoftype,0ffh,starttype,DRcodedata,DRdatadata,
+                 DRstackdata,DRextradata,DRcodesegm,DRdatasegm,DRstacksegm,
+                 DRextrasegm);
+
+
+              /*********** subroutines **********/
+
+  85   1      rectyptab: procedure(n) byte;
+  86   2        declare n byte;
+  87   2        if intel$hex$on then$do
+  89   3          return rectyp$I$tab(n);
+  90   3        else$do
+  92   3          return rectyp$D$tab(n);
+  93   3        end$if;
+  94   2      end rectyptab;
+
+  95   1      switch$high$low: procedure(p);
+  96   2        declare p address, ch based p byte, (s1,s2) byte;
+  97   2        s1=ch;
+  98   2        p=p+1;
+  99   2        s2=ch;
+ 100   2        ch=s1;
+ 101   2        p=p-1;
+ 102   2        ch=s2;
+ 103   2      end switch$high$low;
+
+ 104   1      writebyt: proc (ch);
+ 105   2        dcl ch byte;
+ 106   2        call outhexbyte(ch);
+ 107   2      end writebyt;
+
+ 108   1      writerecord: proc;  /* write current recor to file */
+ 109   2        call switch$high$low(.offsetaddr);
+ 110   2        recordlg=bufpt-4;
+ 111   2        sum=0;              /* compute check sum */
+ 112   2        i=0ffh;
+ 113   2        do while (i:=i+1) < bufpt;
+ 114   3          sum=sum+buffer(i);
+ 115   3        end$while;
+ 116   2        buffer(bufpt)=-sum;  /* check sum */
+ 117   2        call writebyt(':');
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   3
+
+
+ 118   2        do i=0 to bufpt;     /* print hexbytes to file */
+ 119   3          call hex1out(buffer(i),.help(0));
+ 120   3          call writebyt(help(0));
+ 121   3          call writebyt(help(1));
+ 122   3        end$do;
+ 123   2        call writebyt(cr);
+ 124   2        call writebyt(lf);
+ 125   2      end writerecord;
+
+ 126   1      enternewbyt: proc(b); /* enter a new byte into buffer */
+ 127   2        dcl b byte;
+ 128   2        if bufpt > recordlimit then$do /* test if record full */
+ 130   3          call writerecord;
+ 131   3          offsetaddr=cip;
+ 132   3          bufpt=4;
+ 133   3        end$if;
+ 134   2        buffer(bufpt)=b;
+ 135   2        bufpt=bufpt+1;
+ 136   2      end enternewbyt;
+
+ 137   1      enterinput: proc;
+ 138   2        call enternewbyt(gbyt);
+ 139   2      end enterinput;
+
+ 140   1      eofrecord: proc;   /* write end-of-file record to file */
+ 141   2        if curtyp<>empty then call writerecord;
+ 143   2        recordtype=rectyptab(eoftype);
+ 144   2        offsetaddr=0;
+ 145   2        bufpt=4;
+ 146   2        call writerecord;
+ 147   2      end eofrecord;
+
+ 148   1      startrecord: proc;  /* write a start record to file */
+ 149   2        dcl seglow byte at (.csegvalue),seghigh byte at (.csegvalue+1),
+                    offslow byte at (.cip),offshigh byte at (.cip+1);
+ 150   2        if pass=2 then$do
+ 152   3          startfound=true;
+ 153   3          if curtyp <> empty then call writerecord;
+ 155   3          bufpt=4;
+ 156   3          offsetaddr=0;
+ 157   3          recordtype=rectyptab(starttype);
+ 158   3          if csegspec then$do
+ 160   4            call enternewbyt(seghigh);
+ 161   4            call enternewbyt(seglow);
+ 162   4          else$do
+ 164   4            call enternewbyt(0);
+ 165   4            call enternewbyt(0);
+ 166   4          end$if;
+ 167   3          call enternewbyt(offshigh);
+ 168   3          call enternewbyt(offslow);
+ 169   3          call writerecord;
+ 170   3          curtyp=empty;
+ 171   3        end$if;
+ 172   2      end startrecord;
+
+ 173   1      segmbyte: proc;  /* write a segment value byte to file */
+ 174   2        if pass = 2 then$do
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   4
+
+
+ 176   3          if curtyp <> gtyp then$do
+ 178   4            if curtyp <> empty then call writerecord;
+ 180   4            curtyp=gtyp;
+ 181   4            recordtype=rectyptab(gtyp);
+ 182   4            offsetaddr=0;
+ 183   4            bufpt=4;
+ 184   4            call enterinput;
+ 185   4          else$do
+ 187   4            call enterinput;
+ 188   4            call writerecord;
+ 189   4            curtyp=empty;
+ 190   4          end$if;
+ 191   3        end$if;
+ 192   2      end segmbyte;
+
+ 193   1      databyte: proc;  /* write a data byte to file */
+ 194   2        if pass=2 then$do
+ 196   3          if (curtyp <> gtyp) or (loccip <> cip) then$do
+ 198   4            if curtyp<>empty then call writerecord;
+ 200   4            curtyp=gtyp;
+ 201   4            recordtype=rectyptab(gtyp);
+ 202   4            offsetaddr=cip;
+ 203   4            bufpt=4;
+ 204   4          end$if;
+ 205   3          call enterinput;
+ 206   3          call hex1out(gbyt,.prefix(prefixptr)); /* output to listing */
+ 207   3          prefixptr=prefixptr+2;
+ 208   3        end$if;
+ 209   2        cip=cip+1;   /* update instruction pointer */
+ 210   2        loccip=cip;
+ 211   2      end databyte;
+
+ 212   1      emitinit: proc public;
+ 213   2        startfound=false;
+ 214   2        curtyp=empty;
+ 215   2      end emitinit;
+
+ 216   1      emitterminate: proc public;
+ 217   2        call eofrecord;  /* write EOF record */
+ 218   2      end emitterminate;
+
+ 219   1      emitcodebyte: proc (b,typ) public;
+ 220   2        dcl (b,typ) byte;
+ 221   2        gbyt=b;  /* move to global variables */
+ 222   2        gtyp=typ;
+
+ 223   2        do case typ-CSdata;
+
+ 224   3          do;               /* CS data */
+ 225   4          if not startfound then$do
+ 227   5            call startrecord;
+ 228   5          end$if;
+ 229   4          call databyte;
+ 230   4          end;
+ 231   3          call databyte;   /* DS data */
+ 232   3          call databyte;   /* SS data */
+ 233   3          call databyte;   /* ES data */
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   5
+
+
+ 234   3          call segmbyte;   /* CS value */
+ 235   3          call segmbyte;   /* DS value */
+ 236   3          call segmbyte;   /* SS value */
+ 237   3          call segmbyte;   /* ES value */
+
+ 238   3        end$case;
+
+ 239   2      end emitcodebyte;
+
+ 240   1      end$module hexout;
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   6
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+     81  0000H     4  ABSADDR. . . . . .    BYTE ARRAY(4) EXTERNAL(62)
+     81  0000H     1  ACCLEN . . . . . .    BYTE EXTERNAL(66)
+     81  0000H     1  ACCLENSAVE . . . .    BYTE EXTERNAL(69)
+     81  0000H    80  ACCUM. . . . . . .    BYTE ARRAY(80) EXTERNAL(67)
+     81  0000H    80  ACCUMSAVE. . . . .    BYTE ARRAY(80) EXTERNAL(68)
+      2               ADDR . . . . . . .    LITERALLY         6   12   30   33   36   39   77
+                                              81   84 
+     20  0000H        ALPHANUMERIC . . .    PROCEDURE BYTE EXTERNAL(5) STACK=0000H
+     23  0000H        ASCIICHAR. . . . .    PROCEDURE BYTE EXTERNAL(6) STACK=0000H
+    219  0006H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC       220  221 
+    126  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC       127  134 
+     81  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(CURRENTSYMBOL)
+     81  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(OPERANDS)
+      3               BASEREGBIT . . . .    LITERALLY
+      3               BASEREGCOUNT . . .    LITERALLY
+      3               BREGBIT. . . . . .    LITERALLY
+      3               BREGCOUNT. . . . .    LITERALLY
+     84  0007H    35  BUFFER . . . . . .    BYTE ARRAY(35)        84  114  116  119  134 
+     84  002AH     1  BUFPT. . . . . . .    BYTE       110  113  116  118  128  132  134  135
+                                             145  155  183  203 
+     14  0000H     1  CH . . . . . . . .    BYTE PARAMETER        15 
+    104  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       105  106 
+     47  0000H     1  CH . . . . . . . .    BYTE PARAMETER        48 
+     41  0000H     1  CH . . . . . . . .    BYTE PARAMETER        42 
+     26  0000H     1  CH . . . . . . . .    BYTE PARAMETER        27 
+     20  0000H     1  CH . . . . . . . .    BYTE PARAMETER        21 
+     11  0000H     1  CH . . . . . . . .    BYTE PARAMETER        12 
+     23  0000H     1  CH . . . . . . . .    BYTE PARAMETER        24 
+     44  0000H     1  CH . . . . . . . .    BYTE PARAMETER        45 
+     96  0000H     1  CH . . . . . . . .    BYTE BASED(P)         97   99  100  102 
+     17  0000H     1  CH . . . . . . . .    BYTE PARAMETER        18 
+     81  0000H     2  CIP. . . . . . . .    WORD EXTERNAL(31)         131  149  196  202  209
+                                             210 
+     70  0000H        CLOSEHEX . . . . .    PROCEDURE EXTERNAL(25) STACK=0000H
+     68  0000H        CLOSEINCLUDE . . .    PROCEDURE EXTERNAL(24) STACK=0000H
+     72  0000H        CLOSEPRINT . . . .    PROCEDURE EXTERNAL(26) STACK=0000H
+     64  0000H        CLOSESOURCE. . . .    PROCEDURE EXTERNAL(22) STACK=0000H
+     74  0000H        CLOSESYMBOL. . . .    PROCEDURE EXTERNAL(27) STACK=0000H
+     81  0000H     1  CODEMACROFLAG. . .    BYTE EXTERNAL(88)
+      3               CODEMACROHEAD. . .    LITERALLY
+     81  0000H     2  CODEMACROPTR . . .    WORD EXTERNAL(83)
+      2               CR . . . . . . . .    LITERALLY       123 
+     81  0000H     2  CSCIP. . . . . . .    WORD EXTERNAL(36)
+      4               CSDATA . . . . . .    LITERALLY       223 
+     81  0000H     1  CSEGSPEC . . . . .    BYTE EXTERNAL(34)         158 
+     81  0000H     1  CSEGTYPE . . . . .    BYTE EXTERNAL(32)
+     81  0000H     2  CSEGVALUE. . . . .    WORD EXTERNAL(33)         149 
+     81  0000H     1  CSPEC. . . . . . .    BYTE EXTERNAL(43)
+      4               CSVALUE. . . . . .    LITERALLY
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   7
+
+
+     81  0000H     2  CURCSEG. . . . . .    WORD EXTERNAL(39)
+     81  0000H     2  CURDSEG. . . . . .    WORD EXTERNAL(40)
+     81  0000H     2  CURESEG. . . . . .    WORD EXTERNAL(42)
+     81  0000H     9  CURRENTSYMBOL. . .    STRUCTURE EXTERNAL(79)
+     81  0000H     2  CURSSEG. . . . . .    WORD EXTERNAL(41)
+     84  0005H     1  CURTYP . . . . . .    BYTE       141  153  170  176  178  180  189  196
+                                             198  200  214 
+     38  0000H     2  D. . . . . . . . .    WORD PARAMETER        39 
+     35  0000H     2  D. . . . . . . . .    WORD PARAMETER        36 
+     29  0000H     2  D. . . . . . . . .    WORD PARAMETER        30 
+     32  0000H     2  D. . . . . . . . .    WORD PARAMETER        33 
+    193  01EDH   100  DATABYTE . . . . .    PROCEDURE STACK=001AH          229  231  232  233
+      2               DCL. . . . . . . .    LITERALLY
+     38  0000H        DECOUT . . . . . .    PROCEDURE EXTERNAL(11) STACK=0000H
+     81  0000H     1  DEFAULTDRIVE . . .    BYTE EXTERNAL(86)
+     81  0001H     1  DESCR. . . . . . .    BYTE MEMBER(TOKEN)
+     76  0000H     1  DEV. . . . . . . .    BYTE PARAMETER        77 
+     14  0000H        DIGIT. . . . . . .    PROCEDURE BYTE EXTERNAL(3) STACK=0000H
+      4               DRCODEDATA . . . .    LITERALLY        84 
+      4               DRCODESEGM . . . .    LITERALLY        84 
+      4               DRDATADATA . . . .    LITERALLY        84 
+      4               DRDATASEGM . . . .    LITERALLY        84 
+      4               DREXTRADATA. . . .    LITERALLY        84 
+      4               DREXTRASEGM. . . .    LITERALLY        84 
+      4               DRSTACKDATA. . . .    LITERALLY        84 
+      4               DRSTACKSEGM. . . .    LITERALLY        84 
+     81  0000H     2  DSCIP. . . . . . .    WORD EXTERNAL(38)
+      4               DSDATA . . . . . .    LITERALLY
+     81  0000H     1  DSPEC. . . . . . .    BYTE EXTERNAL(44)
+      4               DSVALUE. . . . . .    LITERALLY
+      2               ELSEDO . . . . . .    LITERALLY
+    219  0268H    70  EMITCODEBYTE . . .    PROCEDURE PUBLIC STACK=0022H
+    212  0251H    15  EMITINIT . . . . .    PROCEDURE PUBLIC STACK=0002H
+    216  0260H     8  EMITTERMINATE. . .    PROCEDURE PUBLIC STACK=0014H
+     84               EMPTY. . . . . . .    LITERALLY       141  153  170  178  189  198  214
+      2               ENDCASE. . . . . .    LITERALLY
+      2               ENDDO. . . . . . .    LITERALLY
+      2               ENDFOREVER . . . .    LITERALLY
+      2               ENDIF. . . . . . .    LITERALLY
+      2               ENDMODULE. . . . .    LITERALLY
+      2               ENDOFFILE. . . . .    LITERALLY
+      2               ENDPROC. . . . . .    LITERALLY
+      2               ENDWHILE . . . . .    LITERALLY
+    137  0112H    12  ENTERINPUT . . . .    PROCEDURE STACK=0016H          184  187  205 
+    126  00E5H    45  ENTERNEWBYT. . . .    PROCEDURE STACK=0012H          138  160  161  164
+                                             165  167  168 
+    140  011EH    38  EOFRECORD. . . . .    PROCEDURE STACK=0010H          217 
+     81  0000H     1  EOFSET . . . . . .    BYTE EXTERNAL(70)
+      4               EOFTYPE. . . . . .    LITERALLY        84  143 
+     29  0000H        EQUAL. . . . . . .    PROCEDURE BYTE EXTERNAL(8) STACK=0000H
+     81  0000H     1  ERRORPRINTED . . .    BYTE EXTERNAL(73)
+     81  0000H     2  ERRORS . . . . . .    WORD EXTERNAL(63)
+     81  0000H     2  ESCIP. . . . . . .    WORD EXTERNAL(35)
+      4               ESDATA . . . . . .    LITERALLY
+     81  0000H     1  ESPEC. . . . . . .    BYTE EXTERNAL(46)
+      4               ESVALUE. . . . . .    LITERALLY
+      2               FALSE. . . . . . .    LITERALLY       213 
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   8
+
+
+      8  0000H     2  FCBADR . . . . . .    WORD PARAMETER         9 
+      8  0000H        FILEABORT. . . . .    PROCEDURE EXTERNAL(1) STACK=0000H
+      3               FILEISTRUCTURE . .    LITERALLY
+      3               FILEOSTRUCTURE . .    LITERALLY
+     79  0000H        FILESETUP. . . . .    PROCEDURE BYTE EXTERNAL(29) STACK=0000H
+     11  0000H        FILL . . . . . . .    PROCEDURE EXTERNAL(2) STACK=0000H
+     76  0000H     2  FILNAM . . . . . .    WORD PARAMETER        77 
+     76  0000H     2  FILTYP . . . . . .    WORD PARAMETER        77 
+     81  0000H     2  FIRSTMACROPTR. . .    WORD EXTERNAL(74)
+      2               FOREVER. . . . . .    LITERALLY
+      2               FORMFEED . . . . .    LITERALLY
+     81  0000H     1  FULLSYMBTAB. . . .    BYTE EXTERNAL(76)
+     84  0004H     1  GBYT . . . . . . .    BYTE       138  206  221 
+     82  0000H        GLOBALINIT . . . .    PROCEDURE EXTERNAL(89) STACK=0000H
+     84  0003H     1  GTYP . . . . . . .    BYTE       176  180  181  196  200  201  222 
+     81  0000H     5  HELP . . . . . . .    BYTE ARRAY(5) EXTERNAL(84)          119  120  121
+     32  0000H        HEX1OUT. . . . . .    PROCEDURE EXTERNAL(9) STACK=0000H        119  206
+     35  0000H        HEX2OUT. . . . . .    PROCEDURE EXTERNAL(10) STACK=0000H
+      1  0000H        HEXOUT . . . . . .    PROCEDURE STACK=0000H
+     81  0000H     1  I. . . . . . . . .    BYTE EXTERNAL(85)         112  113  114  118  119
+     76  0000H        IFILESETUP . . . .    PROCEDURE EXTERNAL(28) STACK=0000H
+     81  0000H     1  IFLEVEL. . . . . .    BYTE EXTERNAL(78)
+     81  0000H     1  IFLIST . . . . . .    BYTE EXTERNAL(49)
+     81  0000H     1  INCLUDEDEFAULT . .    BYTE EXTERNAL(87)
+     81  0000H     1  INCLUDEON. . . . .    BYTE EXTERNAL(77)
+      3               INDEXREGBIT. . . .    LITERALLY
+      3               INDEXREGCOUNT. . .    LITERALLY
+     52  0000H        ININCLUDEBYTE. . .    PROCEDURE BYTE EXTERNAL(16) STACK=0000H
+      2               INIT . . . . . . .    LITERALLY
+     50  0000H        INSOURCEBYTE . . .    PROCEDURE BYTE EXTERNAL(15) STACK=0000H
+      4               INTELDATA. . . . .    LITERALLY        84 
+     81  0000H     1  INTELHEXON . . . .    BYTE EXTERNAL(71)          87 
+      4               INTELSEGMENT . . .    LITERALLY        84 
+      3               IREGBIT. . . . . .    LITERALLY
+      3               IREGCOUNT. . . . .    LITERALLY
+     81  0000H     2  LENGTH . . . . . .    WORD MEMBER(OPERANDS)
+     81  0000H     2  LENGTH . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+     17  0000H        LETTER . . . . . .    PROCEDURE BYTE EXTERNAL(4) STACK=0000H
+      2               LF . . . . . . . .    LITERALLY       124 
+      2               LIT. . . . . . . .    LITERALLY         2    3    4   84 
+     84  0000H     2  LOCCIP . . . . . .    WORD       196  210 
+     81  0000H     2  MACROPTR . . . . .    WORD EXTERNAL(75)
+     81  0000H     1  MAXCOL . . . . . .    BYTE EXTERNAL(50)
+     11  0000H     1  N. . . . . . . . .    BYTE PARAMETER        12 
+     38  0000H     2  N. . . . . . . . .    WORD PARAMETER        39 
+     35  0000H     2  N. . . . . . . . .    WORD PARAMETER        36 
+     32  0000H     1  N. . . . . . . . .    BYTE PARAMETER        33 
+     29  0000H     1  N. . . . . . . . .    BYTE PARAMETER        30 
+     85  0004H     1  N. . . . . . . . .    BYTE PARAMETER AUTOMATIC        86   89   92 
+     81  0000H     1  NEXTCH . . . . . .    BYTE EXTERNAL(65)
+     81  0000H     1  NOERROR. . . . . .    BYTE EXTERNAL(72)
+     81  0000H     1  NOOPER . . . . . .    BYTE EXTERNAL(81)
+      3               NOOVERCOUNT. . . .    LITERALLY
+      3               NOOVERRIDEBIT. . .    LITERALLY
+     81  0006H     2  OFFSET . . . . . .    WORD MEMBER(OPERANDS)
+     81  0006H     2  OFFSET . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+     84  0008H     2  OFFSETADDR . . . .    WORD AT         109  131  144  156  182  202 
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE   9
+
+
+    149  0001H     1  OFFSHIGH . . . . .    BYTE EXTERNAL(31) AT      167 
+    149  0000H     1  OFFSLOW. . . . . .    BYTE EXTERNAL(31) AT      168 
+     58  0000H        OPENHEX. . . . . .    PROCEDURE EXTERNAL(19) STACK=0000H
+     56  0000H        OPENINCLUDE. . . .    PROCEDURE EXTERNAL(18) STACK=0000H
+     60  0000H        OPENPRINT. . . . .    PROCEDURE EXTERNAL(20) STACK=0000H
+     54  0000H        OPENSOURCE . . . .    PROCEDURE EXTERNAL(17) STACK=0000H
+     62  0000H        OPENSYMBOL . . . .    PROCEDURE EXTERNAL(21) STACK=0000H
+     81  0000H    36  OPERANDS . . . . .    STRUCTURE ARRAY(4) EXTERNAL(82)
+      3               OPERANDSTRUC . . .    LITERALLY        81 
+     41  0000H        OUTHEXBYTE . . . .    PROCEDURE EXTERNAL(12) STACK=0000H       106 
+     44  0000H        OUTPRINTBYTE . . .    PROCEDURE EXTERNAL(13) STACK=0000H
+     47  0000H        OUTSYMBOLBYTE. . .    PROCEDURE EXTERNAL(14) STACK=0000H
+      5  0000H        OUTTEXT. . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H
+     95  0004H     2  P. . . . . . . . .    WORD PARAMETER AUTOMATIC        96   97   98   99
+                                             100  101  102 
+     81  0000H     1  PAGESIZE . . . . .    BYTE EXTERNAL(56)
+     81  0000H     1  PASS . . . . . . .    BYTE EXTERNAL(30)         150  174  194 
+     81  0000H   240  PREFIX . . . . . .    BYTE ARRAY(240) EXTERNAL(60)        206 
+     81  0000H     1  PREFIXPTR. . . . .    BYTE EXTERNAL(61)         206  207 
+     81  0000H     1  PRINTDEVICE. . . .    BYTE EXTERNAL(53)
+     81  0000H     1  PRINTON. . . . . .    BYTE EXTERNAL(47)
+     81  0000H     1  PRINTSWITCHOFF . .    BYTE EXTERNAL(48)
+      2               PROC . . . . . . .    LITERALLY        20   23   32   35   38   41   44
+                                              47   50   52   54   56   58   60   62   64   66
+                                              68   70   72   74   76   79  104  108  126  137
+                                             140  148  173  193  212  216  219 
+     11  0000H     2  PT . . . . . . . .    WORD PARAMETER        12 
+     84  0007H     1  RECORDLG . . . . .    BYTE AT         110 
+     84               RECORDLIMIT. . . .    LITERALLY       128 
+     84  000AH     1  RECORDTYPE . . . .    BYTE AT         143  157  181  201 
+     84  000CH    12  RECTYPDTAB . . . .    BYTE ARRAY(12) DATA        92 
+     84  0000H    12  RECTYPITAB . . . .    BYTE ARRAY(12) DATA        89 
+     85  0000H    34  RECTYPTAB. . . . .    PROCEDURE BYTE STACK=0004H          143  157  181
+                                             201 
+      2               REENT. . . . . . .    LITERALLY
+     66  0000H        REWINDSOURCE . . .    PROCEDURE EXTERNAL(23) STACK=0000H
+     29  0000H     2  S. . . . . . . . .    WORD PARAMETER        30 
+     96  002BH     1  S1 . . . . . . . .    BYTE        97  100 
+     96  002CH     1  S2 . . . . . . . .    BYTE        99  102 
+     81  0000H    12  SAVESOURCE . . . .    BYTE ARRAY(12) EXTERNAL(52)
+    149  0001H     1  SEGHIGH. . . . . .    BYTE EXTERNAL(33) AT      160 
+    149  0000H     1  SEGLOW . . . . . .    BYTE EXTERNAL(33) AT      161 
+      3               SEGMBIT. . . . . .    LITERALLY
+    173  01A9H    68  SEGMBYTE . . . . .    PROCEDURE STACK=001AH          234  235  236  237
+      3               SEGMCOUNT. . . . .    LITERALLY
+     81  0004H     2  SEGMENT. . . . . .    WORD MEMBER(OPERANDS)
+     81  0004H     2  SEGMENT. . . . . .    WORD MEMBER(CURRENTSYMBOL)
+      3               SEGTYPEBIT . . . .    LITERALLY
+      3               SEGTYPECOUNT . . .    LITERALLY
+     81  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(OPERANDS)
+     81  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+     81  0000H     1  SIMFORM. . . . . .    BYTE EXTERNAL(57)
+     81  0000H    80  SOURCEBUF. . . . .    BYTE ARRAY(80) EXTERNAL(58)
+     81  0000H    12  SOURCENAME . . . .    BYTE ARRAY(12) EXTERNAL(51)
+     81  0000H     1  SOURCEPTR. . . . .    BYTE EXTERNAL(59)
+      2               SPACE. . . . . . .    LITERALLY
+     81  0000H     2  SSCIP. . . . . . .    WORD EXTERNAL(37)
+PL/M-86 COMPILER    HEX OUTPUT MODULE                                            10/5/81    PAGE  10
+
+
+      4               SSDATA . . . . . .    LITERALLY
+     81  0000H     1  SSPEC. . . . . . .    BYTE EXTERNAL(45)
+      4               SSVALUE. . . . . .    LITERALLY
+     84  0002H     1  STARTFOUND . . . .    BYTE       152  213  225 
+    148  0144H   101  STARTRECORD. . . .    PROCEDURE STACK=0016H          227 
+      4               STARTTYPE. . . . .    LITERALLY        84  157 
+      2               STRUC. . . . . . .    LITERALLY        81 
+     81  0002H     1  STYPE. . . . . . .    BYTE MEMBER(OPERANDS)
+     81  0002H     1  STYPE. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+     84  0006H     1  SUM. . . . . . . .    BYTE       111  114  116 
+     95  0022H    42  SWITCHHIGHLOW. . .    PROCEDURE STACK=0004H          109 
+     81  0000H     1  SYMBOLDEVICE . . .    BYTE EXTERNAL(54)
+      3               SYMBOLHEAD . . . .    LITERALLY
+      3               SYMBOLSTRUC. . . .    LITERALLY        81 
+     81  0000H     2  SYMBTABADR . . . .    WORD EXTERNAL(80)
+      5  0000H     2  T. . . . . . . . .    WORD PARAMETER         6 
+      2               TAB. . . . . . . .    LITERALLY
+      8  0000H     2  TEXTADR. . . . . .    WORD PARAMETER         9 
+      2               THENDO . . . . . .    LITERALLY        87  128  150  158  174  176  194
+                                             196  225 
+     81  0000H    30  TITLE. . . . . . .    BYTE ARRAY(30) EXTERNAL(55)
+     81  0000H     4  TOKEN. . . . . . .    STRUCTURE EXTERNAL(64)
+      2               TRUE . . . . . . .    LITERALLY       152 
+    219  0004H     1  TYP. . . . . . . .    BYTE PARAMETER AUTOMATIC       220  222  223 
+     81  0000H     1  TYPE . . . . . . .    BYTE MEMBER(TOKEN)
+      3               TYPEBIT. . . . . .    LITERALLY
+      3               TYPECOUNT. . . . .    LITERALLY
+     26  0000H        UPPER. . . . . . .    PROCEDURE BYTE EXTERNAL(7) STACK=0000H
+     81  0002H     2  VALUE. . . . . . .    WORD MEMBER(TOKEN)
+    104  004CH    13  WRITEBYT . . . . .    PROCEDURE STACK=0008H          117  120  121  123
+                                             124 
+    108  0059H   140  WRITERECORD. . . .    PROCEDURE STACK=000CH          130  142  146  154
+                                             169  179  188  199 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 02AEH    686D
+     CONSTANT AREA SIZE = 0018H     24D
+     VARIABLE AREA SIZE = 002DH     45D
+     MAXIMUM STACK SIZE = 0022H     34D
+     611 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

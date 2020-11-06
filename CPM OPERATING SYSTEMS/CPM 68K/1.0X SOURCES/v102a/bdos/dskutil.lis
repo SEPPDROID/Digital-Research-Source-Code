@@ -1,0 +1,303 @@
+1File: DSKUTIL.C                                                           Page       1
+     1    
+     2   /****************************************************************
+     3   *								*
+     4   *		CP/M-68K BDOS Disk Utilities Module		*
+     5   *								*
+     6   *	This module contains the miscellaneous utilities  	*
+     7   *	for manipulating the disk in CP/M-68K.  Included are:	*
+     8   *								*
+     9   *		dirscan()   - general purpose dir scanning	*
+    10   *		setaloc()   - set bit in allocation vector	*
+    11   *		clraloc()   - clear bit in allocation vector	*
+    12   *		getaloc()   - get free allocation block		*
+    13   *		dchksum()   - directory checksum calculator	*
+    14   *		dir_rd()    - read directory sector		*
+    15   *		dir_wr()    - write directory sector		*
+    16   *		rdwrt()	    - read/write disk sector		*
+    17   *								*
+    18   *								*
+    19   *	Configured for Alcyon C on the VAX			*
+    20   *								*
+    21   ****************************************************************/
+    22    
+    23   #include "bdosinc.h"		/* Standard I/O declarations */
+    24    
+    25   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    26    
+    27   #include "pktio.h"		/* Packet I/O definitions */
+    28    
+    29    
+    30   /* declare external functions and variables */
+    31   EXTERN UWORD	do_phio();	/* external physical disk I/O routine */
+    32   EXTERN UWORD	error();	/* external error routine	*/
+    33    
+    34   EXTERN UWORD	log_dsk;	/* logged-on disk vector */
+    35   EXTERN UWORD	ro_dsk;		/* read-only disk vector */
+    36   EXTERN UWORD	crit_dsk;	/* critical disk vector */
+    37    
+    38    
+    39   /**********************
+    40   * read/write routine  *
+    41   **********************/
+    42    
+    43   UWORD rdwrt(secnum, dma, parm)
+    44   /* General disk sector read/write routine */
+    45   /* It simply sets up a I/O packet and sends it to do_phio */
+    46    
+    47   LONG	secnum;			/* logical sector number to read/write */
+    48   UBYTE	*dma;			/* dma address				*/
+    49   REG WORD parm;			/* 0 for read, write parm + 1 for write */
+    50    
+    51   {
+    52       struct iopb	rwpkt;
+    53       BSETUP
+    54    
+    55       rwpkt.devnum = GBL.curdsk;		/* disk to read/write	*/
+    56       if (parm)
+    57       {
+    58   	rwpkt.iofcn = (BYTE)write; /* if parm non-zero, we're doing a write */
+    59   	rwpkt.ioflags = (BYTE)(parm-1);	/* pass write parm	*/
+1File: DSKUTIL.C                                                           Page       2
+    60           if ( ro_dsk & (1 << (rwpkt.devnum)) ) error(4);
+    61   				/* don't write on read-only disk	*/
+    62       }
+    63       else
+    64       {
+    65   	rwpkt.iofcn = (BYTE)read;
+    66   	rwpkt.ioflags = (BYTE)0;
+    67       }
+    68       rwpkt.devadr = secnum;			/* sector number	*/
+    69       rwpkt.xferadr = dma;			/* dma address		*/
+    70    
+    71   /*		parameters that are currently not used by do_phio
+    72       rwpkt.devtype = disk;
+    73       rwpkt.xferlen = 1;
+    74   				*/
+    75       rwpkt.infop = GBL.dphp;			/* pass ptr to dph	*/
+    76       while ( do_phio(&rwpkt) )
+    77   	if ( error( parm ? 1 : 0 ) ) break;
+    78       return(0);	
+    79   }
+    80    
+    81    
+    82   /***************************
+    83   *  directory read routine  *
+    84   ***************************/
+    85    
+    86   UWORD dir_rd(secnum)
+    87    
+    88   WORD secnum;
+    89   {
+    90       BSETUP
+    91    
+    92       return( rdwrt((LONG)secnum, GBL.dirbufp, 0) );
+    93   }
+    94    
+    95    
+    96   /****************************
+    97   *  directory write routine  *
+    98   ****************************/
+    99    
+   100   UWORD dir_wr(secnum)
+   101    
+   102   REG WORD secnum;
+   103   {
+   104       REG UWORD rtn;
+   105       BSETUP
+   106    
+   107       rtn = rdwrt( (LONG)secnum, GBL.dirbufp, 2);
+   108       if ( secnum < (GBL.parmp)->cks )
+   109   	*((GBL.dphp)->csv + secnum) = dchksum();
+   110       return(rtn);
+   111   }
+   112    
+   113    
+   114   /*******************************
+   115   *  directory checksum routine  *
+   116   *******************************/
+   117    
+   118   UBYTE dchksum()
+1File: DSKUTIL.C                                                           Page       3
+   119   /* Compute checksum over one directory sector */
+   120   /* Note that this implementation is dependant on the representation */
+   121   /*   of a LONG and is therefore not very portable.  But it's fast   */
+   122   {
+   123       REG LONG	*p;		/* local temp variables */
+   124       REG LONG	lsum;
+   125       REG WORD	i;
+   126    
+   127       BSETUP
+   128    
+   129       p = GBL.dirbufp;		/* point to directory buffer */
+   130       lsum = 0;
+   131       i = SECLEN / (sizeof lsum);
+   132       do
+   133       {
+   134   	lsum += *p++;		/* add next 4 bytes of directory */
+   135   	i -= 1;
+   136       } while (i);
+   137       lsum += (lsum >> 16);
+   138       lsum += (lsum >> 8);
+   139       return( (UBYTE)(lsum & 0xff) );
+   140   }
+   141    
+   142    
+   143   /************************
+   144   *  dirscan entry point	*
+   145   ************************/
+   146    
+   147   UWORD dirscan(funcp, fcbp, parms)
+   148    
+   149   BOOLEAN (*funcp)();		/* funcp is a pointer to a Boolean function */
+   150   REG struct fcb *fcbp;		/* fcbp is a pointer to a fcb */
+   151   REG UWORD parms;		/* parms is 16 bit set of bit parameters */
+   152    
+   153   /* Parms & 1  = 0 to start at beginning of dir, 1 to continue from last */
+   154   /* Parms & 2  = 0 to stop when *funcp is true, 1 to go until end	*/
+   155   /* Parms & 4  = 0 to check the dir checksum, 1 to store new checksum	*/
+   156   /* Parms & 8  = 0 to stop at hiwater, 1 to go until end of directory	*/
+   157    
+   158   #define continue 1
+   159   #define full	 2
+   160   #define initckv  4
+   161   #define pasthw   8
+   162    
+   163   {
+   164       REG UWORD 	i;		/* loop counter		*/
+   165       REG struct dpb *dparmp;	/* pointer to disk parm block */
+   166       REG UWORD 	dirsec;		/* sector number we're working on */
+   167       REG UWORD  	rtn;		/* return value		*/
+   168       REG UBYTE	*p;		/* scratch pointer	*/
+   169       REG UWORD	bitvec;		/* disk nmbr represented as a vector */
+   170    
+   171       BSETUP
+   172    
+   173       dparmp = GBL.parmp;			/* init ptr to dpb */
+   174       rtn  = 255;				/* assume it doesn't work */
+   175    
+   176       i = ( (parms & continue) ? GBL.srchpos + 1 : 0 );
+   177       while ( (parms & pasthw) || (i <= ((GBL.dphp)->hiwater + 1)) )
+1File: DSKUTIL.C                                                           Page       4
+   178       {				/* main directory scanning loop		*/
+   179   	if ( i > dparmp->drm ) break;
+   180   	if ( ! (i & 3) )
+   181   	{			/* inside loop happens when we need to
+   182   				   read another directory sector	*/
+   183   retry:	    dirsec = i >> 2;
+   184   	    dir_rd(dirsec);	/* read the directory sector	*/
+   185   	    if ( dirsec < (dparmp->cks) )  /* checksumming on this sector? */
+   186   	    {
+   187   		p = ((GBL.dphp)->csv) + dirsec;
+   188   					/* point to checksum vector byte  */
+   189   		if (parms & initckv) *p = dchksum();
+   190   		else if (*p != dchksum())
+   191   		{			/* checksum error! */
+   192   		    (GBL.dphp)->hiwater = dparmp->drm;  /* reset hi water */
+   193   		    bitvec = 1 << (GBL.curdsk);
+   194   		    if (crit_dsk & bitvec)	/* if disk in critical mode */
+   195   			ro_dsk |= bitvec;	/* then set it to r/o	*/
+   196   		    else
+   197   		    {
+   198   			log_dsk &= ~bitvec;	/* else log it off  */
+   199   			seldsk(GBL.curdsk);	/* and re-select it */
+   200   			goto retry;		/* and re-do current op */
+   201   		    }
+   202   		}
+   203   	    }
+   204   	}
+   205    
+   206   	GBL.srchpos = i;
+   207   	if ( (*funcp)(fcbp, (GBL.dirbufp) + (i&3), i) )
+   208   			/* call function with parms of (1) fcb ptr,
+   209   			   (2) pointer to directory entry, and
+   210   		   	   (3) directory index		  	*/
+   211   	{
+   212   	    if (parms & full) rtn = 0;	/* found a match, but keep going */
+   213   	    else return(i & 3);		/* return directory code	*/
+   214   	}
+   215   	i += 1;
+   216       }
+   217       return(rtn);
+   218   }
+   219    
+   220    
+   221   /****************************************
+   222   *  Routines to manage allocation vector *
+   223   *	setaloc()			*
+   224   *	clraloc()			*
+   225   *	getaloc()			*
+   226   ****************************************/
+   227    
+   228   setaloc(bitnum)
+   229   /*  Set bit in allocation vector	*/
+   230   REG UWORD	bitnum;
+   231   {
+   232       BSETUP
+   233    
+   234       if (bitnum >= 0 && bitnum <= (GBL.parmp)->dsm)
+   235           *((GBL.dphp)->alv + (bitnum>>3)) |= 0x80 >> (bitnum & 7);
+   236   }
+1File: DSKUTIL.C                                                           Page       5
+   237    
+   238    
+   239   clraloc(bitnum)
+   240   /* Clear bit in allocation vector	*/
+   241   REG UWORD	bitnum;
+   242   {
+   243       BSETUP
+   244    
+   245       if (bitnum > 0 && bitnum <= (GBL.parmp)->dsm)
+   246   	*((GBL.dphp)->alv + (bitnum>>3)) &= ~(0x80 >> (bitnum & 7));
+   247   }
+   248    
+   249    
+   250   UWORD	chkaloc(i)
+   251   /* Check bit i in allocation vector			*/
+   252   /* Return non-zero if block free, else return zero	*/
+   253   REG UWORD i;
+   254   {
+   255       BSETUP
+   256    
+   257       return( ~(*( (GBL.dphp)->alv + (i >> 3) )) & (0x80 >> (i&7)) );
+   258   }
+   259    
+   260    
+   261   UWORD	getaloc(leftblk)
+   262   /* Get a free block in the file system and set the bit in allocation vector */
+   263   /* It is passed the block number of the last block allocated to the file    */
+   264   /* It tries to allocate the block closest to the block that was passed	    */
+   265   REG UWORD leftblk;
+   266   {
+   267       REG UWORD	blk;		/* block number to allocate	*/
+   268       REG UWORD	rtblk;		/* high block number to try	*/
+   269       REG UWORD	diskmax;	/* # bits in alv - 1		*/
+   270    
+   271       BSETUP
+   272       LOCK			/* need to lock the file system while messing
+   273   				   with the allocation vector		*/
+   274    
+   275       diskmax = (GBL.parmp)->dsm;
+   276   				/* get disk max field from dpb		*/
+   277       rtblk = leftblk;
+   278       blk = ~0;			/* -1 returned if no free block found	*/
+   279       while (leftblk || rtblk < diskmax)
+   280       {
+   281   	if (leftblk)
+   282   	    if (chkaloc(--leftblk))
+   283   	    {
+   284   		blk = leftblk;
+   285   		break;
+   286   	    }
+   287   	if (rtblk < diskmax)
+   288   	    if (chkaloc(++rtblk))
+   289   	    {
+   290   		blk = rtblk;
+   291   		break;
+   292   	    }
+   293       }
+   294       if (blk != ~0) setaloc(blk);
+   295       UNLOCK
+1File: DSKUTIL.C                                                           Page       6
+   296       return(blk);
+   297   }

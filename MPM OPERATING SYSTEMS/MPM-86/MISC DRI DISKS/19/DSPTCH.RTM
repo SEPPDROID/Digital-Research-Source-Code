@@ -1,0 +1,384 @@
+
+;*****************************************************
+;*
+;*	Dispatch Routines
+;*
+;*****************************************************
+
+;=====
+fdisp:
+;=====
+; This entry point used by interrupt routines in XIOS
+
+	cli
+	push ds ! mov ds,sysdat
+	cmp indisp,true ! jne do_dispatch
+	    pop ds ! iret
+do_dispatch:
+	mov es_sav,es
+	mov bx_sav,bx
+	mov bx,rlr
+	mov es,p_uda[bx]
+	mov u_in_int,true
+	pop u_ds_sav
+	push bx
+	mov bl,p_stat[bx]
+	mov u_stat_sav,bl
+	pop bx
+	mov p_stat[bx],ps_run
+	mov bx,es_sav
+	mov u_es_sav,bx
+	mov bx,bx_sav
+	jmp dsptch
+		;dispatcher will jump to here if
+		; u_in_int = true.
+int_disp_exit:
+	mov u_in_int,false
+	mov bx_sav,bx
+	mov es_sav,ax
+	mov bx,rlr
+	mov al,u_stat_sav
+	mov p_stat[bx],al
+	mov ax,es_sav
+	mov bx,bx_sav
+	mov indisp,false
+	mov ds,u_ds_sav
+	mov es,u_es_sav
+	iret
+
+;========
+farpdisp:
+;========
+; Intermodule pdisp (non-interrupt)
+
+	call pdisp ! ret
+
+;=====
+pdisp:
+;=====
+; Call dispatcher with no special action
+
+	push bx ! mov bx,rlr
+	mov p_stat[bx],ps_run ! pop bx
+	;jmp dsptch
+
+;======
+dsptch:
+;======
+;	The dispatch function looks like a noop to the
+;	caller. All flags and registers are maintained.
+;	No levels of user stack is used.
+;	(jmp dispatch = ret)
+;	Interrupt routines enter through fdisp.
+;
+;	Dispatch has two (2) arguments:
+;	1. the p_stat field of the  process  descriptor
+;	    determines the type of  action  to  perform
+;	    for this process.
+;	2. the dparam field of the uda is  an  argument
+;	    to the action.
+;	The main part of the dispatch routine takes the
+;	currently running process off  the  Ready  list
+;	and jmps to a routine which will put it on some
+;	other list depending on  the  p_stat  argument.
+;	The subsequent routine will then  jump  to  the
+;	scheduler which will do polling of devices  and
+;	move processes off the dispatch ready list onto
+;	the Ready list.  The Ready List  is  maintained
+;	in priority order with  round-robin  scheduling
+;	of processes with equivalent  priorities.   The
+;	first process on the ready list  will  then  be
+;	switched in.
+
+		; set indisp flag
+	pushf ! cld ! cli
+	cmp indisp,true ! jne dispin
+	    popf ! ret
+dispin:	mov indisp,true
+	pop u_flag_sav
+		; store and switch stack
+	mov u_ss,ss ! mov u_sp,sp
+	mov ss,sysdat ! mov sp,offset dsptchtos
+	sti
+		; save registers
+		; NOTE: We will use DS instead of ES
+		;  No segment overrides...
+	push es ! pop ds
+	mov ds:u_ax,ax
+	mov ds:u_bx,bx
+	mov ds:u_cx,cx
+	mov ds:u_dx,dx
+	mov ds:u_di,di 
+	mov ds:u_si,si
+	mov ds:u_bp,bp
+		; save interrupt vectors
+		; block move first 5
+	mov bx,0 ! mov ds,bx
+	mov si,bx ! mov di,offset u_ivectors
+	mov cx,10 ! rep movs ax,ax
+		; block move mpmint,debugint
+	mov si,offset i_mpm_ip ! mov di,offset u_mpm_ip
+	mov cx,4 ! rep movs ax,ax
+		; take current process off RLR.
+	mov ds,sysdat
+	cli
+	mov si,rlr
+	mov ax,p_link[si] ! mov rlr,ax
+	mov p_link[si],0
+		; We are now in NO-MAN's land
+		; From now until the end of the
+		; switch routine, There is no
+		; process in context.
+		; SI -> PD just taken out of context.
+		; jump to routine for given status
+	mov bh,0 ! mov bl,p_stat[si] ! shl bx,1
+	jmp cs:dsp_table[bx]
+
+dsp_table	dw	disp_act	;00 - run
+		dw	poll_act	;01 - poll device
+		dw	delay_act	;02 - delay
+		dw	swap_act	;03 - swap
+		dw	term_act	;04 - terminate
+		dw	sleep_act	;05 - sleep
+		dw	disp_act	;06 - (nop)-dq
+		dw	disp_act	;07 - (nop)-nq
+		dw	flag_act	;08 - flag wait
+					;09 - (nop)-ciowait
+
+sleep_act:
+;---------
+; insert running process into list specified by
+; u_dparam and set p_stat from p_scratch
+
+	mov bx,u_dparam
+	push si ! call insert_process
+	pop si ! or p_flag[si],pf_resource
+	mov al,p_scratch[si] ! mov p_stat[si],al
+	jmp schedule
+
+poll_act:
+;--------
+; set p_wait field of process = device number.
+; put running process on poll list and wait
+; for the device specified by u_dparam
+;	input:	SI=pd address
+
+	mov dx,u_dparam
+	mov p_wait[si],dx
+	mov ax,plr ! mov p_link[si],ax
+	mov plr,si ! jmp schedule
+
+delay_act:
+;---------
+; Put the running process on the Delay List.  The
+; delay list is built such that any process's
+; remaining delay time is the additive of the delay
+; times of all processes ahead of it plus the # of
+; ticks in it's own p_wait field.  At each clock tick
+; the p_wait field of the top process in the list
+; is decremented.  If it reaches zero (0), all
+; processes with a zero in the p_wait field are
+; placed on the dispatch ready list.
+;	input:	SI=pd address
+
+	push si ! mov al,io_strtclk
+	call xiosif ! pop si
+	mov bx,(offset dlr)-p_link
+	mov cx,u_dparam ! inc cx
+	cmp cx,0 ! jne del_lp
+	    dec cx
+del_lp:	mov di,p_link[bx]
+	cmp di,0 ! je del_o
+	    mov ax,p_wait[di]
+	    cmp ax,cx ! ja del_o
+		sub cx,ax ! mov bx,di ! jmps del_lp
+del_o:	mov p_link[si],di ! mov p_link[bx],si
+	mov p_wait[si],cx
+	cmp di,0 ! je del_e
+	    sub p_wait[di],cx
+del_e:	jmp schedule
+
+swap_act:
+;--------
+; put running process on swap list
+;	input:	SI=pd address
+
+	mov bx,(offset slr)-p_link
+	call insert_process ! jmp schedule
+
+flag_act:
+;--------
+; place running process in flag table to wait
+; for next flag. Note, flag may have been set...
+;	input:  SI=pd address
+;		BX=address of Flag entry
+
+	mov bx,u_dparam
+	cmp flg_pd[bx],flag_on ! je gflagon
+	    mov flg_pd[bx],si ! mov p_link[si],0
+	    jmp schedule
+gflagon:				; Flag set since wait check
+	mov flg_pd[bx],flag_off
+	jmps disp_act
+
+term_act:
+;--------
+; terminate the running process
+; free memory,free pd
+;	input:	SI=pd address
+
+	mov ax,rlr
+	mov p_link[si],ax
+	mov rlr,si
+	mov ch,0 ! mov cl,ncondev
+nxtcon:	jcxz delst
+	    dec cx ! mov p_cns[si],cl
+	    push cx ! push si
+	    mov cx,f_condetach ! call mpmif
+	    pop si ! pop cx ! jmps nxtcon
+delst:	mov cl,nlstdev
+nxtlst:	jcxz free_nxt
+	    dec cx ! mov dx,cx
+	    add dl,ncondev
+	    mov p_lst[si],dl
+	    push cx ! push si
+	    mov cx,f_lstdetach ! call mpmif
+	    pop si ! pop cx ! jmps nxtlst
+free_nxt:
+	push si
+	mov si,p_mem[si]
+	test si,si ! jz end_free
+	    push ds ! sub cx,cx ! push cx
+	    push ms_start[si]
+	    mov ax,ss ! mov ds,ax ! mov dx,sp
+	    mov cx,f_memfree ! call mpmif
+	    pop bx ! pop cx ! pop ds ! pop si
+	    jmps free_nxt
+end_free:
+	mov mxmemowner,0
+	mov dx,offset mxmemqpb ! mov cx,f_qwrite
+	call mpmif
+        pop si 
+	mov ax,p_link[si]
+	mov rlr,ax
+	mov p_link[si],0
+	call freepd ! jmp schedule 
+
+disp_act:
+;--------
+; 	place process on RLR
+;	input:	SI=pd address
+
+	mov p_stat[si],ps_run
+	mov bx,(offset rlr)-p_link
+	call insert_process ! jmp schedule
+
+;==============
+insert_process:
+;==============
+;
+; put PD# in list ordered by priority
+;
+; input:	BX = list root
+;		SI = pd number
+
+	 mov cx,pflag[si] ! and cx,pf_resource
+ins_npd: mov di,p_link[bx]
+	 cmp di,0 ! jz ins_out
+	    mov al,p_prior[di]
+	    cmp al,p_prior[si]
+	    ja ins_out
+		jb ins_nxt
+		    cmp cx,0 ! jz ins_nxt
+			jmps ins_out
+ins_nxt:	mov bx,di ! jmp ins_npd
+ins_out: cmp cx,0 ! jz ins_exit
+	    mov cx,pf_resource
+	    not cx ! and p_flag[si],cx
+ins_exit:
+	 mov p_link[si],di ! mov p_link[bx],si ! ret
+
+;=========
+schedule:
+;=========
+; poll all required devices and place any ready
+; processes on the Ready List
+
+		;we can enable interrupts now.
+		;there MUST be a process on the RLR
+		;at this point, ie. IDLE...
+	sti
+		;go through the Poll List
+	mov di,(offset plr)-p_link
+		;get the next PD on list.
+		;DI is the last one which
+		;has already been checked.
+polld_another:
+	mov si,p_link[di]
+		;SI is the next PD to check
+	cmp si,0 ! jz drltorlr
+		;SI is valid PD, poll it.
+	    push di ! mov cx,p_wait[si]
+	    mov al,io_polldev ! call xiosif
+	    pop di ! mov si,p_link[di]
+		;if AL=0, device not ready.
+	    cmp al,0 ! je polld_next
+			;device ready,
+			;move SI from PLR to RLR
+		mov ax,p_link[si] ! mov p_link[di],ax
+		push di ! mov bx,(offset rlr)-p_link
+		mov p_stat[si],ps_run
+		call insert_process ! pop si
+			;p_link[SI]=next PD to check
+polld_next:		;SI has been checked
+	    mov di,si ! jmps polld_another
+
+drltorlr:
+;--------
+; Pull all processes on the dispatch ready list and
+; place them on the Ready List.
+
+		;We must disable interrupts while
+		;playing with DRL since interrupts
+		;doing a Flag_set may also.
+	cli ! mov si,drl
+	cmp si,0 ! jz switch
+	    mov ax,p_link[si] ! mov drl,ax
+	    mov p_stat[si],ps_run
+	    mov bx,(offset rlr)-p_link
+	    call insert_process
+	    sti ! jmps drltorlr
+
+switch:
+;------
+; switch to the first process on the Ready List 
+
+	mov bx,rlr
+	mov dx,p_uda[bx] ! mov ds,dx
+	push dx				;UDA on stack
+		; restore interrupt vectors
+	mov ax,0 ! mov es,ax
+	mov si,offset u_ivectors ! mov di,ax
+	mov cx,10 ! rep movs ax,ax
+	mov si,offset u_mpm_ip
+	mov di,offset i_mpm_ip
+	mov cx,4 ! rep movs ax,ax
+		; restore registers
+	mov ax,ds:u_ax
+	mov bx,ds:u_bx
+	mov cx,ds:u_cx
+	mov dx,ds:u_dx
+	mov si,ds:u_si
+	mov di,ds:u_di
+	mov bp,ds:u_bp
+		; restore DS and ES and stack
+	pop es
+	mov ss,u_ss
+	mov sp,u_sp
+	mov ds,sysdat
+	cmp u_in_int,true ! jne dret
+	    jmp int_disp_exit
+dret:	push u_flag_sav ! popf
+	mov indisp,false
+	ret
+

@@ -1,0 +1,102 @@
+$title('MP/M-86 2.0 Status Process - Transient')
+$compact
+				/* want 32 bit pointers */
+status:
+do;
+
+$include (copyrt.lit)
+
+/* VAX generation commands
+
+asm86 mcd.a86
+plm86 stscmd.plm 'p1' 'p2' 'p3' optimize(3) debug
+link86 mcd.obj,stscmd.obj  to stscmd.lnk
+loc86 stscmd.lnk od(sm(dats,code,data,stack,const)) -
+      ad(sm(dats(0),code(0)))  ss(stack(+32))
+h86 stscmd
+
+then on a micro
+
+vax stscmd.h86
+gencmd stscmd
+ren mpmstat.cmd=stscmd.cmd
+
+Notes:
+	Stack is expanded for interrupts.  Const(ants) come
+	last to force hex generation
+
+*/
+
+
+$include (stscom.plm)
+
+dcl cpmversion lit '30h';            /* BDOS 3.0 or later */
+dcl mpmproduct lit '11h';            /* MP/M-86           */
+
+plmstart: procedure public;
+  dcl (temp,repeat) boolean,
+      i byte,
+      ver address;
+
+  dcl vers$str$pointer pointer;
+  dcl vers$str$ptr structure (
+      offset word,
+      segment word) at (@vers$str$pointer);
+
+  ver = get$version;
+  if low(ver) <> cpmversion or high(ver) <> mpmproduct then 
+  do;
+     call print$buffer (.('Requires MP/M-86 2.0','$'));
+     call reboot;                 /* use CP/M exit */
+  end;
+  else
+  do;
+    sysdat$pointer = get$sysdat;
+    ccb$ptr.segment,flag$ptr.segment,md$ptr.segment,ms$ptr.segment,
+    sat$ptr.segment,qd$ptr.segment,pd$ptr.segment, sysdat$ptr.segment
+    = sysdat$ptr.segment;
+
+    repeat = false;
+  
+    do i = 1 to buff(0);
+      if buff(i) = 'p' or buff(i) = 'P' then
+         repeat = true;
+    end;
+
+    temp = true;                /* show display at least once */
+    do while repeat or temp;
+      call crlf;
+      vers$str$ptr.offset = sd.version + 3;    /* skip cr, lf's */
+      vers$str$ptr.segment = sd.supmod(1);
+      call display$text(0,vers$str$pointer);
+      call print$buffer (.(
+      '****** Status Display - Values Shown In Hexadecimal *****',
+      cr,lf,lf,'$'));
+      
+      call display$config;
+      call display$ready;
+      call display$DQ;
+      call display$NQ;
+      call display$delay;
+      call display$poll;
+      call display$flag$wait;
+      call display$flag$set;
+      call display$queues;
+      call display$ccb(.('Consoles:$'),0,sd$byte(ncondev));
+      call display$ccb(.('Printers:$'),sd$byte(ncondev), sd$byte(nciodev));
+      call display$memory;
+      if repeat then
+      do;
+        call print$buffer(.(cr,lf,'Hit a Key to Continue,',
+          ' Control C to Stop $'));
+        call crlf;
+        i = conin;
+      end;
+      temp = false;
+    end;
+  end;
+  call terminate;
+end plmstart; 
+
+end status;
+

@@ -1,0 +1,3 @@
+### Important note
+If you like to port CP/M-8000 to another (non-Olivetti) machine, you must consider that you need to do the first build on an Olivetti M20 running CP/M-8000. Dwight Elvey is willing to assemble and link programs for those that want to bring up CPM-8000 on some other machine, with his Olivetti. He can except text source files for the bios over the net.
+As for the contact address, please contact me (Gaby@gaby.de) first, I will then forward your mail to Dwight. 

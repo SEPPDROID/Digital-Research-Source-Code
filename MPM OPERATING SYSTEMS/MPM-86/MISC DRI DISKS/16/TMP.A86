@@ -1,0 +1,509 @@
+
+;*****************************************************
+;*
+;*	Terminal Message Processor
+;*
+;*	The TMP determines the user interface to MPM.
+;*	Much of the interface is available though
+;*	system calls.  This TMP takes advantage of
+;*	as much as possible for simplicity.  The TMP
+;*	could, for instance,  be easily modified to
+;*	force logins and have non-standard defaults.
+;*
+;*	With a little more work, The TMP could do all
+;*	command parsing and File Loading instead of
+;*	using the CLI COMMAND FUNCTION.  This is also
+;*	the place to AUTOLOAD programs for specific
+;*	users.  Suggestions are given in the MP/M-86
+;*	SYSTEM'S GUIDE.
+;*
+;*****************************************************
+
+true		equ	0ffh
+false		equ	0
+unknown		equ	0
+mpmint		equ	224	  ; int vec for mpm
+
+cr		equ	13
+lf		equ	10
+
+mpm_conout	equ	2
+mpm_conwrite	equ	9
+mpm_conread	equ	10
+mpm_diskselect	equ	14
+mpm_getdefdisk	equ	25
+mpm_usercode	equ	32
+mpm_freedrive	equ	39
+mpm_conattach	equ	146
+mpm_condetach	equ	147
+mpm_setdefcon	equ	148
+mpm_clicmd	equ	150
+mpm_parse	equ	152
+mpm_setdeflst	equ	160
+mpm_getdeflst	equ	164
+
+ps_run		equ	00	; on ready list root
+pf_sys		equ	001h	; system process
+pf_keep		equ	002h	; do not terminate
+
+s_mpmseg   equ	word ptr 40H	;begin MPM segment
+s_sysdisk  equ  byte ptr 04bh	;system disk
+s_ncns	   equ	byte ptr 47H    ;sys. consoles
+s_version  equ	word ptr 78h	;ofst ver. str in SUP
+
+rsp_top	     equ  0
+rsp_md	     equ  008h
+rsp_pd	     equ  010h
+rsp_uda	     equ  040h
+rsp_bottom   equ  140h
+
+e_no_memory	   equ	3   ; cant find memory
+e_no_pd		   equ	12  ; no free pd's
+e_q_full	   equ	15  ; full queue
+e_illdisk	   equ	23  ; illegal disk #
+e_badfname	   equ	24  ; illegal filename
+e_badftype	   equ	25  ; illegal filetype
+e_bad_load	   equ	28  ; bad ret. from BDOS load
+e_bad_read	   equ	29  ; bad ret. from BDOS read
+e_bad_open	   equ  30  ; bad ret. from BDOS open
+e_nullcmd	   equ	31  ; null command sent
+e_ill_lst	   equ	37  ; illegal list device
+e_ill_passwd	   equ	38  ; illegal password
+
+
+;*****************************************************
+;*
+;*	TMP Shared Code and Constant Area
+;*
+;*****************************************************
+
+	cseg
+	org	0
+
+;===
+mpm:	; INTERFACE ROUTINE FOR SYSTEM ENTRY POINTS
+;===
+
+	int mpmint ! ret
+
+;===
+tmp:	; PROGRAM MAIN - INITIALIZATION
+;===
+
+		; set default console # = TMP#
+	mov dl,defconsole ! call setconsole
+
+		; set default disk = drive A
+	push ds ! mov ds,sysdatseg
+	mov dl,.s_sysdisk ! pop ds
+	call setdisk
+
+		; set default user # = console
+	mov dl,defconsole ! call setuser
+
+		; print version
+	call attach
+	push ds ! mov ds,sysdatseg
+	mov dx,.s_version
+	mov ds,.s_mpmseg
+	call print_ds_string ! pop ds
+	call detach
+
+		; THIS IS WHERE A LOGIN ROUTINE MIGHT
+		; BE IMPLEMENTED.  THE DATA FILE THAT
+		; CONTAINS THE USER NAME AND PASSWORD
+		; MIGHT ALSO CONTAIN AN INITIAL DEFAULT
+		; DISK AND USER NUMBER FOR THAT USER.
+
+;===========
+nextcommand:	; LOOP FOREVER
+;===========
+
+		; free drive
+	    mov dx,0ffffh ! call freedrive
+
+		; attach console
+	    call attach
+
+		; print CR,LF if we just sent command
+	    cmp cmdsent,false ! je noclearline
+		mov cmdsent,false
+		call crlf
+noclearline:
+
+		; set up and print user prompt
+		; get current default user # and disk
+		; this call should be made on every
+		; loop in case the last command
+		; has changed the default.
+
+	    mov dl,cr ! call prchar
+	    call getuser
+	    mov dl,bl ! call prnum
+	    call getdisk
+	    mov dl,'A' ! add dl,bl
+	    call prchar	
+	    mov dx,offset prompt
+	    call print_string
+
+		; Read Command from Console
+	    mov dx,offset read_buf ! call conread
+
+		; echo newline
+	    mov dl,lf ! call prchar
+
+		; make sure not a null command
+	    lea bx,clicb_cmd
+	    cmp read_blen,0 ! je gonextcmd
+		cmp byte ptr [bx],';' ! je gonextcmd
+
+			; see if disk change
+			; if 'X:' change def disk to X
+		    cmp read_blen,2 ! jne clicall
+		    cmp byte ptr 1[bx],':'
+		    jne clicall
+
+				; change default disk
+			mov dl,[bx]	;get disk name
+			and dl,5fh	;Upper Case
+			sub dl,'A'	;disk number
+
+				; check bounds
+			cmp dl,0 ! jb gonextcmd
+			cmp dl,15 ! ja gonextcmd
+
+				; select default disk
+			    call setdisk
+gonextcmd:  jmp nextcommand
+
+;=======
+clicall:	; SEND CLI COMMAND
+;=======
+			; put null at end of input
+		    mov bx,offset clicb_cmd
+		    mov al,read_blen ! mov ah,0
+		    add bx,ax ! mov byte ptr [bx],0
+
+			; copy command string for err
+			; reporting later and to check
+			; for built in commands...
+		    mov cx,64
+		    mov si,offset clicb_cmd
+		    mov di,offset savebuf
+		    push ds ! pop es
+		    rep movsw
+
+			; parse front to see if
+			; built in command
+		    mov si,offset fcb
+		    mov di,offset savebuf
+		    call parsefilename
+		    jcxz goodparse
+			sub bx,bx ! mov bl,read_blen
+			add bx,offset savebuf
+			mov byte ptr [bx],'$'
+		        jmp clierror
+
+
+goodparse:	    mov parseret,bx
+		    cmp bx,0 ! jne haveatail
+			mov bl,read_blen
+			add bx,offset savebuf
+haveatail:	    mov byte ptr [bx],'$' ! inc bx
+		    cmp fcb,0 ! je try_builtin
+			jmp not_builtin
+			; is it USER command?
+
+try_builtin:	    mov si,offset fcb ! inc si
+		    mov di,offset usercmd
+		    push cs ! pop es
+		    mov cx,4 ! repz cmpsw
+		    jnz notuser
+			mov si,offset fcb
+			mov di,parseret
+			cmp di,0 ! je pruser
+			    inc di
+			    call parsefilename
+			    cmp cx,0 ! jne pruser
+			      mov si,offset fcb
+			      inc si
+			      mov dx,[si]
+			      call a_to_b
+			      cmp bl,15 ! ja usererr
+				mov dl,bl
+				call setuser
+				jmp pruser
+usererr:		      mov dx,offset usererrmsg
+			      call printstring
+pruser:			mov dx,offset usermsg
+			call printstring
+			call getuser
+			mov dl,bl ! call prnum
+			call crlf
+			jmp nextcommand
+notuser:
+		    mov si,offset fcb ! inc si
+		    mov di,offset printercmd
+		    push cs ! pop es
+		    mov cx,4 ! repz cmpsw
+		    jnz notprinter
+			mov si,offset fcb
+			mov di,parseret
+			cmp di,0 ! je prprinter
+			    inc di
+			    call parsefilename
+			    cmp cx,0 ! jne prprinter
+			      mov si,offset fcb
+			      inc si
+			      mov dx,[si]
+			      call a_to_b
+			      cmp bl,0ffh
+			      je printererr
+				mov dl,bl
+				call setlist
+				jcxz prprinter
+printererr:		      mov dx,offset printemsg
+			      call printstring
+prprinter:		mov dx,offset printermsg
+			call printstring
+			call getlist
+			mov dl,bl ! call prnum
+			call crlf
+			jmp nextcommand
+notprinter:
+not_builtin:
+			; initialize Cli Control Block
+
+                    mov clicb_net,0
+			; make cli call
+
+		    mov cmdsent,true
+		    lea dx,clicb ! mov cl,mpm_clicmd
+		    call mpm
+		    cmp bx,0 ! jne clierror
+		        jmp nextcommand
+
+;========
+clierror:
+;========
+; Cli call unsuccesful, analyze and display err msg
+;	input: CX = ERROR CODE
+
+		;null command?
+	cmp cx,e_nullcmd ! jne not_nullcmd
+	    mov cmdsent,false
+	    jmp nextcommand
+not_nullcmd:
+		;no memory?
+	cmp cx,e_no_memory ! jne memory_ok
+	    mov dx,offset memerr ! jmp showerr
+memory_ok:
+		;no pd in table?
+	cmp cx,e_no_pd ! jne pd_ok
+	    mov dx,offset pderr ! jmp showerr
+pd_ok:
+		;bad file spec?
+	cmp cx,e_badfname   ! je fname_bad
+	cmp cx,e_illdisk    ! je fname_bad
+	cmp cx,e_ill_passwd ! je fname_bad
+	cmp cx,e_badftype   ! jne fname_ok
+fname_bad:  mov dx,offset fnameerr ! jmp showerr
+fname_ok:
+		;bad load?
+	cmp cx,e_bad_load ! je load_bad
+	cmp cx,e_bad_read ! jne load_ok
+load_bad:   mov dx,offset loaderr ! jmp showerr
+load_ok:
+		;bad open?
+	cmp cx,e_bad_open ! jne open_ok
+	    mov dx,offset openerr ! jmp showerr
+open_ok:
+		;RSP que full?
+	cmp cx,e_q_full ! jne que_ok
+	    mov dx,offset qfullerr ! jmp showerr
+que_ok:
+		;some other error...
+	mov dx,offset catcherr
+	;jmp showerr
+
+showerr:	; Print Error String
+		; input: DX = address of Error
+		;             string in CSEG
+
+	push dx
+	mov dx,offset savebuf ! call print_ds_string
+	mov dl,':' ! call prchar
+	mov dl,' ' ! call prchar
+	pop dx
+	call printstring ! call crlf
+	jmp nextcommand	
+
+parsefilename:	; SI = fcb   DI = string
+		mov cx,mpm_parse
+		mov bx,offset pcb
+		mov [bx],di ! mov 2[bx],si
+		mov dx,bx ! jmp mpm
+a_to_b:		;dl = 1st char, dh = 2nd char
+		cmp dh,' ' ! jne atob2char
+		    mov dh,dl ! mov dl,'0'
+atob2char:	cmp dh,'0' ! jb atoberr
+		cmp dh,'9' ! ja atoberr
+		cmp dl,'0' ! jb atoberr
+		cmp dl,'9' ! ja atoberr
+		    sub dh,'0' ! sub dl,'0'
+		    mov ax,0 ! mov al,dl
+		    push dx ! mov cl,10
+		    mul cl ! pop dx
+		    mov dl,dh ! mov dh,0
+		    add ax,dx
+		    mov bx,ax ! ret
+atoberr:	mov bl,0ffh ! ret
+prnum:		; dl = num (0-15)
+		cmp dl,10 ! jb prnum_one
+		    push dx
+		    mov dl,'1' ! call prchar
+		    pop dx ! sub dl,10
+prnum_one:	add dl,'0'
+		; jmp prchar
+prchar:		mov cl,mpm_conout ! jmp mpm1
+getuser:	mov dl,0ffh
+setuser:	mov cl,mpm_usercode ! jmp mpm1
+crlf:		mov dx,offset crlfstr
+		;jmp printstring
+printstring:	push ds ! mov ax,cs ! mov ds,ax
+		call print_ds_string ! pop ds ! ret
+print_ds_string:mov cl,mpm_conwrite ! jmps mpm1
+setconsole:	mov cl,mpm_setdefcon ! jmps mpm1
+setdisk:	mov cl,mpm_diskselect ! jmps mpm1
+getdisk:	mov cl,mpm_getdefdisk ! jmps mpm1
+setlist:	mov cl,mpm_setdeflst ! jmps mpm1
+getlist:	mov cl,mpm_getdeflst ! jmps mpm1
+attach:		mov cl,mpm_conattach ! jmps mpm1
+detach:		mov cl,mpm_condetach ! jmps mpm1
+conread:	mov cl,mpm_conread ! jmps mpm1
+freedrive:	mov cl,mpm_freedrive ! jmps mpm1
+mpm1:		jmp mpm
+
+;*****************************************************
+;*
+;*	CONSTANTS (IN SHARED CODE SEGMENT)
+;*
+;*****************************************************
+
+prompt		db	'>$'
+crlfstr		db	13,10,'$'
+memerr		db	'?Not Enough Memory$'
+pderr		db	'?PD Table Full$'
+fnameerr	db	'?Bad File Spec$'
+loaderr		db	'?Load Error$'
+openerr		db	'?Can''t Find Command$'
+catcherr	db	'?$'
+qfullerr	db	'?RSP Command Que Full$'
+
+usererrmsg	db	13,10,'Invalid User Number,'
+		db	' IGNORED',13,10,'$'
+usermsg		db	13,10,'User Number = $'
+
+printemsg	db	13,10,'Invalid Printer Number,'
+		db	' IGNORED',13,10,'$'
+printermsg	db	13,10,'Printer Number = $'
+
+usercmd		db	'USER    '
+printercmd	db	'PRINTER '
+
+;*****************************************************
+;*
+;*	TMP Data Area - this area is copied once for
+;*		each system console.  The 'defconsole'
+;*		field is unique for each copy
+;*		- Each Data Area is run by a common
+;*		shared code segment.
+;*
+;*****************************************************
+
+	DSEG
+	org	rsp_top
+
+sysdatseg	dw	0
+sdatvar		dw	s_ncns
+defconsole	db	0,0
+		dw	0,0,0,0,0
+
+	org	rsp_pd
+
+pd		dw	0,0		; link fields
+		db	ps_run		; status
+		db	198		; priority
+		dw	pf_sys+pf_keep	; flags
+		db	'Tmp     '	; Name
+		dw	offset uda/10h	; uda seg
+		db	0,0		; disk,user
+                db      0,0             ; ldisk,luser
+		dw	0ffffh		; mem
+		dw	0,0		; dvract,wait
+                db      0,0             ; org,net
+                dw      0               ; parent
+                db      0,0             ; cns,abort
+                db      0,0             ; cin,cout
+                db      0,0             ; lst,sf3
+                db      0,0             ; sf4,sf5
+		dw	0,0		; reserved
+                dw      0,0             ; pret,scratch
+
+	org	rsp_uda
+
+uda		dw	0,offset dma,0,0	;0-7
+		dw	0,0,0,0			;8-fh
+		dw	0,0,0,0			;10-17
+		dw	0,0,0,0			;18-1f
+		dw	0,0,0,0			;20-27
+		dw	0,0,0,0			;28-2f
+		dw	0,0,offset stack_top,0	;30-37
+		dw	0,0,0,0			;38-3f
+		dw	0,0,0,0			;40-47
+		dw	0,0,0,0			;48-4f
+		dw	0,0,0,0			;50-57
+		dw	0,0,0,0			;58-5f
+		dw	0,0,0,0			;60-67
+
+
+	org	rsp_bottom
+
+dma		rb	128
+
+stack		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+stack_top	dw	offset tmp	; code offset
+		dw	unknown		; code seg
+		dw	unknown		; init. flags
+
+maxcmdlen	equ	128
+
+	; the Read Console Buffer and the
+	; Cli Control Block share the same memory
+
+read_buf	rb	0
+read_maxcmd	db	128
+clicb		rb	0
+clicb_net       rb	0
+read_blen	rb      1
+clicb_cmd       rb      maxcmdlen + 1
+
+cmdsent		db	false
+
+parseret	dw	0
+
+pcb		dw	offset savebuf
+		dw	offset fcb
+
+fcb		rb	32
+savebuf		rb	128
+
+			;make sure hex is formed
+
+		db	0
+
+	end
+

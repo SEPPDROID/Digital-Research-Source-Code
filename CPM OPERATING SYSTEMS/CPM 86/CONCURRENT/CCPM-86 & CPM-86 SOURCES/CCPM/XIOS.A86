@@ -1,0 +1,4518 @@
+;			===================
+;			X  I  O  S  -  8  6
+;			===================
+
+;			Concurrent  CP/M-86
+;			eXtended I/O System
+;			      for the
+;			IBM Personal Computer
+
+;			Copyright (c) 1983
+;			Digital Research, Inc.
+;			Box 579, Pacific Grove
+;			California, 93950
+
+;	This XIOS is presented as an example
+;	hardware interface the CCP/M-86 operating system.
+
+;	Permission is hereby granted to use or
+;	abstract the following program in  the
+;	implementation of Concurrent CP/M-86,
+;	CP/M, MP/M or CP/Net for the 8086 or 8088
+;	micro-processor.
+
+title 'Example CCP/M-86 XIOS'
+
+;************************************************************************
+;*									*
+;*			XIOS ORGANIZATION				*
+;*									*
+;************************************************************************
+
+;	This XIOS is organized into the several major sections which
+;	begin with the section name centered and underlined.
+;	The following Table of Contents lists the major sections,
+;	and most of the sub-sections.
+
+;	Section Name					Page
+;	  Sub Section
+
+;	CCP/M Formats					6
+;	  SYSDAT Format					6
+;	  CCP/M System Call Equates			6
+;	  Process Descriptor Format			7
+;	  Console Control Block Format			8
+;	  Memory Descriptor Format			9
+
+;	XIOS Equates					11
+;	  XIOS Flag Assignments				11
+;	  ASCII Codes					11
+
+;	XIOS HEADER					13
+;	AND CCP/M INTERFACE
+;	  Header					13
+;	  CCP/M Interface				14
+;	  IO_POLL					16
+;	  POLL						16
+
+;	INTERRUPT HANDLERS				17
+;	  IBM PC Interrtupt Structure			17
+;	  IBM PC Keyboard Ports				17
+;	  8259 Equates					17
+;	  8253-5 Equates				18
+;	  I_TICK					18
+;	  I_KEYBOARD					21
+;	  I_DISK					24
+;	  I_UNEXPECTED					26
+
+;	CHARACTER I/O					28
+;	  IBM PC Screen Equates				28
+;	  IBM PC Parallel Port Equates			28
+;	  6845 CRT Controller Equates			28
+;	  IO_CONST					29
+;	  IO_CONIN					29
+;	  IO_CONOUT					33
+;	  Special Character Output Routines		36
+;	  Escape Sequence Routines			37
+;	  Console Output Subroutines			46
+;	  IO_SWITCH					49
+;	  IO_STATLINE					50
+;	  IO_LISTST					54
+;	  IO_LIST					54
+;	  IO_AUXIN					55
+;	  IO_AUXOUT					55
+
+;	Character I/O Data				56
+;	  IO_CONIN Data					56
+;	  Keyboard Translation Tables			57
+;	  Special Output Character Tables		60
+;	  Escape Sequence Tables			60
+;	  Screen Structures				61
+;	  Console Control Blocks (CCBs)			63
+;	  Status Line Data				64
+;	  List Control Blocks (LCBs)			65
+
+;	Disk I/O					66
+;	  IBM PC Disk Equates				66
+;	  8272 FDC Controller Equates			66
+;	  8237 DMA Controller Equates			67
+;	  CCP/M Disk I/O Equates			68
+;	  IO_SELDSK					69
+;	  IO_READ					69
+;	  IO_WRITE					71
+;	  IO_FLUSHBUF					79
+
+;	Disk I/O Data					80
+
+;	INIT:						84
+
+;	Miscellaneous Routines				93
+;	  PRINT_MSG:					93
+;	  RESET:					93
+
+
+;	The XIOS functions invoked by the CCP/M kernel through
+;	the JMP to ENTRY:, are denoted by a row of equal signs
+;	above and below the function label.  For example the IO_CONIN
+;	label has the form:
+
+;	;========
+;	io_conin:
+;	;========
+
+;	Internal XIOS functions that are called from various
+;	parts of the XIOS are of the form:
+
+;	;-------------------
+;	set_physical_cursor:
+;	;-------------------
+
+;	Interrupt routines are similar to the latter but begin
+;	with the string "i_", for example:
+
+;	;----------
+;	i_keyboard:
+;	;----------
+
+;	Subroutines local to a specific function are underlined:
+
+;	action_key:
+;	;----------
+
+
+; 	Register usage for XIOS "io_" functions and INIT:
+
+;	Entry:	AL = function # (at ENTRY: label)
+;		CX = entry parameter
+;		DX = entry parameter
+;		DS = SYSDAT (at ENTRY: and INIT:)
+;		ES = User Data Area (UDA) of currently running process
+
+;	Exit:	AX = return
+;		BX = AX (in exit)
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+;	Far calls to the Supervisor from the XIOS:
+;		CL = function
+;		CH = 0
+;		DX = parameter
+;		DS = data segment of parameter if DX is an address
+;		ES = UDA of currently running process
+
+;	Far jumps to the Dispatcher made from XIOS interrupt routines:
+;		All registers the same as on entry to the interrupt
+;		routine, except CS and IP which are changed by the JMPF.
+;		(the FLAGS, CS, IP are on the stack
+;		by virtue of the INT instruction)
+
+;	DEV_SETFLAG calls to the Supervisor from XIOS interrupt routines:
+;		CL = DEV_SETFLAG function number
+;		CH = 0
+;		DX = flag number to set
+;		DS = SYSDAT
+;		ES = don't care (must be restored at end of the
+;			interrupt service routine, however)
+
+;	Notes: The DEV_SETFLAG call and the jump to the dispatcher are
+;		the only legal operating system "entry" points
+;		for interrupt routines.
+
+;		Changes have been made in the
+;		register conventions from
+;		the CP/M-86 BIOS and the MP/M-86 XIOS.
+
+
+;	The XIOS must be assembled using the following memory model:
+;
+;	8080 model:
+;	-----------
+;	The code and data segments are the same,
+;	mixed code and data.  The code segment
+;	is org'd at 0C00H relative to the system
+;	data area.
+;
+;	high	+-----------------+\
+;		|  system tables  | |
+;		+-----------------+ |
+;		|  XIOS (C and D) |  >  system data
+;		+-----------------+ |
+;		|  SYSDAT         | |
+;		+-----------------+x
+;		|  system code    | >	system code
+;	low	+-----------------+/
+
+
+;	Notes on coding style:
+
+;	Indentation of the code is used to emphasize branching
+;	after conditional jumps.  Lower case is used for all code
+;	and variables for easier reading.  Code labels, equates
+;	and variable names are in upper case within comments to
+;	distinquish them from the english.
+
+;	Equates and data variables are placed in proximity to where
+;	they are used.	Having the code and data intermixed requires
+;	the use of equates and ORG statements throughout the XIOS.
+
+;	The XIOS may be broken up into smaller files with the use
+;	of the ASM86 "include" statement.  All of the data variables
+;	may be placed in one separate data segment and the extra
+;	equates and ORGs removed.
+
+eject
+;			CCP/M Formats
+;			-------------
+
+;************************************************************************
+;*									*
+;*			SYSDAT Format					*
+;*									*
+;************************************************************************
+
+DSEG
+ORG	0
+supmod		rw	2		;internal entry point to SUP
+	org	038h
+dispatcher	rw	2		;interrupt routines may exit with
+	org	040h			;a JMPF here
+osseg		rw	1		;beginning paragraph of O.S.
+	org	044h
+endseg		rw	1		;1st paragraph after O.S.
+	org	04bh
+sys_disk	rb	1		;system disk number
+	org	050h
+temp_disk	rb	1		;temporary disk number
+	org	058h
+mdul		rw	1		;root of unused memory descriptors
+mfl		rw	1		;root of memory free list
+	org	068h
+rlr		rw	1		;Ready List Root, 1st PD is
+	org	072h			;running process
+thrdrt		rw	1		;Thread Root, list of active
+qlr		rw	1		;processes
+	org	078h
+version		rw	1		;address of version string
+					;relative to SUP code segment
+bvernum		rw	1		;BDOS version number
+osvernum	rw	1		;O.S. version number
+tod_day		rw	1		;binary days since January 1, 1978
+tod_hour	rb	1		;BCD
+tod_min		rb	1		;BCD
+tod_sec		rb	1		;BCD
+	org	088h
+open_vec	rw	1		;16 bit vector of drives with
+					;open files - used by status line
+					;routine
+
+;************************************************************************
+;*									*
+;*	CCP/M System Calls Used by this XIOS				*
+;*									*
+;************************************************************************
+
+					;process control functions:
+p_delay		equ	141		;delay specified number of ticks
+p_dispatch	equ	142		;let other another process run
+p_pdadr		equ	156		;get double word pointer of process
+					;descriptor
+p_term		equ	143		;terminate process
+
+					;device control functions:
+dev_poll	equ	131		;poll device
+dev_waitflag	equ	132		;wait for flag to be set
+dev_setflag	equ	133		;set a specified flag
+
+					;Time function:
+t_seconds	equ	155		;get date,hours,minutes,seconds
+
+
+;************************************************************************
+;*									*
+;*		Process Descriptor Format				*
+;*									*
+;************************************************************************
+
+;	The Process Descriptor (PD) along with the
+;	associated User Data Area (UDA), describe
+;	the current state of a Process under CCP/M-86.
+;	The process descriptor is always within the System
+;	Data Segment.
+
+;	Process Descriptor:
+
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 00|   link    |  thread   |stat |prior|   flag    |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 08|                     name                      |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 10|    uda    |disk | user|       reserved        |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 18|               resereved           |  parent   |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 20|cons |     reserved    |list |    reserved     |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+; 28|                   reserved                    |
+;   +-----+-----+-----+-----+-----+-----+-----+-----+
+
+;	link	- used for placement into System Lists
+;	thread	- link field for Thread List
+;	stat	- current process activity
+;	prior	- priority
+;	flag	- process state flags
+;	name	- name of process
+;	uda	- segment address of user data area
+;	disk	- current default disk
+;	user	- current default user number
+;	mem	- pointer to MD list of memory owned
+;		  by this process
+;	parent	- process that created this process
+;	cons	- default console device (doesn't imply ownership)
+;	list	- default list device (doesn't imply ownership)
+
+p_link		equ	word ptr 0
+p_thread	equ	word ptr p_link + word
+p_stat		equ	byte ptr p_thread + word
+p_prior		equ	byte ptr p_stat + byte
+p_flag		equ	word ptr p_prior + byte
+p_name		equ	byte ptr p_flag + word    
+p_uda		equ	word ptr p_name + 8
+p_disk		equ	byte ptr p_uda + word
+p_user		equ	byte ptr p_disk + byte
+p_mem		equ	word ptr p_user + 3
+p_parent	equ	word ptr p_mem + 8
+p_cons		equ	byte ptr p_parent + word
+p_list		equ	byte ptr p_cons + 4
+
+pd_len		equ	30H
+
+;************************************************************************
+;*									*
+;*		Console Control Block Format				*
+;*									*
+;************************************************************************
+;*
+;*	The CCB is used by the system to control the virtual
+;*	consoles.  There must be one correctly initialiazed CCB
+;*	in the XIOS per virtual	console.
+;*
+;*	+---------+---------+---------+---------+
+;*  00	|      owner        |      reserved	|
+;*	+---------+---------+---------+---------+
+;*  04	|                reserved               |
+;*	+---------+---------+---------+---------+
+;*  08	|  mimic  |      reserved               |
+;*	+---------+---------+---------+---------+
+;*  0C	|      reserved     |       state       |
+;*	+---------+---------+---------+---------+
+;*  10  |     maxbufsiz     |     reserved      |
+;*	+---------+---------+---------+---------+
+;*  14  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*  18  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*  1C  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*  20  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*  24  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*  28  |               reserved                |
+;*      +---------+---------+---------+---------+
+;*
+;*	owner	- current owner of device
+;*		  if 0, no owner
+;*	mimic	- list dev that mimics us.
+;*		  0ffh means no mimic device
+;*	state	- current state of virtual console
+;*	maxbufsiz - maximum file size for buffered mode
+
+c_owner		equ	word ptr 00h
+c_mimic		equ	byte ptr 08h
+c_state		equ	word ptr 0Eh
+c_maxbufsiz	equ	word ptr 10h
+ccblen		equ	2ch
+
+;CCB state flags
+
+csm_buffered	equ	00001h
+csm_background	equ	00002h
+csm_purging	equ	00004h
+csm_noswitch	equ	00008h
+csm_ctrlS	equ	00080h
+csm_ctrlO	equ	00100h
+csm_ctrlP	equ	00200h
+
+;************************************************************************
+;*									*
+;*		Memory Descriptor Format				*
+;*									*
+;************************************************************************
+
+;*	GENCCPM creates an MD per memory partition specified,
+;*	links them together and roots the list at the Memory Free
+;*	list location in SYSDAT.
+;*	The XIOS in the INIT: routine can trim this list to
+;*	be in the bounds of actual memory
+
+;*	+---------+---------+---------+---------+
+;*  04	|       link        |       start       |
+;*	+---------+---------+---------+---------+
+;*  08	|      length       |      reserved     |
+;*	+---------+---------+---------+---------+
+;*  0C  |      reserved     |
+;*      +-------------------+
+
+;*	link	- offset of next MD, 0 if end of list
+;*	start	- beginning paragraph of free memory
+;*	length	- size of partition in paragraphs
+
+md_link		equ	word ptr 0
+md_start	equ	word ptr md_link + word
+md_length	equ	word ptr md_start + word
+mdlen		equ	md_length + 4
+
+eject
+;			XIOS Equates
+;			---- -------
+
+true		equ	0ffffh
+false		equ	0
+
+;************************************************************************
+;*									*
+;*			XIOS Flag Assignments	 			*
+;*									*
+;************************************************************************
+
+;	Definition of flag table used by by CCP/M and this XIOS
+
+					;CCP/M flags:
+					;0 - is reserved
+tick_flag	equ	1		;tick flag number
+sec_flag	equ	2		;seconds flag number
+min_flag	equ	3		;minutes flag number
+
+					;XIOS flags:
+fdc_flag	equ	4		;disk operation flag
+key_flag	equ	5		;key available flag
+bell_flag	equ	6
+last_flag	equ	bell_flag
+
+;************************************************************************
+;*									*
+;*			ASCII Codes					*
+;*									*
+;************************************************************************
+
+nul	equ	00h
+soh	equ	01h
+stx	equ	02h
+etx	equ	03h
+eot	equ	04h
+enq	equ	05h
+ack	equ	06h
+bel	equ	07h
+bs	equ	08h
+ht	equ	09h
+lf	equ	0ah
+vt	equ	0bh
+ff	equ	0ch
+cr	equ	0dh
+so	equ	0eh
+shi	equ	0fh
+dle	equ	10h
+dc1	equ	11h
+dc2	equ	12h
+dc3	equ	13h
+dc4	equ	14h
+nak	equ	15h
+syn	equ	16h
+etb	equ	17h
+can	equ	18h
+em	equ	19h
+subb	equ	1ah
+esc	equ	1bh
+fs	equ	1ch
+gs	equ	1dh
+rds	equ	1eh
+us	equ	1fh
+del	equ	7fh
+
+xon	equ	dc1
+xoff	equ	dc3
+
+eject
+;		XIOS HEADER AND CCP/M INTERFACE
+;		-------------------------------
+
+;************************************************************************
+;*									*
+;*			XIOS Header 					*
+;*									*
+;************************************************************************
+
+CSEG
+ORG	0C00h				;8080 model XIOS base
+					;CCP/M-86 entry points to XIOS:
+	jmp	init			;called once at system boot
+	jmp	entry			;subsequent calls go through here
+
+num_vir_cons	equ	4		;number of virtual consoles
+
+sysdat		dw	0
+supervisor_o	rw	1
+supervisor_s	rw	1
+supervisor	equ	dword ptr supervisor_o
+
+SL1	equ	offset $
+DSEG
+ORG	SL1	
+
+ticks_per_second	equ	60
+
+tick		db	false		;set by I_TICK
+ticks_sec	db	ticks_per_second
+door		db	false		;used if door open interrupt
+					;is available to XIOS
+		rb	2
+nvcns		db	num_vir_cons	;4 virtual consoles
+nccb		db	4		;total number of CCBs
+nlcb		db	2		;2 list devices
+
+ccb		dw	offset ccb_tab	;pointer to the first CCB
+lcb		dw	offset lcb_tab	;pointer to the first LCB
+
+					;disk parameter header offsets
+dph_tbl		dw	offset dphA	;A
+		dw	offset dphB	;B
+		dw	0,0,0,0,0,0,0	;C-I
+		dw	0,0,0		;J-L
+dph_m_adr	dw	dphM,0,0,0	;M-P
+
+;	If Mdisk memory is not present, INIT: 0's DPH_M_ADR.
+;	We put this DPHM in now so GENCCPM will perform
+;	DPH fixups for us.
+					
+
+genccpm_buf	dw	screens_size	;GENCCPM will alloc screens_size
+					;# of paragraphs and put the
+					;segment address of the buffer in
+					;the variable GENCCPM_BUF
+
+trans_table	dw	key_table	;allow a transient to change
+					;the keyboard mapping
+debug		db	false		;allow CP/M-86 to be used
+					;for debugging, see INIT:
+
+;************************************************************************
+;*									*
+;*			CCP/M INTERFACE					*
+;*									*
+;************************************************************************
+
+SL2	equ	offset $
+CSEG
+ORG	SL2
+
+;=====
+;=====
+entry:					;arrive here from JMP at
+;=====					;03H in XIOS code segment
+;=====
+
+;	entry:	AL = function number
+;		CX, DX parameters
+;	exit:	AX = BX = return
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+;	Note: no alteration of stack is allowed during entry except
+;	for the return address caused by the "CALL FUNCTION_TABLE[BX]"
+;	instruction.
+
+	cld				;set the direction flag
+	xor ah,ah
+	cmp al,xios_funcs
+	jae ill_func
+	  shl al,1			;multiply by 2
+	  mov bx,ax			;put in pointer register
+	  call function_table[bx]	;no range checking needed
+	  mov bx,ax			;only called by O.S.
+
+ill_func:
+	retf				;return to O.S. kernel
+
+SL3	equ	offset $
+DSEG
+ORG	SL3
+
+xios_funcs	equ	14
+
+function_table:
+	dw	io_const		; 0 console status
+	dw	io_conin		; 1 console input
+	dw	io_conout		; 2 console output
+	dw	io_listst		; 3 list status
+	dw	io_list			; 4 list output
+	dw	io_auxin		; 5 auxillary input
+	dw	io_auxout		; 6 auxillary out
+	dw	io_switch		; 7 switch screen
+	dw	io_statline		; 8 update or print new status
+	dw	io_seldsk		; 9 select disk
+	dw	io_read			;10 read logical sector
+	dw	io_write		;11 write logical sector
+	dw	io_flushbuf		;12 flush buffers
+	dw	io_poll			;13 poll device
+
+SL4	equ	offset $
+CSEG
+ORG	SL4
+
+;-------
+setflag:
+;-------
+;	entry:	DL = flag number
+;	exit:	AX = BX = return
+
+	mov cl,dev_setflag
+	jmps supif
+
+;--------
+waitflag:
+;--------
+;	entry:	DL = flag number
+;	exit:	AX = BX = return
+
+	mov cl,dev_waitflag
+	;jmps supif
+
+;-----
+supif:
+;-----
+;	entry:	CL = function number
+;		CH = 0
+;		DX parameter
+;		ES = user data area
+;	exit:	AX = BX = return
+;		CX = error code from O.S.
+;		ES = UDA or return value
+
+	xor ch,ch			;ensure CH is 0
+	callf supervisor
+	ret
+
+;=======
+io_poll:
+;=======
+;	entry:	DL =	device #
+;	exit:	AL =	0 if not ready, 0FFH if ready
+;		BX =	device# * 2
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+;	IO_POLL is called from the dispatcher after a process makes
+;	a DEV_POLL call to the O.S.
+
+	xor bx,bx
+	mov bl,dl
+	shl bx,1
+	jmp poll_table[bx]
+
+;----
+poll:					;poll device
+;----
+;	entry:	DL = device number
+;	exit:	AL = 0ffh device ready
+;		AL = 0 if not ready
+;		BX = device# * 2
+	
+	call io_poll			;check hardware first
+	test ax,ax ! jz p_os		;AX=0 if not ready
+	  ret				;BX=device# * 2 set by io_poll
+p_os:					;DL=device#
+	push bx				;save device# * 2
+	mov cl,dev_poll			;give up the CPU resource
+	call supif
+	pop bx				;device# * 2
+	ret
+
+SL5	equ	offset $
+DSEG
+ORG	SL5
+
+poll_table	dw	listst		;each of these functions must
+		dw	listst		;preserve BX and DX
+		dw	0,0,0,0		;replace with other poll device
+					;routines address, when needed.
+eject
+;			Interrupt Handlers
+;			------------------
+
+;************************************************************************
+;*									*
+;*			IBM PC Interrupt Structure			*
+;*									*
+;************************************************************************
+
+s_step_int		equ	01h		;interrupt numbers
+nmi_int			equ	02h
+one_byte_int		equ	03h
+tick_int		equ	08h
+key_int			equ	09h
+disk_int		equ	0Eh
+equip_int		equ	11H
+mem_size_int		equ	12H
+rom_rs232_int		equ	14h		;see init for debugging use
+rom_printer_int		equ	17h		;	"
+os_int			equ	224		;normal CCP/M-86 entry
+debug_int		equ	225		;debugger entry to O.S.
+
+iv_s_step		equ	s_step_int*4	;interrupt vector offsets
+iv_nmi			equ	nmi_int*4
+iv_one_byte		equ	one_byte_int*4
+iv_tick			equ	tick_int*4
+iv_key			equ	key_int*4
+iv_disk			equ	disk_int*4
+iv_rs232		equ	rom_rs232_int*4
+iv_debug		equ	debug_int*4
+
+;************************************************************************
+;*									*
+;*		IBM PC Keyboard Ports					*
+;*									*
+;************************************************************************
+
+kbd_data	equ	060h		;input port for the key board data
+kbd_control	equ	061h		;control port for the key board
+
+;************************************************************************
+;*									*
+;*	8259 Programmable Interrupt Controller Commands			*
+;*			and Ports					*
+;*									*
+;************************************************************************
+
+pic_even_port		equ	020h	;port 0
+pic_odd_port		equ	021h	;bit 0 is A0 of 8259 instructions
+
+pic_nseoi		equ	020h	;non specific end of interupt
+
+disk_channel		equ	06h
+keyboard_channel	equ	01h
+timer_channel		equ	00h
+
+;************************************************************************
+;*									*
+;*	      8253-5 Counter Timer Port and Data Equates		*
+;*									*
+;************************************************************************
+
+timer_0_reg		equ	040h		;first counter timer port
+timer_1_reg		equ	041h
+timer_2_reg		equ	042h
+timer_cmd_reg		equ	043h		;command port
+
+timer_60_hz		equ	19886		;constant for 60.001 hz tick
+timer_1000_hz		equ	533h		;constant for 1000 hz tone
+
+bell_cmd		equ	10110110b	;timer 2 lsb,msb binary
+bell_on			equ	03h
+bell_off		equ	0fch
+
+port_a			equ	060h
+port_b			equ	061h
+port_c			equ	062h
+
+;************************************************************************
+;*									*
+;*				I_TICK					*
+;*									*
+;************************************************************************
+
+;	The following routine gets control on a timer interrupt,
+;	from the 8253-5. 
+
+
+SL6	equ	offset $
+CSEG
+ORG	SL6
+
+;------
+i_tick:
+;------
+;	Entry:	Currently running process's register state
+;	Exit:	All registers preserved
+
+	push ds				;use one level of user stack
+	mov ds,sysdat
+	cmp tcnt,0			;keep entry count to allow
+	jnz t_noswitch			;debugging under DDT86
+	  mov i_tick_ss,ss
+	  mov i_tick_sp,sp
+	  mov ss,sysdat
+	  mov sp,offset i_tick_stack
+t_noswitch:
+	inc t_cnt
+
+	inc int_cnt			;interrupt counter
+	sti
+
+	push ax ! push bx ! push cx
+	push dx ! push bp ! push di
+	push si ! push es
+
+;	Bells on the IBM PC must turn on a speaker for a given duration.
+;	A "bell cycle" must have an off period so we can distinquish
+;	it from the next bell generated.  A process sending a bell
+;	to IO_CONOUT, waits for a DEV_SETFLAG operation from the I_TICK
+;	routine that signals the end of the bell.
+;
+;	Handling bells sent to background processes presents some
+;	problems.  If we generate bells sent to a background
+;	console, the bells would not pertain to the displayed image.
+;	If we keep a bell count per console, and produce the stacked up
+;	bells when we switch in a background virtual console
+;	the bells would be out of "sync" with the
+;	the displayed image.  Stopping a background process because
+;	it produced a bell would defeat the purpose of virtual screens.
+;	Therefore, bells sent to background consoles are ignored.
+;
+;	Note: the screen structures are defined in the SERIAL IO section.
+
+	cmp bell_ticks,0		;in bell cycle if non 0
+	  jz check_motor_off		;BELL_TICKS is set by IO_CONOUT
+	  dec bell_ticks
+	  jnz check_bell_off
+	    mov dx,bell_flag
+	    call setflag		;wake up process that generated
+	    jmps check_motor_off	;the bell, ES doesn't need to
+check_bell_off:				;be the UDA on DEV_SETFLAG calls
+	    cmp bell_ticks,1		;turn bell on last tick of cycle
+	    jne check_motor_off
+	      in al,port_b
+	      and al,bell_off
+	      out port_b,al
+
+check_motor_off:
+	cmp disk_busy,true		;leave motor on while disk
+	je check_seconds		;operation is underway ...
+					;helpful for debuging disk routines
+	  cmp motor_off_counter,0	;motor is off if 0
+	  je check_seconds		;motor on routine sets counter to
+	    dec motor_off_counter	;0ffh
+	    jnz check_seconds		;not timed out yet
+	      mov dx,fdc_port
+	      mov al,fdc_on		;do not reset the FDC
+	      mov motor_flags,al	;deselect the motors
+	      out dx,al			;turn it off
+					;only one can be on at a time
+check_seconds:
+	dec tick_counter		;has 1 second elapsed ?
+	jnz no_second_flag
+	  mov tick_counter,ticks_per_second	;yes - set
+	  mov dx,sec_flag		;the second flag
+	  call setflag			;DS=SYSDAT but ES does not
+					;need to be UDA on DEV_SETFLAG
+no_second_flag:
+	cmp tick,false			;only set the tick flag
+	je i_tick_exit			;when the tick variable in
+	  mov dx,tick_flag		;the XIOS header is true
+	  call setflag			;DS must = SYSDAT but
+					;ES does not need = UDA
+					;on DEV_SETFLAG
+i_tick_exit:
+	pop es ! pop si ! pop di
+	pop bp ! pop dx ! pop cx
+	pop bx				;AX still on stack
+
+	cli				;stop reentrancy
+
+	mov al,pic_nseoi		;signal end of interrupt
+	out pic_even_port,al		;to 8259
+
+	pop ax
+
+	dec t_cnt
+	jnz no_stack_restore
+	  mov ss,i_tick_ss
+	  mov sp,i_tick_sp
+
+no_stack_restore:
+	dec int_cnt
+	pop ds				;restore DS of interrupted process
+	jz it_disp
+	  iret
+it_disp:
+	jmpf cs:dword ptr dispatcher	;go run the next ready process
+
+;************************************************************************
+;*									*
+;*			I_TICK Data					*
+;*									*
+;************************************************************************
+
+SL7	equ	offset $
+DSEG
+ORG SL7
+
+bell_ticks	db	0
+tick_counter	db	ticks_per_second	;counter for tick interupts
+int_cnt		db	0
+
+org (offset $ + 1) and 0fffeh
+
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+		dw	0CCCCh,0CCCCH,0CCCCH
+
+i_tick_stack	rw	0
+
+i_tick_ss	rw	1
+i_tick_sp	rw	1
+t_cnt		db	0
+
+;************************************************************************
+;*									*
+;*			I_KEYBOARD					*
+;*									*
+;************************************************************************
+
+;	The following routine gets control after a keyboard interrupt.
+;	Interrupts are generated on the IBM PC when a key is depressed
+;	or released.
+
+SL8	equ	offset $
+CSEG
+ORG	SL8
+
+;----------
+i_keyboard:
+;----------
+;	Entry:	Currently running process's register state
+;	Exit:	All registers preserved
+
+	push ds ! mov ds,sysdat		;use one level of user stack
+	mov i_keyboard_ss,ss		;use data segment, keep
+	mov i_keyboard_sp,sp		;XIOS code and data separate
+	mov ss,sysdat
+	mov sp,offset i_keyboard_stack	;keyboard interrupt stack
+	
+	inc int_cnt			;keep other processes from
+	sti				;running
+
+	push ax ! push bx ! push cx
+	push dx ! push bp ! push di
+	push si ! push es
+
+	in al,kbd_data			;get the scan code
+	mov dl,al
+
+	mov al,kb_cnt			;# chars in buffer
+	cmp al,kblen			;if it is full throw away
+	je ik_full			;scan code, PIN rings the
+					;bell when VINQ gets full.
+	  inc kb_cnt			;we have one more char in buf
+	  mov ax,kb_in			;ptr to next char
+	  mov bx,ax
+	  mov byte ptr [bx],dl		;put the scan code in buffer
+	  inc bx			;next free byte in buffer
+	  cmp bx,kblen+offset kb_buf	;wrap around ?
+	  jne ik_ptr_ok
+	    mov bx,offset kb_buf	;back to beginning of buffer
+ik_ptr_ok:
+	  mov kb_in,bx			;save new pointer
+
+ik_full:
+	cmp kb_wait,false		;only call DEV_SETFLAG when
+	je ik_no_flag			;a process is waiting for
+	  mov dx,key_flag		;keyboard input
+	  call setflag			;process doesn't wake up
+	  mov kb_wait,false		;until dispatch occurs
+
+ik_no_flag:
+	in al,kbd_control		;get the current control port
+	mov ah,al			;save the current state
+	or al,080h			;reset the key board
+
+	pop es ! pop si ! pop di
+	pop bp ! pop dx ! pop cx
+	pop bx				;AX still on stack
+
+	out kbd_control,al		;send to control port
+	mov al,ah
+	out kbd_control,al		;set keyboard back to normal state
+
+	cli				;keep this interrupt handler
+					;from being reentered
+	mov al,pic_nseoi		;signal end of interrupt
+	out pic_even_port,al		;to 8259
+
+	pop ax
+
+	mov ss,i_keyboard_ss
+	mov sp,i_keyboard_sp
+
+	dec int_cnt
+	pop ds
+	jz ik_disp
+	  iret
+ik_disp:
+	jmpf cs:dword ptr dispatcher
+
+;************************************************************************
+;*									*
+;*			I_KEYBOARD Data					*
+;*									*
+;************************************************************************
+
+SL9	equ	offset $
+DSEG
+ORG	SL9
+
+;	Keyboard interrupt routine stack
+
+org	(offset $ + 1) and 0fffeh
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+i_keyboard_stack	rw	0
+
+i_keyboard_ss	dw	0		;keyboard interrupt
+i_keyboard_sp	dw	0		;handler
+
+;	Keyboard input buffer, filled by I_KEYBOARD:, read by
+;	IO_CONIN:
+
+kblen		equ	32		;length of character buffer
+
+kb_buf		rb	kblen		;char buffer
+kb_out		dw	kb_buf		;pts to next char to read
+kb_in		dw	kb_buf		;pts to next free char buffer
+kb_cnt		db	0		;# of chars in buffer
+kb_wait		db	false		;is any process waiting for
+					;keyboard input
+
+;************************************************************************
+;*									*
+;*			I_DISK						*
+;*									*
+;************************************************************************
+
+;	The following routine gets control from an interrupt from the
+;	FDC.  The current state is saved and DEV_SETFLAG is called.
+
+SL10	equ	offset $
+CSEG
+ORG	SL10
+
+;------
+i_disk:
+;------
+;	Entry:	Currently running process's register state
+;	Exit:	All registers preserved
+
+	push ds ! mov ds,sysdat
+	mov disk_ss,ss			;save the stack segment
+	mov disk_sp,sp			;and stack pointer
+	mov ss,sysdat			;set up interrupt stack
+	mov sp,offset i_disk_stack
+
+	inc int_cnt
+	sti
+
+	push ax ! push bx ! push cx
+	push dx ! push bp ! push di
+	push si ! push es
+
+	mov dx,fdc_flag			;DEV_SETFLAG call must have
+	call setflag			;DS = SYSDAT, but ES
+					;does not need to be set to UDA
+					;on flag set calls
+	pop es ! pop si ! pop di
+	pop bp ! pop dx ! pop cx
+	pop bx				;AX still on stack
+
+	cli				;keep this interrupt
+					;handler from being
+					;reentered
+	mov al,pic_nseoi		;signal end of interrupt
+	out pic_even_port,al		;to 8259
+
+	pop ax	
+
+	mov ss,disk_ss			;restore user's stack
+	mov sp,disk_sp
+	dec int_cnt
+	pop ds
+	jz id_disp
+	  iret
+id_disp:
+	jmpf cs:dword ptr dispatcher
+
+;************************************************************************
+;*									*
+;*			I_DISK Data					*
+;*									*
+;************************************************************************
+
+SL11	equ	offset $
+DSEG
+ORG	SL11
+
+;	Stack switch area for disk interrupt
+
+org	(offset $ + 1) and 0fffeh
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+		dw	0CCCCH,0CCCCH,0CCCCH
+
+i_disk_stack	rs	0
+disk_ss		dw	0
+disk_sp		dw	0
+
+;************************************************************************
+;*									*
+;*			I_UNEXPECTED					*
+;*									*
+;************************************************************************
+
+SL12	equ	offset $
+CSEG
+ORG	SL12
+
+;------------
+i_unexpected:			;unknown interrupts go here
+;------------
+
+;	Display on the console the interrupt vector number that caused
+;	the CPU to be here.  We will terminate the process that caused
+;	the unknown interrupt, even if its keep flag is on.
+
+	cmp debug,true
+	jne u_notd		;break to CP/M-86
+	  int 3			;when debugging
+u_notd:
+
+	mov ax,sysdat
+	mov ds,ax
+	mov es,ax		;ES,DS = SYSDAT SEGMENT
+	mov di,offset unex_msg_pd
+	mov si,rlr		;PD offset
+	test si,si
+	jz iu_nopd
+	  lea si,p_name[si]
+	  mov di,offset unex_msg_pd
+	  mov cx,4
+	  rep movsw		;get PD name into message string
+
+iu_nopd:
+	  mov si,offset unex_msg
+	  call print_msg	;print unexpected interrupt message
+
+	  mov bx,rlr		;terminate the running process
+	  test bx,bx		;if no process is running
+	  jnz iu_abort		;halt the machine
+	    hlt			;this should only happen if
+				;kernel image has been corrupted
+iu_abort:
+	  mov p_flag[bx],0	;force termination to succeed
+	  mov es,p_uda[bx]	;set up UDA
+	  mov cx,p_term
+	  mov dx,0ffffh
+	  jmp supif		;process is terminated, interrupts 
+				;are forced on when next process to
+				;run is brought into context
+
+;************************************************************************
+;*									*
+;*	       		I_UNEXPECTED Data				*
+;*									*
+;************************************************************************
+
+SL13	equ	offset $
+DSEG
+ORG	SL13
+
+unex_msg	db	cr,lf,'Terminating '
+unex_msg_pd	db	'        '
+		db	': unexpected interrupt',cr,lf,0
+
+eject
+;			Character I/O
+;			-------------
+
+;************************************************************************
+;*									*
+;*			IBM PC Screen Equates				*
+;*									*
+;************************************************************************
+
+rows_per_screen		equ	24
+columns_per_screen	equ	80
+screen_siz		equ	rows_per_screen * columns_per_screen
+						;in words
+
+screens_size		equ	((2 * screen_siz + 15)/16) * num_vir_cons
+						;storage for all the screens
+						;in paragraphs
+bw_video_seg		equ	0B000h		;segment address of
+						;start of video ram
+bw_video_status_line	equ	screen_siz * 2
+						;byte offset of status line
+
+;************************************************************************
+;*									*
+;*		IBM PC Parallel Port Equates				*
+;*									*
+;************************************************************************
+
+list_ports	dw	03bch		;BW card parallel port
+		dw	0378h		;0378h parallel port card as shipped
+
+;************************************************************************
+;*									*
+;*	       6845 CRT Controller Port and Command Equates		*
+;*									*
+;************************************************************************
+
+;	The IBM PC's monochrome memory mapped video display begins
+;	at paragraph 0B000H.  It represents a screen 80 X 25.
+;	Each video character requires a word value, the low byte
+;	is the ASCII code (characters codes > 128 are also displayed)
+;	and the high byte is an attribute byte.  The 25th line
+;	is reserved by this XIOS as a status line.
+
+bw_card			equ	003b4h
+
+video_on		equ	00029h
+video_off		equ	00021h
+
+cursor_start		equ	10
+cursor_end		equ	11
+display_start_hi	equ	12
+display_start_low	equ	13
+cursor_hi		equ	14
+cursor_low		equ	15
+
+;************************************************************************
+;*									*
+;*			IO_CONST					*
+;*									*
+;************************************************************************
+
+SL14	equ	offset $
+CSEG
+ORG SL14
+
+;========
+io_const:
+;========
+;	entry:	DL console number
+;	exit:	AL = 0ffh if ready
+;		AL = 0 if not
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	xor ax,ax
+	ret
+
+;************************************************************************
+;*									*
+;*			IO_CONIN					*
+;*									*
+;************************************************************************
+
+;========
+io_conin: 
+;========
+;	entry:	DL console number
+;	exit:	AH = 0 and AL = character data
+;		AH = 0ffh and AL screen to switch to
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	pushf ! cli
+	cmp kb_cnt,0
+	jne ci_haveone
+ci_wait:
+	  mov kb_wait,true
+	  popf
+	  mov dx,key_flag		;get the flag number
+	  call waitflag			;wait for a scan code
+	  jmps ci_haveone2
+ci_haveone:
+	popf
+ci_haveone2:
+	dec kb_cnt
+	mov ax,kb_out
+	mov bx,ax
+	mov al,[bx]			;scan code in AL
+	inc bx
+	cmp bx,offset kb_buf+kblen
+	jne ci_ptr_ok
+	  mov bx,offset kb_buf
+ci_ptr_ok:
+	mov kb_out,bx
+	push es				;save UDA
+	push ds ! pop es		;ES=SYSDAT
+	call scan_trans			;returns AH=0 and AL=char to
+	pop es				;return to process
+					;else AH=0ffh - check for
+					;switch screen
+	test ah,ah			;AH=0 then done
+	jz conin_done
+					;AH=0ffh and AL=0 if released
+					;key, AL=special key otherwise
+	  cmp al,0f9h			;0F0h-0F9h are switch screen
+	  ja io_conin			;codes
+	    cmp al,0f0h
+	    jb io_conin			;implement check for programable
+					;function keys here
+	      and al,0fh		;switch screen range 0-9
+	      ;jmp conin_done
+conin_done:
+	ret
+
+scan_trans:
+;----------
+;	entry:	AL=scan code
+;	exit:	AH=0 if ASCII and AL=ASCII code
+;		AH=0FFH if AL is special code
+
+;	Test for CTRL, ALT already being down and DEL being current
+;	scan code.  If yes, call the ROM reset routine.
+
+	mov scan_code,al		;save scan code
+	cmp al,83 ! jnz mask_release	;is scan code the DEL key ?
+	  test down_bits,ctrl_bit	;yes $ is control down ?
+	  jz mask_release
+	    test down_bits,alt_bit	;yes $ is alt down ?
+	    jz mask_release
+	      jmp reset			;yes alt and ctrl are down
+ 
+mask_release:				;parity is on when key is released
+	and al,7fh			;turn off key release bit
+	cmp al,83 ! jle valid_key	;test for non$existent key
+	  jmp no_key
+
+;	Test for CTRL, SHIFT, ALT, NUMBLOCK, CAPSLOCK
+;	keys.  The scan codes for these keys are in action_key_table.
+;	and are refered to as action keys in the comments below.
+;	The bit position in AH corresponds with what kind of key is
+;	found, see equates below.
+;	The DOWN_BITS byte has bits on for action keys that are currently
+;	being held down by the operator.  The TOGGLE_BITS byte is similar
+;	but for keys that have toggle action, NUM LOCK, CAPS LOCK.
+;	Note, there is one only one set of DOWN_BITS, whereas
+;	the TOGGLE_BITS are kept on a per virtual console basis in the
+;	screen structures.
+
+valid_key:				;AL=scan code without parity
+	mov si,foreground_ss		;foreground screen structure
+	mov di,offset action_key_table	;look for CTRL,SHIFT,ALT,NUMLOCK
+	xor cx,cx			;CAPSLOCK
+	mov cl,num_action_keys		;get count
+	repnz scasb			;look for the byte	
+	jnz not_action_key
+	  dec di			;backup to matched action key
+	  sub di,offset action_key_table
+					;DI= 0 relative index
+	  mov ah,offset action_key_masks[di]
+					;get the corresponding bit
+	  jmp action_key		;pattern
+
+not_action_key:
+	mov al,scan_code
+	or al,al ! jns key_make		;sign is on if key just released
+	  jmp no_key			;ignore release condition on
+					;non action type key
+key_make:
+	mov bx,offset key_table		;translation table for single keys
+	test down_bits,ctrl_bit		;was control key already down ?
+	jz test_for_keypad		;no - try numlock
+	  mov bx,offset control_table	;yes - point to control key table
+	  jmps translate
+
+test_for_keypad:
+	cmp al,71 ! jb test_for_shift	;test for keypad
+	  test ss_mode[si],ssm_numlock	;from keypad, numlock on ?
+	  jz test_for_shift
+	    test down_bits,shft_bit
+	    jnz translate		;use key_table if numlock,shifted
+	    mov bx,offset shift_table
+	    jmps translate		;use shift table if numlock
+
+test_for_shift:
+	test down_bits,shft_bit
+	jz translate			;no $ return key from key_table
+	  mov bx,offset shift_table	;yes $ get key from shift_table
+
+translate:
+	xlat bx				;look up the key
+	test al,80h			;is it special ?
+	jnz special_key			;yes then done
+	  test ss_mode[si],ssm_capslock	;test for caps lock
+	  jz test_for_alt
+	    cmp al,'z'			;yes
+	    ja test_for_alt		;not alphabetic
+	      cmp al,'a'		;is it lower case ?
+	      jae do_case_change	;yes, switch case
+	        cmp al,'Z'
+	        ja test_for_alt		;not alphabetic
+	          cmp al,'A'		;test for upper case
+	          jb test_for_alt	;not alphabetic
+do_case_change:
+	xor al,020h			;switch the case
+test_for_alt:
+	and al,07fh			;mask off the sign bit from table
+	test down_bits,alt_bit		;is alt key currently down ?
+	jz printable			;no
+	  or al,080h			;yes $ turn on the msb for alt key
+printable:
+	xor ah,ah			;signal printable char
+	jmps scan_done
+
+no_key:
+	mov al,0			;AH=FF, AL=0 force IO_CONIN: 
+					;to get another scan code
+special_key:
+	mov ah,0ffh 
+
+scan_done:
+	ret
+
+action_key:
+;----------
+;	Scan code in AL indicates an action key.  AH is
+;	the bit mask for the action key.
+;	Live action keys are those that must remain pressed down
+;	to have	an effect, i.e., CTRL, SHIFT, ALT.  The state of live
+;	action keys are bits stored in DOWN_BITS.
+;	Toggle action keys are those that switch back and forth in
+;	function each time they are depressed, i.e., NUMLOCK, CAPSLOCK.
+;	The state of the toggle action keys are bits stored in the
+;	SS_MODE byte of the foreground screen structure.
+
+;	entry:	AL = scan code, one of CTRL, SHIFT,
+;		ALT, NUMLOCK, CAPSLOCK with parity masked off
+;		AH = bit mask
+;		SI = foreground screen structure
+;	exit:	jumps to NO_KEY since no printable
+;		character results
+
+					;ALT is last live key in table
+	cmp al,alt			;see if live action: ALT,SHIFT,CTRL
+	mov al,scan_code		;get scan code with parity
+	ja toggle_action		;no - it is a toggle type key
+	  test al,80H			;pressed or released ?
+	  jz action_make		;no parity bit - key is down
+	    not ah			;parity bit on - key is released
+	    and down_bits,ah		;clear the bit for this live
+	    jmps action_key_done	;action key
+action_make:
+	  or down_bits,ah		;set bit for this live action key
+	  jmps action_key_done
+
+toggle_action:				;NUMLOCK or CAPSLOCK
+	test al,80H			;depressed or released ?
+	jnz action_key_done		;ignore release of toggle
+	  xor ss_mode[si],ah		;it is toggle: reverse the state
+	  call update_status
+	  ;jmps action_key_done
+
+action_key_done:
+	jmps	no_key
+
+
+;************************************************************************
+;*									*
+;*			IO_CONOUT					*
+;*									*
+;************************************************************************
+
+;=========
+io_conout:
+;=========
+;	entry:	CL = character to output
+;		DL = device number
+;	exit:	None
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+;	While in IO_CONOUT routines:
+;		AL = character to output
+;		AH = device number
+;		BX = screen structure
+
+	call ioo_conout
+	ret
+
+ioo_conout:
+	cmp dl,nvcns
+	jb co_ok
+	  ret				;support of character devices
+					;which are not virtual consoles
+					;can go here ...
+co_ok:
+					;NOTE: PIN will not call
+					;IO_SWITCH, while in
+					;IO_CONOUT and we are
+					;the foreground or requested
+					;screen.
+	mov al,cl
+	mov ah,dl			;AH = virtual console #
+	xor dh,dh			;get screen structure for
+	mov bx,dx			;this console
+	shl bx,1			;word index
+	mov bx,screen_struct_addrs[bx]
+	jmp ss_escape[bx]		;escape handler if in the middle
+					;of and escape sequence else
+					;jump to CO_NO_ESCAPE
+
+co_no_escape:				;look for CR,LF,backspace,ESC
+	mov di,offset special_char_tab	;and jump to special handler
+	mov si,offset special_func_tab	
+	call co_lookup
+	jcxz co_simple_char
+	  ret				;all done if special handling
+					;or expanding and escape
+					;sequence
+
+co_simple_char:				;simple character output
+
+;	Put character in screen and update cursor position
+;	BX = screen structure
+;	AL = character
+
+	cmp al,bel			;is it a bell ?
+	jne no_bell
+	  cmp bx,foreground_ss		;bells to background consoles
+	  jne ignore_bell		;are ignored
+	    cmp bell_ticks,0		;are we generating a bell
+	    jne ignore_bell		;already ?
+	      in al,port_b		;and then off for 1/60
+	      or al,bell_on
+	      out port_b,al
+	      mov bell_ticks,7		;a bell is on 6/60 of a sec
+	      mov dx,bell_flag		;wait for tick interrupt
+	      call waitflag		;(I_TICK:) to call DEV_SETFLAG
+					;when bell is done
+
+ignore_bell:				;NOTE: PIN will not call
+	ret				;IO_SWITCH, while in
+					;IO_CONOUT and we are
+					;the foreground or requested
+					;screen.
+no_bell:
+	mov di,ss_cursor[bx]		;cursor byte offset
+	push es
+	call set_up_es
+
+co_back:
+	push ax				;save virtual console number
+	mov ah,ss_attribute[bx]
+	stosw				;update data and atrribute
+	pop ax
+	pop es
+					;DI points at next data
+					;and attribute word
+	cmp ss_column[bx],columns_per_screen-1
+	jb inc_col
+	  test ss_mode[bx],ssm_no_wrap
+	  jnz co_nowrap
+	    call carriage_return
+	    jmp line_feed
+co_nowrap:
+	    ret				;don't move cursor
+					;when at end of line
+inc_col:
+	jmp r_right			;move cursor right
+
+
+co_look_up:
+;----------
+;	entry:	BX = address of screen structure
+;		AH = device#
+;		AL = character to scan for
+;		DI = ptr to lookup table, first byte is length
+;		SI = table of functions to jump to if char found in
+;			lookup table
+;	exit:	CX = 0ffffh if special character found
+;			and special function has been performed
+;		CX = 0 if char not found, no special handling is performed
+;		AX,BX preserved if not special function
+
+	mov bp,es ! mov dx,ds		;use registers instead of
+	mov es,dx			;stack for speed
+	xor cx,cx ! mov cl,[di]		;length of lookup
+	mov dx,cx			;save the length
+	inc di
+	repne scasb			;is it in table ?
+	mov es,bp			;restore UDA
+	je lu_func			;CX=0 if not found
+	  ret
+
+lu_func:
+	  inc cx			;iteration we matched on
+	  sub dx,cx			;function number
+	  shl dx,1			;jump to special function
+	  add si,dx
+	  call word ptr [si]
+	  xor cx,cx ! dec cx		;return CX=0FFFFH
+	  ret
+			
+;************************************************************************
+;*									*
+;*		Special Output Character Routines			*
+;*									*
+;************************************************************************
+
+;---------------
+carriage_return:
+;---------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	xor dx,dx
+	xchg ss_column[bx],dl		;set column to 0
+	shl dx,1			;back up cursor
+	sub ss_cursor[bx],dx
+cr_done:
+	jmp set_physical_cursor
+
+;---------
+line_feed:
+;---------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_row[bx],rows_per_screen-1
+	je lf_scroll
+	  jmp d_down			;no-just move cursor down
+lf_scroll:				;yes-scroll screen up
+	  xor dl,dl			;start row
+	  mov dh,rows_per_screen-1	;end row
+	  call scroll_up
+	  jmp erase_line
+
+;----------
+back_space:
+;----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	mov di,ss_cursor[bx]
+	test di,di			;at home position, return
+        jz bs_ret
+	  cmp ss_column[bx],0		;if column 0, go up to previous line
+	  je bs_row
+            dec ss_column[bx]
+	    jmps bs_set_cursor
+bs_row:
+	  test ss_mode[bx],ssm_no_wrap	;don't back up to previous row
+	  jnz bs_ret			;if in NOWRAP mode
+	    dec ss_row[bx]
+	    mov ss_column[bx],columns_per_screen - 1
+bs_set_cursor:
+	    sub di,2
+	    mov ss_cursor[bx],di
+	    jmp set_physical_cursor
+bs_ret:
+	ret
+
+;************************************************************************
+;*									*
+;*			Escape Sequence Routines			*
+;*									*
+;************************************************************************
+
+escape:					;expand escape sequences
+;------
+;	entry:	BX = screen_structure address for this device console
+;		AL = current byte in escape sequence
+;	exit:	ss_escape = address of where to continue
+;				escape sequence or 0 if done
+
+	mov ss_escape[bx],offset escape1
+	ret				;back to co_look_up
+
+escape1:				;first char of escape sequence
+	mov ss_escape[bx],offset co_no_escape
+					;assume done with escape
+	mov di,offset esc_tab1		;if more chars are needed
+	mov si,offset esc_func_tab1	;in the escape sequence, the
+	jmp co_look_up			;escape field is set by the
+					;handler - see X_AND_Y: 
+;------------
+erase_screen:				;ESC E
+;------------
+;	entry:	BX = screen structure whose screen data to blank
+;		AH = virtual console #
+;	exit:	AX,CX,DI are used
+;		BX = screen structure
+
+	push ax ! push es
+	call set_up_es 
+	mov cx,screen_siz
+	xor di,di
+	mov ax,0720h
+	rep stosw
+	pop es ! pop ax
+	;jmps home
+
+;----
+home:					;ESC H
+;----
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	xor dx,dx
+	mov ss_cursor[bx],dx
+	mov ss_row[bx],dl
+	mov ss_column[bx],dl
+	jmp set_physical_cursor
+
+;-----
+right:					;ESC C
+;-----
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_column[bx],columns_per_screen-1
+	jb r_right
+	  ret
+r_right:
+	  add ss_cursor[bx],2
+	  inc ss_column[bx]
+	  jmp set_physical_cursor
+
+;----
+left:					;ESC D
+;----
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_column[bx],0
+	ja l_left
+	  ret
+l_left:
+	  sub ss_cursor[bx],2
+	  dec ss_column[bx]
+	  jmp set_physical_cursor
+
+;----
+down:					;ESC B
+;----
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_row[bx],rows_per_screen-1
+	jb d_down
+	  ret
+d_down:
+	  add ss_cursor[bx],columns_per_screen*2
+	  inc ss_row[bx]
+	  jmp set_physical_cursor
+
+;--
+up:					;ESC A
+;--
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_row[bx],0
+	ja d_up
+	  ret
+d_up:
+	  sub ss_cursor[bx],columns_per_screen*2
+	  dec ss_row[bx]
+	  jmp set_physical_cursor
+
+;--------------
+up_with_scroll:				;ESC I
+;--------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	cmp ss_row[bx],0		;if not the top line
+	ja up				;just do a cursor up
+	  xor dl,dl			;start row
+	  mov dh,rows_per_screen-1	;ending row
+	  call scroll_down		;down one row
+	  call erase_line		;blank out current row
+	  ret				;don't move the cursor
+
+;------
+report:
+;------
+	ret
+
+;----
+save:					;ESC j
+;----
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+;		AX destroyed
+
+	mov ax,ss_xy[bx]
+	mov ss_old_xy[bx],ax
+	mov ax,ss_cursor[bx]
+	mov ss_oldcursor[bx],ax
+	ret
+
+;-------
+restore:				;ESC k
+;-------
+;	entry:	BX = screen structure
+;	exit:	AX,BX preserved
+
+	mov cx,ss_oldxy[bx]
+	mov ss_xy[bx],cx
+	mov cx,ss_oldcursor[bx]
+	mov ss_cursor[bx],cx
+	jmp set_physical_cursor
+
+;-------
+x_and_y:				;ESC Y
+;-------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	mov ss_escape[bx],offset xy_row	;wait for row
+	ret
+xy_row:
+	sub al,32			;make row relative to 0
+	cmp al,rows_per_screen-1
+	jbe row_ok
+	  mov ss_escape[bx],offset xy_err
+row_ok:
+	mov ss_row[bx],al
+	mov ss_escape[bx],offset xy_col	;wait for column
+	ret
+xy_col:
+	sub al,32			;make column relative to 0
+	cmp al,columns_per_screen-1
+	jbe xy_set_col
+	  mov al,columns_per_screen-1
+xy_set_col:
+	mov ss_column[bx],al
+	call compute_cursor
+	call set_physical_cursor
+xy_err:
+	mov ss_escape[bx],offset co_no_escape
+	ret
+
+;-----------
+erase_begin:				;ESC b
+;-----------
+;	entry:	BX = screen structure
+;		AH = virtual screen number
+;	exit:	AX,CX,DI are used
+;		BX = screen structure
+
+	push es
+	call set_up_es
+
+	mov ax,ss_cursor[bx]		;cursor byte offset
+	shr ax,1			;make word offset
+	inc ax				;make relative to 1
+	mov cx,ax			;number of words to erase
+	mov ax,0720h			;7 = normal attribute
+					;20 = ASCII space
+	xor di,di			;start at beginning
+	rep stosw			;of display
+	pop es
+	ret
+	
+;---------
+erase_end:				;ESC j
+;---------
+;	entry:	BX = screen structure
+;		AH = virtual screen number
+;	exit:	AX,CX,DI are used
+;		BX = screen structure
+
+	push es
+	call set_up_es
+
+	mov ax,ss_cursor[bx]		;cursor byte offset
+	mov di,ax			;starting offset to erase
+	shr ax,1			;make word offset
+	mov cx,screen_siz		;screen size in words
+	sub cx,ax			;less 0 relative cursor position
+	mov ax,0720h			;7 = normal attribute
+					;20 = ASCII space
+	rep stosw
+	pop es
+	ret
+
+;----------
+erase_line:				;ESC l
+;----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	push es
+	call set_up_es
+
+	xor ax,ax
+	mov al,ss_row[bx]		;current row
+	mov cx,columns_per_screen	;words to move
+	mul cx				;word offset of current row
+	shl ax,1			;byte offset
+	mov di,ax			;destination
+	mov ax,0720h			;7 = normal attribute
+					;20 = ASCII space
+	rep stosw
+	pop es
+	ret
+
+;---------
+erase_bol:				;ESC o
+;---------				;erase from beginning
+;	entry:	BX = screen structure	;of line
+;	exit:	BX preserved
+
+	push es
+	call set_up_es
+
+	xor ax,ax
+	mov al,ss_row[bx]		;current row
+	mov cx,columns_per_screen*2
+	mul cx				;byte offset of row
+	mov di,ax	
+	xor cx,cx
+	mov cl,ss_column[bx]		;words to blank
+	inc cx				;include cursor
+	mov ax,0720h			;7 = normal attribute
+					;20 = ASCII space
+	rep stosw
+	pop es
+	ret
+
+;---------
+erase_eol:				;ESC K
+;---------				;erase to end of line
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	push es
+	call set_up_es
+
+	mov di,ss_cursor[bx]
+	mov cx,columns_per_screen
+	sub cl,ss_column[bx]		;words to blank
+	mov ax,0720h			;7 = normal attribute
+					;20 = ASCII space
+	rep stosw
+	pop es
+	ret
+
+;-----------
+insert_line:				;ESC L
+;-----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	push ax				;save virtual console number
+	mov dl,ss_row[bx]		;start row
+	mov dh,rows_per_screen-1	;ending row
+	call scroll_down		;move screen down one row
+	call erase_line			;blank out the line
+	xor ax,ax			;save virtual console number
+	xchg al,ss_column[bx]		;set cursor to beginning
+	shl ax,1			;of line
+	sub ss_cursor[bx],ax
+	pop ax
+	jmp set_physical_cursor
+
+;-----------
+delete_line:				;ESC M
+;-----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	push ax				;save virtual console number
+	mov dl,ss_row[bx]		;move screen up one line
+	mov dh,rows_per_screen-1	;to present row
+	call scroll_up
+	push ss_xy[bx]			;save row and column
+	mov ss_row[bx],rows_per_screen-1
+	call erase_line			;erase last line
+	pop ss_xy[bx]			;restore row and column
+	pop ax				;restore virtual console number
+	jmp carriage_return		;put cursor at beginning of line
+
+;-----------
+delete_char:				;ESC N
+;-----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	push es
+	call set_up_es
+	mov di,ss_cursor[bx]
+	mov si,di
+	add si,2
+
+	xor cx,cx
+	mov cl,columns_per_screen-1
+	sub cl,ss_column[bx]
+
+	push ds ! push es ! pop ds
+	rep movsw
+	mov 0[di],0720H			;put a blank in last column
+	pop ds ! pop es
+	ret
+
+;-------------
+enter_reverse:				;ESC p
+;-------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+;	video attribute byte has the following structure:
+;
+;     -- high nibble ---       --- low nibble ----
+;	7      6   5   4         3       2   1   0
+;     blink   background       bright   foreground
+;	        color                     color
+;
+;	So we must swap the colors and keep the blink and bright
+;	bits unchanged.
+			
+	test ss_mode[bx],ssm_reverse	;already in reverse video ?
+	jnz rev_done
+	  or ss_mode[bx],ssm_reverse	;turn on reverse video mode bit
+	  ;jmps rev_swap
+
+rev_swap:
+;--------
+	mov al,ss_attribute[bx]
+	mov ah,al			;save blink and bright bits
+	and al,077h			;mask off blink and bright bits
+	mov cl,4
+	ror al,cl			;swap nibbles and colors
+	and ah,088h			;get just the blink and bright bits
+	or al,ah			;put them together again
+	mov ss_attribute[bx],al		;save the new attribute
+rev_done:
+	ret
+
+;------------
+exit_reverse:				;ESC q
+;------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	test ss_mode[bx],ssm_reverse
+	jz rev_done
+	  and ss_mode[bx],not ssm_reverse	;turn off reverse mode bit
+	  jmps rev_swap
+
+;-----------
+enter_blink:				;ESC s
+;-----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	or ss_attribute[bx],080h
+	ret
+
+;----------
+exit_blink:				;ESC t
+;----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	and ss_attribute[bx],not (080h)
+	ret
+
+;------------
+enter_bright:				;ESC r
+;------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	or ss_attribute[bx],08h
+	ret
+
+;-----------
+exit_bright:				;ESC u
+;-----------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	and ss_attribute[bx],not (08h)
+	ret
+
+;-------------
+enable_cursor:				;ESC e
+;-------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	and ss_mode[bx],not ssm_no_cursor	;used by IO_SWITCH:
+	mov ah,0bh			;on cursor byte
+	jmps cursor_on_off
+
+;-------------
+disable_cursor:				;ESC f
+;-------------
+;	entry:	BX = screen structure
+;	exit:	BX preserved
+
+	or ss_mode[bx],ssm_no_cursor	;used by IO_SWITCH:
+	mov ah,26h			;off cursor byte
+
+cursor_on_off:
+	mov dx,bw_card			;get the control register
+	mov al,cursor_start		;register to update
+	out dx,al
+	inc dx
+	mov al,ah			;turn off/on cursor
+	out dx,al
+	ret
+
+;-----------
+enable_wrap:			;ESC v
+;-----------
+;	entry:	BX = screen structure
+;	exit:	nothing preserved since IO_STATLINE is
+;		called
+
+	and ss_mode[bx],not ssm_no_wrap
+	jmp update_status
+
+;------------
+disable_wrap:			;ESC w
+;------------
+;	entry:	BX = screen structure
+;	exit:	nothing preserved since IO_STATLINE is
+;		called
+
+	or ss_mode[bx],ssm_no_wrap
+	jmp update_status
+
+;************************************************************************
+;*									*
+;*		Console Output Sub-Routines				*
+;*									*
+;************************************************************************
+
+scroll_up:				;scroll up in range given in
+;---------				;DX
+;	entry:  AH = virtual console number
+;		BX = screen structure
+;		DL = start row, 0 relative
+;		DH = ending row, 0 relative
+;	exit:	AX,BX,ES preserved
+
+	push ax ! push es
+	call set_up_es
+	mov cx,dx			;copy of start,ending rows
+
+	xor ax,ax			;set up SI,DI
+	mov al,dl			;AX = beginning row
+	mov dx,columns_per_screen*2
+	mul dx				;byte offset of beginning row
+	mov di,ax			;first destination word
+	add ax,columns_per_screen*2	;first word to copy
+	mov si,ax
+					;set up CX
+	mov ax,cx			;AL=start,AH=end
+	sub ah,al			;end always > start
+	xor al,al
+	xchg al,ah			;AX=number or rows to move
+	
+	mov dx,columns_per_screen
+	mul dx				;words to move up
+	mov cx,ax			;get count
+	push ds ! push es ! pop ds
+	rep movsw
+	pop ds ! pop es ! pop ax
+	ret
+
+scroll_down:				;scroll down in range given
+;-----------				;in DX
+;	entry:  AH = virtual console number
+;		BX = screen structure
+;		DL = start row, 0 relative
+;		DH = ending row, 0 relative
+;	exit:	AX,BX,ES preserved
+
+	push ax ! push es
+	call set_up_es
+	mov cx,dx			;copy of start,ending rows
+					;set up SI,DI
+	xor ax,ax
+	mov al,dh			;AX=ending row
+	inc al				;next row after end row
+	mov dx,columns_per_screen*2
+	mul dx				;byte offset of next row
+	sub ax,2			;last word of ending row
+	mov di,ax			;first destination word
+	sub ax,columns_per_screen*2	;first word to copy
+	mov si,ax
+	std				;auto-decrement SI,DI
+					;set up CX
+	mov ax,cx			;AL=start,AH=ending 
+	sub ah,al			;end always > start
+	xor al,al
+	xchg al,ah			;# rows to move
+	mov dx,columns_per_screen
+	mul dx				;words to move down
+	mov cx,ax			;get count
+	push ds ! push es ! pop ds
+	rep movsw
+	pop ds ! pop es ! pop ax
+	cld			  	;zero direction flag !
+	ret
+
+compute_cursor:			;update SS_CURSOR field from
+;--------------			;SS_ROW and SS_COLUMN fields
+;	entry:	BX = screen structure address
+;		AH = virtual console device #
+;		ES = segment of video
+;	exit:	CX,DX used
+;		AX,BX preserved
+
+	push ax				;save virtual console number
+	xor ax,ax
+	mov al,ss_row[bx]		;row and column
+	mov cx,columns_per_screen*2
+	mul cx
+	xor cx,cx
+	mov cl,ss_column[bx]
+	shl cx,1
+	add ax,cx
+	mov ss_cursor[bx],ax		;word offset in screen array
+	pop ax				;restore virtual console number
+	ret
+
+set_physical_cursor:
+;-------------------
+;	If the screen is the foreground screen then set the
+;	cursor register in the 6845 to SS_CURSOR[BX]
+;
+;	entry:	BX = screen structure address
+;		AH = virtual console device #
+;		ES = segment of video
+;	exit:	AX,CX,DX used
+
+	cmp ah,foreground_screen
+	jne sp_ret
+	  mov cx,ss_cursor[bx]		;byte offset of cursor
+	  shr cx,1			;make a word value
+	  mov dx,bw_card		;get the control register
+	  mov al,cursor_low		;register to update
+	  out dx,al
+	  inc dx ! mov al,cl
+	  out dx,al
+	  dec dx ! mov al,cursor_hi
+	  out dx,al
+	  inc dx ! mov al,ch
+	  out dx,al
+sp_ret:
+	ret
+
+set_up_es:				;set up ES for subsequent
+;---------				;string operation
+;	entry:	BX = screen structure
+;		AH = virtual console number
+;	exit:	ES = physical video RAM segment if
+;			foreground, else ES =
+;			virtual console RAM for this screen
+;		CX = destroyed
+
+	mov cx,bw_video_seg
+	mov es,cx
+	cmp ah,foreground_screen
+	je set_r
+	  mov cx,ss_screen_seg[bx]
+	  mov es,cx
+set_r:
+	ret
+
+;************************************************************************
+;*									*
+;*			Switch Screen					*
+;*									*
+;************************************************************************
+
+;=========
+io_switch:
+;=========
+;	entry:	DL = Screen to switch to
+;	exit:	None
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+;	PIN process does range checking of DL
+
+	push es				;save UDA
+
+	xor ax,ax ! mov al,dl
+	mov bl,dl ! mov cx,ccblen
+	mul cx ! add ax,ccb		;compute new foreground CCB
+	mov foreground_ccb,ax
+
+	xchg bl,foreground_screen	;save destination screen
+					;and get screen to save
+	xor bh,bh			;index into screen structure array
+	shl bx,1			;word pointer
+	mov bx,screen_struct_addrs[bx]	;get pointer to old envionrment
+	mov cx,screen_siz		;in words
+	mov es,ss_screen_seg[bx]	;destination segment
+	xor si,si ! mov di,si
+	mov ax,bw_video_seg
+	push ds				;save DS
+	mov ds,ax			;source segment
+	rep movsw			;do the copy
+	pop ds				;restore DS
+
+	mov bl,foreground_screen
+
+	xor bh,bh			;requested one
+	shl bx,1
+	mov bx,screen_struct_addrs[bx]
+	mov foreground_ss,bx		;new foreground screen SS address
+	xor si,si ! mov di,si
+	mov ax,bw_video_seg
+	mov es,ax
+	mov cx,screen_siz		;in words
+	push ds
+	mov ds,ss_screen_seg[bx] 
+	rep movsw
+	pop ds ! pop es			;restore UDA
+	mov ah,foreground_screen	;param to set_physical_cursor
+	push ax				;save AH = foreground screen
+	test ss_mode[bx],ssm_no_cursor	;turn on/off cursor ?
+	jnz sw_no_cursor
+	  call enable_cursor
+	  jmps sw_done
+sw_no_cursor:
+	  call disable_cursor
+sw_done:
+	pop ax				;restore AH = foreground screen
+	jmp set_physical_cursor
+	ret
+
+;************************************************************************
+;*									*
+;*			Status Line Routine				*
+;*									*
+;************************************************************************
+
+;-------------
+update_status:			;XIOS call for normal status update
+;-------------
+	xor cx,cx
+
+;===========
+io_statline:
+;===========
+;	entry:	CX = 0 regular status update
+;		else DX:CX->string to display
+;		CX = 0ffffh stop display of special status
+;		line, and start normal status line update
+;	exit:	AX<>0 if we couldn't print
+;		the requested status line: i.e., another
+;		process is already updating the status
+;		line, or a special status line is being
+;		displayed.
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+ 	push cx ! push dx
+s_wait:				;status line is not reentrant code
+	mov al,true
+	xchg al,sts_locked
+	cmp al,true
+	jne s_own
+	  mov cl,p_delay		;wait one tick
+	  mov dx,1
+	  call supif
+	  je s_wait			;try again
+s_own:
+	pop dx ! pop cx
+	push es				;save UDA
+	test cx,cx			;CX=0 normal status update
+	jz s_norm
+	  cmp cx,0ffffh
+	  jne s_special
+	    mov sts_special,false
+	    jmps s_norm_ok
+s_special:
+	  cmp sts_special,true
+	  jne s_special_ok		;is status line busy with
+	    mov ax,0ffffh		;an earlier special display ?
+	    jmp s_exit
+
+s_special_ok:
+	  mov sts_special,true
+	  push ds			;save SYSDAT
+	  mov ds,dx
+	  mov si,cx
+	  jmp s_prt
+s_norm:
+	cmp sts_special,true		;if special line is currently
+	jne s_norm_ok			;being displayed skip normal
+	  mov ax,0ffffh
+	  jmp s_exit			;update
+s_norm_ok:
+	mov dx,ds ! mov es,dx
+	mov di,offset status_msg_start
+	mov al,' '
+	mov cx,columns_per_screen
+	rep stosb			;blank out local status string
+
+	mov si,offset constr		;put in 'Console='
+	mov di,offset smsg_con
+	mov cx,length constr
+	rep movsb
+
+	mov si,offset prnstr		;put in 'Printer='
+	mov di,offset smsg_prn
+	mov cx,length prnstr
+	rep movsb
+
+	mov al,foreground_screen
+	add al,'0'
+	mov smsg_cnum,al		;set console number
+
+	mov bx,foreground_ccb		;get process which owns the
+	mov si,c_owner[bx]		;foreground console
+	test si,si ! jz s_nopd		;make sure its non-zero
+	  mov al,p_list[si]
+	  add al,'0' ! mov smsg_pnum,al
+	lea si,p_name[si]		;offset of process name
+	mov di,offset smsg_pd
+	mov cx,4 ! rep movsw
+
+s_nopd:
+s_ctrlS:
+	mov ax,c_state[bx]
+	test ax,csm_ctrlS ! jz s_ctrlO
+	  mov s_msgctrlS,'S^' ! jmps s_ctrlP
+s_ctrlO:
+	test ax,csm_ctrlO ! jz s_ctrlP	;ctrl S and ctrl O are mutally
+	  mov s_msgctrlS,'O^'		;exclusive print one of ^S or ^O
+s_ctrlP:
+	test ax,csm_ctrlP ! jz s_mode
+	  mov s_msgctrlP,'P^'
+	  mov dl,'=' ! mov dh,c_mimic[bx]
+	  add dh,'0' ! mov smsg_ctrlP_num,dx
+s_mode:
+	mov di,offset s_msgmode
+	mov cx,length dynstr
+
+	mov si,offset nosstr			;test for noswitch
+	test ax,csm_noswitch ! jnz s_movmode
+	  mov si,offset dynstr
+	  test ax,csm_buffered ! jz s_movmode	;lsb bit=0: dynamic
+	    mov si,offset bufstr		;lsb bit=1:buffered
+	    test ax,csm_purging ! jz s_movmode	;check for purging
+	      mov si,offset purstr
+
+s_movmode:
+	rep movsb
+
+s_getopenvec:
+					;display a letter for each drive
+					;with open files
+	mov cx,16			;loop count - 16 bits to check
+	mov al,'A'			;A through P
+	mov ah,6			;count of drive letters displayed
+	mov dx,open_vec			;BDOS sets this vector in SYSDAT
+	mov di,offset smsg_openvec
+
+open_nxt:
+	shr dx,1			;lowest bit is A drive, highest is P
+	jnc s_open_nxt			;no carry then no open files
+	  stosb				;store letter, incr DI
+	  dec ah 			;count letters displayed, 6 max
+	  jz s_capslock			;used up drive display field
+s_open_nxt:
+	inc al				;next letter
+	loop open_nxt			;tested all 16 drive bits ?
+
+s_capslock:
+	mov bx,foreground_ss
+	mov al,ss_mode[bx]
+	test al,ssm_capslock ! jz s_numlock
+	  mov si,offset capstr
+	  mov di,offset smsg_capslock
+	  mov cx,length capstr
+	  rep movsb
+
+s_numlock:
+	test al,ssm_numlock ! jz s_wrap
+	  mov si,offset numstr
+	  mov di,offset smsg_numlock
+	  mov cx,length numstr
+	  rep movsb
+
+s_wrap:					;BX=foreground_ss
+	test al,ssm_no_wrap		;if bit is set leave WRAP
+	jnz s_display			;field blank
+	  mov si,offset wrpstr
+	  mov di,offset smsg_wrap
+	  mov cx,length wrpstr
+	  rep movsb
+
+s_display:
+	mov si,offset status_msg_start
+	push ds				;save SYSDAT
+s_prt:
+	mov di,bw_video_status_line
+	mov ax,bw_video_seg
+	mov es,ax
+	mov ah,09h			;underlined and enhanced attribute
+	mov cx,columns_per_screen
+	
+s_dloop:
+	lodsb				;get character
+	stosw				;display character and attribute
+	loop s_dloop
+	pop ds				;restore SYSDAT
+	xor ax,ax
+s_exit:
+	pop es				;restore UDA
+	mov sts_locked,false
+	ret
+
+;************************************************************************
+;*									*
+;*			List Device Routines				*
+;*									*
+;************************************************************************
+
+;=========
+io_listst:				;list devices are on poll table
+;=========
+;	entry:	DL =	device
+;	exit:	AL =	0 if not ready
+;			0ffh if ready
+;		BX =	device# * 2
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	xor dh,dh ! shl dx,1
+	mov bx,dx			;device # * 2
+	;jmps listst
+
+listst:					;called from IO_POLL:
+;------					;and IO_LISTST: above
+;	entry:	BX = device# * 2
+;		DL = device#
+;	exit:	AL = 0 if not ready
+;			0ffh if ready
+;		BX = device# * 2
+;		DL presereved
+
+	push dx				;save device #
+	xor cx,cx			;CX=0
+	mov dx,list_ports[bx]		;port for list device 0
+					;parallel status
+	inc dx ! in al,dx		;DX=status register, get status
+	test al,80h
+	jz par_ret
+	  dec cx			;ready: CX=0ffffh
+
+par_ret:
+	mov ax,cx ! pop dx
+	ret	
+
+;=======
+io_list:
+;=======
+;	entry:	CL = character
+;		DL = device
+;	exit:	character sent
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	push cx ! push dx		;save the character and device
+	call poll			;wait for device to be ready
+	pop dx ! pop cx			;device and character
+					;BX=device# * 2
+	mov al,cl			;AL = character
+	mov dx,list_ports[bx]		;get the port for this device
+	test dx,dx			;0 if no such device
+	jz lst_done
+	  out dx,al			;send character
+	  inc dx ! inc dx		;reset it
+	  mov al,0dh			;printer strobe on
+	  out dx,al
+	  mov al,0ch			;printer strobe off 
+	  out dx,al
+lst_done:
+	ret
+
+;************************************************************************
+;*									*
+;*			IO_AUXIN and IO_AUXOUT				*
+;*									*
+;************************************************************************
+
+;========
+io_auxin:
+;========
+;	entry:	none
+;	exit:	AL = character input
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	ret
+
+;=========
+io_auxout:
+;=========
+;	entry:	CL character to output
+;	exit:	none
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	ret
+
+eject
+;			Character I/O Data
+;			------------------
+
+;************************************************************************
+;*									*
+;*			IO_CONIN DATA					*
+;*									*
+;************************************************************************
+
+SL15	EQU	offset $
+DSEG
+ORG	SL15
+
+scan_code	db	0		;code returned by keyboard
+
+down_bits	db	0		;bit vector of
+					;action keys currently pressed
+					;bits representing toggle keys-
+					;numlock and capslock-are
+					;kept in the screen structures
+;	Action key scan codes
+
+ctrl		equ	29		;live action keys
+shft_left	equ	42
+shft_right	equ	54
+alt		equ	56		;keys greater than ALT are
+capslock	equ	58		;toggle action keys
+numlock		equ	69
+
+;	Bit masks for special function keys,
+;	these values are masked into the DOWN_BITS bytes.
+
+ctrl_bit	equ	001h
+shft_bit	equ	002h
+alt_bit		equ	008h
+
+num_action_keys	equ	6		;number of entries in table
+					;below
+action_key_table:
+	db	ctrl			;action key look up table
+	db	shft_right
+	db	shft_left
+	db	alt
+	db	numlock
+	db	capslock
+		
+action_key_masks:			;look up table for mask bits
+	db	ctrl_bit		;to use in DOWN_BITS or
+	db	shft_bit		;the SS_MODE byte in the
+	db	shft_bit		;foreground screen structure
+	db	alt_bit
+	db	ssm_numlock		;see screen structure definition
+	db	ssm_capslock		; "
+
+pfk_id_table	db	';<=>?@abcdghikmopqrs'
+
+;************************************************************************
+;*									*
+;*		Keyboard Translation Tables				*
+;*									*
+;************************************************************************
+
+;	Three keyboard translation tables follow.  The IBM PC returns
+;	a "scan code" from the keyboard which is used as an index into
+;	the following tables.
+;	KEY_TABLE contains ASCII for keys that have no other keys held down
+;	simultaneously.  The SHIFT_TABLE is for keys depressed when
+;	the shift, capslocks, or numslock keys are also down
+;	The CTRL_TABLE is for keys depressed when the CTRL
+;	is down.
+
+;	0FFH in the translation table designates an illegal key code.
+;	The most significant bit is set for keys that are programmable
+;	or are fixed function keys, and also for the switch screen keys.
+
+key_table:
+	;	translation		keyboard scan code
+	;	-----------		------------------
+
+	db	0ffH			;0 - doesn't exist
+	db	esc			;1
+	db	'1234567890-='		;2-13 (1st row)
+	db	bs,ht			;14-15 (backspace, horizontal tab)
+	db	'qwertyuiop[]'		;16-27 (2nd row)
+	db	cr, 0ffh		;28-29 (carriage return)
+	db	'asdfghjkl;''`'		;30-41 (3rd row)
+	db	0ffh			;42 (left shift)
+	db	'\zxcvbnm,./'		;43-53 (4th row)
+	db	0ffh			;54 (right shift)
+	db	'*'			;55
+	db	0ffh			;56 (alt)
+	db	' '			;57 (space bar)
+	db	0ffh			;58 (caps lock)
+
+					;-function keys-
+					;-programmable-
+	db	80h,81h,82h,83h		;59-62 (fucntion keys f1,f2,f3,f4)
+	db	84h,85h,86h,87h		;63-66 (function keys f5,f6,f7,f8)
+	db	88h,89h			;67-68 (function keys f9,f10)
+
+	db	0ffh			;69 (num lock)
+	db	dc3			;70 (scroll lock)
+
+					;- key pad -
+					;-programmable-
+	db	8ah			;71 (home)
+	db	8bh			;72 (up arrow)
+	db	8ch			;73 (Pg Up)
+	db	'-'			;74
+	db	8dh			;75 (left arrow)
+	db	0ffh			;76
+	db	8eh			;77 (right arror)
+	db	'+'			;78
+	db	8fh			;79 (end)
+	db	90h			;80 (down arrow)
+	db	91h			;81 (Pg Dn)
+	db	92h			;82 (Ins)
+	db	7fh			;83 (Del)
+
+shift_table:
+	;	translation		keyboard scan code
+	;	-----------		------------------
+
+	db	0ffH			;0 - doesn't exist
+	db	esc			;1
+	db	'!@#$%^&*()_+'		;2-13 (1st row)
+	db	bs,ff			;14-15 (backspace, form feed)
+	db	'QWERTYUIOP{}'		;16-27 (2nd row)
+	db	cr			;28 (carriage return)
+	db	0ffh			;29 (ctrl)
+	db	'ASDFGHJKL:"~'		;30-41 (3rd row)
+	db	0ffh			;42 (left shift)
+	db	'|ZXCVBNM<>?'		;43-53 (4th row)
+	db	0ffh			;54 (right shift)
+	db	dle			;55 (Prt Sc - ^P)
+	db	0ffh			;56 (Alt)
+	db	' '			;57 (space bar)
+	db	0ffh			;58 (Caps Lock)
+
+					;-function keys-
+					;-return fixed strings-
+	db	203,204,205,206		;59-62 (f1,f2,f3,f4)
+	db	207,208,209,210		;63-67 (f5,f6,f7,f8)
+	db	211,212			;67-68 (f9,f10)
+	db	0ffh			;69 (Num Lock)
+	db	dc1			;70 (Scroll Lock - ^Q)
+
+					;-key pad-
+	db	'789-456+1230.'		;71-83 (ascii values on keys)
+
+control_table:
+	;	translation		keyboard scan code
+	;	-----------		------------------
+
+	db	0ffh			;0 (no such key code)
+	db	ESC			;1
+	db	0ffh			;2
+	db	NUL			;3 (ctrl @)
+	db	0ffh,0ffh,0ffh		;4-6
+	db	RDS			;7 (ctrl ^)
+	db	0ffh,0ffh,0ffh,0ffh	;8-11
+	db	US			;12 (ctrl _)
+	db	0ffh			;13
+	db	DEL			;14 (left arrow)
+	db	0ffh			;15
+	db	DC1,ETB,ENQ,DC2		;16-19 (ctrl q,w,e,r)
+	db	DC4,EM,NAK,HT		;20-23 (ctrl t,y,u,i)
+	db	SHI,DLE,ESC,GS		;24-27 (ctrl o,p,[,])
+	db	cr			;28 (ctrl carriage return)
+	db	0ffh			;29
+	db	SOH,DC3,EOT,ACK		;30-33 (ctrl a,s,d,f)
+	db	BEL,BS,LF,VT		;34-37 (ctrl g,h,j,k)
+	db	FF			;38 (ctrl l)
+	db	0ffh,0ffh,0ffh,0ffh	;39-42
+	db	FS,SUBB,CAN,ETX		;43-47 (ctrl \,z,x,c)
+	db	SYN,STX,SO,CR		;47-50 (ctrl v,b,n,m)
+	db	0ffh,0ffh,0ffh,0ffh	;51-54
+	db	DLE			;55 (Prt Sc = ctrl P)
+	db	0ffh,' ',0ffh		;56-58
+
+					;-function keys
+	db	193,194,195,196		;59-62 (f1,f2,f3,f4)
+	db	197,198,199,200		;63-66 (f5,f6,f7,f8)
+	db	201,202			;66-68 (f9,f10)
+	db	0ffh			;69
+	db	ETX			;70 break (^scroll lock = ctrl c)
+
+					;-key pad-
+					;-returns fixed escape sequences-
+	db	247,248,249,0ffh	;7,8,9,-
+	db	244,245,246,0ffh	;4,5,6,+
+	db	241,242,243		;1,2,3
+	db	240,0ffh		;0,.
+
+;************************************************************************
+;*									*
+;*		Special Output Characters Tables			*
+;*									*
+;************************************************************************
+
+special_char_tab	db	4		;number of special chars
+			db	cr,lf,bs,esc	;the special chars
+
+special_func_tab	dw	carriage_return	;the special char routines
+			dw	line_feed
+			dw	back_space
+			dw	escape
+
+;************************************************************************
+;*									*
+;*		Escape Sequence Tables					*
+;*									*
+;************************************************************************
+
+esc_tab1	db	28		;number of escape sequences
+						;supported
+		db	'H','C','D','B','A'	;the second char
+		db	'I','j','k','Y','E'	;in the escape
+		db	'b','J','l','o','K'	;sequence
+		db	'L','M','N','p','q'
+		db	'r','u','s','t','e'
+		db	'f','v','w'
+						;the escape sequence
+						;routines
+esc_func_tab1	dw	home		;H	
+		dw	right		;C
+		dw	left		;D
+		dw	down		;B
+		dw	up		;A
+
+		dw	up_with_scroll	;I
+		dw	save		;j
+		dw	restore		;k
+		dw	x_and_y		;Y - row and column
+		dw	erase_screen	;E
+
+		dw	erase_begin	;b
+		dw	erase_end	;J
+		dw	erase_line	;l
+		dw	erase_bol	;o - BOL = begin of line
+		dw	erase_eol	;K - EOL = end of line
+
+		dw	insert_line	;L
+		dw	delete_line	;M
+		dw	delete_char	;N
+		dw	enter_reverse	;p
+		dw	exit_reverse	;q
+
+		dw	enter_bright	;r
+		dw	exit_bright	;u
+		dw	enter_blink	;s
+		dw	exit_blink	;t
+		dw	enable_cursor	;e
+
+		dw	disable_cursor	;f
+		dw	enable_wrap	;v
+		dw	disable_wrap	;w
+
+;************************************************************************
+;*									*
+;*			Screen Structures				*
+;*									*
+;************************************************************************
+
+;	Each virtual console has a structure of the following
+;	format associated with it.  (SS = Screen Structure)
+;	The data in this structure is dependent on the type of screen
+;	supported and any escape sequence handling in IO_CONOUT.
+;	Note: SS_CURSOR is the byte offset of the cursor relative
+;	to the screen segment.  SS_ROW, SS_COLUMN are relative to 0
+;	and are	word offsets, i.e., if SS_ROW is 0 and SS_COLUMN is 1,
+;	they refer to bytes 2 and 3 in the video RAM or a background
+;	screen's data area.
+
+ss_cursor	equ	word ptr 0			;points at data/attrib
+ss_oldcursor	equ	word ptr ss_cursor + word
+ss_escape	equ	word ptr ss_oldcursor + word	;escape routine to return to
+ss_screen_seg	equ	word ptr ss_escape + word	;data for screen image
+ss_xy		equ	word ptr ss_screen_seg + word	;overlay row, col
+ss_row		equ	byte ptr ss_xy			;current row
+ss_column	equ	byte ptr ss_row + byte		;current col
+ss_oldxy	equ	word ptr ss_xy + word		;overlay old row, col
+ss_oldrow	equ	byte ptr ss_oldxy		;old row
+ss_oldcolumn	equ	byte ptr ss_oldxy + byte	;old col
+ss_attribute	equ	byte ptr ss_oldxy + word
+ss_mode		equ	byte ptr ss_attribute + byte
+ss_len		equ	ss_mode + byte
+
+;	ss_mode byte bit values
+
+ssm_reverse	equ	00000001B	;1 = if reverse video
+					;0 = in normal
+ssm_no_wrap	equ	00000010B	;0 = wrap at EOL, 1 = discard
+ssm_no_cursor	equ	00000100B	;0 = cursor, 1 = cursor
+ssm_log		equ	00001000B	;0 = normal, 1 = data log
+ssm_numlock	equ	00010000B	;1 = numlock on
+ssm_capslock	equ	00100000B	;1 = capslock on
+
+screen_structures	rb	0
+
+ss0		dw	0,0	;cursor, old cursor
+		dw	offset co_no_escape
+				;initially not in an escape sequence
+		dw	0	;screen_seg - set by INIT:
+		db	0,0	;row,column
+		db	0,0	;old row, old column
+		db	07h	;attribute
+		db	0	;mode - initialize wrap,cursor,reverse off,
+				;no data logging
+
+ss1		dw	0,0	;cursor, old cursor
+		dw	offset co_no_escape
+				;initially not in an escape sequence
+		dw	0	;screen_seg - set by INIT:
+		db	0,0	;row,column
+		db	0,0	;old row, old column
+		db	07h	;attribute
+		db	0	;mode - initialize wrap,cursor,reverse off,
+				;no data logging
+
+ss2		dw	0,0	;cursor, old cursor
+		dw	offset co_no_escape
+				;initially not in an escape sequence
+		dw	0	;screen_seg - set by INIT:
+		db	0,0	;row,column
+		db	0,0	;old row, old column
+		db	07h	;attribute
+		db	0	;mode - initialize wrap,cursor,reverse off
+				;no data logging
+
+ss3		dw	0,0	;cursor, old cursor
+		dw	offset co_no_escape
+				;initially not in an escape sequence
+		dw	0	;screen_seg - set by INIT:
+		db	0,0	;row,column
+		db	0,0	;old row, old column
+		db	07h	;attribute
+		db	0	;mode - initialize wrap,cursor,reverse off
+				;no data logging
+
+screen_struct_addrs	dw	offset ss0
+			dw	offset ss1
+			dw	offset ss2
+			dw	offset ss3
+
+;************************************************************************
+;*									*
+;*		Console Control Blocks					*
+;*									*
+;************************************************************************
+
+foreground_screen	db	0		;console 0 is initial
+foreground_ccb		dw	offset ccb0	;foreground console
+foreground_ss		dw	offset ss0
+
+ccb_tab		rb	0
+ccb0		dw	0		;owner
+		dw	0,0,0
+		db	0ffh, 0ffh	;mimic, msource
+		db	0
+		db	0		;virtual console number
+		dw	0
+		dw	0		;foreground and dynamic
+					;be the foreground console
+		dw	10h		;max buffer file size
+                dw      0,0,0,0,0,0
+                dw      0,0,0,0,0,0
+		dw	0
+
+ccb1		dw	0		;owner
+		dw	0,0,0
+		db	0ffh, 0ffh	;mimic, msource
+		db	0
+		db	1		;virtual console number
+		dw	0
+		dw	csm_background	;background and dynamic
+		dw	10h		;max buffer file size
+                dw      0,0,0,0,0,0
+                dw      0,0,0,0,0,0
+		dw	0
+
+ccb2		dw	0		;owner
+		dw	0,0,0
+		db	0ffh, 0ffh	;mimic, msource
+		db	0
+		db	2		;virtual console number
+		dw	0
+		dw	csm_background	;background and dynamic
+		dw	10h		;max buffer file size
+                dw      0,0,0,0,0,0
+                dw      0,0,0,0,0,0
+		dw	0
+
+ccb3		dw	0		;owner
+		dw	0,0,0
+		db	0ffh, 0ffh	;mimic, msource
+		db	0
+		db	3		;virtual console number
+		dw	0
+		dw	csm_background	;background and dynamic
+		dw	10h		;max buffer file size
+                dw      0,0,0,0,0,0
+                dw      0,0,0,0,0,0
+		dw	0
+
+					;non virtual console CCB
+;ccb4		dw	0		;would look like this:
+;		dw	0,0,0
+;		db	0
+;		db	0
+;		db	0
+;		dw	0
+;		dw	0
+;		dw	0
+;               dw      0,0,0,0,0,0
+;               dw      0,0,0,0,0,0
+;		dw	0
+
+;************************************************************************
+;*									*
+;*			Status Line Data				*
+;*									*
+;************************************************************************
+
+sts_locked	db	false	;semaphore for status line code
+sts_special	db	false	;is a special status line being displayed ?
+
+;	The format of the status line is:
+
+;Console=1 Buffered GENCCPM  ABCDEF ^S^P=0 Printer=2 CapsLock NumLock Wrap
+;                                   ^O
+
+status_msg_start	rb	0
+smsg_con		rb	8		;0-7 (Console=)
+smsg_cnum		rb	1		;8
+			db	' '		;9
+smsg_mode		rb	8		;10-17
+			db	' '		;18
+smsg_pd			rb	8		;19-26
+			db	' '		;27
+smsg_openvec		rb	6		;28-33
+			db	' '		;34
+smsg_ctrlS		rw	1		;35-36
+smsg_ctrlO		rw	0		;overlays ctrlS
+			db	' '		;37
+smsg_ctrlP		rw	1		;38-39
+smsg_ctrlP_num		rw	1		;40-41
+			db	' '		;42
+smsg_prn		rb	8		;43-50 (Printer=)
+smsg_pnum		rb	1		;51
+			db	' '		;52
+smsg_capslock		rb	8		;53-60
+			db	' '		;61
+smsg_numlock		rb	7		;62-68
+			db	' '		;69
+smsg_wrap		rb	4		;70-73
+			rb	6		;74-79
+
+;	String constants for status line
+
+dynstr			db	'Dynamic '	;these
+bufstr			db	'Buffered'	;messages must
+purstr			db	'Purging '	;be the same length
+nosstr			db	'NoSwitch'
+
+constr			db	'Console='
+prnstr			db	'Printer='
+capstr			db	'CapsLock'
+numstr			db	'NumLock'
+wrpstr			db	'Wrap'
+
+
+;************************************************************************
+;*									*
+;*			List Control Blocks				*
+;*									*
+;************************************************************************
+
+lcb_tab		rb	0
+lcb0		dw	0,0,0,0		;each LCB is 10 bytes long
+		db	0
+		db	0ffh		;msource
+lcb1		dw	0,0,0,0
+		db	0
+		db	0ffh		;msource
+
+eject
+;			DISK I/O
+;			--------
+
+;************************************************************************
+;*									*
+;*			IBM PC Disk Equates				*
+;*									*
+;************************************************************************
+
+;	The following equates are set to the size of a double density,
+;	single sided 5 & 1/4" floppy.
+
+bytes_per_sector	equ	512
+sectors_per_track	equ	8		;1 to 8
+bytes_per_track		equ	sectors_per_track * bytes_per_sector
+tracks_per_disk		equ	40		;0 to 39
+bytes_per_disk		equ	tracks_per_disk * bytes_per_track
+
+;	Memory disk support, drive M: is a RAM disk.
+
+m_disk_segment	equ 	0C000h	;segment base of mdisk RAM on IBM PC
+
+;************************************************************************
+;*									*
+;*		Intel 8272 FDC Equates					*
+;*									*
+;************************************************************************
+
+fdc_stat		equ	03f4h		;status port for the disk controller
+fdc_data		equ	fdc_stat+1	;data port for the disk controller
+fdc_port		equ	03f2h		;all bits clear on channel reset
+
+		;7 6 5 4 3 2 1 0
+		;| | | | | | \_/
+		;| | | | | |  |
+		;| | | | | |  drive select 00=a,01=b,10=c,11=d
+		;| | | | | fdc reset*
+		;| | | | int & dmarq enable
+		;d c b a motor on
+
+fdc_on		equ	00001100b	;mask to keep the 8272 unreset
+fdc_no_motor	equ	11111100b	;mask for no motors
+
+fdc_read_cmd	equ	01100110b	;mfm, skip deleted data, read
+fdc_write_cmd	equ	01000101b	;mfm, write
+fdc_format_cmd	equ	01001101b	;mfm, format
+fdc_seek_cmd	equ	00001111b	;seek
+fdc_recal_cmd	equ	00000111b	;home to track 0
+fdc_si_cmd	equ	00001000b	;sense interupt status
+fdc_spec_cmd	equ	00000011b	;specify
+
+fdc_ready	equ	10000000b	;mask for transfer ready
+
+fdc_spec_1	equ	11001111b	;srt=0c, hd unload=0f first specify byte
+fdc_spec_2	equ	00000011b	;hd load=1, mode=DMA second specify byte
+
+f_bytes		equ	2		;magic number for 512 bytes per sector
+f_sectors	equ	8		;sectors per track
+f_gap		equ	03ah		;magic number for format gap
+f_filler	equ	0e5h		;fill character
+
+r_bytes		equ	2		;magic number for 512 bytes
+r_sectors	equ	8
+r_gap		equ	02ah
+r_dtl		equ	0ffh
+
+;************************************************************************
+;*									*
+;*		8237 DMA Controller Port and Commands			*
+;*									*
+;************************************************************************
+
+dma_c0_address	equ	000h		;8237 channel 0 address		rw
+dma_c0_count	equ	001h		;8237 channel 0 transfer count	rw
+dma_c1_address	equ	002h		;8237 channel 1 address		rw
+dma_c1_count	equ	003h		;8237 channel 1 transfer count	rw
+dma_c2_address	equ	004h		;8237 channel 2 address		rw
+dma_c2_count	equ	005h		;8237 channel 2 transfer count	rw
+dma_c3_address	equ	006h		;8237 channel 3 address		rw
+dma_c3_count	equ	007h		;8237 channel 3 transfer count	rw
+dma_stat_reg	equ	008h		;8237 status register		ro
+dma_cmd_reg	equ	dma_stat_reg	;8237 command register		wo
+dma_requ_reg	equ	dma_stat_reg+1	;8237 software dma request	wo
+dma_bmsk_reg	equ	dma_stat_reg+2	;8237 binary channel mask	wo
+dma_mode_reg	equ	dma_stat_reg+3	;8237 mode register		wo
+dma_cbpf	equ	dma_stat_reg+4	;8237 clear byte pointer f/f	wo
+dma_temp_reg	equ	dma_stat_reg+5	;8237 temporary register	ro
+dma_clear	equ	dma_stat_reg+5	;8237 master clear		wo
+dma_mask_reg	equ	dma_stat_reg+7	;8237 linear channel mask	wo
+
+dma_page_c1	equ	080h		;a16 to a20 for channel 1
+dma_page_fdc	equ	081h		;a16 to a20 for channel 2
+dma_page_c3	equ	082h		;a16 to a20 for channel 3
+
+;	The following labels define single mode, address increment
+;	auto-initialization disable, read or write using channel 2
+
+dma_mode_write_fdc	equ	01001010b
+dma_mode_read_fdc	equ	01000110b
+
+dma_bmsk_fdc		equ	00000010b	;binary channel mask for disk
+
+;	DMA channel assignments
+
+;channel 0 dynamic memory refresh
+;channel 1
+;channel 2 floppy disk controller
+;channel 3
+
+;************************************************************************
+;*									*
+;*		CCP/M Disk I/O Equates					*
+;*									*
+;************************************************************************
+
+;	Equates for parameter passing for read and write
+;	requests from the BDOS.
+
+;	At the disk read and write function entries,
+;	all disk I/O parameters are on the stack.
+;	The stack at these entries appears as
+;	follows:
+;
+;           +-------+-------+
+;       +14 |  DRV  | MCNT  |   Drive and Multi sector count
+;           +-------+-------+
+;       +12 |     TRACK     |   Track number
+;           +-------+-------+
+;       +10 |    SECTOR     |   Physical sector number
+;           +-------+-------+
+;        +8 |    DMA_SEG    |   DMA segment 
+;           +-------+-------+
+;        +6 |    DMA_OFF    |   DMA offset
+;           +-------+-------+
+;        +4 |    RET_SEG    |   BDOS return segment
+;           +-------+-------+
+;        +2 |    RET_OFF    |   BDOS return offset
+;           +-------+-------+
+;      SP+0 |    RET_ADR    |   Return address to XIOS ENTRY routine
+;           +-------+-------+
+;
+;	These parameters may be indexed and modifided
+;	directly on the stack by the XIOS read and write rotines
+;	They will be removed by the BDOS when the XIOS completes
+;	the read/write function and returns to the BDOS.
+
+drive	equ	byte ptr 14[bp]
+mcnt	equ	byte ptr 15[bp]
+track	equ	word ptr 12[bp]
+sector	equ	word ptr 10[bp]
+dma_seg	equ	word ptr 8[bp]
+dma_off	equ	word ptr 6[bp]
+
+;	Some equtes in the Disk Parameter Header (DPH)
+;	and the Disk Parameter Block.
+
+xlt	equ	0	;translation table offset in DPH
+dpb	equ	8	;disk parameter block offset in DPH
+spt	equ	0	;sectors per track offset in DPB
+psh	equ	15	;physical shift factor offset in DPB
+
+;************************************************************************
+;*									*
+;*				IO_SELDSK				*
+;*									*
+;************************************************************************
+
+SL16	equ	offset $
+CSEG
+ORG	SL16
+
+;=========
+io_seldsk:	    ; Function 7:  Select Disk
+;=========
+;	entry:	CL = disk to be selected
+;		DL = 00h if disk has not been previously selected
+;		   = 01h if disk has been previously selected
+;	exit:	AX = 0 if illegal disk
+;		   = offset of DPH relative from
+;			XIOS Data Segment
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	xor bx,bx			;get ready for error
+	cmp cl,15			;is it a valid drive ?
+	ja sel_ret			;if not just exit
+	  mov bl,cl
+	  shl bx,1			;index into the DPH's
+	  mov ax,dph_tbl[bx]		;get DPH address
+sel_ret:
+	ret
+
+;************************************************************************
+;*									*
+;*				IO_READ					*
+;*									*
+;************************************************************************
+
+;=======
+io_read:	    ; Function 11: Read sector
+;=======
+; Reads the sector on the current disk, track and
+; sector into the current DMA buffer.
+
+;	entry:	parameters on stack
+;	exit:	AL = 00	if no error occured
+;		AL = 01 if an error occured
+;		AL = 0ffh if density change detected
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+	mov bp,sp
+	mov al,drive
+	xor ah,ah			;index into the physical driver
+	mov si,ax
+	shl si,1
+	jmp read_tbl[si]		;jump to physical driver read routine
+
+read_m_disk:	
+;-----------
+	call mdisk_calc			;calculate byte address;
+	push es				;save UDA
+	les di,dword ptr dmaoff 	;load destination DMA offset
+					;and segment
+	xor si,si			;setup source DMA address
+	push ds				;save current DS
+	mov ds,bx			;load pointer to sector in memory
+	rep movsw			;execute move of 128 bytes....
+	pop ds				;then restore user DS register
+	pop es				;restore UDA
+	xor ax,ax			;return with good return code
+	ret
+
+read_sd_floppy:
+;--------------
+	mov dma_mode_storage,dma_mode_read_fdc
+	mov flp_rw_command,fdc_read_cmd
+					;set up for read before going
+	jmp flp_io			;to common read/write code
+
+mdisk_calc:
+;----------
+;	exit:	BX = sector paragraph address
+;		CX = length in words to transfer
+;	Assume MDISK DPB describes a disk with a physical
+;	sector size of 128, 8 sectors to a 1K track.
+;	Avoid deblocking by setting the logical sector size (128)
+;	equal to the physical sector size.
+
+	mov bx,track			;pickup track number
+	mov cl,3			;times eight for relative sector
+					;number
+	shl bx,cl
+	mov cx,sector			;plus sector
+	add bx,cx			;gives relative sector number
+	mov cl,3			;times eight for paragraph of
+					;sector start
+	shl bx,cl
+	add bx,m_disk_segment		;plus base address of disk in memory
+	mov al,mcnt
+	xor ah,ah			;multiply by 64, length of sector
+	mov cl,6			;in words
+	shl ax,cl			;length * multi sector count
+	mov cx,ax
+	cld
+	ret
+
+;************************************************************************
+;*									*
+;*				IO_WRITE				*
+;*									*
+;************************************************************************
+
+;========
+io_write:		; Function 12: Write disk
+;========
+; Write the sector in the current Dma buffer to the current disk on the current
+; track in the current sector.
+
+;	entry:	CL = 0 - Defered Writes
+;		CL = 1 - non-defered writes
+;		CL = 2 - def-wrt 1st sect unalloc blk
+;	exit:	AL = 00H if no error occured
+;		AL = 01H if error occured
+;		AL = 02H if read only disk
+;		AL = 0ffh if density change detected
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+	
+	mov bp,sp
+	mov al,drive
+	xor ah,ah			;index into the physical driver
+	mov si,ax
+	shl si,1
+	jmp write_tbl[si]		;jump to physical driver write routine
+
+write_m_disk:
+;------------
+	call mdisk_calc			;calculate byte address
+	push es				;save UDA
+	mov es,bx			;setup destination DMA segment
+	xor di,di			;destination offset
+	push ds				;save user segment register
+	lds si,dword ptr dmaoff 	;load source DMA offset
+					;and segment
+	rep movsw			;move from user to disk in memory
+	pop ds				;restore user segment pointer
+	pop es				;restore UDA
+	xor ax,ax			;return no error
+	ret
+
+write_sd_floppy:
+;---------------
+	mov dma_mode_storage,dma_mode_write_fdc
+	mov flp_rw_command,fdc_write_cmd
+	;jmps flp_io			;set up for write before
+					;going to common read/write code
+
+flp_io:
+;------
+;	entry:	parameters on stack
+;	exit:	zero flag set if successful
+
+;	Common code for floppy read and write
+;	Note the parameters on the stack, SECTOR, TRACK are
+;	0 relative, and MCNT, SECTORS_PER_TRACK are relative to 1
+
+	mov disk_busy,true		;keep I_TICK from turning off motor
+	mov ax,sectors_per_track	;max sectors - starting sector =
+	sub ax,sector			;sectors left on track
+	xor bh,bh
+	mov bl,mcnt			;multi sector count is byte variable
+	cmp ax,bx			;sectors left on track, sectors
+					;requested 
+	jbe flp_track			;transfer to end of track 
+	  mov al,mcnt			;transfer to before end of track
+
+flp_track:
+	sub mcnt,al			;AL = # sectors to R/W on this
+					;iteration
+					;through FLP_IO,
+	mov track_mcnt,al		;sectors to R/W on current track 
+				
+					;check for 64K page overlap
+	mov ah,al			;shl al,8 (* 256)
+	xor al,al
+	shl ah,1			;* 512
+	push ax				;how many bytes to R/W on cur trk
+
+	mov ax,dma_seg			;compute new 20 bit DMA addr
+	mov bx,dma_off
+	call comp_dma			;returns AX = low 16 bits of 20 bit adr
+	not ax				;how many bytes left in this 64K page
+
+	pop bx				;BX=bytes to R/W on current track
+	cmp ax,bx			;does this transfer fit in 64K page
+	jb flp_end_64K
+	  jmp flp_pg_ok
+
+flp_end_64K:
+					;read to end of 64K page and then
+					;read spanning sector locally
+	  mov al,ah			;how many sectors fit in this page ?
+	  xor ah,ah			;bytes left in 64K page
+	  shr ax,1			;divided by 512
+	  test ax,ax			;if 0, no sectors fit
+	  jz flp_rwlocal		;in the rest of this 64K page
+
+	    mov num_sec,al		;sectors that fit in end 64K page
+	    sub track_mcnt,al		;track_mcnt always > AL
+	    call flp_phys_io		;read/write them, DMA already computed
+	    jz flp_end64k_ok
+	      jmp flp_ret		;zero flag is reset for error return
+
+flp_end64K_ok:
+	      xor ax,ax
+	      mov al,num_sec		;compute new DMA offset
+	      add sector,ax		;still on the same track
+	      xchg ah,al		;shl ax,8 (* 256)
+	      shl ah,1			;* bytes_per_sector (512)
+	      add dma_off,ax		;64K wrap around is legal
+	    
+flp_rwlocal:				;read into XIOS data segment
+					;the spanning
+	    mov bx,offset local_buf	;sector
+	    mov ax,ds			;compute 20 bit local DMA addr
+	    call comp_dma
+	    cmp flp_rw_command,fdc_read_cmd
+					;reading or writing ?
+	    je flp_local
+	      mov si,dma_off		;get the sector to write from local
+	      mov di,offset local_buf	;buffer
+	      push es ! push ds ! pop es
+	      mov ax,dma_seg ! mov ds,ax
+	      mov cx,bytes_per_sector/2
+	      rep movsw
+	      pop es ! mov ds,sysdat
+	      mov dma_off,si		;update DMA offset
+
+flp_local:
+	    mov num_sec,1		;read/write one sector
+	    call flp_phys_io		;XIOS data cannot span 64K page
+	    jnz flp_ret			;return error
+	      inc sector ! dec track_mcnt
+
+	      cmp flp_rw_command,fdc_read_cmd
+	      jne flp_local_done	;reading or writing ?
+	        mov di,dma_off		;move the sector to user's area
+	        mov si,offset local_buf	;if reading
+	        push es ! mov es,dma_seg
+	        mov cx,bytes_per_sector/2
+	        rep movsw
+	        mov dma_off,di		;update DMA offset
+	        pop es
+
+flp_local_done:
+	      mov ax,dma_seg		;compute new 20 bit DMA addr
+	      mov bx,dma_off		;for next FDC read/write
+	      call comp_dma
+
+flp_pg_ok:				;read will not cross 64K boundary
+	mov al,track_mcnt		;could be 0 if we just read locally
+	test al,al ! jz nxt_track
+	  mov num_sec,al		;read the rest from this track
+	  call flp_phys_io		;DMA is already computed
+	  jnz flp_ret			;return error, zero flag reset
+	    xor ax,ax
+	    mov ah,num_sec		;shl num_sec,8 (* 256)
+	    shl ah,1			;* 512
+	    add dma_off,ax
+
+nxt_track:
+	xor al,al
+	cmp mcnt,al
+	jz flp_ret			;sucessful return with zero flag on
+	  inc track
+	  mov sector,0
+	  jmp flp_io			;more IO to do on next track
+ 
+flp_ret:
+	mov disk_busy,false
+	ret
+
+comp_dma:	;Compute 20 bit address from offset, segment
+;--------
+
+;	entry:	AX =	segment
+;		BX =	offset
+;	exit:	AX =	low 16 bits
+;		CH =	highest 4 bits of address, always less then 16 -
+;			no megabyte wrap around
+;
+;		The XIOS variables DMA_LOW16 and DMA_HIGH4 are
+;		set by this routine.  These variables are transferred
+;		to the floppy disk controller by the routine DMA_SET_UP.
+
+	mov cl,4 ! rol ax,cl		;make paragraphs into bytes
+	mov ch,al ! and al,0f0h		;save high 4 bits, 0 low 4 bits
+	add ax,bx			;add byte offset
+	adc ch,0 ! and ch,0fh		;add in the carry, page is less than
+	mov dma_low16,ax		;16
+	mov dma_high4,ch
+	ret
+
+flp_phys_io:
+;-----------
+;	entry:	num_sec = number of sectors to read in this
+;		operation
+;		disk parameters on the stack
+;	exit:	zero flag set if ok
+
+;	Perform physical actions to read/write floppy diskette
+
+	mov d_a_number,r_bytes
+	mov d_a_eot,r_sectors
+	mov d_a_gpl,r_gap
+	mov d_a_dtl,r_dtl
+	call motor_on			;make sure motor is on
+	mov recals,recal_max
+recal_loop:
+	mov retries,retry_max
+retry_loop:
+	call seek
+	call dma_setup
+	call fdc_read_write
+	jz phys_ret			;if errors 
+	  dec retries			;attempt retries
+	  jnz retry_loop
+	    call recal			;if retries fail
+	    dec recals			;recalabrate the drive
+	    jnz recal_loop
+	      or al,1			;give up and return error
+phys_ret:
+	ret
+
+motor_on:
+;--------
+;	entry:	none
+;	exit:	none
+
+;	Turn on the motor if it is off.
+
+	mov motor_off_counter,0ffh	;set for I_TICK timeout 
+	mov al,010h			;pick up a bit for motor a
+	mov cl,drive			;fetch the binary drive code
+	shl al,cl			;make it a bit for motor x
+	mov ah,motor_flags		;fetch the motor bits
+	test ah,al			;check to see if its on
+	jnz motor_on_done		;yes then leap
+	  or al,fdc_on			;mask in the no reset,enable interupt
+	  or al,drive			;mask in the drive
+	  mov motor_flags,al		;save for later
+	  mov dx,fdc_port		;point to the port number
+	  out dx,al			;select & motor on
+	  cmp flp_rw_command,fdc_read_cmd
+	  je motor_on_done
+	    mov dx,ticks_per_second/8	;wait for motor on 1/8 second
+	    mov cl,p_delay		;when writing
+	    call supif	
+
+					;When initially debugging
+;	  xor cx,cx			;do not use the P_DELAY function
+;m_wait:				;until I_TICK is implemented;
+;	  loop m_wait			;use a delay loop like this.
+
+motor_on_done:
+	ret
+
+recal:
+;-----
+;	entry:	none
+;	exit:	none
+
+;	Move the head to home on the selected disk drive.
+
+	mov disk_arguments,2		;specify number of arguments
+	mov d_a_command,fdc_recal_cmd
+	mov al,drive			;get current disk
+	mov d_a_drive,al		;set up the command block
+	call fdc_command_put		;go send the command block
+	mov dx,fdc_flag
+	call waitflag			;wait for FDC interrupt
+rc_end:
+	jmp sense_interrupt		;required after RECAL command
+	;ret
+
+seek:
+;----
+;	entry:	TRACK to seek to on the stack relative to BP
+;	exit:	none
+
+	mov disk_arguments,3		;request 3 byte command transfer
+	mov d_a_command,fdc_seek_cmd
+	xor bl,bl			;select head 0
+	mov ax,track			;get track off stack
+
+					;code for double sided diskettes
+					;would go here ...
+;	cmp al,40			;test for off side 1
+;	jb side_ok			;if single sided then done
+;	  mov bl,1			;else specify head 1
+;	  mov ah,79			;compute track on second side
+;	  sub ah,al
+;	  xchg ah,al
+					
+side_ok:
+	mov d_a_head,bl			;set up the head
+	add bl,bl			;multiply by 2
+	add bl,bl			;multiply by 4
+	mov d_a_cylinder,al		;set up the track number
+	or bl,drive			;bits 0,1 are drive number
+	mov d_a_drive,bl		;set up disk number
+	mov ax,sector			;get sector off stack
+	inc ax				;increment it
+	mov d_a_record,al		;and set it up
+	add al,num_sec			;compute new end of track
+	dec al
+	mov d_a_eot,al			;put last sector in params
+	call fdc_command_put		;send the command block
+	mov dx,fdc_flag
+	call waitflag			;wait for FDC interrupt
+
+st_end:
+	jmp sense_interrupt		;required after SEEK command
+	;ret
+
+dma_setup:
+;---------
+;	entry:	DMA_MODE_STORAGE, DMA_LOW16, DMA_HIGH4 set up
+;	exit:   none
+
+;	Set the DMA device up for a read/write operation.
+;	The current DMA command word must in DMA_MODE_STORAGE.
+;	DMA_LOW16 and DMA_HIGH4 are the twenty bit starting address.
+;	The read/write operation cannot cross a physical 64K boundary.
+
+	out dma_cbpf,al			;reset the byte pointer
+
+	mov al,dma_mode_storage		;get the mode byte
+	out dma_mode_reg,al		;set the mode
+	mov ax,dma_low16		;low 16 bits of 20 bit DMA address
+	out dma_c2_address,al		;send low 8 bits
+	mov al,ah
+	out dma_c2_address,al		;send next 8 bits
+	mov al,dma_high4		;high 4 bits of 20 bit DMA address
+	out dma_page_fdc,al
+	xor ax,ax
+	mov ah,num_sec			;shl num_sec,8 (* 256)
+	shl ah,1			;*512
+	dec ax				;0 relative
+	out dma_c2_count,al		;set up the low byte
+	mov al,ah			;get the low byte
+	out dma_c2_count,al		;and the high byte
+	mov al,dma_bmsk_fdc		;get the binary channel mask
+	out dma_bmsk_reg,al		;enable the disk channel
+	ret
+
+fdc_read_write:
+;--------------
+;	entry:	DMA device set up, head positioned on correct
+;		track
+;	exit:	zero flag set if successful
+
+;	Send read or write command to 8272 FDC
+
+	mov disk_arguments,9		;9 byte command for read or write
+	mov al,flp_rw_command		;get read or write command
+	mov d_a_command,al		;put it in the command string
+	call fdc_command_put		;send the command to the FDC
+	mov dx,fdc_flag
+	call waitflag			;waiô foò FDÃ interrupt
+	mov disk_results,7		;7 byte result transfer
+	call fdc_status_get		;get the result bytes
+	test d_r_st0,0C0H		;test status register 0
+	ret				;return zero flag set on success
+
+sense_interrupt:
+;---------------
+;	Sense interrupt command on the FDC.  It is called
+;	after a recal or a seek to test for seek complete.
+
+	mov disk_arguments,1		;only one byte of command
+	mov d_a_command,fdc_si_cmd	;sense interrupt commmand
+	call fdc_command_put		;send the command to the FDC
+	mov disk_results,2		;2 bytes are returned
+	call fdc_status_get		;get the 2 result bytes
+	ret
+
+fdc_command_put:
+;---------------
+;	entry:	DISK_ARGUMENT array set up
+;	exit:	none
+
+;	Send the command block in the DISK_ARGUMENTS table to
+;	the 8272 FDC.
+;	The number of commands to write to the FDC is the
+;	first item in the table.
+
+	mov dx,fdc_stat			;point to the i/o port
+	mov si,offset disk_arguments	;point to the table of arguments
+	cld				;make sure we go forward
+	lodsb				;get the length of the arguments table
+	mov cl,al			;get it into the count register
+	sub ch,ch			;zero the high byte
+
+fdc_command_loop:
+	in al,dx			;get the current control byte
+	test al,fdc_ready		;if not ok to send next byte
+	jz fdc_command_loop		;then loop waiting
+	  inc dx			;point at the data port
+	  lodsb				;else get the byte to send
+	  out dx,al			;send it
+	  dec dx			;point back at the status port
+	  loop fdc_command_loop		;if not last byte then loop
+	  ret				;else were all done
+
+fdc_status_get:
+;--------------
+;	entry:	number of results in 1st byte of DISK_RESULTS array
+;	exit:	none
+
+;	Get the status information from the 8272
+;	FDC and place them in the table at DISK_RESULTS.
+;	The first byte in the table is the number of results
+;	to read from the FDC
+
+	push es				;save UDA
+	mov dx,fdc_stat			;point at the status port
+	mov ax,ds			;get our data segment
+	mov es,ax			;into the extra segment
+	mov di,offset disk_results + 1	;point to where to put the data
+	cld 				;make sure we go forward
+	mov cl,disk_results		;fetch the number of expected results
+	sub ch,ch			;zero the high byte
+
+fdc_status_loop:
+	in al,dx			;get the current control byte
+	test al,fdc_ready		;if not ok to read next byte
+	jz fdc_status_loop		;then loop waiting
+	  inc dx			;point at the data port
+	  in al,dx			;get the byte
+	  stosb				;put it in the structure
+	  dec dx			;point back at the status port
+	  loop fdc_status_loop		;if not last then loop
+	pop es				;restore UDA
+	ret				;else return
+
+;************************************************************************
+;*									*
+;*			IO_FLUSHBUF					*
+;*									*
+;************************************************************************
+
+;===========
+io_flushbuf:			;Flush Buffer
+;===========
+;	entry:	None
+;	exit:	AL = 00h if no error occurs
+;		   = 01h if error occurs
+;		   = 02h if read/only disk
+;		ALL SEGMENT REGISTERS PRESERVED:
+;		CS,DS,ES,SS must be preserved though call
+
+
+	xor al,al	;no need to flush buffer with
+	ret		;no blocking/deblocking in XIOS
+
+;************************************************************************
+;*									*
+;*			Disk I/O Data					*
+;*									*
+;************************************************************************
+
+SL17	equ	offset $
+DSEG
+ORG	SL17
+	
+retry_max	equ		5
+recal_max	equ		10
+retries		db		0
+recals		db		0
+
+;	The following tables are used to issue commands to,
+;	and read results from the 8272 FDC.  The first entry
+;	in each table is the number of bytes to send or receive
+;	from the device
+
+disk_arguments	db	0		;number of arguments to send
+d_a_command	db	0		;command read/write
+d_a_drive	db	0		;drive select & head select
+d_a_cylinder	db	0		;cylinder to read/write
+d_a_head	db	0		;head
+d_a_record	db	0		;sector
+d_a_number	db	2		;magic number for 512 bytes/sector 
+d_a_eot		db	sectors_per_track	;end of track sector number
+d_a_gpl		db	02ah		;inter sector gap length
+d_a_dtl		db	0ffh		;data length
+
+disk_results	db	0		;number of bytes to read
+d_r_st0		db	0		;status byte 0
+d_r_st1		db	0		;status byte 1
+d_r_st2		db	0		;status byte 2
+d_r_cylinder	db	0		;cylinder we are on now
+d_r_head	db	0
+d_r_record	db	0
+d_r_number	db	0		;number of sectors read
+
+f_a_bytes	db	0
+f_a_sectors	db	0
+f_a_gap		db	0
+f_a_filler	db	0
+
+dma_mode_storage	db	dma_mode_read_fdc	;current DMA mode
+flp_rw_command		db	fdc_read_cmd		;reading or writing ?
+
+num_sec			db	1		;num sectors to read/write
+						;in one call to FDC
+
+track_mcnt		rb	1		;multi sector count on
+						;current track
+dma_low16		rw	1		;20 bit address storage
+dma_high4		rb	1
+
+motor_flags		db	0		;last state of the motor bits
+disk_busy		db	false
+motor_off_counter	db	0		;time out counter to
+						;turn off motor
+
+;	Sector buffer used by read/write routines when requested
+;	multi sector I/O operation crosses a 64K page boundary.
+;	This buffer cannot cross 64K page boundary on the IBM PC.
+
+local_buf	rb	bytes_per_sector
+
+;	Jump table for disk I/O read and write routines.
+;	Expand for hard disks and other types of floppies.
+
+read_tbl	dw	offset read_sd_floppy
+		dw	offset read_sd_floppy
+		dw	0,0,0,0		;C,D,E,F
+		dw	0,0,0,0		;G,H,I,J
+		dw	0,0		;K,L
+		dw	offset read_m_disk
+		dw	0,0,0		;N,O,P
+
+write_tbl	dw	offset write_sd_floppy
+		dw	offset write_sd_floppy
+		dw	0,0,0,0		;C,D,E,F
+		dw	0,0,0,0		;G,H,I,J
+		dw	0,0		;K,L
+		dw	offset write_m_disk
+		dw	0,0,0		;N,O,P
+
+;	Disk parameter headers
+
+				;Floppy A:
+dph_A	dw	xlt0,0000h	;translate table
+	dw	0000h,0000h	;scratch area
+	dw	dpb_flp		;dsk parm block
+	dw	0ffffh		;check
+	dw	0ffffh		;alloc vectors
+	dw	0ffffh		;dir buff cntrl	blk
+	dw	0ffffh		;data buff cntrl blk
+	dw	0ffffh		;hash table segment
+
+				;Floppy B:
+dph_B	dw	xlt1,0000h	;translate table
+	dw	0000h,0000h	;scratch area
+	dw	dpb_flp		;dsk parm block
+	dw	0ffffh		;check
+	dw	0ffffh		;alloc vectors
+	dw	0ffffh		;dir buff cntrl	blk
+	dw	0ffffh		;data buff cntrl blk
+	dw	0ffffh		;hash table segment
+
+				;Mdisk:
+dph_M	dw	0000h,0000h	;translate table
+	dw	0000h,0000h	;scratch area
+	dw	dpb_m		;dsk parm block
+	dw	0000h		;check
+	dw	0ffffh		;alloc vectors
+	dw	0ffffh		;dir buff cntrl	blk
+	dw	0		;data buff cntrl blk
+	dw	0		;hash table segment
+
+;	Disk Parameter Blocks
+
+				;For both floppy drives
+dpb_flp		dw	8	;sectors per track
+		db	3	;block shift
+		db	7	;block mask
+		db	0	;extnt mask
+		dw	155	;disk size in 1k blocks
+				;less offset track(s)
+		dw	63	;directory max
+		db	11000000b	;alloc0
+		db	0	;alloc1
+		dw	16	;check size
+		dw	1	;offset
+		db	2	;phys sec shift
+		db	3	;phys sec mask
+
+				;For Mdisk:
+dpb_M		dw	8	;sectors per track
+		db	3	;block shift
+		db	7	;block mask
+		db	0	;extnt mask
+dpb_m_dsm	dw	191	;max disk size in 1k blocks
+				;less offset track(s)
+				;reset set by INIT: after memory test,
+				;set max here so GENCCPM
+				;can reserve the Allocation Vector
+		dw	63	;directory max
+		db	11000000b	;alloc0
+		db	0	;alloc1
+		dw	0	;check size
+		dw	0	;offset
+		db	0	;phys sec shift
+		db	0	;phys sec mask
+
+xlt0	equ	0		;no translate table
+xlt1	equ	xlt0		;no translate table
+
+eject
+;				Init
+;				----
+
+;************************************************************************
+;*									*
+;*		      XIOS Initialization				*
+;*									*
+;************************************************************************
+
+;	The following routine is used to initialize any required
+;	data areas and alter any peripheral chip programming when
+;	starting up CCP/M-86.  This code is called once from the
+;	SUP(ERVISOR) after calling the SUP has called the RTM,
+;	RTM, CIO, MEM, BDOS initialization routines and before the
+;	SUP has created the RSP processes.
+;	This code can be placed in an XIOS data area if the XIOS is
+;	8080 model (mixed code and data).  Usually, overlaying the
+;	initialization code with a data area is done after the XIOS
+;	has been debugged.
+
+SL18	equ	offset $
+CSEG
+ORG	SL18
+
+;====
+;====
+init:					;arrive here from the JMP
+;====					;at 0 in XIOS code segment
+;====
+
+	cli ! cld			;Supervisor restores DS,ES and int
+					;224 after on INIT call 
+	push es				;save the UDA
+
+;	Memory initialization
+
+	int mem_size_int		;get memory size in K bytes
+	push ax				;save the memory size
+	push ds ! pop es		;ES=SYSDAT
+	mov di,offset sign_mem		;fill in sign on message
+	mov bl,100
+	div bl
+	add al,030h			;put in hundreds digit
+	stosb
+	mov al,ah			;get remainder
+	xor ah,ah			;make sure we don't overflow
+	mov bl,10
+	div bl
+	add al,030h			;put in tens digit
+	stosb
+	mov al,ah			;get remainder
+	add al,030h
+	stosb				;put in ones digit
+	pop ax				;restore memory size in K bytes
+
+;	Trim the Memory Free List to the actual memory size.
+;	This code checks the MFL to be in the bounds of
+;	the address found by the INT MEMORY_SIZE call.
+;	The first Memory Descriptor and all those following
+;	MDs that represent partitions that extend past
+;	the end of memory, are placed on the Memory Descriptor
+;	Unused List.  The O.S. uses MDs from the
+;	MDUL when memory is allocated to processes.
+
+;	This code can be expanded to adjust the MD_LENGTH
+;	field of the MD that overlaps the end of memory,
+;	instead of just placing it on the MDUL and potentially
+;	wasting some memory.  However, if the partitions
+;	are created by GENCCPM with starting addresses
+;	that correspond to the RAM card options there is no
+;	waste.  For the IBM PC, partitions starting
+;	at 64K and every 32K boundary thereafter will be
+;	trimmed by the following code with no wasted RAM.
+
+	mov cl,6			;make number of K into
+	shl ax,cl			;number of paragraphs
+	mov cx,ax
+	mov bx,offset mfl - md_link
+next_mfl:
+	mov si,bx			;save previous link
+	mov bx,md_link[bx]
+	test bx,bx			;GENCCPM sorts memory partitions
+	jz mfl_done			;in accending order of starting
+	  mov ax,md_start[bx]		;paragraph.  Assume memory is
+	  add ax,md_length[bx]		;contiguous from 0 on IBM PC.
+	  cmp ax,cx			;AX=end of partition, CX=
+	  jbe next_mfl			;end of memory
+	    mov md_link[si],0		;terminate MFL
+	    mov si,bx			;save beginning of severed list
+next_mdul:				;recycle MDs from MFL
+	    mov di,bx			;save last link
+	    mov bx,md_link[bx]		;to Memory Descriptor
+	    test bx,bx			;Unused List
+	    jnz next_mdul		;look for end
+	      mov ax,mdul		;save MDUL list
+	      mov mdul,si		;attach trimmed MDs to MDUL
+	      mov md_link[di],ax	;re-attach original MDUL to
+mfl_done:				;new end of MDUL
+
+;	Initialize the Memory Disk
+
+test_for_mdisk:
+	mov dx,m_disk_segment		;DX is base of 64K Mdisk segments
+	push ds				;save SYSDAT
+	mov cx,3			;try three contiguous 64K areas
+
+next64K:
+	mov es,dx ! mov ds,dx		;ES=DS=mdisk area
+	mov si,0fffeh			;last word of 64K segment
+	mov di,si
+	mov ax,0aa55h			;bit pattern to write
+	mov bx,ax			;keep for compare
+	stosw				;write it
+	lodsw				;read it
+	cmp ax,bx
+	jne m_test_done			;not equal-then no more memory
+	  push cx			;set Mdisk to E5's, blank disk
+	  mov ax,0E5E5h			;parity of memory at C0000H is not
+          xor di,di			;set by IBM PC ROM
+	  mov cx,8000H			;32K words = 64K bytes
+	  rep stosw
+	  pop cx			;restore loop count
+	  add dx,1000H			;try next 64K
+	  loop next64k
+
+m_test_done:
+	pop ds				;restore DS
+	cmp cx,3			;if equal no mdisk
+	jne m_exists
+	  mov dph_m_adr,0		;IO_SELDSK will return
+	  jmps m_disk_done		;an error on Mdisk select
+
+m_exists:
+	  mov sign_m_disk,cr		;print mdisk message
+	  cmp cx,2			;select to work
+	  jne more_than_64K
+            mov sign_md_size1,'46'	;64 - low byte high byte storage
+	    mov dpb_m_dsm,63		;number of 1K blocks - 1
+	    jmps mdisk_done
+
+more_than_64K:
+	    cmp cx,1
+	    jne more_than_128K
+	      mov sign_md_size0,'1'
+	      mov sign_md_size1,'82'
+	      mov dpb_m_dsm,127		;number of 1K blocks - 1
+	      jmps mdisk_done
+
+more_than_128K:				;it is 192K
+		mov sign_md_size0,'1'
+		mov sign_md_size1,'29'	;low byte high byte
+		mov dpb_m_dsm,191	;number of 1K blocks - 1
+	        ;jmps m_disk_done
+
+m_disk_done:
+
+;	Disk I/O Initialization
+
+;	Initialize DPH Hash Table Segment Entry.
+;	Commented out since we let GENCCPM perform this
+;	initialization.  Use this code if you build your own
+;	Buffer Control Blocks, Hash Table Segment, Allocation
+;	and Check Sum Vectors.
+
+;	mov cx,16
+;inith0:	push cx
+;	dec cl
+;	call io_seldsk			;get disk param header offset
+;	or bx,bx ! jz inith1		;if not 0, BX = DPH
+;	    mov	ax,18[bx]		;AX = Hash Tbl	Offset
+;	    or ax,ax ! jz inith1	;if 0, No Hash Tbl
+;		mov cl,4
+;		shr ax,cl
+;		mov dx,ds
+;		add ax,dx		;AX = Hash Tbl Seg
+;		mov 18[bx],ax
+;inith1:
+;	pop cx
+;	loop inith0
+;
+;	Initialize data BCB segment addresses
+;	all drives share the same set of data buffers
+;
+;	xor cl,cl			;get disk param header address
+;	call io_seldsk			;BX=DPH address for drive A:
+;	mov si,16[bx]			;SI=data BCB root address
+;	mov si,[si]
+;initd1:
+;	mov ax,10[si]			;AX=BCB buffer offset
+;	mov cl,4
+;	shr ax,cl
+;	mov dx,ds
+;	add ax,dx
+;	mov 10[si],ax			;AX=BCB buffer segment
+;	mov si,12[si]			;SI=next BCB
+;	or si,si ! jnz initd1		;0 if end of linked list
+;	
+;end of disk init
+
+set_up_interrupts:
+	mov al,10111100b		;enable diskette, keyboard,
+	out pic_odd_port,al		;timer interrrupt
+					;and mask off the rest
+
+	mov disk_arguments,3		;send specify command to the
+	mov d_a_command,fdc_spec_cmd	;FDC (Intel 8272 or NEC 765)
+	mov d_a_drive,0dfh		;step rate=3ms, head unload=240ms
+	mov d_a_cylinder,02h		;head load=2ms, DMA mode true
+	call fdc_command_put		;head unload and head load times
+					;are meaningless on mini floppies
+					;where the head is loaded
+					;when the motor is turned on
+	mov ax,timer_60_hz
+	out timer_0_reg,al
+	xchg ah,al
+	out timer_0_reg,al
+					
+	mov al,bell_cmd			;set up the bell frequency
+	out timer_cmd_reg,al		;send the command
+	mov ax,timer_1000_hz		;get the constant
+	out timer_2_reg,al
+	xchg ah,al
+	out timer_2_reg,al
+
+;	Paint the software interrupt vectors.
+
+;	When debugging leave the single step, one byte, debugger and
+;	serial interrupt vectors pointing at DDT86 and CP/M-86.
+
+;	To debug CCP/M-86 under CP/M-86, DDT86 or SID86 must be
+;	able to perform console input, console input status and 
+;	console output through the CP/M-86 BIOS.
+;	This is usually accomplished by BIOS through a serial port.
+;	Often the BIOS routines AUXIN and AUXOUT, are used for
+;	serial device support.  If the BIOS supports the IOBYTE,
+;	it may be possible to redirect the CP/M console to a
+;	serial port using the STAT transient.
+
+;	When debugging is finished, all interrupts unused
+;	by the XIOS should be initialized in XIOS INIT to
+;	point at the XIOS I_UNEXPECTED interrupt handler routine.
+
+	xor dx,dx
+	cmp debug,true			;debug flag: see HEADER
+	jne no_save
+	  push ds ! pop es		;ES=SYSDAT
+	  mov ds,dx			;DS=0
+	  mov bx,2			;count of 2 words
+	  mov cx,bx
+	  mov di,offset iv_save		;local save area
+	  mov si,iv_sstep		;single step interrupt
+	  rep movsw
+	  mov cx,bx			;CX=2
+	  mov si,iv_one_byte		;one byte INT instruction
+	  rep movsw
+	  mov cx,bx
+	  mov si,iv_rs232		;serial port
+	  rep movsw
+	  mov cx,bx			;CX=2
+	  mov si,iv_debug		;debugger interrupt
+	  rep movsw
+
+no_save:				;paint all the interrupt vectors
+	  mov ds,dx			;to point at I_UNEXPECTED:
+	  mov es,dx			;ES=0, DS=0	
+	  mov word ptr .0,offset i_unexpected
+	  mov word ptr .2,cs
+	  mov cx,255*2
+	  mov si,0 ! mov di,4
+	  rep movsw
+
+int_offsets:				;interrupt vectors used by XIOS
+	  mov ax,offset i_tick		;DS=0,ES=0
+	  mov .iv_tick,ax		;tick interrupt
+	  mov ax,offset i_keyboard
+	  mov .iv_key,ax
+	  mov ax,offset i_disk
+	  mov .iv_disk,ax
+
+	  mov ds,cs:sysdat		;in debug environment ?
+	  cmp debug,true
+	  jne no_restore
+					;DS=SYSDAT,ES=0
+	    mov cx,bx			;BX=2
+	    mov si,offset iv_save	;local save area
+	    mov di,offset iv_s_step	;single step interrupt
+	    rep movsw
+	    mov cx,bx			;CX=2
+	    mov di,offset iv_one_byte	;one byte INT instruction
+	    rep movsw
+	    mov cx,bx			;CX=2
+	    mov di,offset iv_rs232	;serial port
+	    rep movsw
+	    mov cx,bx
+	    mov di,offset iv_debug	;debugger interrupt
+	    rep movsw
+
+no_restore:
+	push ds
+	pop es				;ES=SYSDAT
+
+init_parallel:
+	mov dx,3bch			;BW parallel port
+	add dx,2
+	mov al,08h			;printer init byte
+	out dx,al
+	mov ax,1000h			;delay count
+
+parallel_wait:
+	dec ax
+	jnz parallel_wait
+	mov al,0Ch			;printer strobe off
+	out dx,al
+
+set_up_video:	
+	mov dx,bw_card			;get the video chip port
+	mov si,offset bw_table		;initialization commands
+	mov cx,length bw_table		;how many commands
+	call video_init			;send commands to port
+					;color board is similar ...
+
+;	Set up the virtual screen structures (one per virtual console)
+;	and blank their screen save areas.
+
+	mov dx,genccpm_buf		;paragraph address of buffer
+					;space allocated by GENCCPM.
+					;this area is not part of the
+					;CCPM.SYS file, and is located
+					;with GENCCPM allocated disk
+					;data buffers at the end of
+					;the system image.
+	xor ah,ah			;CX = screen we are initializing
+					;and param to erase_screen
+	mov bx,offset screen_structures
+
+init_screen_structures:
+	mov ss_screen_seg[bx],dx	;RAM storage segment for this virtual
+					;console
+	push ax ! push dx		;save screen #
+
+;	test ah,ah			;to keep the LOADER messages,
+;	jz no_erase			;don't erase screen 0
+	  call erase_screen
+;no_erase:
+	pop dx ! pop ax			;screen #
+	add dx,(screen_siz*2 + 15)/16	;next virtual screen storage area
+	add bx,ss_len			;next screen_structure
+	inc ah ! cmp ah,nvcns		;do for each virtual console
+	jb init_screen_structures
+					
+	mov si,offset sign_on
+	call print_msg
+	pop es				;restore the UDA
+	sti
+	retf				;initializaiton done
+
+video_init:
+;----------
+;	entry:	DX = video chip port
+;		SI = table of commands to send to the port
+;		CX = number of commands to send
+;	exit:	none
+
+	xor bl,bl
+
+video_init_l:
+	mov al,bl ! inc bl
+	out dx,al ! inc dx
+	lodsb !	out dx,al
+	dec dx !
+	loop video_init_l
+
+	add dx,4
+	mov al,video_on
+	out dx,al
+	ret
+
+;************************************************************************
+;*									*
+;*			INIT Data					*
+;*									*
+;************************************************************************
+
+SL19	equ	offset $
+DSEG
+ORG	SL19
+
+bw_table	db	61h,50h,52h,0fh,19h,06h,19h,19h,02h,0dh,0bh,0ch,0,0,0,0
+
+iv_save		rw	10		;space for 5 interrupt vectors
+
+sign_on	rb	0	
+		db 'Example XIOS Version of '
+		db '4/15/83'
+		db cr,lf,cr,lf
+		db 'Hardware Supported :',cr,lf
+		db '                   Diskette(s) :   '
+sign_d		db '2',cr,lf
+		db '      Parallel Printer Port(s) :   '
+sign_sp		db '1',cr,lf
+		db '              Main Memory (Kb) : '
+sign_mem	db '   ',cr,lf
+sign_mdisk	db 0					;end msg here
+		db '                   M:Disk (Kb) : '	;unless mdisk
+sign_md_size0	rb 1					;set to 64,128,192
+sign_md_size1	rw 1
+		db cr,lf,0
+
+eject
+;			Miscellaneous Routines
+;			----------------------
+
+;************************************************************************
+;*									*
+;*				RESET					*
+;*									*
+;************************************************************************
+
+SL20	equ	offset $
+CSEG
+ORG	SL20
+
+;---------
+print_msg:
+;---------
+;	entry:	SI = address of string to print until 0 byte
+;			on foreground console
+;	exit:	none
+
+	mov dl,foreground_screen
+p_msg_l:
+	mov cl,[si]
+	test cl,cl
+	jz p_done
+	  push dx ! push si
+	  call io_conout
+	  pop si ! pop dx
+	  inc si
+	  jmps p_msg_l
+p_done:
+	ret
+
+;-----
+reset:
+;-----
+;	Reset function - reboot from floppy
+
+	  mov ax,40H
+	  mov ds,ax			;ROM data segment
+	  mov reset_flag,1234H		;parameter to reset routine
+	  jmpf rom_reset		;don't perform diagnostics
+
+CSEG	0ffffh				;address in ROM monitor
+ORG	0				;of reset routine
+
+rom_reset:
+
+DSEG	0
+ORG	72h
+
+reset_flag	rw	1	
+

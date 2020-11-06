@@ -1,0 +1,426 @@
+.bp
+.pn 51
+.cs 5
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.he CP/M-8000 Programmer's Guide            4.2  File Access Functions
+.ft All Information Presented Here is Proprietary to Digital Research
+.tc         4.2.18  Write Random With Zero Fill Function
+.sh
+4.2.18  Write Random With Zero Fill Function
+.qs
+.sp 3
+.nf
+            FUNCTION 40:  WRITE RANDOM WITH ZERO FILL
+
+              Entry Parameters:
+                 Register   R5:  28H
+                 Register  RR6:  FCB Address
+
+              Returned  Values:
+                 Register   R7:  Return Code
+ 
+                                 success:  00H
+                                   error:  02H, 03H
+                                           05H, 06H
+.sp 2
+.fi
+.pp
+The Write Random With Zero Fill Function, like the Random Write
+Function (34), writes a 128-byte record from the current DMA
+buffer to the disk file.  The address of a 36-byte FCB is passed
+in register  RR6. The last three bytes contain the FCB random record
+field. This field specifies the record number of the record that
+this write random function writes to the file. Refer to Write Random
+Function (34) for details on the FCB and setting its
+random record field. 
+.pp
+Like the Write Random Function, this function allocates a data 
+block before writing the record when a block is not already allocated. 
+However, in addition to allocating the data block, this 
+function also initializes the block with zeroes before writing the 
+record. If your program uses this function to write random records to 
+files, it  
+ensures that the contents of unwritten records in the block are
+predictable. 
+.pp
+After the random write function completes, register   R5 contains
+either an error code (see Table 4-9), or the value 00H, which 
+indicates the operation was successful. 
+.bp
+.he CP/M-8000 Programmer's Guide                  4.3  Drive Functions
+.tc    4.3 Drive Functions
+.sh
+4.3  Drive Functions
+.qs
+.ix drive functions
+.pp 
+This section describes drive functions that reset the disk system, select
+and write-protect disks, and return vectors. They include the 
+functions listed in Table 4-11.
+.sp 2
+.ce
+.sh
+Table 4-11.  Drive Functions
+.sp 
+.nf
+.in 7
+          Function              Function Number
+.sp 
+     Reset Disk System                13
+.sp
+     Select Disk                      14
+.sp
+     Return Login Vector              24
+.sp
+     Return Current Disk              25
+.sp
+     Write Protect Disk               28
+.sp
+     Get Read-Only Vector             29
+.sp
+     Get Disk Parameters              31
+.sp
+     Reset Drive                      37
+.sp
+     Get Disk Free Space              46
+.bp
+.in 0
+.fi
+.tc         4.3.1  Reset Disk System Function
+.sh  
+4.3.1  Reset Disk System Function
+.qs
+.ix reset disk system function
+.sp 3
+.nf
+                 FUNCTION 13:  RESET DISK SYSTEM
+
+                     Entry Parameters:
+                        Register   R5:  0DH
+
+                     Returned  Values:
+                        Register   R7:  00H
+.sp 2
+.fi
+.pp
+The Reset Disk System Function restores the file system to a reset
+state. All disks are set to read-write (see Write Protect Disk 
+(28) and Get Read-Only Vector (29) Functions),
+and all the disk drives are logged out. This function can be used by
+an application program that requires disk changes during
+operation.  The Reset Drive Function (37) can also be used for this
+purpose. All files must be closed before your program invokes this 
+function.
+.ix reset disk
+.bp
+.tc         4.3.2  Select Disk Function
+.sh
+4.3.2  Select Disk Function
+.qs
+.ix select disk function
+.sp 3
+.nf
+                    FUNCTION 14:  SELECT DISK
+
+                 Entry Parameters: 
+                    Register   R5:  0EH
+                    Register   R7:  Disk Number
+
+                 Returned  Values:
+                    Register   R7:  00H
+.sp 2
+.fi
+.pp 5
+The Select Disk Function designates the disk drive specified in
+register   R7 as the default disk for subsequent file operations.
+The decimal numbers 0 through 15 correspond to drives A through
+P.  For example,   R7 contains a 0 for drive A, a 1 for drive
+B, and so forth through 15 for a full 16-drive system.  In
+addition, the designated drive is logged-in if it is currently in
+the reset state.  Logging in a drive places it in an on-line
+status which activates the drive's directory until the next cold
+start, or Reset Disk System (13) or Reset Drive (37) Function. 
+.pp
+When the FCB drive code equals zero (dr = 0H), this function
+references the currently selected drive.  However, when the FCB drive code
+value is between 1 and 16, this function references drives A through P.  
+.pp
+If this function fails, CP/M-8000 returns a CP/M Disk select
+error, which is described in Section 4.2.2. 
+.ix select disk
+.bp
+.tc         4.3.3  Return Login Vector Function
+.sh
+4.3.3  Return Login Vector Function
+.qs
+.sp 3
+.ix return login vector function
+.nf
+                FUNCTION 24:  RETURN LOGIN VECTOR
+
+                 Entry Parameters:
+                    Register   R5:  18H
+
+                 Returned  Values:
+                    Register   R7:  Login Vector
+.sp 3
+.fi
+.pp
+The Return Login Vector Function returns in register   R7 a 16-bit value
+that denotes the log-in status of the drives. The least significant bit
+corresponds to the first drive A, and the high order bit corresponds to the
+sixteenth drive, labeled P. Each bit has a value of zero or one. The value
+zero indicates the drive is not on-line.  The value one denotes the drive
+is on-line. When a drive is logged in, its bit in the log-in vector has a
+value of one. Explicitly or implicitly logging in a drive sets its bit
+in the log-in vector. The Select Disk Function (14) explicitly logs in a
+drive. File operations implicitly log in a drive when the FCB drive field
+(dr) contains a nonzero value. 
+.ix login vector
+.bp
+.tc         4.3.4  Return Current Disk Function
+.sh
+4.3.4  Return Current Disk Function
+.qs
+.sp 3
+.ix return current disk function
+.nf
+                FUNCTION 25:  RETURN CURRENT DISK
+
+                 Entry Parameters:
+                    Register   R5:  19H
+
+                 Returned  Values:
+                    Register   R7:  Current Disk
+.sp 2
+.fi
+.pp
+The Return Current Disk Function returns the current default disk
+number in register   R7.  The disk numbers range from 0 through
+15, which correspond to drives A through P. Note that this 
+numbering convention differs from the FCB drive 
+field, which specifies integers 1 through 16 
+correspond to drives labeled A through P.
+.ix return current disk
+.ix current default disk numbers
+.bp
+.tc         4.3.5  Write Protect Disk Function
+.sh
+4.3.5  Write Protect Disk Function
+.qs
+.ix write protect disk function
+.sp 3
+.nf
+                FUNCTION 28:  WRITE PROTECT DISK
+
+                     Entry Parameters:
+                        Register   R5:  1CH
+
+                     Returned  Values:
+                        Register   R7:  00H
+.sp 2
+.fi
+.pp
+The disk write protect function provides temporary write protection for the 
+currently selected disk.  Any attempt
+to write to the disk, before the next cold start, warm start,
+disk system reset, or drive reset operation produces the message:
+.sp
+.ti 8
+Disk change error on drive x 
+.ix write protect disk
+.ix disk change error
+.sp
+Your program terminates when this error occurs.  Program control returns
+to the CCP.
+.bp
+.tc         4.3.6  Get Read-Only Vector Function
+.sh
+4.3.6  Get Read-Only Vector Function
+.qs
+.ix get Read-Only vector function
+.sp 3
+.nf
+               FUNCTION 29:  GET READ-ONLY VECTOR
+
+                 Entry Parameters:
+                    Register   R5:  1DH
+
+                 Returned  Values:
+                    Register   R7:  Read-Only
+                                    Vector Value
+.sp 2
+.fi
+.ix read-only bit
+.pp
+The Get Read-Only Vector Function returns a 16-bit vector in register   R7.
+The vector denotes drives that have the temporary read-only bit set. Similar
+to the Return Login Vector Function (24), the least significant bit
+corresponds to drive A, and the most significant bit corresponds to drive
+P. The Read-Only bit is set either by an explicit call to the Write Protect
+Disk Function (28), or by the automatic software mechanisms within CP/M-8000
+that detect changed disks. 
+.ix get read-only vector
+.bp
+.tc         4.3.7 Get Disk Parameters Function
+.sh
+4.3.7  Get Disk Parameters Function
+.qs
+.ix get disk parameters function
+.sp 3
+.nf
+                FUNCTION 31:  GET DISK PARAMETERS
+
+                 Entry Parameters:
+                    Register   R5:  1FH
+                    Register  RR6:  CDPB Address
+
+                 Returned  Values:
+                    Register   R7:  00H
+                    Register CDPB:  Contains DPB
+                                    Values
+.sp 2
+.fi
+.ix DPB
+.ix CDPB
+.pp
+The Get Disk Parameters Function writes a copy of the 16-byte
+BIOS Disk Parameter Block (DPB) for the current default disk,
+called the CDPB, at the address specified in register  RR6. 
+Figure 4-2 illustrates the format of the DPB and CDPB. The
+values in the CDPB can be extracted and used for display and
+space computation purposes.  Normally, application programs do
+not use this function. For more details on the BIOS DPB, refer to
+the \c
+.ul
+CP/M-8000 Operating System System Guide. 
+.qu
+.sp 3
+.nf
+       SPT   BSH  BLM  EXM  RES   DSM   DRM  RES   CKS  OFF
+
+       16     8    8    8    8     16    16   16    16   16
+.sp 2
+.fi
+.ce
+.sh
+Figure 4-2. DPB and CDBP
+.qs
+.bp
+.pp
+Table 4-12 lists the fields in the DPB and CDPB.
+.sp 2
+.ce
+.sh
+Table 4-12.  Fields in the DPB and CDPB
+.qs
+.sp
+.nf
+.in 5
+Field                       Description
+.fi
+.sp
+.ll 60
+.in 18
+.ti -12
+.qs
+SPT         Number of 128-byte logical sectors per track
+.sp
+.ti -12
+BSH         Block shift factor
+.sp
+.ti -12
+BLM         Block mask
+.sp
+.ti -12
+EXM         Extent mask
+.sp
+.ti -12
+RES         Reserved byte
+.sp
+.ti -12
+DSM         Total number of blocks on the disk
+.sp
+.ti -12
+DRM         Total number of directory entries on the disk
+.sp
+.ti -12
+RES         Reserved for system use 
+.sp
+.ti -12
+CKS         Length (in bytes) of the checksum vector
+.sp
+.ti -12
+OFF         Track offset to disk directory
+.in 0
+.ll 65
+.ix get address of disk parameter block
+.bp
+.tc         4.3.8  Reset Drive Function
+.sh  
+4.3.8  Reset Drive Function
+.qs
+.ix reset drive function
+.sp 3
+.nf
+                    FUNCTION 37:  RESET DRIVE
+
+                 Entry Parameters:
+                    Register   R5:  25H
+                    Register   R7:  Drive Vector
+
+                 Returned  Values:
+                    Register   R7:  00H
+.sp 2
+.fi
+.pp
+The Reset Drive function restores specified drives to the reset
+state.  A reset drive is not logged-in and its status is read-write.
+Register   R7 contains a 16-bit vector indicating the
+drives this function resets.  The least significant bit corresponds
+to the first drive, A.  The high order bit corresponds to the
+sixteenth drive, labeled P. Bit values of 1 indicate the
+drives this function resets. 
+.ix reset drive
+.pp
+To maintain compatibility with other Digital Research operating
+systems, this function returns the value zero in register   R7. 
+.bp
+.tc         4.3.9  Get Disk Free Space Function
+.sh
+4.3.9  Get Disk Free Space Function
+.qs
+.ix get disk free space function
+.sp 3
+.nf
+                FUNCTION 46:  GET DISK FREE SPACE
+
+                Entry Parameters:
+                   Register   R5:  2EH
+                   Register   R7:  Disk Number
+
+                Returned  Values:
+             Register DMA Buffer:  Free Sector Count
+.fi
+.sp 2
+.ix free sector count
+.pp
+The Get Free Disk Space Function returns the free sector count,
+the number of free 128-byte sectors on a specified drive, in the
+first four bytes of the current DMA buffer. The drive number 
+is passed in register   R7.  CP/M-8000 assigns disk
+numbers sequentially from 0 through 15 (decimal). Each
+number corresponds to a drive in the range A through P.  For
+example, the disk number for drive A is 0 and for drive B, the
+number is 1.
+.pp
+Note that these numbers do not correspond to those
+in the drive field of the FCB. The FCB drive field (dr) uses the
+numbers 1 through 16 (decimal) to designate drives. 
+.nx foure

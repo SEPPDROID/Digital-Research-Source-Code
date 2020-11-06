@@ -1,0 +1,666 @@
+;***************** BDOS file system part 2 *****************
+;
+scndm:
+        ;scan the disk map addressed by dptr for non-zero
+        ;entries, the allocation vector entry corresponding
+        ;to a non-zero entry is set to the value of CL (0,1)
+        ;BX addresses the beginning of the directory entry
+;
+        CALL    getdptra                ;BX = buffa + dptr
+        ADD     BX,dskmap               ;BX = diskmap address
+        PUSH    CX                      ;save the 0/1 bit to set
+        MOV     CL,fcblen-dskmap+1      ;size of single byte diskmap+1
+scndm0:
+                                        ;loop for each diskmap entry
+        POP     DX                      ;recall bit parity
+        DEC     CL
+        JNZ     L_41
+        RET
+L_41:                                   ;all done scanning?
+                                        ;no, get next entry for scan
+        PUSH    DX                      ;replace bit parity
+        cmp     single,0
+        JZ      scndm1
+                                        ;single byte scan operation
+        PUSH    CX                      ;save counter
+        PUSH    BX                      ;save map address
+        MOV     CL,[bx]
+        MOV     CH,0                    ;CX=block#
+        jmps    scndm2
+scndm1:
+                                        ;double byte scan operation
+        DEC     CL                      ;count for double byte
+        PUSH    CX                      ;save counter
+        MOV     cx,[bx]                 ;CX=block
+        INC     BX
+        PUSH    BX                      ;save map address
+scndm2:
+                                        ;arrive here with CX=block#,
+                                        ;DL= 0/1
+        OR      cx,cx                   ;skip if = 0000
+        JZ      scan3
+        MOV     BX,maxall               ;check invalid index
+        cmp     bx,cx
+        JNAE    L_42
+        CALL    setallocbit
+L_42:                                   ;
+                                        ;bit set to 0/1
+scan3:                                  ;
+        POP     BX
+        INC     BX                      ;to next bit position
+        POP     CX                      ;recall counter
+        jmps    scndm0                  ;for another item
+;
+initialize:
+        ;initialize the current disk
+        ;lret = false ;set to true if $ file exists
+        ;compute the length of the allocation vector - 2
+        MOV     BX,maxall
+        MOV     CL,3                    ;perform maxall/8
+        shr     bx,cl
+        INC     BX
+        mov     cx,bx
+        MOV     BX,alloca               ;base of allocation vector
+                                        ;fill the allocation vector
+                                        ;with zeros
+init0:
+        MOV     b[bx],0
+        INC     BX                      ;alloc(i)=0
+        loop    init0
+                                        ;set the reserved space for
+                                        ;the directory
+        MOV     DX,dirblk
+        MOV     BX,alloca               ;BX=.alloc()
+        MOV     [bx],dx                 ;sets reserved directory blks
+                                        ;allocation vector initialized
+        CALL    home                    ;home disk
+                                        ;cdrmax = 3 (scans at least
+                                        ;one directory record)
+        MOV     BX,cdrmaxa
+        mov     w[bx],3
+                                        ;cdrmax = 0000
+        CALL    setenddir               ;dcnt = enddir
+                                        ;read directory entries and
+                                        ;check for allocated storage
+init2:
+        MOV     CL,true
+        CALL    rddir
+        CALL    endofdir
+        jz      ret8b                   ;rz
+                                        ;not end of directory,
+                                        ;valid entry ?
+        CALL    getdptra                ;BX = buffa + dptr
+        cmp     b[bx],empty
+        JZ      init2                   ;go get another item
+                                        ;not empty,user code the same?
+        MOV     AL,usrcode
+        CMP     AL,[bx]
+        JNZ     pdollar
+                                        ;same user code,
+                                        ;check for '$' submit
+        INC     BX
+        MOV     AL,[bx]                 ;first character
+        SUB     AL,'$'                  ;dollar file?
+        JNZ     pdollar
+                                        ;$ file found, mark in lret
+        DEC     AL
+        MOV     lret,al                 ;lret = 255
+pdollar:
+                                        ;now scan the disk map for
+                                        ;allocated blocks
+        MOV     CL,1                    ;set to allocated
+        CALL    scndm
+        CALL    setcdr                  ;set cdrmax to dcnt
+        jmps    init2                   ;for another entry
+;
+cpydirloc:
+        ;copy directory location to lret following
+        ;delete, rename, ... ops
+        MOV     AL,dirloc
+        JMP     staret
+;       ret
+;
+compext:
+        ;compare extent# in AL with that in CL, return nonzero
+        ;if they do not match
+        PUSH    CX                      ;save CL's original value
+        MOV     ch,extmsk
+        NOT     ch
+                                        ;CH has negated form of
+                                        ;extent mask
+        and     cl,ch                   ;low bits removed from CL
+        AND     AL,CH                   ;low bits removed from AL
+        SUB     AL,CL
+        AND     AL,maxext               ;set flags
+        POP     CX                      ;restore original values
+ret8b:  RET
+;
+srch:
+                                        ;search for directory element
+                                        ;of lenght
+        MOV     dirloc,0ffh             ;changed if actually found
+        MOV     srchl,cl                ;searchl = CL
+        MOV     BX,info
+        MOV     srcha,BX                ;searcha = info
+        CALL    setenddir               ;dcnt = enddir
+        CALL    home                    ;to start at the beginning
+                                        ;(drop through to searchn)                      ;
+;
+srchn:
+        ;search for the next directory element, assuming
+        ;a previous call on search which sets searcha and searchhl
+        MOV     CL,false
+        CALL    rddir                   ;read next dir element
+        CALL    endofdir
+        jz      srchfin
+                                        ;skip to end if so
+                                        ;not end of directory,
+                                        ;scan for match
+        MOV     dx,srcha                ;DX=beginning of user fcb
+        MOV     SI,DX
+        LODS    al                      ;first character
+        CMP     AL,empty                ;keep scanning if empty
+        JZ      srchnext
+                                        ;not empty, may be end of
+                                        ;logical directory
+        PUSH    DX                      ;save search address
+        CALL    compcdr                 ;past logical end?
+        POP     DX                      ;recall address
+        jnb     srchfin
+                                        ;artificial stop
+srchnext:
+        CALL    getdptra                ;BX = buffa+dptr
+        MOV     AL,srchl
+        MOV     CL,AL                   ;length of search to CL
+        MOV     CH,0                    ;CH counts up, CL counts down
+srchloop:
+        or      cl,cl
+        JZ      endsearch
+        MOV     SI,DX
+        LODS    al
+        CMP     AL,'?'
+        JZ      srchok                  ;? matches all
+                                        ;scan next character if not
+                                        ;ubytes
+        CMP     ch,ubytes
+        JZ      srchok
+                                        ;not the ubytes field,
+                                        ;extent field
+        CMP     ch,extnum               ;may be extent field
+        MOV     SI,DX
+        LODS    al                      ;fcb character
+        JZ      srchext                 ;skip to search extent
+        SUB     AL,[bx]
+        AND     AL,7fh                  ;mask-out flags/extent modulus
+        jnz     srchn
+        jmps    srchok                  ;matched character
+srchext:
+                                        ;A has fcb character
+                                        ;attempt an extent # match
+        PUSH    CX                      ;save counters
+        MOV     CL,[bx]                 ;directory character to c
+        CALL    compext                 ;compare user/dir char
+        POP     CX                      ;recall counters
+        jnz     srchn                   ;skip if no match
+srchok:
+                                        ;current character matches
+        INC     DX
+        INC     BX
+        INC     CH
+        DEC     CL
+        jmps    srchloop
+endsearch:
+        ;entire name matches, return dir position
+        MOV     AL,ldcnt
+        AND     AL,dskmsk
+        MOV     lret,al
+                                        ;lret = low(dcnt) and 11b
+        LEA     BX,dirloc
+        MOV     AL,[bx]
+        RCL     AL,1
+        jae     ret9                    ;rnc
+                                        ;yes, change it to 0 to
+                                        ;mark as found
+        XOR     AL,AL
+        MOV     [bx],al                 ;dirloc=0
+ret9:   RET
+srchfin:
+        ;end of directory, or empty name
+        CALL    setenddir               ;may be artifical end
+        MOV     AL,255
+        JMP     staret
+;
+;
+delet:
+        ;delete the currently addressed file
+        CALL    checkwrite              ;write protected?
+        MOV     CL,extnum
+        CALL    srch                    ;search through file type
+delet0:
+                                        ;loop while directory matches
+        CALL    endofdir
+        jz      ret9
+                                        ;set each non zero disk map
+                                        ;entry to 0
+                                        ;in the allocation vector
+                                        ;may be r/o file
+        CALL    ckrodir                 ;ro disk error if found
+        CALL    getdptra                ;BX=.buff(dptr)
+        MOV     b[bx],empty
+        MOV     CL,0
+        CALL    scndm                   ;alloc elts set to 0
+        CALL    wrdir                   ;write the directory
+        CALL    srchn                   ;to next element
+        jmps    delet0                  ;for another record
+;
+getblock:
+        ;given allocation vector position CX, find the zero bit
+        ;closest to this position by searching left and right.
+        ;if found, set the bit to 1 and return the bit position
+        ;in BX.  if not found (i.e., we pass 0 on the left, or
+        ;maxall on the right), return 0000 in BX
+;
+        MOV     dx,cx                   ;copy start pos. to DX
+lefttst:
+        or      cx,cx
+        JZ      righttst                ;skip if left=0000
+                                        ;left not at position zero,
+                                        ;bit zero ?
+        DEC     CX
+        PUSH    DX
+        PUSH    CX                      ;left,right pushed
+        CALL    getallocbit
+        RCR     AL,1
+        JAE     rblok                   ;return block number if zero
+                                        ;bit is one, so try the right
+        POP     CX
+        POP     DX                      ;left, right restored
+righttst:
+        cmp     dx,maxall               ;value of maximum allocation#
+        JAE     rblok0                  ;return block 0000 if so
+        INC     DX
+        PUSH    CX
+        PUSH    DX                      ;left, right pushed
+        MOV     cx,dx                   ;ready right for call
+        CALL    getallocbit
+        RCR     AL,1
+        JAE     rblok                   ;return block number if zero
+        POP     DX
+        POP     CX                      ;restore left and right ptr
+        jmps    lefttst                 ;for another attempt
+rblok:
+        RCL     AL,1
+        INC     AL                      ;bit back into position
+                                        ;and set to 1
+                                        ;DL contains the number of
+                                        ;shifts required to reposition
+        CALL    rotr                    ;move bit back to position
+                                        ;and store
+        POP     BX
+        POP     DX                      ;BX returned value,
+                                        ;DX discarded
+        RET
+rblok0:
+                                        ;cannot find an available
+                                        ;bit, return 0000
+        or      cx,cx
+        jnz     lefttst
+        MOV     BX,0000h
+        RET
+;
+copyfcb:
+                                        ;copy the entire FCB
+        MOV     CL,0
+        MOV     DL,fcblen               ;start at 0, to fcblen-1
+                                        ;       jmp copydir                     ;
+;
+copydir:
+        ;copy fcb information starting
+        ;into the currently addressed directory entry
+        PUSH    DX                      ;save length for later
+        MOV     CH,0                    ;double index to CX
+        MOV     dx,info                 ;BX = source for data
+        ADD     dx,CX                   ;DX=.fcb(CL), source for copy
+        CALL    getdptra                ;BX=.buff(dptr), destination
+        POP     CX                      ;DX=source, BX=dest, C=length
+        CALL    move                    ;data moved
+seekcopy:
+        ;enter from close to seek and copy current element
+        CALL    seekdir                 ;to the directory element
+        JMP     wrdir                   ;write the directory element
+                                        ;ret
+;
+;
+rename:
+        ;rename the file described by the first half of
+        ;the currently addressed file control block. the
+        ;new name is contained in the last half of the
+        ;currently addressed file conrol block. the file
+        ;name and type are changed, but the reel number
+        ;is ignored.  the user number is identical.
+;
+        CALL    checkwrite              ;may be write protected
+                                        ;search up to the extent field
+        MOV     CL,extnum
+        CALL    srch
+                                        ;copy position 0
+        MOV     BX,info
+        MOV     AL,[bx]                 ;BX=.fcb(0), A=fcb(0)
+        ADD     BX,dskmap               ;bx=.fcb(diskmap)
+        MOV     [bx],al                 ;fcb(dskmap)=fcb(0)
+                                        ;assume the same disk
+                                        ;for new named file
+renam0:
+        CALL    endofdir
+        JNZ     L_51
+ret10:  RET
+L_51:                                   ;stop at end of dir
+                                        ;not end of directory,
+                                        ;rename next element
+        CALL    ckrodir                 ;may be read-only file
+        MOV     CL,dskmap
+        MOV     DL,extnum
+        CALL    copydir
+                                        ;element renamed, move to next
+        CALL    srchn
+        jmps    renam0
+;
+indicators:
+        ;set file indicators for current fcb
+        MOV     CL,extnum
+        CALL    srch                    ;through file type
+indic0:
+        CALL    endofdir
+        jz      ret10                   ;stop at end of dir
+                                        ;not end of directory,
+                                        ;continue to change
+        MOV     CL,0
+        MOV     DL,extnum               ;copy name
+        CALL    copydir
+        CALL    srchn
+        jmps    indic0
+;
+open:
+        ;search for the directory entry, copy to FCB
+        MOV     CL,namlen
+        CALL    srch
+        CALL    endofdir
+        jz      ret10                   ;return with lret=255 if end
+                                        ;not end of directory,copy fcb
+opencopy:
+                                        ;(referenced below to copy fcb
+        CALL    getexta
+
+        PUSH    AX
+        PUSH    BX                      ;save extent#
+        CALL    getdptra
+        XCHG    BX,DX                   ;DX = .buff(dptr)
+        MOV     BX,info                 ;BX=.fcb(0)
+        MOV     CL,nxtrec               ;length of move operation
+        PUSH    DX                      ;save .buff(dptr)
+        CALL    move                    ;from .buff(dptr) to .fcb(0)
+                                        ;note that entire fcb is
+                                        ;copied, including indicators
+        CALL    setfwf                  ;sets file write flag
+        POP     DX
+        MOV     BX,extnum
+        ADD     BX,DX                   ;bx=.buff(dptr+extnum)
+        mov     cl,[bx]
+
+        MOV     BX,reccnt
+        ADD     BX,DX
+        mov     ch,[bx]
+
+        POP     BX
+        POP     AX
+        MOV     [bx],al                 ;restore extent number
+;
+        ;BX = .user extent#, CH = dir rec cnt, CL = dir extent#
+        ;if user ext < dir ext then user := 128 records
+        ;if user ext = dir ext then user := dir records
+        ;if user ext > dir ext then user := 0 records
+;
+        CMP     cl,[bx]
+        MOV     AL,CH                   ;ready dir reccnt
+        JZ      openrcnt                ;if same, user gets dir reccnt
+        MOV     AL,0
+        JB      openrcnt                ;user is larger
+        MOV     AL,128                  ;directory is larger
+openrcnt:                               ;A has record count to fill
+        MOV     BX,info
+        MOV     DX,reccnt
+        ADD     BX,DX
+        MOV     [bx],al
+ret11:  RET
+;
+mergezero:
+                                        ;BX = .fcb1(i), DX = .fcb2(i),
+                                        ;if fcb1(i) = 0
+                                        ;then fcb1(i) := fcb2(i)
+        cmp     w[bx],0
+        jnz     ret11                   ;rnz
+        MOV     SI,DX
+        LODS    ax
+        mov     [bx],ax
+ret12:  RET
+;
+close:
+        ;locate the directory element and re-write it
+        XOR     AX,AX
+        MOV     lret,al
+        MOV     dcnt,ax
+        CALL    nowrite
+        jnz     ret12                   ;skip close if r/o disk
+                                        ;check file write flag -
+                                        ;0 indicates written
+        CALL    getmodnum               ;fcb(modnum) in A
+        AND     AL,fwfmsk
+        jnz     ret12                   ;return if bit remains set
+        MOV     CL,namlen
+        CALL    srch                    ;locate file
+        CALL    endofdir
+        jz      ret12                   ;return if not found
+                                        ;merge the disk map at info
+        MOV     CX,dskmap
+        CALL    getdptra
+        ADD     BX,CX
+        XCHG    BX,DX                   ;DX is .buff(dptr+16)
+        MOV     BX,info
+        ADD     BX,CX                   ;dx=.buff(dptr+16),
+                                        ;bx=.fcb(16)
+        MOV     CL,(fcblen-dskmap)      ;length of single byte dm
+merge0:
+        cmp     single,0
+        JZ      merged                  ;skip to double
+;
+        ;this is a single byte map
+        ;if fcb(i) = 0 then fcb(i) = buff(i)
+        ;if buff(i) = 0 then buff(i) = fcb(i)
+        ;if fcb(i) <> buff(i) then error
+;
+        MOV     AL,[bx]
+        OR      AL,AL
+        MOV     SI,DX
+        LODS    al
+        JNZ     fcbnzero
+                                        ;fcb(i) = 0
+        MOV     [bx],al                 ;fcb(i) = buff(i)
+fcbnzero:
+        OR      AL,AL
+        JNZ     buffnzero
+                                        ;buff(i) = 0
+        MOV     AL,[bx]
+        MOV     DI,DX
+        stos    al                      ;buff(i)=fcb(i)
+buffnzero:
+        CMP     AL,[bx]
+        jnz     mergerr                 ;fcb(i) = buff(i)?
+        jmps    dmset                   ;if merge ok
+merged:
+                                        ;this is a double byte merge
+        CALL    mergezero               ;buff = fcb if buff 0000
+        XCHG    BX,DX
+        CALL    mergezero
+        XCHG    BX,DX                   ;fcb = buff if fcb 0000
+                                        ;they should be identical
+                                        ;at this point
+        MOV     SI,DX
+        mov     ax,[si]
+        cmp     ax,[bx]
+        jnz     mergerr
+        inc     dx
+        inc     bx
+                                        ;merge ok for this pair
+        DEC     CL                      ;extra count for double byte
+dmset:
+        INC     DX
+        INC     BX
+        DEC     CL
+        JNZ     merge0                  ;for more
+                                        ;end of disk map merge,
+                                        ;check record count
+                                        ;DX = .buff(dptr)+32,
+                                        ;BX = .fcb(32)
+        MOV     CX,-(fcblen-extnum)
+        ADD     BX,CX
+        XCHG    BX,DX
+        ADD     BX,CX
+                                        ;DX = .fcb(extnum),
+                                        ;BX = .buff(dptr+extnum)
+        MOV     SI,DX
+        LODS    al                      ;current user extent number
+                                        ;if fcb(ext) >= buff(fcb) then
+                                        ;buff(ext) := fcb(ext),
+                                        ;buff(rec) := fcb(rec)
+        CMP     AL,[bx]
+        JB      endmerge
+                                        ;fcb extent number >=
+                                        ;dir extent number
+        MOV     [bx],al                 ;buff(ext) = fcb(ext)
+                                        ;update dir. rec count field
+        MOV     CX,(reccnt-extnum)
+        ADD     BX,CX
+        XCHG    BX,DX
+        ADD     BX,CX
+                                        ;DX=.buff(reccnt),
+                                        ;BX=.fcb(reccnt)
+        MOV     AL,[bx]
+        MOV     DI,DX
+        stos    al                      ;buff(reccnt)=fcb(reccnt)
+endmerge:
+        MOV     fcbcopied,true          ;mark as copied
+        JMP     seekcopy                ;ok to "wrdir" here -
+                                        ;1.4 compatible
+                                        ; ret
+mergerr:
+                                        ;elements did not merge ok
+        dec     lret                    ;=255 non zero flag set
+ret13:  RET
+;
+make:
+        ;create a new file by creating a directory entry
+                                        ;then opening the file
+        CALL    checkwrite              ;may be write protected
+        push    info
+        MOV     info,offset efcb        ;info = .empty
+        MOV     CL,1
+        CALL    srch                    ;length 1 match on empty entry
+        CALL    endofdir                ;zero flag set if no space
+        pop     info                    ;recall word ptr info address
+        jz      ret13                   ;return with error condition
+                                        ;255 if not found
+        XCHG    BX,DX                   ;DX = word ptr info address
+                                        ;clear the remainder of fcb
+        MOV     BX,namlen
+        ADD     BX,DX                   ;bx=.fcb(namlen)
+        MOV     CL,fcblen-namlen        ;number of bytes to fill
+        XOR     AL,AL                   ;clear AL for fill
+make0:
+        MOV     [bx],al
+        INC     BX
+        DEC     CL
+        JNZ     make0
+        MOV     BX,ubytes
+        ADD     BX,DX   ;bx=.fcb(ubytes)
+        MOV     [bx],al                 ;fcb(ubytes) = 0
+        CALL    setcdr                  ;may have extended dir
+                                        ;now copy entry to dir
+        CALL    copyfcb
+                                        ;set file write flag to "1"
+        JMP     setfwf
+                                        ;ret
+;
+openreel:
+        ;close the current extent, and open the next one
+        ;if possible.  RMF is true if in read mode.
+        XOR     AL,AL
+        MOV     fcbcopied,AL            ;set true if actually copied
+        CALL    close                   ;close current extent
+                                        ;lret remains at enddir
+                                        ;if we cannot open next ext
+        CALL    endofdir
+        jz      ret13                   ;return if end
+                                        ;increment extent number
+        MOV     BX,info
+        ADD     BX,extnum               ;BX=.fcb(extnum)
+        MOV     AL,[bx]
+        INC     AL
+        AND     AL,maxext
+        MOV     [bx],al                 ;fcb(extnum)=++1
+        JZ      openmod                 ;move to next module if 0
+                                        ;may be in same extent group
+        MOV     CH,AL
+        MOV     AL,extmsk
+        AND     AL,CH
+                                        ;if 0, then not in same group
+        and     al,fcbcopied            ;true if fcb was copied to dir
+                                        ;puts 0 in AL if not written
+        JZ      openr0                  ;go to next physical extent
+                                        ;result is non zero,
+                                        ;so we must be in same extent
+        jmps    openr1                  ;to copy fcb info
+openmod:
+        ;extent number overflow, go to next module
+        ADD     BX,(modnum-extnum)      ;bx=.fcb(modnum)
+        INC     b[bx]                   ;fcb(modnum)=++1
+                                        ;module number incremented,
+                                        ;check for overflow
+        MOV     AL,[bx]
+        AND     AL,maxmod               ;mask high order bits
+        JZ      openerr                 ;cannot overflow to 0
+                                        ;otherwise, ok to continue
+                                        ;with new module
+openr0:
+        MOV     CL,namlen
+        CALL    srch                    ;next extent found?
+        CALL    endofdir
+        JNZ     openr1
+                                        ;end of file encountered
+        MOV     AL,rmf
+        INC     AL                      ;0ffh becomes 00 if read
+        JZ      openerr                 ;sets lret = 1
+                                        ;try to extend current file
+        CALL    make
+                                        ;cannot be end of directory
+        CALL    endofdir
+        JZ      openerr                 ;with lret = 1
+        jmps    openr2
+openr1:
+                                        ;not end of file, open
+        CALL    opencopy
+openr2:
+        CALL    getfcb                  ;set parameters
+        XOR     AL,AL
+        JMP     staret                  ;lret = 0
+                                        ; ret
+openerr:
+                                        ;cannot move to next extent
+                                        ;of this file
+        CALL    setlret1                ;lret = 1
+        JMP     setfwf                  ;ensure that it will not
+                                        ;be closed
+                                        ;ret
+;
+;*************** end BDOS file system part 2 ***************
+end
+

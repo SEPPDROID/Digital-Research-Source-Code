@@ -1,0 +1,644 @@
+********************************************************************************
+                                    z80em86
+
+               A Z80 emulator coded in Intel 86 assembly language
+
+                      Copyright (C) 1992-2009 Stewart Kay
+
+For contact details please see the 'Contact' section at the end of this file.
+********************************************************************************
+
+Distribution License
+====================
+See license.txt in this distribution.
+
+Overview
+========
+z80em86 is a Z80 CPU emulator with hardware emulation coded entirely in
+Intel 86 assembly language and designed to run under MSDOS.  The emulator
+will also run under Windows 98/Me/2000/XP (Vista/W7 not tried) as a 16 bit
+application and under DosEmu on Linux systems.
+
+The coding for this Z80 emulator started sometime back in 1992 and was
+mainly complete by 1993 with some further minor changes made in 1995.  Other
+changes have been made recently to allow the program to work under Windows
+2000 as a 16 bit application.  The software was never released and is now
+being released for the first time under the GPL.
+
+The emulator does not try to be fancy but does support a basic DOS Window
+interface system and supports hardware emulation allowing Z80 operating
+systems to be coded for it.
+
+The idea to write the emulator came to surface when I purchased an IBM
+compatible i386 machine and wanted to learn 8086 Assembly language so I
+decided that coding up a Z80 emulator to run under DOS would be an
+interesting and educational exercise.  The goal was to produce a Z80
+emulator to run as fast as possible and to emulate the Z80 documented
+instruction set.
+
+The emulator as it stands also supports some generic hardware emulation
+functions that makes it possible to boot and run a Z80 operating system. 
+The emulator can boot from a floppy disk or a HDD disk image.
+
+The entire memory allocated to z80em86 by DOS on start-up is freed and the
+memory re-allocated. Two banks of 64K each are allocated for use as system
+banks allowing banked operating systems to be implemented.  16K is allocated
+to a DOS window system and the remainder is allocated in 16K blocks usable
+by a Z80 operating system.  Typically these extra blocks can be used to
+implement a RAM disk.
+
+A fully implemented CP/M 3 banked and non banked system with support
+utilities is also available to be used with the emulator.  This is not
+supplied with z80em86 but will be made available elsewhere.  See 'Z80
+Operating systems' section near the end of this document.
+
+A slightly modified CP/M program 'zexdoc.com' has been used for testing. 
+See 'Tesing z80em86' section below.
+
+The software is well organised and broken up into module groups as defined
+in the Z80 CPU documentation.
+
+The following is a list of ideas for possible future development:
+
+1. Convert to 32 bit assembly language.
+2. Add cycle counting for each opcode.
+3. Add optional memory and IO handler functions.
+4. Add interrupt support.
+5. Add undocumented Z80 instructions and flags.
+6. Provide a build option to compile without hardware emulation support so
+   that it just emulates Z80 code and provide a 'C' wrapper.
+7. Add multi processor support.
+
+You can get the emulator package(s) from here:
+
+http://www.cpm.z80.de/source.html
+http://www.gaby.de/z80/z80emu.htm
+
+RUNNING Z80EMU86
+================
+
+Starting
+--------
+The emulator may be started with some options on the command line.  The user
+may optionally specify if a floppy disk 'A' or 'B' is to be booted from
+instead of a HDD disk image.
+
+Boot from floppy drive A:
+>z80em86 -a
+
+Boot from floppy drive B:
+>z80em86 -b
+
+If no drive options are specified the emulator will check for a HDD raw disk
+image file (z80hdd.dsk) or if that does not exist prompt the user to insert
+a floppy disk into drive 'A' to boot from.
+
+The emulator will attempt to load the first sector from side #0, track #0
+from the HDD image or floppy disk into memory at address 80 hex in the Z80
+memory map.  The PC register will be set to address 80 hex and the SP
+register to address FFFF hex upon execution.
+
+The Z80 emulator now executes the Z80 code at address 80 hex which most
+likely contains some sort of boot strap loader for loading an operating
+system into memory.
+
+In addition to the optional floppy drive parameter a second parameter can be
+passed that a Z80 system can make use of.  One of the support programs for
+the CP/M 3 system that runs under the Z80 emulator makes use of this
+parameter allowing a submit file or a CP/M 3 command to be passed.
+
+Interrupting emulation
+----------------------
+As the emulator is running, execution can be interrupted by pressing the
+CTRL+ALT+I keys to bring up a DOS Window of options.  These allow the
+emulator to be Reset (R), Exit to DOS (E) or Continue (C).  This provides a
+convenient method to pause the emulator then resuming by selecting Continue.
+
+DOS critical error handler
+--------------------------
+Emulation employs a DOS critical error handler that will display a DOS
+window message if any critical error occurs during emulation.
+
+Z80 CPU emulation
+=================
+Emulation of all Zilog documented instructions is supported except for I/O,
+interrupt and related instructions.  A DOS Window message will report any
+non emulated instruction.
+
+Handling of some Z80 instructions
+---------------------------------
+IM 0    : Interrupt mode #0, the emulation of this code stops the emulator
+          and prompts the user to reset the Z80 or exit to DOS.
+IM 1    : Interrupt mode #1, same action as IM 0
+IM 2    : Interrupt mode #2, same action as IM 0
+
+DI, EI  : Disable/Enable Interrupts, these instructions only affect the Z80
+          IFF flags. These have no affect on the host system's interrupts.
+
+HALT    : Halt processing, the halt instruction halts the emulator and
+          alerts the user that the HALT instruction was executed and then
+          prompts the user to reboot the CP/M system.
+
+IN, OUT : Input/Output port, all input/output (and block) instructions are
+          ignored as these are hardware dependent.  The emulator will stop
+          and alert the user that an IN/OUT instruction was executed and
+          then prompt the user to reboot the CP/M system.
+
+RETI    : Execution is halted.
+RETN    : Execution is halted.
+
+LD A,I  : Emulated but does nothing.
+LD I,A  : Emulated but does nothing.
+LD A,R  : Emulated but does nothing.
+LD R,A  : Emulated but does nothing.
+
+Z80 and 8086 register/memory relationships
+------------------------------------------
+Z80 Register    8086 Register/(Memory)
+A               AL
+B               CH
+C               CL
+D               DH
+E               DL
+H               BH
+L               BL
+I               (Z80I)
+R               (Z80R)
+AF              AL + SAHF
+BC              CX
+DE              DX
+HL              BX
+PC              BP
+SP              (Z80SP)
+IX              (Z80IX)
+IY              (Z80IY)
+AF'             (Z80AF)
+BC'             (Z80BC)
+DE'             (Z80DE)
+HL'             (Z80HL)
+
+Variable        Bits            Description
+FlagN           8               Emulates the Z80 N flag
+Z80SP           16              Z80 stack pointer storage
+Z80IX           16              Z80 X index register storage
+Z80IY           16              Z80 Y index register storage
+Z80BC           16              Z80 2nd BC register storage
+Z80DE           16              Z80 2nd DE register storage
+Z80HL           16              Z80 2nd HL register storage
+
+Segments
+reg ES (extra segment addresses the Z80 memory map segment)
+reg DS (data segment addresses tables and data)
+reg CS (code segment is the emulator code segment)
+reg SS (stack segment is the stack pointer segment)
+
+Hardware emulation
+==================
+The emulator supports emulation of hardware and other host system calls by
+making use of one of the Z80's OUT instructions:
+
+OUT (Fn),A
+
+Where 'Fn' is the required function and allows up to 256 functions at the
+base level.  As the emulator was originally designed not to emulate I/O
+opcodes this provided a convenient method to access emulated hardware.
+
+The functions are contained in the 'T7' table found in the 'table.asm'
+assembly file.
+
+Functions 00-1FH - Keyboard
+---------------------------
+Fn(H)   Table name      Description
+00      kbd1in          Initialise kbd1
+01      kbd1st          kbd1 status
+                          Return: A(AL)=Keyboard status (not ready=0)
+02      kbd1ip          kbd1 input
+                          Return: A(AL)=Keyboard character
+10      kbd2in          Initialise kbd2 (STDIN)
+11      kbd2st          kbd2 status (STDIN)
+                          Return: A(AL)=STDIN status (not ready=0)
+12      kbd2in          kbd2 input (STDIN)
+                          Return: A(AL)=STDIN character
+
+Functions 20-3FH - CRT
+----------------------
+The CRT emulates a Televideo 920/ADM-3A Video Terminal on crt1 and provides
+STDOUT on crt2 using the DOS video service.
+
+Fn(H)   Table name      Description
+20      crt1in          CRT #1 Initialise
+21      crt1st          CRT #1 ready status
+                          Return: A(AL)=output status
+22      crt1op          CRT #1 output character
+                          Pass: C(CL)=output character
+30      crt2in          CRT #2 Initialise (STDOUT)
+31      crt2st          CRT #2 ready status (STDOUT)
+                          Return: A(AL)=output status
+32      crt2on          CRT #1 output character (STDOUT)
+                          Pass: C(CL)=output character
+
+Functions 40-4FH - LPT
+----------------------
+Fn(H)   Table name      Description
+40      lptini          Initialise LPT port
+                          Pass: DE(DX)=LPT port (0-3)
+41      lptsta          LPT ready status
+                          Pass: DE(DX)=LPT port (0-3)
+                          Return: A(AL)=output status (not ready=0)
+42      lptout          LPT output character
+                          Pass: DE(DX)=LPT port (0-3)
+                                 C(CL)=output character
+
+Functions 50-5FH - COMMUNICATIONS
+---------------------------------
+Fn(H)   Table name      Description
+50      comini          Initialise com port
+                          Pass: DE(DX)=Coms port (0-3)
+                          A(AL)=baud/parity/data bits/stop bits
+51      comist          Input status
+                          Pass: DE(DX)=Coms port (0-3)
+                          Return: input status in reg A(AL)
+52      cominp          Input byte
+                          Pass: DE(DX)=Coms port (0-3)
+                          Return: input character in reg A(AL)
+53      comost          Output status
+                          Pass: DE(DX)=Coms port (0-3)
+                          Return: output status in reg A(AL)
+54      comout          Output byte
+                          Pass: DE(DX)=Coms port (0-3), C(CL)=output character
+
+Functions 60-6FH - TIME/DATE
+----------------------------
+Fn(H)   Table name      Description
+60      gettme          Get time
+                          Pass: reg HL(BX) = Z80 address to return results
+                          Return: mem[HL(BX)+0] = hours in BCD
+                                  mem[HL(BX)+1] = minutes in BCD
+                                  mem[HL(BX)+2] = seconds in BCD
+61      settme          Set time
+                          Pass: reg HL(BX) = Z80 address of parameters
+                                mem[HL(BX)+0] = hours in BCD
+                                mem[HL(BX)+1] = minutes in BCD
+                                mem[HL(BX)+2] = seconds in BCD
+62      getdte          Get date
+                          Pass: reg HL(BX) = Z80 address to return result
+                          Return: mem[HL(BX)+0] = days since 31st December 1977
+63      setdte          Set date
+                          Pass: reg HL(BX) = Z80 address of parameter
+                          Return: mem[HL(BX)+0] = days since 31st December 1977
+
+Functions 80-8FH - DISK
+-----------------------
+Fn(H)   Table name      Description
+80      rdflop          Read floppy disk
+                          Pass: A(AL)=sector size code (0=128, 1=256, 2=512, 3=1024)
+                                B(CH)=track number
+                                C(CL)=sector number
+                                D(DH)=side select
+                                E(DL)=drive code (0=drive A, 1=drive B)
+                                HL(BX)=buffer address
+                          Return: A(AL)=0 if no errors, 1 if error
+81      wrflop          Write floppy disk
+                          Values same as 'rdflop'
+82      rdhard          Read hard disk image
+                          Pass: B(CH)=track number
+                                C(CL)=sector number
+                                E(DL)=drive code (2=drive C, 3=drive D etc)
+                                HL(BX)=buffer address
+                          Return: A(AL)=0 if no errors, 1 if error
+83      wrhard          Write hard disk image
+                          Values same as 'rdhard'
+84      GtBoot          Get boot drive
+                          Return: A(AL)=boot drive
+85      GtHard          Get hard disk drive
+                          Return: A(AL)=HDD drive or FFh if none
+86      FlHard          Flush HDD file buffer
+
+Functions 90-9FH - MEMORY BLOCKS
+--------------------------------
+Fn(H)   Table name      Description
+90      blkcnt          Get count of blocks available (1 block=16384 bytes)
+                          Return: A(AL)=number of blocks
+91      blkget          Get 128 bytes from block (1 record=128 bytes) from
+                        the current DMA bank. (see bnkdma function)
+                          Pass:  C(CL)=block number
+                                 D(DH)=starting record number
+                                 E(DL)=number of records
+                                HL(BX)=Z80 destination address
+92      blkput          Put 128 bytes in block (1 record=128 bytes) for
+                        the current DMA bank. (see bnkdma function)
+                          Pass:  C(CL)=block number
+                                 D(DH)=starting record number
+                                 E(DL)=number of records
+                                HL(BX)=Z80 source address
+93      blkfil          Fill 128 bytes in block (1 record=128 bytes) for
+                        the current DMA bank. (see bnkdma function)
+                          Pass:  A(AL)=fill value
+                                 C(CL)=block number
+                                 D(DH)=starting record number
+                                 E(DL)=number of records
+
+Functions A0-BFH - INTERRUPT SERVICES
+-------------------------------------
+Fn(H)   Table name      Description
+A0      GtZseg          Return Z80 map segment address
+                          Pass: HL(BX)=Z80 address to place result
+A1      intfnc          Call a ROM BIOS/DOS Interrupt service
+                          Pass: BC(CX)=0AA55h
+                                DE(DX)=055AAh
+                                HL(BX)=base address of register table
+                                 A(AL)=Interrupt
+B0      GetByt          Get byte from memory
+                          Pass: DE(DX)=segment
+                                HL(BX)=offset
+                          Return: A(AL)=byte
+B1      SetByt          Set byte in memory
+                          Pass: DE(DX)=segment
+                                HL(BX)=offset
+                                 A(AL)=byte
+
+Functions F0-F7H - BANKING
+--------------------------
+Fn(H)   Table name      Description
+F0      bnkuse          Set bank size to use
+                          Pass: BC(CX)=sets banking, size of bank #0, #1
+F1      bnksel          Select bank
+                          Pass: A(AL)=bank 0 or 1
+F2      bnkmve          Move memory in current bank or bank to bank
+                          Pass: HL(BX)=destination address
+                                DE(DX)=source address
+                                BC(CX)=amount to be moved
+F3      bnkdta          Set destination and source banks
+                          Pass: B(CH)=destination bank
+                                C(CL)=source bank
+F4      bnkdma          Set DMA bank #0 or #1
+                          Pass: A(AL)=DMA bank 0 or 1
+
+Functions F8-FFH - CONTROL
+--------------------------
+Fn(H)   Table name      Description
+F8      prmsta          Get parameter passed status
+                          Return: A(AL)=FFh if parameter passed
+F9      prmget          Get the parameters address
+                          Pass: HL(BX)=Z80 address to place result
+                          Return: Z80[HL+0]=parameter buffer data segment
+                                  Z80[HL+2]=parameter buffer offset
+FA      vidsta          Get the video on/off status
+                          Return: A(AL)=FFh if video is off
+FB      vidset          Set video on/off
+                          Pass: A(AL)=FFh turn video off
+FC      usrbyt          Get/Set a user byte (0-31)
+                          Pass:  C(CL)=0 to get, else set
+                                 A(AL)=byte to set (if set)
+                                HL(BX)=byte offset (0-31)
+                          Return: A(AL)=get byte (if get)
+FD      failed          Set boot strap failure
+FE      rstz80          Reset the Z80 emulator
+FF      extemu          Exit the Z80 emulator back to DOS
+
+SOURCE CODE
+===========
+The software was originally developed to be compiled with Turbo Pascal's
+TASM assembler and then linked with TLINK to produce an EXE binary under a
+DOS environment.  The original work has been converted to NASM (8086) format
+for future development work and can be developed under a Unix environment.
+
+The conversion process used the NOMYSO V4.0 MASM/TASM to NASM source
+converter available here:
+
+www.devoresoftware.com/nomyso
+
+The sources required some changes by hand afterwards.  Comparing of the
+original compiled/linked executable to that produced by NASM and TLINK/ALINK
+is not really possible as different opcodes for some instructions are used
+and optimising differences exist.  TASM (v3.2) does not appear to have
+anyway of turning optimisation off and there are other areas where the
+optimisation does not work consistently.
+
+z80em86 Source Files
+--------------------
+arith8.asm      8-bit Arithmetic and Logical Group
+arith16.asm     16-bit Arithmetic Group
+bit.asm         Bit Test Group
+call.asm        Call and Return Group
+control.asm     General Purpose Arithmetic and CPU Control Groups
+exchange.asm    Exchange, Block Transfer, Block Search Groups
+io.asm          Input and Output Group
+jump.asm        Jump Group
+load8.asm       8-bit Load Group
+load16.asm      16-bit Load Group
+res.asm         Bit Reset Group
+rotate.asm      Rotate and Shift Group
+set.asm         Bit Set Group
+
+insthand.asm    Instruction Handler for Extended Opcodes
+macros.asm      Macros
+table.asm       Z80 Opcodes and Function Interface tables
+
+function.asm    General function interface support for Z80 system code
+hardware.asm    Hardware interface support for Z80 system code
+main.asm        Main assembly module
+video.asm       Video function support for Z80 system code
+window.asm      Window and Screen Output support for error messages
+
+Utility Source Files
+--------------------
+z80hdd.pas	A Turbo Pascal program that can be used to create a 4MB
+                formatted HDD disk image.
+
+Code Execution
+--------------
+Code execution commences in 'main.asm' at '..start'
+
+Z80 Source Opcode Labels
+------------------------
+The labels used are 6 character maximum which was common at the time as it
+fitted neatly in the first tab column of 8 spaces.
+
+Label format for Z80 opcodes:
+
+ABC
+
+A - All labels that reference a Z80 instruction commence with 'Z_'
+B - The capital letters that follow is the mnemonic.
+C - operand associated with mnemonic as follows:-
+
+a=reg A
+b=reg B   bc=reg BC
+c=reg C
+d=reg D   de=reg DE
+e=reg E
+h=reg H   hl=reg HL   x=reg IX   y=reg IY   z=(HL)  w=(IX)  v=(IY)
+l=reg L
+f=reg F   sp=reg SP   n=$12      n=$1234    m=($1234)
+i=reg I
+r=reg R
+
+Tesing z80em86
+==============
+In recent times a CP/M program 'zexdoc.com' has been used for testing and
+debugging emulation. 'zexdoc.com' is the documented Z80 flags version of
+'zexall.com' but both versions test undocumented instructions.
+
+The 'zexdoc' source code was modified to disable tests where undocumented
+instructions were used as these caused the emulator to stop. 'zexdoc.com'
+passed all the tests for undocumented instructions.  The disabled tests may
+contain documented instructions and as such will not be tested.
+
+The source file (CPM.zip) came from here:
+http://mdfs.net/Software/Z80/Exerciser/
+
+The following tests were disabled as undocumented instructions are included
+in the tests.  Place a semicolon in front of these and recompile:
+
+alu8rx, incxh, incxl, incyh, incyl, ld8ixy, ld8rrx, rotxy, rotz80
+
+These all passed the test (no CRC errors):
+
+adc16, add16, add16x, add16y, alu8i, alu8r, alu8x, bitx, bitz80, cpd1, cpi1,
+daaop, inca, incb, incbc, incc, incd, incde, ince, inch, inchl, incix, inciy,
+incl, incm, incsp, incx, ld161, ld162, ld163, ld164, ld165, ld166, ld167,
+ld168, ld16im, ld16ix, ld8bd, ld8im, ld8imx, ld8ix1, ld8ix2, ld8ix3, ld8rr,
+lda, ldd1, ldd2, ldi1, ldi2, negop, rldop, rot8080, srz80, srzx, st8ix1,
+st8ix2, st8ix3, stabd
+
+Output from running the tests
+-----------------------------
+Execution times to complete the tests on various hardware/systems:
+
+* Athlon XP 1.8GHz (2200+) PC, W2000 Pro 'cmd' prompt: 55 seconds.
+* Athlon XP 1.8GHz (2200+) PC, W98 'Startup disk': 47 seconds.
+* Linux Athlon AMD64 dual core (3800+), 32 bit Linux and DosEmu: 227 seconds.
+
+Z80doc instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  OK
+aluop a,(<ix,iy>+1)...........  OK
+bit n,(<ix,iy>+1).............  OK
+bit n,<b,c,d,e,h,l,(hl),a>....  OK
+cpd<r>........................  OK
+cpi<r>........................  OK
+<daa,cpl,scf,ccf>.............  OK
+<inc,dec> a...................  OK
+<inc,dec> b...................  OK
+<inc,dec> bc..................  OK
+<inc,dec> c...................  OK
+<inc,dec> d...................  OK
+<inc,dec> de..................  OK
+<inc,dec> e...................  OK
+<inc,dec> h...................  OK
+<inc,dec> hl..................  OK
+<inc,dec> ix..................  OK
+<inc,dec> iy..................  OK
+<inc,dec> l...................  OK
+<inc,dec> (hl)................  OK
+<inc,dec> sp..................  OK
+<inc,dec> (<ix,iy>+1).........  OK
+ld <bc,de>,(nnnn).............  OK
+ld hl,(nnnn)..................  OK
+ld sp,(nnnn)..................  OK
+ld <ix,iy>,(nnnn).............  OK
+ld (nnnn),<bc,de>.............  OK
+ld (nnnn),hl..................  OK
+ld (nnnn),sp..................  OK
+ld (nnnn),<ix,iy>.............  OK
+ld <bc,de,hl,sp>,nnnn.........  OK
+ld <ix,iy>,nnnn...............  OK
+ld a,<(bc),(de)>..............  OK
+ld <b,c,d,e,h,l,(hl),a>,nn....  OK
+ld (<ix,iy>+1),nn.............  OK
+ld <b,c,d,e>,(<ix,iy>+1)......  OK
+ld <h,l>,(<ix,iy>+1)..........  OK
+ld a,(<ix,iy>+1)..............  OK
+ld <bcdehla>,<bcdehla>........  OK
+ld a,(nnnn) / ld (nnnn),a.....  OK
+ldd<r> (1)....................  OK
+ldd<r> (2)....................  OK
+ldi<r> (1)....................  OK
+ldi<r> (2)....................  OK
+neg...........................  OK
+<rrd,rld>.....................  OK
+<rlca,rrca,rla,rra>...........  OK
+<set,res> n,<bcdehl(hl)a>.....  OK
+<set,res> n,(<ix,iy>+1).......  OK
+ld (<ix,iy>+1),<b,c,d,e>......  OK
+ld (<ix,iy>+1),<h,l>..........  OK
+ld (<ix,iy>+1),a..............  OK
+ld (<bc,de>),a................  OK
+Tests complete
+
+Z80 Operating systems
+=====================
+This emulator project does not provide any sort of operating system.  It
+simply emulates a Z80 CPU and provides some hardware support that may be
+used by an operating system.
+
+The emulator on start-up will load a boot sector from a floppy disk or HDD
+disk image and execute the code loaded.  What code is loaded and run is
+determined by the user and what code is on the disk.
+
+I have coded a customised CP/M 3 BIOS and CP/M 3 support utilities that have
+been designed to run under this emulator.  The system may be booted in
+banked or non banked mode.  Further information about the system can be
+found in the CP/M 3 package.
+
+This README file should provide all the information needed for anyone to
+write other systems to be run under the emulator.
+
+The CP/M 3 system and support files are available as a single package from
+here:
+
+http://www.cpm.z80.de/source.html
+http://www.gaby.de/z80/z80emu.htm
+
+Links
+=====
+- The Unofficial CP/M Web site
+  http://www.cpm.z80.de
+
+- Walnut Creek CDROM,  contains a lot of CP/M stuff
+  http://z80cpu.eu/mirrors/oldcomputers.dyndns.org/cdrom/cpm
+
+- Other sites:
+  http://www.digitalresearch.biz/CPM.HTM
+  http://www.classiccmp.org/dunfield/
+  http://www.seasip.demon.co.uk/Unix/LibDsk/
+  http://www.seasip.demon.co.uk/Cpm/index.html
+  http://www.znode51.de/indexe.htm
+  http://www.z80.eu/cpmcomp.html
+
+Projects by this author
+=======================
+
+uBee512
+-------
+An emulator for the Microbee Z80 ROM, FDD and HDD based models.
+
+http://www.microbee-mspp.org.au/public_repository
+
+uBeeDisk
+--------
+A tool for converting disks/images from one to another with
+auto detection options for Microbee disks.
+
+http://www.microbee-mspp.org.au/public_repository
+
+z80em86
+-------
+A Z80 CPU emulator coded in Intel 86 assembly language.
+
+http://www.cpm.z80.de/source.html
+http://www.gaby.de/z80/z80emu.htm
+
+Contact
+=======
+If you have any new feature suggestions, bug reports, etc. then please send
+an email to: ubee512@gmail.com
+
+Please state which project your referring to.
+
+Stewart

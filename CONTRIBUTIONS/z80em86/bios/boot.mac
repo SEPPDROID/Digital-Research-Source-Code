@@ -1,0 +1,194 @@
+;**************************************************************************
+;*               CP/M 3 BIOS for Z80em86 Z80 CPU emulator                 *
+;*                                                                        *
+;*                         Boot loader module                             *
+;*                                                                        *
+;*                  Copyright (C) 1992-2009 Stewart Kay                   *
+;**************************************************************************
+;
+; ChangeLog (most recent entries are at top)
+; ------------------------------------------
+; v1.0.0 - 16 February 2009, S.J.Kay
+; - Prepare for public release.
+; - Change the sign-on message.
+; - Change COM2 to COM1 for the default auxiliary devices.
+;
+; v1.00 - 26 April 1995, S.J.Kay
+; - Undocumented changes.
+;
+; v0.00 - 1992, S.J.Kay
+; - Initial creation date.
+
+	.z80
+;
+	maclib	TPORTS.LIB
+	maclib	ASMTYPE.LIB
+;
+	public	?init, ?ldccp, ?rlccp, ?time
+;
+	extrn	@civec, @covec, @aivec, @aovec, @lovec, @date, @hour
+	extrn	?boot, ?pmsg, ?conin 
+;
+bdos	equ	5
+;
+; BDOS Function equates
+open	equ	15		;open file
+setdma	equ	26		;set direct memory access address
+user	equ	32		;set/get user code
+smulti	equ	44		;set multi I/O
+read	equ	20		;read file
+;
+; Character equates
+null	equ	 0		;null
+lf	equ	10		;line feed
+cr	equ	13		;carriage return
+cls	equ	26		;clear screen
+;
+	dseg			;banked memory
+;
+; Initial entry point for system startup.
+?init:	ld	hl,1000000000000000b
+	ld	(@covec),hl    	;assign CRT1 to @covec 
+	ld	hl,0010000000000000b
+	ld	(@civec),hl    	;assign KBD1 to @civec
+	ld	hl,0000000010000000b
+	ld	(@lovec),hl    	;assign LPT1 to @lovec
+	ld	hl,0000100000000000b
+	ld	(@aivec),hl	;assign COM1 to @aivec
+	ld	hl,0000100000000000b
+	ld	(@aovec),hl	;assign COM1 to @aovec
+	ld	hl,1		;set date to 1st January 1978
+	ld	(@date),hl
+	out	(gtboot),a	;get the boot drive in reg A
+	ld	hl,?boot	;load address of BIOS
+	ld	de,-0051h	;subtract value for BDOS boot drive value 
+	add	hl,de		;do the subtraction (DE is negative)
+	ld	(hl),a		;store the boot drive number
+	add	a,'A'		;make drive letter for error message
+	ld	(errdrv),a	;place drive letter in message
+	sub	'A' - 1		;drive number A=1, B=2, C=3 etc
+	ld	(ccpfcb),a	;put drive number in FCB for CCP.COM drive
+	ld	hl,sgnmsg	;sign-on message
+	jp	?pmsg		;print signon message
+;
+; get/set date and time
+?time:	push	hl		;must be saved
+	ld	hl,@hour
+	ld	a,c
+	or	a
+	jr	nz,setclk
+	out	(gettme),a	;read time from system clock
+	ld	hl,@date
+	out	(getdte),a	;read date from system clock
+	pop	hl
+	ret
+setclk:	out	(settme),a	;set time in system clock
+	ld	hl,@date
+	out	(setdte),a	;set date in system clock
+	pop	hl
+	ret
+;
+	cseg			;common memory
+;
+; load CCP.COM into the TPA and save image
+?ldccp:	xor	a
+	ld	(ccpext),a	;zero extent
+	ld	hl,0 
+	ld	(fcbnr),hl	;start at begining of file
+	ld	de,ccpfcb 
+	ld	c,open		;open file containing CCP
+	call	bdos
+	inc	a
+	jp	nz,openok	;if opened then no error
+	ld	hl,errmsg
+	call	?pmsg
+	call	?conin		;any key to try again
+	jp	?ldccp
+openok:	ld	de,0100h
+	ld	c,setdma	;start of TPA
+	call	bdos
+	ld	de,128
+	ld	c,smulti	;allow up to 16k bytes
+	call	bdos
+	ld	de,ccpfcb 
+	ld	c,read		;load CCP.COM
+	call	bdos
+	out	(blkcnt),a
+	or	a
+	ret	z
+if banked
+	ld	a,1		;bank #1 (TPA)
+	out	(bnkdma),a
+endif
+	ld	c,0		;starting block # in storage
+	ld	d,c		;starting position in block
+	ld	e,128		;number of 128 byte blocks to move
+	ld	hl,0100h	;source address
+	out	(blkput),a
+	ret
+;
+; reload CCP.COM image into the TPA
+?rlccp:	out	(flhard),a	;flushes Z80HDD file if it exists
+	out	(blkcnt),a
+	or	a
+	jr	z,?ldccp
+if banked
+	ld	a,1		;bank #1 (TPA)
+	out	(bnkdma),a
+endif
+	ld	c,0		;starting block # in storage
+	ld	d,c		;starting position in block
+	ld	e,128		;number of 128 byte blocks to move
+	ld	hl,0100h	;destination address
+	out	(blkget),a
+	ret
+;
+ccpfcb:	db	0
+	db	'CCP     COM'
+	db	0,0,0
+ccpext:	db	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+fcbnr:	db	0,0,0
+;
+errmsg:	db	cr, lf, lf, lf
+	db	'BDOS Error on '
+errdrv:	db	'X: CCP.COM not found'
+	db	cr, lf, lf
+	db	'Press any key to retry', null
+;
+		dseg			;banked memory
+;
+if banked
+sgnmsg:	db	cls, cr, lf
+	db	201
+	rept	55
+	db	205
+	endm
+	db	187, cr, lf
+
+	db	186
+	db	' CP/M v3.1 Banked System (v1.0.0) for z80em86 emulator '
+	db	186, cr, lf
+
+	db	186
+	rept	55
+	db	' '
+	endm
+	db	186, cr, lf
+
+	db	186
+	db	'      Custom BIOS, Copyright (C) 1992-2009 S.J.Kay     '
+	db	186, cr, lf
+
+	db	200
+	rept	55
+	db	205
+	endm
+	db	188, cr, lf, lf, null
+else
+sgnmsg:	db	cls, cr, lf
+	db	'CP/M Plus v3.1 Non-banked System (v1.0.0) for z80em86 emulator', cr, lf
+	db	'Custom BIOS, Copyright (C) 1992-2009 S.J.Kay'
+	db	cr, lf, lf, null
+endif
+;
+	end

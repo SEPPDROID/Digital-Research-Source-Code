@@ -1,0 +1,166 @@
+1File: INIT.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "icode.h"
+     9   #include "machine.h"
+    10   	/*cexpr operators*/
+    11   #define EOF		0
+    12   #define SUB		1
+    13   #define ADD		2
+    14   #define NOT		3
+    15   #define NEG		4
+    16   #define LPAREN	5
+    17   #define RPAREN	6
+    18   #define QMARK	7
+    19   #define COLON	8
+    20   #define OR		9
+    21   #define AND		10
+    22   #define XOR		11
+    23   #define EQUAL	12
+    24   #define NEQUAL	13
+    25   #define LESS	14
+    26   #define LSEQUAL	15
+    27   #define GREAT	16
+    28   #define GREQUAL	17
+    29   #define LSHIFT	18
+    30   #define RSHIFT	19
+    31   #define MULT	20
+    32   #define DIV		21
+    33   #define MOD		22
+    34   #define	COMPL	23
+    35   #define	CONST	24
+    36   #define	LASTOP	COMPL					/*up to here used by cexpr*/
+    37   #define	SQUOTE	25
+    38   #define	DQUOTE	26
+    39   #define	ANYC	27
+    40   #define	BADC	28
+    41   #define	COMMA	29
+    42   #define	NEWL	30
+    43   #define	POUND	31
+    44   #define	ALPHA	32
+    45   #define	DIGIT	33
+    46   #define	BSLASH	34
+    47   #define	WHITE	35
+    48   #define BUFSIZE	512
+    49   #define	LINESIZE	512
+    50   #define	ARG			-1
+    51   #define	NEWLABEL	-2
+    52   #define	LABEL		-3
+    53   #define	NOARGS		-4
+    54   #define	MAXARGS		60
+    55   #define	ARGBSIZE	1000
+    56   #define	TOKSIZE	300				/*BUG 4/20/82 was 128*/
+    57   #define	DEFSIZE	1024
+    58   #define PBSIZE	1000
+    59   #define	DEFINE	1
+1File: INIT.C                                                              Page       2
+    60   #define	UNDEF	2
+    61   #define	INCLUDE	3
+    62   #define	IFDEF	4
+    63   #define	IFNDEF	5
+    64   #define	ELSE	6
+    65   #define	ENDIF	7
+    66   #define	IF		8
+    67   #define	SKIP	0
+    68   #define	NOSKIP	1
+    69   #define	SOH		'\01'
+    70   #define	SSIZE	8
+    71   #define	HSIZE	517		/* 3.4 made prime */
+    72   #define	FSTACK	10
+    73    
+    74   #define TRUE	1
+    75   #define FALSE	0
+    76   #define NDEFS	20
+    77    
+    78   struct symbol {
+    79   	char s_name[SSIZE];
+    80   	char *s_def;
+    81   } symtab[HSIZE]=0;
+    82    
+    83   	/*buffered I/O structure*/
+    84   struct ibuf {
+    85   	int fd;
+    86   	int nc;
+    87   	char *bp;
+    88   	char buffer[BUFSIZE];
+    89   } outbuf=0;
+    90    
+    91   	/* command line define structure */
+    92   struct defstruc {
+    93   	char *ptr;
+    94   	char *value;
+    95   } defs[NDEFS]=0;
+    96    
+    97   struct stackstruc {	/* [vlh] */
+    98   	int ifd;
+    99   	char ifile[13];
+   100   	int lineno;
+   101   	struct ibuf inbuf;
+   102   } filestack[FSTACK]=0, *filep=0;	/* stack of incl files, ptr to... */
+   103   #ifdef BULLSHIT				/* Bullshit, bullshit, bullshit!!!*/
+   104   #ifdef VERSADOS
+   105   #define NONEST	1
+   106   #define NOFORKS	1
+   107   #endif
+   108    
+   109   #ifdef VMS
+   110   #define NONEST	1
+   111   #endif
+   112    
+   113   #ifdef NONEST
+   114   struct ibuf holdbuf=0;	/* alternate buffer, hold main file info */
+   115   #endif
+   116   #endif
+   117   int mfail=0;							/*macro error flag*/
+   118   int skip=0;							/*skipping current line*/
+1File: INIT.C                                                              Page       3
+   119   char *defap=0;						/*pointer to available define area*/
+   120   char *defp=0;							/*pointer to next avail define byte*/
+   121   int defcount=0;						/*bytes left in define area*/
+   122   int defused=0;						/*number of bytes used in define area*/
+   123   int defmax=0;							/*maximum define area used*/
+   124   int pflag=0;
+   125   int asflag=0;
+   126    
+   127   	/*line to output after macro substitution*/
+   128   char line[LINESIZE+2]=0;				/*line buffer*/
+   129   char *linep=0;						/*current line pointer*/
+   130   int loverflow=0;					/*line overflow flag*/
+   131   int lineno=0;
+   132    
+   133   	/*push back buffer*/
+   134   char pbbuf[PBSIZE]=0;					/*push back buffer*/
+   135   char *pbp=0;							/*push back pointer*/
+   136   int pbflag=0;							/*checks for recursive definition*/
+   137    
+   138    
+   139   char *lookup();
+   140   char *setend();
+   141   char *makecopy();
+   142   char *makecopy();
+   143   char *maketemp();
+   144   char *sbrk();
+   145   struct symbol *getsp();
+   146   #define STKLEN 64
+   147   int oprstk[STKLEN]=0;
+   148   int opnstk[STKLEN]=0;
+   149   int pristk[STKLEN]=0;
+   150   int *oprptr=0;
+   151   int *opnptr=0;
+   152   int *priptr=0;
+   153    
+   154   int nincl=0;
+   155   char *incl[10]=0;
+   156   char tmp[6]=0;
+   157   #define CSTKSIZE 20
+   158   char cstack[CSTKSIZE]=0;
+   159   char *cstkptr=0;
+   160   char inclname[TOKSIZE]=0;
+   161   int cvalue=0;
+   162   #define EXPSIZE 1024
+   163   int exprarea[EXPSIZE]=0;

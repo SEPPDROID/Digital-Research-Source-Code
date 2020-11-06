@@ -1,0 +1,1319 @@
+
+M	EQU	Byte Ptr 0[BX]
+;
+;
+;------------------------------------------------------------------
+;	Small-C  Run-time Library
+;
+;
+;	V3b	As of June 9, 1980 12pm (rj)
+;		   corrected cp to chp in @gets
+;		   changed lower case to hex constants in @fopen and fcb
+;	V4	As of June 26, 1980 12:15pm (gtf)
+;		   Changed all @'s and ?'s to "QZ" for ASM compatibility
+;	V4b	As of July 7, 1980 3:00 pm (gtf)
+;	   	   Changed putc() to test code returned by cput()
+;	V4c	As of July 9, 1980 9:15 pm (gtf)
+;		   Fixed bug in CPMIO which returned wrong error status.
+;		   Added PUTS() function
+;		   Un-hardwired I/O buffer count.
+;		   Made GETCHAR() print LF after reading CR.
+;		   Made GETCHAR() return -1 on EOF (=CTRL-Z)
+;		   Added EOL and LF equates, instead of magic numbers
+;	V4d	As of July 16, 1980  9:00 pm (gtf)
+;		   Added EXIT() function
+;------------------------------------------------------------------
+;
+; Runtime library initialization.  Set up default drive for CP/M.
+CCGO:	MOV	CL,QUERY		;get logged-in disk
+	INT	224
+	INC	AL			;make it so it will work in fcb
+	MOV	Byte Ptr DFLTDSK,AL
+	RET
+;Fetch a single byte from the address in HL and
+; sign extend into HL
+CCGCHAR:MOV	AL,M
+CCSXT:	MOV	BL,AL
+	ROL	AL,1
+	SBB	AL,AL
+	MOV	BH,AL
+	RET
+;Fetch a full 16-bit integer from the address in HL
+CCGINT:	MOV	AL,M
+	LAHF
+	INC	BX
+	SAHF
+	MOV	BH,M
+	MOV	BL,AL
+	RET
+;Store a single byte from HL at the address in DE
+CCPCHAR:MOV	AL,BL
+	MOV	SI,DX
+	MOV	[SI],AL
+	RET
+;Store a 16-bit integer in HL at the address in DE
+CCPINT:	MOV	AL,BL
+	MOV	SI,DX
+	MOV	[SI],AL
+	LAHF
+	INC	DX
+	SAHF
+	MOV	AL,BH
+	MOV	SI,DX
+	MOV	[SI],AL
+	RET
+;Inclusive "or" HL and DE into HL
+CCOR:	MOV	AL,BL
+	OR	AL,DL
+	MOV	BL,AL
+	MOV	AL,BH
+	OR	AL,DH
+	MOV	BH,AL
+	RET
+;Exclusive "or" HL and DE into HL
+CCXOR:	MOV	AL,BL
+	XOR	AL,DL
+	MOV	BL,AL
+	MOV	AL,BH
+	XOR	AL,DH
+	MOV	BH,AL
+	RET
+;"And" HL and DE into HL
+CCAND:	MOV	AL,BL
+	AND	AL,DL
+	MOV	BL,AL
+	MOV	AL,BH
+	AND	AL,DH
+	MOV	BH,AL
+	RET
+;Test if HL = DE and set HL = 1 if true else 0
+CCEQ:	CALL	CCCMP
+	JNZ	L_1
+	RET
+L_1:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Test if DE ~= HL
+CCNE:	CALL	CCCMP
+	JZ	L_2
+	RET
+L_2:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Test if DE > HL (signed)
+CCGT:	XCHG	BX,DX
+	CALL	CCCMP
+	JNB	L_3
+	RET
+L_3:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Test if DE <= HL (signed)
+CCLE:	CALL	CCCMP
+	JNZ	L_4
+	RET
+L_4:
+	JNB	L_5
+	RET
+L_5:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Test if DE >= HL (signed)
+CCGE:	CALL	CCCMP
+	JNAE	L_6
+	RET
+L_6:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Test if DE < HL (signed)
+CCLT:	CALL	CCCMP
+	JNB	L_7
+	RET
+L_7:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;Common routine to perform a signed compare
+; of DE and HL
+;This routine performs DE - HL and sets the conditions:
+;	Carry reflects sign of difference (set means DE < HL)
+;	Zero/non-zero set according to equality.
+CCCMP:	MOV	AL,DL
+	SUB	AL,BL
+	MOV	DL,AL
+	MOV	AL,DH
+	SBB	AL,BH
+	MOV	BX,1			;preset true condition
+	JS	CCCMP1
+	OR	AL,DL			;"OR" resets carry
+	RET
+CCCMP1:	OR	AL,DL
+	STC				;set carry to signal minus
+	RET
+;
+;Test if DE >= HL (unsigned)
+CCUGE:	CALL	CCUCMP
+	JNAE	L_8
+	RET
+L_8:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;
+;Test if DE < HL (unsigned)
+CCULT:	CALL	CCUCMP
+	JNB	L_9
+	RET
+L_9:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;
+;Test if DE > HL (unsigned)
+CCUGT:	XCHG	BX,DX
+	CALL	CCUCMP
+	JNB	L_10
+	RET
+L_10:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;
+;Test if DE <= HL (unsigned)
+CCULE:	CALL	CCUCMP
+	JNZ	L_11
+	RET
+L_11:
+	JNB	L_12
+	RET
+L_12:
+	LAHF
+	DEC	BX
+	SAHF
+	RET
+;
+;Common routine to perform unsigned compare
+;carry set if DE < HL
+;zero/nonzero set accordingly
+CCUCMP:	MOV	AL,DH
+	CMP	AL,BH
+	JNZ	L_13
+	MOV	AL,DL
+	CMP	AL,BL
+L_13:
+	MOV	BX,1
+	RET
+;
+;Shift DE arithmetically right by HL and return in HL
+CCASR:	XCHG	BX,DX
+L_14:
+	MOV	AL,BH
+	RCL	AL,1
+	MOV	AL,BH
+	RCR	AL,1
+	MOV	BH,AL
+	MOV	AL,BL
+	RCR	AL,1
+	MOV	BL,AL
+	DEC	DL
+	JNZ	L_14
+	RET
+;Shift DE arithmetically left by HL and return in HL
+CCASL:	XCHG	BX,DX
+L_15:
+	SHL	BX,1
+	DEC	DL
+	JNZ	L_15
+	RET
+;Subtract HL from DE and return in HL
+CCSUB:	MOV	AL,DL
+	SUB	AL,BL
+	MOV	BL,AL
+	MOV	AL,DH
+	SBB	AL,BH
+	MOV	BH,AL
+	RET
+;Form the two's complement of HL
+CCNEG:	CALL	CCCOM
+	LAHF
+	INC	BX
+	SAHF
+	RET
+;Form the one's complement of HL
+CCCOM:	MOV	AL,BH
+	NOT	AL
+	MOV	BH,AL
+	MOV	AL,BL
+	NOT	AL
+	MOV	BL,AL
+	RET
+;Multiply DE by HL and return in HL
+CCMULT:	MOV	CH,BH
+	MOV	CL,BL
+	MOV	BX,0
+CCMULT1:MOV	AL,CL
+	ROR	AL,1
+	JNB	L_16
+	ADD	BX,DX
+L_16:
+	XOR	AL,AL
+	MOV	AL,CH
+	RCR	AL,1
+	MOV	CH,AL
+	MOV	AL,CL
+	RCR	AL,1
+	MOV	CL,AL
+	OR	AL,CH
+	JNZ	L_17
+	RET
+L_17:
+	XOR	AL,AL
+	MOV	AL,DL
+	RCL	AL,1
+	MOV	DL,AL
+	MOV	AL,DH
+	RCL	AL,1
+	MOV	DH,AL
+	OR	AL,DL
+	JNZ	L_18
+	RET
+L_18:
+	JMPS	CCMULT1
+;Divide DE by HL and return quotient in HL, remainder in DE
+CCDIV:	MOV	CH,BH
+	MOV	CL,BL
+	MOV	AL,DH
+	XOR	AL,CH
+	LAHF
+	XCHG	AL,AH
+	PUSH	AX
+	MOV	AL,DH
+	OR	AL,AL
+	JNS	L_19	
+	CALL	CCDENEG
+L_19:
+	MOV	AL,CH
+	OR	AL,AL
+	JNS	L_20	
+	CALL	CCBCNEG
+L_20:
+	MOV	AL,16
+	LAHF
+	XCHG	AL,AH
+	PUSH	AX
+	XCHG	BX,DX
+	MOV	DX,0
+CCDIV1:	SHL	BX,1
+	CALL	CCRDEL
+	JZ	CCDIV2
+	CALL	CCCMPBCDE
+	JS	CCDIV2
+	MOV	AL,BL
+	OR	AL,1
+	MOV	BL,AL
+	MOV	AL,DL
+	SUB	AL,CL
+	MOV	DL,AL
+	MOV	AL,DH
+	SBB	AL,CH
+	MOV	DH,AL
+CCDIV2:	POP	AX
+	XCHG	AL,AH
+	SAHF
+	DEC	AL
+	JZ	CCDIV3
+	LAHF
+	XCHG	AL,AH
+	PUSH	AX
+	JMPS	CCDIV1
+CCDIV3:	POP	AX
+	XCHG	AL,AH
+	SAHF
+	JS	L_21
+	RET
+L_21:
+	CALL	CCDENEG
+	XCHG	BX,DX
+	CALL	CCDENEG
+	XCHG	BX,DX
+	RET
+CCDENEG:MOV	AL,DH
+	NOT	AL
+	MOV	DH,AL
+	MOV	AL,DL
+	NOT	AL
+	MOV	DL,AL
+	LAHF
+	INC	DX
+	SAHF
+	RET
+CCBCNEG:MOV	AL,CH
+	NOT	AL
+	MOV	CH,AL
+	MOV	AL,CL
+	NOT	AL
+	MOV	CL,AL
+	LAHF
+	INC	CX
+	SAHF
+	RET
+CCRDEL:	MOV	AL,DL
+	RCL	AL,1
+	MOV	DL,AL
+	MOV	AL,DH
+	RCL	AL,1
+	MOV	DH,AL
+	OR	AL,DL
+	RET
+CCCMPBCDE:MOV	AL,DL
+	SUB	AL,CL
+	MOV	AL,DH
+	SBB	AL,CH
+	RET
+L_22	EQU	$
+	DSEG	PUBLIC
+	ORG	Offset L_22
+;
+; ========================================
+;  I/O subroutines for CP/M
+;  	By Glen Fisher
+;       The Code Works(tm)
+; ========================================
+;
+NULL	EQU	0			;pointer to nothing
+FCBSIZE	EQU	36			;size, in bytes, of an FCB
+NEXTP	EQU	0			;offset to next-character pointer in I/O structure
+UNUSED	EQU	2			;offset to unused-positions-count in I/O structure
+BUFFER	EQU	4			;offset to disk sector buffer in I/O structure
+FLAG	EQU	33			;file-type flag byte (in unused part of FCB)
+FREEFLG	EQU	128			;This I/O structure is available for the taking
+EOFFLG	EQU	2			;The end of this file has been hit
+WRTFLG	EQU	1			;This file open for writing
+BUFSIZ	EQU	128			;how long the sector buffer is
+NBUFS	EQU	4			;number of I/O buffers (change buffer declarations, too)
+; CP/M system call codes
+CLOSE	EQU	16			;close a file
+CREATE	EQU	22			;make a file
+DMA	EQU	26			;set DMA (I/O address)
+DELETE	EQU	19			;delete a file
+GETCH	EQU	1			;read character from console
+GETSTR	EQU	10			;read string from console
+OPEN	EQU	15			;open a file
+PUTCH	EQU	2			;write character to console
+QUERY	EQU	25			;get logged-in drive id
+READ	EQU	20			;read a sector
+SELECT	EQU	14			;log-in a drive
+WRITE	EQU	21			;write a sector
+LF	EQU	10			;line feed
+EOL	EQU	13			;end-of-line character (=carriage return)
+CTRLZ	EQU	26			;end-of-file mark for text files
+TBUFF	EQU	80H			;address of default I/O address
+DFLTDSK	RS	1			;drive to use if no drive is named
+UNIT	RS	2			;I/O structure address to act on
+IP	RS	2			;int *ip;
+CHP	RS	2			;char *chp;
+DP	RS	2			;char *dp;
+FILE	RS	2			;file name
+MODE	RS	2			;char *mode;(read or write)
+ZCH	RS	2			;char ch;
+ZT	RS	2			;int t;
+FN	RS	2			;int fn;	i/o function (for cpmio)
+L_23	EQU	$
+	CSEG	PUBLIC
+	ORG	Offset L_23
+;
+;	exit()
+;
+;	Stop execution of the program,
+;	restore the logged-in drive,
+;	and re-boot CP/M
+;
+QZEXIT:
+	MOV	AL,Byte Ptr DFLTDSK	; Grab orig. logged-in disk
+	MOV	DL,AL
+	DEC	DL			; (cvt. back to 0-n)
+	MOV	CL,SELECT		; and log it in again
+	INT	224
+	MOV	CL,0			; Our work is complete.
+	MOV	DL,0
+	INT	224
+;
+;	cpm(bc,de)
+;
+;	fill BC and DE, and then call CP/M
+;
+;	return whatever is in A
+;
+BDOS	EQU	5
+QZCPM:
+	POP	BX			;grab the arguments
+	POP	DX
+	POP	CX
+	PUSH	CX			;restore the size of the stack
+	PUSH	DX
+	PUSH	BX
+	INT	224			;go to daddy
+	JMP	CCSXT			;hand the answer back
+;
+;	grabio()
+;
+;	find an input buffer, and return its address.
+;	if there isn't one, return a NULL.
+;
+GRABIO:				;6 May 80 rj
+	MOV	CH,NBUFS
+	MOV	BX,(Offset IOBUFS)+(Offset FLAG)
+	MOV	DX,FCBSIZE+BUFFER+BUFSIZ
+	MOV	AL,FREEFLG
+GRAB2:	CMP	AL,M			;flag byte == freeflg?
+	JZ	GRAB3			;if so, found a free buffer
+	LAHF				;on to next buffer
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	DEC	CH
+	JNZ	GRAB2			;if there is one...
+	MOV	BX,NULL			;there ain't
+	RET				;give up
+GRAB3:	MOV	M,0			;mark buffer as taken
+	MOV	DX,-FLAG		;back up to buffer start
+	LAHF
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	RET				;and hand it back
+;
+;	freeio(unit)
+;
+;	mark a buffer as free.
+;
+FREEIO:				;Mod  6 May 80 rj
+	POP	CX			;save rtn addr
+	POP	BX			;get buffer addr
+	PUSH	BX			;put the stack back together
+	PUSH	CX
+	MOV	DX,FLAG			;find flag byte
+	LAHF
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	MOV	M,FREEFLG		;mark buffer as 'free'
+	MOV	BX,NULL			;return something
+	RET
+L_24	EQU	$
+	DSEG	PUBLIC
+	ORG	Offset L_24
+IOBUFS	RS	0
+	RS	FCBSIZE-3
+	DB	FREEFLG,0,0
+	RS	BUFFER+BUFSIZ
+	RS	FCBSIZE-3
+	DB	FREEFLG,0,0
+	RS	BUFFER+BUFSIZ
+	RS	FCBSIZE-3
+	DB	FREEFLG,0,0
+	RS	BUFFER+BUFSIZ
+	RS	FCBSIZE-3		;mod 4 May 80 rj
+	DB	FREEFLG,0,0
+	RS	BUFFER+BUFSIZ
+L_25	EQU	$
+	CSEG	PUBLIC
+	ORG	Offset L_25
+;
+;	fopen(name,mode)
+;
+QZFOPEN:
+	POP	CX			;get args
+	POP	BX			;mode
+	MOV	Word Ptr MODE,BX
+	POP	DX
+	XCHG	BX,DX
+	MOV	Word Ptr FILE,BX
+	PUSH	BX
+	PUSH	DX
+	PUSH	CX
+	CALL	GRABIO			; unit = grabio();
+	MOV	Word Ptr UNIT,BX
+	MOV	AL,BH			; if(unit==NULL)
+	OR	AL,BL			;	return(NULL);
+	JNZ	L_26
+	RET
+L_26:
+	MOV	DX,FCBSIZE		; ip = unit+FCBSIZE;
+	ADD	BX,DX
+	MOV	Word Ptr IP,BX
+	MOV	BX,Word Ptr IP		; ip[NEXTP] = &ip[BUFFER];
+	MOV	DX,BUFFER
+	ADD	BX,DX
+	XCHG	BX,DX
+	MOV	BX,Word Ptr IP
+	MOV	CX,NEXTP
+	ADD	BX,CX
+	MOV	M,DL
+	INC	BX
+	MOV	M,DH
+	MOV	BX,Word Ptr UNIT	; fcb(unit,name);
+	PUSH	BX
+	MOV	BX,Word Ptr FILE
+	PUSH	BX
+	CALL	FCB
+	POP	BX
+	POP	BX
+	MOV	BX,Word Ptr UNIT	; cpmdisk(*unit);
+	MOV	BL,M
+	MOV	BH,0
+	PUSH	BX
+	CALL	CPMDISK
+	POP	BX
+	MOV	BX,Word Ptr MODE	; if(*mode=='r'  || *mode=='R'){
+	MOV	AL,M
+	CMP	AL,72H			; 'r' ? 9 Jun 80 rj
+	JZ	FOPIF0
+	CMP	AL,52H			; 'R' ? 9 Jun 80 rj
+	JNZ	FOPIF1
+FOPIF0:
+	MOV	CL,OPEN			;	if(cpm(OPEN,unit)<0){
+	MOV	BX,Word Ptr UNIT
+	XCHG	BX,DX
+	INT	224
+	OR	AL,AL
+	JNS	FOPIF2
+	MOV	BX,Word Ptr UNIT	;		freeio(unit);
+	PUSH	BX
+	CALL	FREEIO
+	POP	BX
+	MOV	BX,NULL			;		return(NULL);
+	RET
+;		}
+FOPIF2:
+	MOV	BX,Word Ptr IP		;	ip[UNUSED] = 0;
+	MOV	DX,UNUSED
+	LAHF
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	MOV	DX,0
+	MOV	M,DL
+	LAHF
+	INC	BX
+	SAHF
+	MOV	M,DH
+;	}
+	JMP	FOPIF4
+FOPIF1:				; else if(*mode=='w' || *mode=='W'){
+	MOV	BX,Word Ptr MODE
+	MOV	AL,M
+	CMP	AL,77H			; 'w'  9 Jun 80 rj
+	JZ	FOPIF1A
+	CMP	AL,57H			; 'W'  9 Jun 80 rj
+	JNZ	FOPIF5
+FOPIF1A:
+	MOV	CL,DELETE		;	cpm(DELETE,unit);
+	MOV	BX,Word Ptr UNIT
+	XCHG	BX,DX
+	INT	224
+	MOV	CL,CREATE		;	if(cpm(CREATE,unit)<0){
+	MOV	BX,Word Ptr UNIT
+	XCHG	BX,DX
+	INT	224
+	OR	AL,AL
+	JNS	FOPIF3
+	MOV	BX,Word Ptr UNIT	;		freeio(unit);
+	PUSH	BX
+	CALL	FREEIO
+	POP	BX
+	MOV	BX,NULL			;		return(NULL);
+	RET
+;		}
+FOPIF3:
+	MOV	BX,Word Ptr IP		;	ip[UNUSED] = BUFSIZ;
+	MOV	DX,UNUSED
+	ADD	BX,DX
+	MOV	DX,BUFSIZ
+	MOV	M,DL
+	INC	BX
+	MOV	M,DH
+	MOV	BX,Word Ptr UNIT	;	unit[FLAG] = WRITE_FL;
+	MOV	DX,FLAG
+	ADD	BX,DX
+	MOV	AL,WRTFLG
+	OR	AL,M
+	MOV	M,AL
+	JMPS	FOPIF4
+;	}
+FOPIF5:
+	MOV	BX,Word Ptr UNIT	; else{	freeio(unit);
+	PUSH	BX
+	CALL	FREEIO
+	POP	BX
+	MOV	BX,NULL			;	return(NULL);
+	RET
+;	}
+FOPIF4:
+	MOV	BX,Word Ptr UNIT	; return(unit);
+	RET
+;
+;	fclose(unit)
+;
+QZFCLOSE:
+	POP	CX
+	POP	BX
+	MOV	Word Ptr UNIT,BX
+	PUSH	BX
+	PUSH	CX
+	MOV	BX,1			; t = 1;
+	MOV	Word Ptr ZT,BX
+	MOV	BX,Word Ptr UNIT	; if(unit[FLAG] & WRITE_FL){
+	MOV	DX,FLAG
+	ADD	BX,DX
+	MOV	AL,M
+	AND	AL,WRTFLG
+	JNZ	L_27	
+	JMP	FCLIF1
+L_27:
+	MOV	BX,CTRLZ		;	putc(CTRL_Z,unit);	
+	PUSH	BX
+	MOV	BX,Word Ptr UNIT
+	PUSH	BX
+	CALL	QZPUTC
+	POP	BX
+	POP	BX
+	MOV	BX,Word Ptr UNIT	;	ip = unit + FCBSIZE;
+	MOV	DX,FCBSIZE
+	ADD	BX,DX
+	MOV	Word Ptr IP,BX
+	MOV	BX,Word Ptr IP		;		cp = ip[NEXTP];
+	MOV	DX,NEXTP
+	ADD	BX,DX
+	MOV	DL,M
+	INC	BX
+	MOV	DH,M
+	XCHG	BX,DX
+	MOV	Word Ptr CHP,BX
+	MOV	BX,Word Ptr IP		;		dp = &ip[BUFFER]+BUFSIZ;
+	MOV	DX,BUFFER+BUFSIZ
+	ADD	BX,DX
+	MOV	Word Ptr DP,BX
+FCLWH1:				;		while(cp<dp)
+	MOV	BX,Word Ptr CHP
+	XCHG	BX,DX
+	MOV	BX,Word Ptr DP
+	MOV	AL,DH
+	CMP	AL,BH
+	JB	FCLWH2
+	JNZ	FCLWH3
+	MOV	AL,DL
+	CMP	AL,BL
+	JNB	FCLWH3
+FCLWH2:				;			*cp++ = CTRL_Z;
+	MOV	BX,Word Ptr CHP
+	MOV	M,CTRLZ
+	INC	BX
+	MOV	Word Ptr CHP,BX
+	JMPS	FCLWH1
+FCLWH3:
+	MOV	BX,WRITE		;		if(cpmio(WRITE,unit)<0)
+	PUSH	BX
+	MOV	BX,Word Ptr UNIT
+	PUSH	BX
+	CALL	CPMIO
+	POP	DX
+	POP	DX
+	MOV	AL,BH
+	OR	AL,AL
+	JNS	FCLIF4
+	MOV	BX,0			;			t = 0;
+	MOV	Word Ptr ZT,BX
+FCLIF4:
+;		}
+FCLIF3:
+;	}
+FCLIF1:
+	MOV	CL,CLOSE		; if(cpm(CLOSE,unit)<0)
+	MOV	BX,Word Ptr UNIT
+	XCHG	BX,DX
+	INT	224
+	OR	AL,AL
+	JNS	FCLIF5
+	MOV	BX,0			;	t = 0;
+	MOV	Word Ptr ZT,BX
+FCLIF5:
+	MOV	BX,Word Ptr UNIT	; freeio(unit);
+	PUSH	BX
+	CALL	FREEIO
+	POP	BX
+	MOV	BX,Word Ptr ZT		; return(NULL+t);
+	RET
+;
+;	fcb(fp,name)
+;
+FCB:
+	POP	BX			;get args
+	POP	DX			;name
+	POP	CX			;fp
+	PUSH	CX
+	PUSH	DX
+	PUSH	BX
+	INC	DX			; if(name[1]==':'){
+	MOV	SI,DX
+	MOV	AL,[SI]
+	DEC	DX
+	CMP	AL,':'
+	JNZ	FCBIF1
+	MOV	SI,DX			;	A = *name - '@';
+	MOV	AL,[SI]
+	SUB	AL,40H			; '@' 9 Jun 80 rj
+	INC	DX			;	name += 2;
+	INC	DX
+	CMP	AL,61H-41H		;	if(A>'a'-'A') /* lower case? */  9 Jun 80 rj
+	JB	FCBIF2
+	SUB	AL,61H-41H		;		A -= 'a'-'A'; 9 Jun 80 rj
+	JMPS	FCBIF2			;	}
+FCBIF1:
+	MOV	AL,Byte Ptr DFLTDSK	; else	A = default_drive;
+FCBIF2:
+	MOV	SI,CX			; *fp++ = A;
+	MOV	[SI],AL
+	LAHF
+	INC	CX
+	SAHF
+	MOV	BH,' '			; fp = fcbfill(fp,name,' ',8);
+	MOV	BL,8
+	CALL	FCBFILL
+	MOV	BL,3			; fp = fcbfill(fp,name,' ',3);
+	CALL	FCBFILL
+	MOV	BH,0			; fp = fcbpad(fp,0,4);
+	MOV	BL,4
+	CALL	FCBPAD
+	MOV	BX,16			; fp[16] = 0;
+	LAHF
+	ADD	BX,CX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	MOV	M,0
+	RET				; return;
+;
+;	fcbfill(dest,name,pad,size)
+;		B    D    H   L
+;
+FCBFILL:
+	MOV	AL,BL			; while(L>0 && (A= *D)~='.' && A~=0){
+	OR	AL,AL
+	JZ	FILL2
+	MOV	SI,DX
+	MOV	AL,[SI]
+	CMP	AL,'.'
+	JZ	FILL2
+	CMP	AL,0
+	JZ	FILL2
+	CMP	AL,61H			;	if(A>='a' && A<='z')
+	JB	FILL1
+	CMP	AL,7AH+1		; 'z' 9 Jun 80 rj
+	JNB	FILL1
+	SUB	AL,61H-41H		;		A = A - 'a' + 'A';
+FILL1:
+	MOV	SI,CX			;	*B++ = A;
+	MOV	[SI],AL
+	INC	CX
+	INC	DX			;	D++;
+	DEC	BL			;	L--;
+	JMPS	FCBFILL			;	}
+FILL2:
+	MOV	SI,DX			; while(*D~='.' && *D~=0)	
+	MOV	AL,[SI]
+	CMP	AL,'.'
+	JZ	FILL3
+	CMP	AL,0
+	JZ	FILL3
+	INC	DX			;	D++;
+	JMPS	FILL2
+FILL3:
+	CMP	AL,'.'			; if(*D=='.')
+	JNZ	FILL4
+	INC	DX			;	D++;
+FILL4:
+;	fall into...
+;
+;	fcbpad(dest,pad,size)
+;		B   H   L
+;
+FCBPAD:
+	MOV	AL,BL			; while(L>0){
+	OR	AL,AL
+	JZ	PAD2
+	MOV	AL,BH			;	*B++ = H;
+	MOV	SI,CX
+	MOV	[SI],AL
+	INC	CX
+	DEC	BL			;	L--;
+	JMPS	FCBPAD			;	}
+PAD2:
+	RET				; return;
+;
+;	getc(unit)
+;
+QZGETC:
+	POP	CX
+	POP	BX			; get args
+	PUSH	BX
+	PUSH	CX
+; c=cget(unit);
+	PUSH	BX
+	CALL	CGET
+	POP	DX
+	MOV	AL,BL			; if(c=='\r') 	
+	CMP	AL,EOL
+	JNZ	GETCRET
+	PUSH	BX			;	cget(unit)
+	PUSH	DX			;		/* to absorb LF */
+	CALL	CGET
+	POP	BX
+	POP	BX
+GETCRET:
+	RET
+;
+;	cget(unit)
+;
+CGET:
+	POP	DX
+	POP	BX
+	MOV	Word Ptr UNIT,BX
+	PUSH	BX
+	PUSH	DX
+	MOV	DX,FLAG			; if(unit[FLAG] & EOF_FL)
+	ADD	BX,DX
+	MOV	AL,M
+	AND	AL,EOFFLG
+	JZ	GETCIF1
+	MOV	BX,-1			;	return(-1);
+	RET
+GETCIF1:
+	MOV	BX,Word Ptr UNIT	; ip = unit + FCBSIZE;
+	MOV	DX,FCBSIZE
+	ADD	BX,DX
+	MOV	Word Ptr IP,BX
+	MOV	DX,NEXTP		; cp = ip[NEXTP];
+	ADD	BX,DX
+	MOV	DL,M
+	INC	BX
+	MOV	DH,M
+	XCHG	BX,DX
+	MOV	Word Ptr CHP,BX
+	MOV	BX,Word Ptr IP		; if(ip[UNUSED]==0){
+	MOV	DX,UNUSED
+	ADD	BX,DX
+	MOV	AL,M
+	INC	BX
+	OR	AL,M
+	JNZ	GETCIF2
+	MOV	BX,READ			;	if(cpmio(READ,unit)~=0)
+	PUSH	BX
+	MOV	BX,Word Ptr UNIT
+	PUSH	BX
+	CALL	CPMIO
+	POP	DX
+	POP	DX
+	MOV	AL,BH
+	OR	AL,BL
+	JZ	GETCIF3
+	MOV	BX,-1			;		return(-1);
+	RET
+GETCIF3:
+	MOV	BX,Word Ptr IP		;	else {	ip[UNUSED] = BUFSIZ;
+	MOV	DX,UNUSED
+	ADD	BX,DX
+	MOV	DX,BUFSIZ
+	MOV	M,DL
+	INC	BX
+	MOV	M,DH
+	MOV	BX,Word Ptr IP		;		cp = &ip[BUFFER];
+	MOV	DX,BUFFER
+	ADD	BX,DX
+	MOV	Word Ptr CHP,BX
+;		}
+;	}
+GETCIF2:
+	MOV	BX,Word Ptr IP		; ip[UNUSED]--;
+	MOV	DX,UNUSED
+	ADD	BX,DX
+	MOV	DL,M
+	INC	BX
+	MOV	DH,M
+	DEC	DX
+	MOV	M,DH
+	DEC	BX
+	MOV	M,DL
+	MOV	BX,Word Ptr CHP		; ip[NEXTP] = cp+1;
+	INC	BX
+	XCHG	BX,DX
+	MOV	BX,Word Ptr IP
+	MOV	CX,NEXTP
+	ADD	BX,CX
+	MOV	M,DL
+	INC	BX
+	MOV	M,DH
+	MOV	BX,Word Ptr CHP		; if(*cp==CTRL_Z){
+	MOV	AL,M
+	CMP	AL,CTRLZ
+	JNZ	GETCIF4
+	MOV	BX,Word Ptr UNIT	;	unit[FLAG] |= EOF_FL;
+	MOV	DX,FLAG
+	ADD	BX,DX
+	MOV	AL,M
+	OR	AL,EOFFLG
+	MOV	M,AL
+	MOV	BX,-1			;	return(-1);
+	RET
+;	}
+GETCIF4:
+	MOV	BL,AL			; return(*cp & 0377);
+	MOV	BH,0
+	RET
+;
+;	putc(c,unit)
+;
+QZPUTC:
+	POP	CX			;rtn addr
+	POP	DX			;unit
+	POP	BX			;c
+	PUSH	BX
+	PUSH	DX
+	PUSH	CX
+	PUSH	BX			; if(cput(c,unit)<0)
+	PUSH	DX			;	goto putcerr;
+	CALL	CPUT
+	POP	DX
+	MOV	AL,BH
+	OR	AL,AL
+	JS	PUTCERR
+	MOV	AL,BL			; if(c=='\r')
+	CMP	AL,EOL
+	JNZ	PUTCRET
+	MOV	BX,LF			;	cput('\n',unit);
+	PUSH	BX
+	PUSH	DX
+	CALL	CPUT
+	POP	DX
+	POP	DX
+	MOV	AL,BH
+	OR	AL,AL
+	JS	PUTCERR
+PUTCRET:
+	POP	BX			; return(c);
+	RET
+PUTCERR:				;putcerr:
+	POP	CX			; return(-1);
+	MOV	BX,-1
+	RET
+;
+;	cput(c,unit)
+;
+CPUT:
+	POP	CX
+	POP	DX
+	POP	BX
+	MOV	Word Ptr ZCH,BX
+	XCHG	BX,DX
+	MOV	Word Ptr UNIT,BX
+	PUSH	DX
+	PUSH	BX
+	PUSH	CX
+	MOV	DX,FCBSIZE		; ip = unit + FCBSIZE;
+	ADD	BX,DX
+	MOV	Word Ptr IP,BX
+	MOV	DX,NEXTP		; cp = ip[NEXTP];
+	ADD	BX,DX
+	MOV	DL,M
+	INC	BX
+	MOV	DH,M
+	XCHG	BX,DX
+	MOV	Word Ptr CHP,BX
+	MOV	BX,Word Ptr IP		; if(ip[UNUSED]==0){
+	MOV	DX,UNUSED
+	ADD	BX,DX
+	MOV	AL,M
+	INC	BX
+	OR	AL,M
+	JNZ	PUTCIF1
+	MOV	BX,WRITE		;	if(cpmio(WRITE,unit)~=0)	
+	PUSH	BX
+	MOV	BX,Word Ptr UNIT
+	PUSH	BX
+	CALL	CPMIO
+	POP	DX
+	POP	DX
+	MOV	AL,BH
+	OR	AL,BL
+	JZ	PUTCIF2
+	MOV	BX,-1			;		return(-1);
+	RET
+PUTCIF2:
+	MOV	BX,Word Ptr IP		;	else {	ip[UNUSED] = BUFSIZ;
+	MOV	DX,UNUSED
+	LAHF
+	ADD	BX,DX
+	SAHF
+	MOV	DX,BUFSIZ
+	MOV	M,DL
+	LAHF
+	INC	BX
+	SAHF
+	MOV	M,DH
+	MOV	BX,Word Ptr IP		;		cp = &ip[BUFFER];
+	MOV	DX,BUFFER
+	LAHF
+	ADD	BX,DX
+	SAHF
+	MOV	Word Ptr CHP,BX
+;		}
+;	}
+PUTCIF1:
+	MOV	BX,Word Ptr IP
+	MOV	DX,UNUSED		; ip[UNUSED]--;
+	LAHF
+	ADD	BX,DX
+	SAHF
+	MOV	DL,M
+	LAHF
+	INC	BX
+	SAHF
+	MOV	DH,M
+	LAHF
+	DEC	DX
+	SAHF
+	MOV	M,DH
+	LAHF
+	DEC	BX
+	SAHF
+	MOV	M,DL
+	MOV	BX,Word Ptr CHP		; ip[NEXTP] = cp+1;
+	LAHF
+	INC	BX
+	SAHF
+	XCHG	BX,DX
+	MOV	BX,Word Ptr IP
+	MOV	CX,NEXTP
+	LAHF
+	ADD	BX,CX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	MOV	M,DL
+	LAHF
+	INC	BX
+	SAHF
+	MOV	M,DH
+	MOV	AL,Byte Ptr ZCH		; return((*cp = c) & 0377);
+	MOV	BX,Word Ptr CHP
+	MOV	M,AL
+	MOV	BH,0
+	MOV	BL,AL
+	RET
+;
+;	gets(buff)
+;
+QZGETS:
+	POP	CX
+	POP	BX
+	MOV	Word Ptr CHP,BX
+	PUSH	BX
+	PUSH	CX
+	LAHF				; save = buff[-1]; save2 = buff[-2];
+	DEC	BX
+	SAHF
+	MOV	DH,M			; buff[-1] = 0;  buff[-2] = 79;
+	MOV	M,0
+	LAHF
+	DEC	BX
+	SAHF
+	MOV	DL,M
+	MOV	M,79			;6 May 80 rj
+	PUSH	BX
+	PUSH	DX
+	XCHG	BX,DX			; cpm(GETSTR,buff-2);
+	MOV	CL,GETSTR
+	INT	224
+	MOV	BX,Word Ptr CHP		; buff[buff[-1]] = 0; (9 Jun 80. Was cp)
+	LAHF
+	DEC	BX
+	SAHF
+	MOV	DL,M
+	LAHF
+	INC	BX
+	SAHF
+	MOV	DH,0
+	LAHF
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	MOV	M,0
+	POP	DX			; buff[-1] = save; buff[-2] = save2;
+	POP	BX
+	MOV	M,DL
+	LAHF
+	INC	BX
+	SAHF
+	MOV	M,DH
+	LAHF
+	INC	BX
+	SAHF
+	MOV	CL,PUTCH		; putchar('\n');
+	MOV	DL,LF
+	INT	224
+	MOV	BX,Word Ptr CHP		; return(buff);
+	RET
+;
+;	getchar()
+;
+QZGETCHAR:
+	MOV	CL,GETCH		; t = cpm(GETCH,0) & 0377;
+	INT	224
+	MOV	BL,AL
+	MOV	BH,0
+	CMP	AL,CTRLZ		; if(t==CTRLZ)
+	JNZ	GETCHAR1
+	MOV	BX,-1			;	t = -1;
+GETCHAR1:
+	CMP	AL,EOL			; if(t==EOL)
+	JNZ	GETCHAR2
+	PUSH	BX			;	putchar('\n');
+	MOV	CL,PUTCH
+	MOV	DL,LF
+	INT	224
+	POP	BX
+GETCHAR2:
+	RET				; return(t);
+;
+;	puts(cp)
+;
+QZPUTS:
+	POP	CX			; get args
+	POP	BX
+	PUSH	BX
+	PUSH	CX
+PUTS1:
+	MOV	AL,M			; while(*cp)
+	OR	AL,AL
+	JZ	PUTSRET
+	MOV	DL,M			;	putchar(*cp++);
+	INC	BX
+	PUSH	BX
+	MOV	CL,PUTCH
+	INT	224
+	POP	BX
+	JMPS	PUTS1
+PUTSRET:
+	RET				; return;
+;
+;	putchar(c)
+;
+QZPUTCHAR:
+	POP	CX
+	POP	BX
+	MOV	Word Ptr ZCH,BX
+	PUSH	BX
+	PUSH	CX
+	XCHG	BX,DX			; cpm(PUTCH,c);
+	MOV	CL,PUTCH
+	INT	224
+	MOV	AL,Byte Ptr ZCH		; if(c==EOL)
+	CMP	AL,EOL
+	JNZ	PUTCHIF1
+	MOV	DL,LF			;	cpm(PUTCH,LF);
+	MOV	CL,PUTCH
+	INT	224
+PUTCHIF1:
+	MOV	BX,Word Ptr ZCH		; return(c & 0377);
+	MOV	BH,0
+	RET
+;
+;	cpmio(fn,unit)
+;
+CPMIO:
+	POP	CX
+	POP	DX
+	POP	BX
+	MOV	Word Ptr FN,BX
+	XCHG	BX,DX
+	MOV	Word Ptr UNIT,BX
+	PUSH	DX
+	PUSH	BX
+	PUSH	CX
+	MOV	BX,Word Ptr UNIT	; cpmdisk(*unit);
+	MOV	BL,M
+	MOV	BH,0
+	PUSH	BX
+	CALL	CPMDISK
+	POP	BX
+	MOV	BX,Word Ptr UNIT	; ip = unit+FCBSIZE;
+	MOV	DX,FCBSIZE		; cpm(DMA,&ip[BUFFER]);
+	ADD	BX,DX
+	MOV	DX,BUFFER
+	ADD	BX,DX
+	XCHG	BX,DX
+	MOV	CL,DMA
+	INT	224
+	MOV	BX,Word Ptr FN		; t = cpm(fn,unit);
+	MOV	CL,BL
+	MOV	BX,Word Ptr UNIT
+	XCHG	BX,DX
+	INT	224
+	CALL	CCSXT
+	MOV	Word Ptr ZT,BX
+	MOV	CL,DMA			; cpm(DMA,TBUFF);
+	MOV	DX,TBUFF
+	INT	224
+	MOV	BX,Word Ptr ZT		; if(t~=0) return(-1);
+	MOV	AL,BH			; else	   return(0);
+	OR	AL,BL
+	JNZ	CPMIF1
+	MOV	BX,0
+	JMPS	CPMIF2
+CPMIF1:
+	MOV	BX,-1
+CPMIF2:
+	RET
+;
+;	cpmdisk(disk)
+;
+CPMDISK:
+	POP	DX
+	POP	BX
+	PUSH	BX
+	PUSH	DX
+	MOV	AL,BL			; if(d~=0)
+	OR	AL,BH
+	JZ	DISKIF1
+	XCHG	BX,DX			;	cpm(SELECT,d-1);
+	LAHF
+	DEC	DX
+	SAHF
+	MOV	CL,SELECT
+	INT	224
+DISKIF1:
+	RET
+;
+;----------- End of Small-c library -----------
+;
+	END
+

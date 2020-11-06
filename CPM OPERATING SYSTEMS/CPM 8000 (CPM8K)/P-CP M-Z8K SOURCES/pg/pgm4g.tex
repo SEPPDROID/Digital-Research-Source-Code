@@ -1,0 +1,433 @@
+.cs 5
+.pn 
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.sp 2
+.he CP/M-8000 Programmer's Guide              4.6  Exception Functions
+.tc    4.6  Exception Functions
+.sp 2
+.sh
+4.6  Exception Functions
+.qs
+.ix exception functions
+.pp 5 
+This section describes the Set Exception (61), Set Supervisor State, 
+(62), and the Get/Set TPA Limits Functions that set exceptions for error
+handling and other exception processing. 
+.bp
+.pn 88
+.tc         4.6.1  Set Exception Vector Function
+.sh
+4.6.1  Set Exception Vector Function
+.qs
+.ix set exception vector function
+.sp 3
+.nf 
+               FUNCTION 61:  SET EXCEPTION VECTOR
+
+                Entry Parameters:
+                   Register   R5:  3DH
+                   Register  RR6:  EPB Address
+
+                Returned  Values:
+                   Register   R7:  Return Code
+
+                                   success:  00H
+                                     error:  FFH
+.fi
+.sp 2
+.pp
+The Set Exception Vector Function allows a program to reset
+current exception vectors, set new exception vectors, and create
+exception handlers for the Z8000 microprocessor. 
+The exception numbers used are the same as the exception numbers 
+used in CP/M-68000, for portability.
+.ix exception vectors
+.ix exception handlers
+.ix exception parameter block (EPB)
+.pp
+In addition to passing the function number in register   R5, a
+program must pass the address of the Exception Parameter Block
+(EPB) in register  RR6. The EPB is a 10-byte data structure
+containing a one-word vector number and two longword vector
+values.  See Figure 4-7. The EPB specifies the exception and
+the address of the new exception handler. 
+Table 4-21 lists valid exceptions that correspond to Z8000 
+microprocessor hardware.  The starting location of the 
+EPB must be an even-numbered address.
+.sp 2
+.nf        
+.sh
+               Field                            Size
+.qs
+.sp              
+
+             Vector Number                     1 word
+
+             New Defined Vector Value          1 longword
+
+           Old Vector Value Returned by BDOS   1 longword
+
+.fi
+.sp 2
+.ce
+.sh
+Figure 4-7. Exception Parameter Block (EPB)
+.qs
+.sp 2 
+.ix vector number
+.ix vector values
+.pp
+The vector number identifies the exception. The New Vector Value specifies
+the address of the new exception handler for the specified exception. The
+BDOS returns in the Old Vector Value Field, the value that the exception
+vector contained before this function was invoked.  The BDOS replaces the
+old vector value with the new vector value in its table of exception
+handlers and returns the address of the old exception handler to the old
+vector value in the EPB.  After the BDOS sets the new exception vector, it
+passes the value 00H in register   R7. However, if an error, such as a bad
+vector, occurs while the vector is being set, this function passes the
+value FFH in register   R7.  The bad vector error occurs when a vector
+other than one listed in Table 4-21 is specified for this function. 
+.ix bad vector error
+.ix system state
+.pp
+When an exception occurs, before the BIOS passes control to the BDOS
+exception handler, it saves the registers on the system stack
+in a form suitable for use with the control-transfer (XFER) system
+call provided by the BIOS (as described in the CP/M-8000 Operating
+System Guide).  It then calls the BDOS exception handler as a subroutine,
+in system, segmented mode.  The BDOS exception handler restores the
+status to that of the program that was executing when the exception
+occurred (usually normal, non-segmented mode), and places a copy
+of the context block on the appropriate (system or normal) stack.
+The exception handler must return control to the interrupted program
+by means of an XFER system call.
+.ix exception handler
+.ix logical console device (CONSOLE)
+.pp
+If an exception handler does not exist for an exception, when
+that exception occurs, the BDOS default exception handler returns
+an exception message to the logical console device (CONSOLE)
+before it aborts the program. The BDOS exception message format is
+defined below: 
+.sp 2
+.ix resident system extensions (RSXs) 
+.nf
+           Exception nn at user address aaaaaaaa. Aborted.
+.fi
+.sp 
+.in 10
+.ti -10
+where:
+.sp 
+.ti -10
+nn        is a hexadecimal number in the range 2 through 17 or 24
+through 2F that defines all exceptions excluding reset,
+hardware interrupts, and system Traps 0 through 3.
+.sp 
+.ti -10
+aaaaaaaa  is the address of the instruction following the one 
+that caused the exception.
+.qi
+.sp 2
+Except for exceptions handled by resident system extensions (RSXs), the
+BDOS reinitializes all vectors to the default exception handler when the
+BDOS System Reset Function (0) is invoked. Any exception vectors, which
+your program sets, are reset after the BDOS warm boots the system. An RSX
+is a program that is not configured in the operating system but remains
+resident in memory after it is loaded. RSXs normally provide additional
+system functions. The Get/Set TPA Limits Function (63) allows you to create
+an area in the TPA in which one or more RSXs can reside. 
+.ix RSX
+.ix resident system extension
+.bp
+.ce
+.sh
+Table 4-21.  Valid Vectors and Exceptions
+.qs
+.sp 
+.nf
+                 Vector         Exception
+.sp
+		    0	     Non-Maskable Interrupt
+.sp
+		    1	     EPU Trap
+.sp
+                    2        Segment Violation
+.sp
+                    8        Privilege Violation
+.sp
+                   32*       System Call 0 (debugger breakpoint)
+.sp
+                   36**      System Call 4	
+.sp
+                   37**      System Call 5  
+.sp
+                   38**      System Call 6  
+.sp
+                   39**      System Call 7 
+ 
+.sp        
+.fi
+.in 6
+.ti -4
+*   Vectors reserved for Resident System Extensions (RSX)
+implemented with the Get/Set TPA Limits Function (63). 
+.sp
+.ti -4
+**  Recommended Trap vectors for applications. 
+.bp
+.in 0
+.tc         4.6.2  Set Supervisor State
+.sh
+4.6.2  Set Supervisor State
+.qs
+.ix set supervisor state
+.sp 3
+.nf
+               FUNCTION 62:  SET SUPERVISOR STATE
+
+                     Entry Parameters:  
+                        Register   R5:  3EH
+
+                     Returned  Values:
+                        Register   R7:  00H
+.fi
+.sp 2
+.ix supervisor state
+.pp
+The Set Supervisor Function puts the calling program in supervisor 
+(system) state.  If running on a segmented processor (Z8001 or Z8003),
+it also puts the program into segmented mode.
+This function should not be used by novice 
+programmers and experienced programmers should be careful when 
+invoking this function.
+.ix supervisor stack
+.pp
+The user stack is swapped when the program enters supervisor state.  
+On return from this function, the stack pointer, register RR14, is the 
+supervisor stack pointer and not the user stack pointer. Thus, you
+cannot use register RR14 to reference the user stack, but must use
+the user stack pointer (accessible with the LDCTL instruction).  
+.pp
+The supervisor stack is used by the BDOS and BIOS. The
+size of this stack is unpredictable, and the percent of the stack used 
+by the system is dependent on the operation being performed and 
+those previously performed. Therefore, you cannot predict
+how much of the stack is available for program operations.  To 
+avoid stack overflow and overwriting the system, you should not  
+push more than a few dozen bytes onto the stack, especially when
+you call BDOS and BIOS functions. 
+.pp
+An alternate method of avoiding stack overflow is to switch to a private
+supervisor stack. You create the stack by loading into RR14 the address of an
+area in memory that you use as the supervisor stack. The address must be an
+even address. If you call BDOS and BIOS functions, your private supervisor
+stack should be 300 longwords more than the space required by the program.
+If your program exits supervisor mode, make sure your program restores the
+system stack pointer to its original value. The supervisor stack is
+reinitialized when the system warm boots. 
+.pp
+Note that in future CP/M-8000 upward compatible systems, this
+function may not exist, or will require privilege for the calling
+process to access this function, or the function will fail. If it fails 
+the value FFH will be passed to   R7.  However, no
+privilege is currently necessary. The function is always
+successful and the value 00H is passed in register   R7. 
+.bp
+.tc         4.6.3  Get/Set TPA Limits
+.sh
+4.6.3  Get/Set TPA Limits
+.qs
+.sp 3
+.ix get/set TPA limits
+.nf
+                FUNCTION 63:  GET-SET TPA LIMITS
+
+                 Entry Parameters:
+                    Register   R5:  3FH
+                    Register  RR6:  TPAB Address
+
+                 Returned  Values:
+                    Register   R7:  00H
+                    Register TPAB:  Contains TPA
+                                    Values
+.sp 2
+.fi
+.ix Transient Program Area (TPA)
+.ix Transient Program Area block (TPAB)
+.ix Transient Program Area (TPA), boundaries
+.pp
+The Get/Set TPA Limits Function allows you to obtain or set the
+boundaries of the Transient Program Area (TPA).  You must load
+the address of the Transient Program Area Block (TPAB) in 
+register  RR6.  The TPAB is a 5-word data structure consisting  
+of one word and two longwords. You create the TPAB in 
+the TPA as illustrated in Figure 4-8. 
+
+=============== THIS IS PRESENTLY NOT IMPLEMENTED RIGHT =========
+=============== IT IS NOT CLEAR WHAT IT SHOULD DO IN A  =========
+=============== SEGMENTED ADDRESS SPACE.                =========
+.sp 3
+.in 2
+.nf
+Byte Offset            Field                        Size
+   
+ 00H              Parameters                       1 word  
+
+ 02H              Low TPA address                  1 longword
+
+ 06H              High TPA address + 1             1 longword
+
+.fi
+.in 0
+.sp 2
+.ce
+.sh 
+Figure 4-8.  Transient Program Parameter Block
+.qs
+.sp 2
+.pp
+The value of the first two bits in the one-word Parameters Field 
+determines whether 
+this function gets or sets the TPA limits and which fields you 
+supply. Figure 4-9 illustrates the
+format of the parameters field.
+.bp
+.in 6
+.nf
+   
+ Parameters    15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0   
+ Field        
+                   reserved bits (2-15) = 0      
+
+
+
+                 bits:         1      0 
+
+                 values =     1/0    1/0   
+
+.fi
+.in 0
+.sp 2
+.ce
+.sh 
+Figure 4-9.  Parameters Field in TPAB
+.sp 2
+.pp
+Bit Zero  determines whether you get or set the TPA limits.  When
+the value of bit zero is zero, the BDOS returns the current TPA
+boundaries in the Low and High Address fields of the TPAB.  When the value of 
+bit zero is one, the BDOS sets new TPA
+boundaries.  The BDOS uses the values that you specify in the Low
+and High TPA address fields of the TPAB to set the new TPA
+boundaries.  
+.pp
+When you set the TPA boundaries, bit one determines whether the boundaries 
+are temporary or permanent.  When the value of bit one is zero, 
+the TPA boundaries that you set are temporary; when the system warm boots,
+the previous TPA limits are restored.  When the value of bit one is 
+one, the TPA values that you set are permanent; they are not 
+changed when the system warm boots. 
+.pp
+Bits 2 through 15 contain zeroes.  These bits are reserved for future use.  
+Table 4-22 summarizes the values of bits zero and one. 
+.sp 2 
+.ce 2
+.sh 
+Table 4-22.  
+.sp 0
+.sh
+Values For Bits 0 and 1 in the TPAB Parameters Field
+.qs
+.ix TPAB parameters field
+.sp
+.in 5
+.ll 60
+.nf
+Bit    Value                      Explanation
+.sp
+.fi
+.in 23
+.ti -18
+0        0        Return boundaries of current TPA in TPAB Low and High 
+Address Fields.
+.sp
+.ti -18
+         1        Set new TPA boundaries with the values loaded in TPAB Low 
+and High address fields.
+.sp
+.ti -18
+1        0        Restore previous TPA values when the system warm boots.
+.sp
+.ti -18
+         1        Permanently replace the TPA boundaries with the ones you 
+specify in the Low and High TPAB Address Fields.
+.bp
+.in 0
+.ll 65
+The examples below illustrate and explain values for bits zero and 
+one.
+.sp
+Examples:
+.sp 2
+.in 8
+.ti -4
+1)  Get TPA Limits
+.sp
+.nf
+                         1       0               
+  
+                         0       0   
+
+.fi
+.sp
+This function returns the boundaries of the current TPA in the 
+Low and High Address Fields of the TPAB when the value of bit 
+zero equals 0.
+.ne 10
+.sp
+.ti -4
+2)  Temporarily Set TPA Limits 
+.sp
+.nf
+                         1       0               
+  
+                         0       1   
+
+.fi
+.sp
+This function temporarily sets the TPA boundaries to the
+boundaries that you supply in the Low and High Address Fields of
+the TPAB when bit zero equals 1 and bit one equals 0. The TPA
+boundaries are reset when the system 
+warm boots.
+.sp
+.ti -4
+3) Permanently Set TPA Limits
+.sp
+.nf
+                         1       0               
+  
+                         1       1   
+
+.fi
+.sp
+This function permanently sets the TPA boundaries to the values 
+that you supply in the Low and High Address Fields of the TPAB 
+when the value of bit zero equals 1 and bit one equals 1. The
+TPA limits remain set until this function is called to reset the
+boundaries or you cold boot system.
+.in 0
+.sp 2
+.ce
+End of Section 4
+.nx five
+

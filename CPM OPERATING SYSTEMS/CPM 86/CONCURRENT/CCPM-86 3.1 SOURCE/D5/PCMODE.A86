@@ -1,0 +1,213 @@
+;
+;     PC_MODE SUPPORT
+;
+
+include system.lib
+include flags.equ
+include	serdata.equ
+
+;DOS_HEAD	equ	byte ptr 13[BP]
+;DOS_TRACK	equ	byte ptr 12[BP]
+;DOS_SECTOR	equ	byte ptr 10[BP]
+
+;TRACK		equ	word ptr 12[BP]
+;SECTOR		equ	word ptr 10[BP]
+
+
+	CSEG
+
+public	io_screen
+public	io_video
+public	io_keybd
+public	io_shft
+public	io_eqck
+public	io_int13_read
+public	io_int13_write
+
+extrn	io_read:near, io_write:near
+extrn	supif:near
+
+	DSEG
+
+public	f30_tbl
+
+extrn	ocdesctbl:word
+extrn	vrtl_phy:byte
+
+	CSEG
+
+;=========
+io_screen:	;FUNCTION 30  --  get/set screen mode
+;=========
+;
+;    ENTRY:  CH -- 0 = set, 1 = get
+;	     CL -- Mode if CH = 0
+;	     DL -- Virtual console number 
+;
+;    EXIT:   AX -- Mode if CH = 1.  If CH = 0, then 0000H for success.
+;
+
+	xor	bx,bx
+	mov	bl,dl			; Vcon index
+
+	cmp	ch,0			; check mode
+	jz	set
+
+;
+;     Get the screen mode
+;
+	shl	bx,1
+	mov	ax,f30_tbl[bx]
+;
+	ret
+
+set:
+;
+;     Set the screen mode
+;
+	mov	dx,cx			; save mode
+	and	cx,000fH		; get alphanumeric mode
+	cmp	cx,0
+	jz	set_grphc
+
+	mov	dx,cx
+	call	set_mode
+	ret
+
+set_grphc:
+	and	dx,00f0H
+	call	set_mode
+	cmp	dx,10H
+	jne	set_exit
+
+;	Handle GSX with care
+
+	shr	bx,1
+	mov	dx,bx			; Vcon number
+	mov	bl,vrtl_phy[bx]		; Pcon number
+	shl	bx,1
+	mov	bx,ocdesctbl[bx]	; bx -> Xmit Queue control
+
+	pushf
+	cli
+
+	cmp	dl,CUR_VCON[bx]		; are we in foreground
+	je	int_exit		; no need to do flagwait
+
+;   F L A G W A I T until we get put into foreground
+
+	add	dl,v_flag
+	mov	cl,f_flagwait
+	call	supif
+
+int_exit:
+	popf
+
+set_exit:
+	mov	ax,0
+	ret
+
+set_mode:
+;		entry:  BX has Vcon number, DL new mode
+; 
+;
+
+	shl	bx,1
+	mov	cx,word ptr f30_tbl[bx]
+	mov	cl,dl
+	mov	word ptr f30_tbl[bx],cx		; update f30_tbl
+
+;
+	ret
+
+;========
+io_video:	;FUNCTION 31  --  video i/o
+;========
+;========
+io_keybd:	;FUNCTION 32  --  keyboard information
+;========
+;=======
+io_shft:	;FUNCTION 33  --  shift status
+;=======
+;=======
+io_eqck:	;FUNCTION 34  --  equipment check
+;=======
+	mov	ax,0ffffh
+	ret
+
+
+;=============
+io_int13_read:	;FUNCTION 35  --  read DOS disk
+;=============
+;
+;    ENTRY: DOS IOPB on stack
+;
+;    EXIT:  CCP/M IOPB on stack
+;
+
+; Since 5 and 1/4" dependent programs would only use this routine,
+;  and we have 8" drives, we will return an error.
+
+	mov	ax,0ffffH
+	ret
+
+;	mov	bp,sp
+;
+;	xor	ah,ah
+;	mov	al,DOS_SECTOR
+;	dec	ax		; DOS field 1 relative CCP/M 0 relative
+;	mov	SECTOR,ax
+;
+;	mov	al,DOS_TRACK
+;	shl	ax,1		; CCP/M TRACK = DOS_TRACK*2 + DOS_HEAD
+;	xor	bh,bh
+;	mov	bl,DOS_HEAD
+;	add	ax,bx
+;	mov	TRACK,ax
+;
+;	jmp	io_read
+
+
+;==============
+io_int13_write:	;FUNCTION 36  --  write DOS disk
+;==============
+;
+;    ENTRY: DOS IOPB on stack
+;
+;    EXIT:  CCP/M IOPB on stack
+;
+
+; Since 5 and 1/4" dependent programs would only use this routine,
+;  and we have 8" drives, we will return an error.
+
+	mov	ax,0ffffH
+	ret
+
+;	mov	bp,sp
+;
+;	xor	ah,ah
+;	mov	al,DOS_SECTOR
+;	dec	ax		; DOS field 1 relative CCP/M 0 relative
+;	mov	SECTOR,ax
+;
+;	mov	al,DOS_TRACK
+;	shl	ax,1		; CCP/M TRACK = DOS_TRACK*2 + DOS_HEAD
+;	xor	bh,bh
+;	mov	bl,DOS_HEAD
+;	add	ax,bx
+;	mov	TRACK,ax
+;
+;	jmp	io_write
+
+	DSEG
+
+f30_tbl	dw	1801h
+	dw	1801h
+	dw	1801h
+	dw	1801h
+	dw	1801h
+	dw	1801h
+	dw	1801h
+	dw	1801h
+
+	end

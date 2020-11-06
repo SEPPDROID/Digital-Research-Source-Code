@@ -1,0 +1,475 @@
+.bp
+.pn 31
+.cs 5
+.mt 5
+.mb 6
+.pl 66
+.ll 65
+.po 10
+.hm 2
+.fm 2
+.ft All Information Presented Here is Proprietary to Digital Research
+.tc         4.2.3  Open File Function 
+.sh
+4.2.3  Open File Function
+.qs
+.sp
+.ix open file function
+.nf
+.sp 3
+                    FUNCTION 15:  OPEN FILE
+
+             Entry Parameters:
+                Register   R5:  0FH
+                Register  RR6:  FCB Address
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H - 03G
+                                  error:  FFH
+.sp 2 
+.fi
+.pp 5
+The Open File Function matches the filename and filetype fields of the FCB
+specified in register  RR6 with these fields of a directory entry for an
+existing file on the disk.  When a match occurs, the BDOS sets the FCB
+extent (ex) field and the second system (S2) field to zero before the BDOS
+opens the file. Setting these one-byte fields to zero opens the file at the
+base extent, the first extent in the file. In CP/M-8000, files can be opened
+only at the base extent. In addition, the physical I/O mapping information,
+which allows access to the disk file through subsequent read and write
+operations, is copied to fields d0 through dn of the FCB. A file cannot be
+accessed until it has been opened successfully. The open function returns
+an integer value ranging from 00H through 03H in   R7 when the open
+operation is successful. The value FFH is returned in register   R7 when
+the file cannot be found. 
+.ix wildcard
+.pp
+The question mark (?) wildcard can be specified
+for the filename and filetype fields of the FCB referenced by
+register  RR6.  The ? wildcard has the value 3FH. For each position
+containing a ? wildcard, any character constitutes a match. For
+example, if the filename and filetype fields of the FCB
+referenced by  RR6 contain only ? wildcards, the BDOS accesses the
+first directory entry. However, you should not create a FCB of all wildcards 
+for this function because you cannot ensure which file this function 
+opens. 
+.pp
+Note that the current record field (cr) in the FCB must be set to
+zero by the program for the first record in the file to be
+accessed by subsequent sequential I/O functions. However, setting the
+current record field to zero is not required to open the file.
+.ix wildcard
+.ix open file
+.bp
+.tc         4.2.4 Close File Function
+.sh
+4.2.4  Close File Function
+.qs
+.ix close file function
+.sp
+.nf
+.sp 3
+                    FUNCTION 16:  CLOSE FILE
+
+             Entry Parameters:
+                Register   R5:  10H
+                Register  RR6:  FCB Address
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H - 03H
+                                  error:  FFH
+.sp 2
+.fi
+.pp
+The Close File Function performs the inverse of the Open File
+Function.  When the FCB passed in  RR6 was opened previously by either
+an Open File (15) or Make File (22) Function, the close function
+updates the FCB in the disk directory. The
+process used to match the FCB with the directory entry is
+identical to the Open File Function (15).  An integer value
+ranging from 00H though 03H is returned in   R7 for a successful
+close operation. The value FFH is returned in   R7 when the file
+cannot be found in the directory. When only read functions access
+a file, closing the file is not required. However, a file must be
+closed to update its disk directory entry when write functions access the 
+file. 
+.ix close file
+.bp
+.tc         4.2.5  Search For First Function
+.sh
+4.2.5  Search For First Function
+.qs
+.sp 3
+.ix search for first function
+.nf
+                 FUNCTION 17:  SEARCH FOR FIRST
+
+             Entry Parameters:
+                Register   R5:  11H
+                Register  RR6:  FCB Address
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H - 03H
+                                  error:  FFH
+.sp 2
+.fi
+.pp
+The Search For First Function scans the disk directory allocated
+to the current user number to match the filename and filetype of
+the FCB addressed in register  RR6 with the filename and filetype
+of a directory entry. The value FFH is returned in register   R7
+when a matching directory entry cannot be found. An
+integer value ranging from 00H through 03H is returned in
+register   R7 when a matching directory entry is found. 
+.ix disk directory
+.pp
+The directory record containing the matching entry is copied to
+the buffer at the current DMA address. Each directory record
+contains four directory entries of 32 bytes each. The integer value returned in
+  R7 indexes the relative location of the matching directory
+entry within the directory record. For example, the value 01H
+indicates that the matching directory entry is the second one in the directory
+record in the buffer. The relative starting position of the directory
+entry within the buffer is computed by multiplying the value
+in   R7 by 32 (decimal), which is equivalent to shifting the
+binary value of   R7 left 5 bits. 
+.ix search for first
+.pp
+When the drive (dr) field contains a ? wildcard, the auto disk
+select function is disabled and the default disk is searched. All
+entries including empty entries for all user numbers in the
+directory are searched.  The search function returns any matching
+entry, allocated or free, that belongs to any user number.  An
+allocated directory entry contains the filename and filetype of
+an existing file.  A free entry is not assigned to an existing
+file. If the first byte of the directory entry is E5H, the entry
+is free.  A free entry is not always empty. It can contain the
+filename and filetype of a deleted file because the directory
+entry for a deleted file is not zeroed. 
+.bp
+.tc         4.2.6  Search For Next Function
+.sh
+4.2.6  Search For Next Function
+.qs
+.sp
+.ix search for next function
+.nf
+.sp 3
+                 FUNCTION 18:  SEARCH FOR NEXT
+
+             Entry Parameters:
+                Register   R5:  12H
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H - 03H
+                                  error:  FFH
+.fi            
+.sp 2
+.pp
+The Search For Next Function scans the disk directory for an
+entry that matches the FCB and follows the last matched entry, found 
+with this or the Search For First Function (17). 
+.pp
+A program must invoke a Search For First Function before invoking
+this function for the first time. Subsequent Search For Next
+Functions can follow, but they must be specified 
+without other disk related BDOS functions intervening. Therefore,
+a Search For Next Function must follow either itself or a Search
+For First Function. 
+.pp
+The Search For Next 
+Function returns the 
+value FFH in   R7 when no more directory entries match.  
+.ix search for next
+.bp
+.tc         4.2.7  Delete File Function
+.sh
+4.2.7  Delete File Function
+.qs
+.ix delete file function
+.sp 3
+.nf
+                   FUNCTION 19:  DELETE FILE
+
+                Entry Parameters:
+                   Register   R5:  13H
+                   Register  RR6:  FCB Address
+
+                Returned  Values:
+                   Register   R7:  Return Code
+
+                                   success:  00H
+                                     error:  FFH
+.fi
+.sp 2
+.pp
+The Delete File Function removes files and deallocates the
+directory entries for and space allocated to files that match the
+filename in the FCB pointed to by the address passed in  RR6. The
+filename and filetype can contain wildcards, but the drive select
+code cannot be a wildcard as in the Search For First (17) and
+Search For Next (18) Functions.  The value FFH is returned in
+register   R7 when the referenced file cannot be found.  The
+value 00H is returned in   R7 when the file is found. 
+.ix delete file
+.bp
+.tc         4.2.8  Read Sequential Function
+.sh
+4.2.8  Read Sequential Function
+.qs
+.sp 3
+.ix read sequential function
+.nf
+                 FUNCTION 20:  READ SEQUENTIAL
+
+                Entry Parameters:
+                   Register   R5:  14H
+                   Register  RR6:  FCB Address
+
+                Returned  Values:
+                   Register   R7:  Return Code
+
+                                   success:  00H
+                                     error:  01H
+.sp 2
+.fi
+.pp
+The Read Sequential Function reads the next 128-byte record in a 
+file.  The FCB passed in register  RR6 must have been opened by
+an Open File (15) or the Make File Function (22) before this 
+function is invoked. The program must set the current record
+field to zero following the open or make function to ensure the
+file is read from the first record in the file. After the file 
+is opened, the Read
+Sequential Function reads the 128-byte record specified by the 
+current record field from the disk
+file to the current DMA buffer. The FCB current record (cr) and
+extent (ex) fields indicate the location of the record 
+that is read. The current record field is automatically
+incremented to the next record in the extent after a read
+operation.
+.pp
+When the current record field overflows, the next
+logical extent is automatically opened and the current record
+field is reset to zero before the read operation is performed.  After
+the first record in the new extent is read, the current record field 
+contains the value 01H.  
+.pp
+The value 00H is returned in register   R7 when the read
+operation is successful.  The value of 01H is returned in   R7
+when the record being read contains no data. Normally, the no data
+situation is encountered at the end of a file.  However, it can
+also occur when this function tries to read either a previously
+unwritten data block or a nonexistent extent. These situations
+usually occur with files created or appended with the BDOS
+Write Random Function (34). 
+.ix read sequential
+.bp
+.tc         4.2.9  Write Sequential Function 
+.sh 
+4.2.9  Write Sequential Function 
+.qs
+.ix write sequential function
+.sp 3
+.nf
+                 FUNCTION 21:  WRITE SEQUENTIAL
+
+             Entry Parameters:
+                Register   R5:  15H
+                Register  RR6:  FCB Address
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H
+                                  error:  01H or 02H
+.sp 2
+.fi
+.pp
+The Write Sequential Function writes a 128-byte record from the
+DMA buffer to the disk file whose FCB address is passed in 
+register  RR6. The FCB must be opened by either an Open File (15)
+or Make File (22) Function before your program invokes
+the Write Sequential Function. The record is written
+to the current record, specified in the FCB current record (cr)
+field. 
+.pp
+The current record field is automatically incremented to the next record.
+When the current record  field overflows, the next logical extent of the
+file is automatically opened and the current record field is reset to zero
+before the write operation. After the write operation, the current record
+field in the newly opened extent is set to 01H. 
+.pp
+Records can be written to an existing file. However, newly
+written records can overlay existing records in the file because the
+current record field usually is set to zero after a file is
+opened or created to ensure a subsequent sequential I/O function accesses
+the first record in the file. 
+.pp
+The value 00H is returned in register   R7 when the
+write operation is successful. A nonzero value in register
+  R7 indicates the write operation is unsuccessful
+due to one of the conditions described below.
+.bp
+.ce
+.sh
+Table 4-6.  Unsuccessful Write Operation Return Codes
+.qs
+.sp
+.in 5
+.ll 60
+.nf
+Value                        Meaning
+.fi
+.sp
+.in 13
+.ti -7
+01     No available directory space - This condition occurs when
+the write command attempts to create a new extent that requires a
+new directory entry and no available directory entries exist on
+the selected disk drive.
+.sp
+.ti -7
+02     No available data block - This condition is encountered when
+the write command attempts to allocate a new data block to the
+file and no unallocated data blocks exist on the selected disk drive.
+.ix write sequential
+.in 0
+.ll 65
+.bp
+.tc         4.2.10  Make File Function
+.sh
+4.2.10  Make File Function
+.qs
+.sp 3
+.ix make file function
+.nf
+                    FUNCTION 22:  MAKE FILE
+
+             Entry Parameters:
+                Register   R5:  16H
+                Register  RR6:  FCB Address
+
+             Returned  Values:
+                Register   R7:  Return Code
+
+                                success:  00H - 03H
+                                  error:  FFH
+.sp 2
+.fi
+.pp
+The Make File Function creates and opens a new file on a
+specified disk or the default disk. The address of the FCB for the
+file is passed in register  RR6. You must ensure the FCB contains
+a filename that does not already exist in the 
+referenced disk directory. The drive field (dr) in the FCB
+indicates the drive on which the directory resides.  The disk
+directory is on the default drive when the FCB drive field
+contains a zero. 
+.pp
+The BDOS creates the file and initializes the directory and
+the FCB in memory to indicate an empty file. The program must ensure that no
+duplicate filenames occur.  Invoking the Delete File Function
+(19) prior to the Make File Function excludes the possibility of
+duplicate filenames. 
+.pp
+Register   R7 contains an integer value in the range 00H through
+03H when the function is successful. Register   R7 contains the
+value FFH when a file cannot be created due to insufficient directory 
+space.
+.ix make file
+.bp
+.tc         4.2.11  Rename File Function 
+.sh
+4.2.11  Rename File Function
+.qs
+.ix rename file function
+.sp 3
+.nf
+                   FUNCTION 23:  RENAME FILE
+
+                Entry Parameters:
+                   Register   R5:  17H
+                   Register  RR6:  FCB Address
+                
+                Returned  Values:
+                   Register   R7:  Return Code
+                                   success:  00H
+                                     error:  FFH
+.sp 2
+.fi
+.pp
+The Rename File Function uses the FCB specified in register  RR6
+to change the filename and filetype of all directory entries for
+a file. The first 12 bytes of the FCB contains the file
+specification for the file to be renamed as shown in Figure 4-1.
+Bytes 16 through 27 (d0 through d12) contain the new name of the
+file.  The filenames and filetypes specified must be valid for
+CP/M. Wildcards cannot be specified in the filename and filetype
+fields.  The FCB drive field (dr) at byte position 0 selects the
+drive.  This function ignores the drive field at byte position 16,
+if it is specified for the new filename. Register   R7 contains the value 
+zero when the rename function is successful. It contains the
+value FFH when the first filename in the FCB cannot be found
+during the directory scan. 
+.ix rename
+.sp 3
+.nf
+FCB byte position 
+.sp
+ 0  1  2  3  4  5  6  7  8  9 10 11...16 17 18 19 20 21 22 23...27...
+.sp
+dr f1 f2 f3 f4 f5 f6 f7 f8 t1 t2 t3...d0 d1 d2 d3 d4 d5 d6 d7...d12...
+ 
+      old file specification             new file specification     
+.fi
+.sp 2
+.sh
+.ce
+Figure 4-1. FCB Format for Rename Function
+.qs
+.sp 2
+.pp
+In the above figure, horizontal ellipses indicate FCB fields that are not 
+required for this function. Refer to Section 4.1.2 for a description of 
+all FCB fields.
+.bp
+.tc         4.2.12  Set Direct Memory Access (DMA) Address
+.sh
+4.2.12  Set Direct Memory Access (DMA) Address Function
+.ix set direct memory access (DMA address function
+.sp 3
+                 FUNCTION 26:  SET DMA ADDRESS
+
+                 Entry Parameters:
+                    Register   R5:  1AH
+                    Register  RR6:  DMA Address
+
+                 Returned  Values:
+                    Register   R7:  00H
+.sp 2
+.fi
+.pp
+The Set DMA Address Function sets the starting address of the
+128-byte DMA buffer. DMA is an acronym for Direct Memory Access,
+which often refers to disk controllers that directly access
+memory to transfer data to and from the disk subsystem.  Many
+computer systems use nonDMA access in which the data is
+transferred through programmed I/O operations. In CP/M the 
+term DMA is used differently. The DMA address in
+CP/M-8000 is the beginning address of a 128-byte data buffer,
+called the DMA buffer. The DMA buffer is the area in memory
+where a data record resides before a disk write operation and after a
+disk read operation.  The DMA buffer can begin on 
+an even or odd address.
+.ix set DMA address
+.ix DMA buffer
+.nx fourc

@@ -1,0 +1,477 @@
+;******************** BDOS filesystem part 3 ****************
+;
+;
+sqread:
+        ;sequential disk read operation
+        MOV     seqio,1
+                                        ;drop through to diskread
+;
+diskread:                               ;(may enter from seqdiskread)
+        MOV     rmf,true                ;read mode flag =
+                                        ;true (open$reel)
+                                        ;read the next record from
+                                        ;the current FCB
+        CALL    getfcb                  ;sets parameters for the read
+        MOV     AL,lvrecord
+        CMP     AL,rcount               ;vrecord-rcount
+                                        ;skip if rcount > vrecord
+        JB      recordok
+                                        ;not enough records in extent
+                                        ;record count must be 128
+                                        ;to continue
+        CMP     AL,128                  ;vrecord = 128?
+        JNZ     diskeof                 ;skip if vrecord<>128
+        CALL    openreel                ;go to next extent if so
+        MOV     vrecord,0               ;vrecord=00
+                                        ;now check for open ok
+        cmp     lret,0                  ;stop at eof
+        JNZ     diskeof
+recordok:
+        ;arrive with fcb addressing a record to read
+        CALL    index
+                                        ;error 2 if reading
+                                        ;unwritten data
+                                        ;(returns 1 to be compatible
+                                        ;with 1.4)
+        CALL    alloct                  ;arecord=0000?
+        JZ      diskeof
+                                        ;record has been allocated,
+                                        ;read it
+        CALL    atran                   ;arecord now a disk address
+        CALL    seek                    ;to proper track,sector
+        CALL    rdbuff                  ;to dma address
+        JMP     setfcb                  ;replace parameter      
+;       ret
+diskeof:
+        JMP     setlret1                ;lret = 1
+                                        ;ret
+;
+slect:
+        ;select disk word ptr info for subsequent input or output ops
+        MOV     BX,dlog
+        MOV     cl,curdsk
+        ror     bx,cl
+        PUSH    BX
+        XCHG    BX,DX                   ;save it for test below,
+                                        ;send to seldsk
+        CALL    selectdisk
+        POP     BX                      ;recall dlog vector
+        JNZ     L_67
+        CALL    selerror
+L_67:                                   ;returns true if select ok
+                                        ;is the disk logged in?
+        RCR     bl,1
+        jb      ret20                   ;rc
+                                        ;return if bit is set
+                                        ;disk not logged in,
+                                        ;set bit and initialize
+        mov     cx,dlog
+        CALL    setcdisk
+        MOV     dlog,BX                 ;dlog=set$cdisk(dlog)
+        JMP     initialize
+                                        ;ret
+;
+curselect:
+        MOV     AL,linfo
+        mov     curdsk,al               ;curdsk=info
+        jmps    slect
+                                        ;ret
+;
+reselect:
+        ;check current fcb to see if reselection necessary
+        MOV     resel,true              ;mark possible reselect
+        MOV     BX,info
+        MOV     AL,[bx]                 ;drive select code
+        AND     AL,00011111b            ;non zero is auto drive select
+        dec     AL                      ;drive code normalized to 
+                                        ;0...30, or 255
+        MOV     linfo,AL                ;save drive code
+        CMP     AL,30
+        JAE     noselect
+                                        ;auto select function,
+                                        ;save curdsk
+        MOV     AL,curdsk
+        MOV     olddsk,AL               ;olddsk=curdsk
+        MOV     AL,[bx]
+        MOV     fcbdsk,AL               ;save drive code
+        AND     AL,11100000b
+        MOV     [bx],al                 ;preserve hi bits
+        CALL    curselect
+noselect:
+                                        ;set user code
+        MOV     AL,usrcode              ;0...31
+        MOV     BX,info
+        OR      AL,[bx]
+        MOV     [bx],al
+ret20:  RET
+;
+;       individual function handlers
+
+func12	equ	return
+func13:
+;
+        ;reset disk system - initialize to disk 0
+;
+        xor     bx,bx
+        MOV     rodsk,BX
+        MOV     dlog,BX
+        MOV     curdsk,bl               ;note that usrcode remains
+                                        ;unchanged
+        JMP     slect
+                                        ;ret ;jmp goback
+;
+func14  EQU     curselect               ;
+;
+        ;select disk info
+;
+;
+func15:
+;
+        ;open file
+;
+        CALL    parsave33               ;copy FCB from user seg.
+        CALL    clrmodnum               ;clear the module number
+        CALL    reselect
+        jmp     open
+                                        ;ret ;jmp goback
+;
+func16	equ	return
+func17	equ	return
+func18	equ	return
+func19	equ	return
+;
+func20:
+;
+        ;read a file
+;
+        CALL    parsave33
+        CALL    reselect
+        jmp     sqread
+                                        ;jmp goback
+;
+func21	equ	return
+func22	equ	return
+func23	equ	return
+func24	equ	return
+func25	equ	return
+;
+func26:
+;
+        ;set the subsequent dma address to info
+;
+                                        ;was MOV BX,INFO
+        MOV     dmaad,dx                ;dmaad = info
+        JMP     setdata                 ;to data dma address
+                                        ;ret ;jmp goback
+;
+func27	equ	return
+func28	equ	return
+func29	equ	return
+func30	equ	return
+func31	equ	return
+func32	equ	return
+func33	equ	return
+func34	equ	return
+func35	equ	return
+func36	equ	return
+func37	equ	return
+;
+goback:
+
+        ;arrive here at end of processing to return to user
+
+        cmp     resel,0
+        JZ      retmon
+                                        ;reselection may have
+                                        ;taken place
+        MOV     BX,info
+        MOV     b[bx],0                 ;fcb(0)=0
+        MOV     AL,fcbdsk
+        OR      AL,AL
+        JZ      retmon
+                                        ;restore disk number
+        MOV     [bx],al                 ;fcb(0)=fcbdsk
+        MOV     AL,olddsk
+        MOV     linfo,AL
+        CALL    curselect
+;
+;       return from the disk monitor
+retmon:
+        cmp     parcopfl,true           ;test if parameter block
+        jnz     retm1                   ;to be copied back to user
+        call    parunsave
+retm1:  MOV     BX,aret
+        MOV     AL,BL
+        MOV     CH,BH                   ;BA = BX = aret
+        RET
+func38  EQU     funcret
+func39  EQU     funcret
+func40	equ	return
+;
+;******************* end BDOS filesystem part 3 ***************
+end
+  BX
+;        MOV     arecord,BX
+;        CALL    setdata
+;dskw11:
+;        CALL    seek                    ;to proper file position
+;        POP     CX
+;        PUSH    CX                      ;restore/save write flag
+;                                       ;(CL=2 if new block,0 if not)
+;        CALL    wrbuff                  ;written to disk
+;        POP     CX
+                                        ;increment record count
+                                        ;if rcount <= vrecord
+;        MOV     AL,lvrecord
+;        LEA     BX,rcount
+;        CMP     AL,[bx]                 ;vrecord-rcount
+;        JB      dskwr2
+                                        ;rcount <= vrecord
+;        MOV     [bx],al
+;        INC     b[bx]                   ;rcount = vrecord+1
+;        MOV     CL,2                    ;mark as record count
+                                        ;incremented
+;dskwr2:
+                                        ;AL has vrecord,
+                                        ;CL=2 if new block or record#
+;        dec     CL
+;        dec     CL
+;        JNZ     noupdate
+;        PUSH    AX                      ;save vrecord value
+;        CALL    getmodnum               ;BX=.fcb(modnum),
+                                        ;AL=fcb(modnum)
+                                        ;reset the file write flag to
+                                        ;mark as written FCB
+;        AND     AL,not fwfmsk           ;bit reset
+;        MOV     [bx],al                 ;fcb(modnum) = fcb(modnum)
+                                        ;and 7fh
+;        POP     AX                      ;restore vrecord
+;noupdate:
+        ;check for end of extent, if found attempt to open
+        ;next extent in preparation for next write
+;        CMP     AL,lstrec               ;vrecord=lstrec?
+;        JNZ     dskwr3                  ;skip if not
+                                        ;may be random access write,
+                                        ;if so we are done
+                                        ;change next     
+;        cmp     seqio,1
+;        JNZ     dskwr3                  ;skip next extent open op
+                                        ;update current fcb before
+                                        ;going to next extent
+;        CALL    setfcb
+;        CALL    openreel                ;rmf=false
+                                        ;vrecord remains at lstrec
+                                        ;causing eof if no more dir
+                                        ;space is available
+;        LEA     BX,lret
+;        MOV     AL,[bx]
+;        OR      AL,AL
+;        JNZ     nospace
+                                        ;space available,
+                                        ;set vrecord = 255
+;        dec     AL
+;        MOV     lvrecord,al             ;goes to 00 next time
+;nospace:
+;        MOV     b[bx],0                 ;lret = 00 for returned value
+;dskwr3:
+;        JMP     setfcb                  ;replace parameters
+                                        ;ret
+;
+;rseek:
+        ;random access seek operation, C=0ffh if read mode
+        ;fcb is assumed to address an active FCB
+        ;(modnum has been set to 1100$0000b if previous bad seek)
+;
+;        MOV     seqio,0                 ;marked as random access op.
+;rseek1:
+;        PUSH    CX                      ;save r/w flag
+;        MOV     DX,info
+                                        ;dx will hold base of fcb
+;        MOV     BX,ranrec
+;        ADD     BX,DX                   ;bx=.fcb(ranrec)
+;        MOV     AL,[bx]
+;        AND     AL,7fh
+;        PUSH    AX                      ;record number
+;        MOV     AL,[bx]
+;        RCL     AL,1                    ;cy=lsb of extent#
+;        INC     BX
+;        MOV     AL,[bx]
+;        RCL     AL,1
+;        AND     AL,11111b               ;AL=ext#
+;        MOV     CL,AL                   ;CL holds extent number,
+                                        ;record stacked
+;        MOV     AL,[bx]
+;        RCR     AL,1
+;        RCR     AL,1
+;        RCR     AL,1
+;        RCR     AL,1
+;        AND     AL,1111b                ;mod#
+;        MOV     CH,AL                   ;CH = module#,CL = ext#
+;        POP     AX                      ;recall sought record #
+                                        ;check to insure high byte
+;        INC     BX
+;        MOV     BL,[bx]                 ;l=high byte (must be 00)
+;        or      bl,bl
+;        MOV     BL,6                    ;zero flag, l=6
+                                        ;produce error 6,
+                                        ;seek past physical eod
+;        jnz     seekerr
+                                        ;otherwise, high byte = 0
+;        MOV     BX,nxtrec
+;        ADD     BX,DX                   ;bx=.fcb(nxtrec)
+;        MOV     [bx],al                 ;sought rec# stored away
+;
+        ;arrive here with CH=mod#, CL=ext#, DX=.fcb, rec stored
+        ;the r/w flag is still stacked.  compare fcb values
+;
+;        MOV     BX,extnum
+;        ADD     BX,DX
+;        MOV     AL,CL                   ;A=seek ext#
+;        SUB     AL,[bx]
+;        JNZ     ranclose                ;tests for = extents
+                                        ;extents match, check mod#
+;        MOV     BX,modnum
+;        ADD     BX,DX
+;        MOV     AL,CH                   ;B=seek mod#
+                                        ;could be overflow at eof,
+                                        ;producing module# of 90h
+                                        ;or 10h, so compare all
+                                        ;but fwf
+;        SUB     AL,[bx]
+;        AND     AL,7fh
+;        JZ      seekok                  ;same?
+;ranclose:
+;        PUSH    CX
+;        PUSH    DX                      ;save seek mod#,ext#, .fcb
+;        CALL    close                   ;current extent closed
+;        POP     DX
+;        POP     CX                      ;recall parameters and fill
+;        MOV     BL,3                    ;cannot close error #3
+;        MOV     AL,lret
+;        INC     AL
+;        JZ      badseek
+;        MOV     BX,extnum
+;        ADD     BX,DX
+;        MOV     [bx],cl                 ;fcb(extnum)=ext#
+;        MOV     BX,modnum
+;        ADD     BX,DX
+;        MOV     [bx],ch                 ;fcb(modnum)=mod#
+;        CALL    open                    ;is the file present?
+;        MOV     AL,lret
+;        INC     AL
+;        JNZ     seekok                  ;open successful?
+                                        ;cannot open file, read mode?
+;        POP     CX                      ;r/w flag to c (=0ffh if read)
+;        PUSH    CX                      ;everyone expects this
+                                        ;item stacked
+;        MOV     BL,4                    ;seek to unwritten extent #4
+;        INC     CL                      ;becomes 00 if read operation
+;        JZ      badseek                 ;error if read operation
+                                        ;write, make new extent
+;        CALL    make
+;        MOV     BL,5                    ;cannot create new extent #5
+;        MOV     AL,lret
+;        INC     AL
+;        JZ      badseek         ;no dir space
+                                        ;file make successful
+;seekok:
+;        POP     CX                      ;discard r/w flag
+;        XOR     AL,AL
+;        JMP     staret                  ;with zero set  
+;badseek:
+;
+        ;fcb no longer contains a valid fcb, mark
+        ;with 1100$000b in modnum field so that it
+        ;appears as overflow with file write flag set
+;
+;        PUSH    BX                      ;save error flag
+;        CALL    getmodnum               ;BX = .modnum
+;        MOV     b[bx],11000000b
+;        POP     BX                      ;and drop through
+;seekerr:
+;        POP     CX                      ;discard r/w flag
+;        MOV     AL,BL
+;        MOV     lret,al                 ;lret=#, nonzero
+                                        ;setfwf returns <> 0 if error
+;        JMP     setfwf                  ;flag set, so subsequent
+                                        ;close ok
+                                        ;ret
+;
+;rdread:
+;
+        ;random disk read operation
+;
+;        MOV     CL,true                 ;marked as read operation
+;        CALL    rseek
+;        JNZ     L_65
+;        CALL    diskread
+;L_65:                                   ;if seek successful
+;        RET
+;
+;rdwrite:
+                                        ;random disk write operation
+;        MOV     CL,false                ;marked as write operation
+;        CALL    rseek
+;        JNZ     L_66
+;        CALL    diskwite
+;L_66:                                   ;if seek successful
+;        RET
+;
+;cmperr:
+        ;compute random record position for getfilesize/setrandom
+;        XCHG    BX,DX
+;        ADD     BX,DX
+                                        ;DX=.buf(dptr) or .fcb(0),
+                                        ;BX=.f(nxtrec/reccnt)
+;        MOV     CL,[bx]                 ;pick up record no.
+;        MOV     CH,0                    ;CX = 0000 0000 ?rrr rrrr
+;        MOV     BX,extnum
+;        ADD     BX,DX
+;        MOV     ah,[bx]
+;        mov     al,0
+;        shr     ax,1
+;        and     ah,0fh
+;        add     cx,ax
+                                        ;CX = 000? eeee errrr rrrr
+ ;       MOV     BX,modnum
+;        ADD     BX,DX
+;        MOV     AL,[bx]                 ;A=XXX? mmmm
+;        mov     ah,16
+;        mul     ah
+;        PUSH    AX
+;        ADD     ch,al
+                                        ;cy=?,CX = mmmm eeee errr rrrr
+;        pushf                           ;possible second carry
+;        POP     BX                      ;cy = lsb of L
+;        MOV     AL,BL                   ;cy = lsb of A
+;        POP     BX                      ;cy = lsb of L
+;        OR      AL,BL                   ;cy/cy = lsb of A
+;        AND     AL,1                    ;Al=0? possible carry-out
+;        RET
+;
+;getfilesize:
+        ;compute logical file size for current fcb
+;        MOV     CL,extnum
+;        CALL    srch
+                                        ;zero receiving ranrec field
+;        MOV     BX,info
+;        MOV     DX,ranrec
+;        ADD     BX,DX
+;        PUSH    BX                      ;save position
+;        MOV     [bx],dh
+;        INC     BX
+;        MOV     [bx],dh
+;        INC     BX
+;        MOV     [bx],dh                 ;=00 00 00
+;getsize:
+;        CALL    endofdir
+;        JZ      setsize
+                                        ;current fcb addressed by dptr
+;        CALL    getdptra
+;        MOV     DX,reccnt               ;ready for compute size
+;        CALL    cmperr
+                                        ;AL=0000 000?,
+                                        ;CX = mmmm eeee errr rrrr
+                                        ;compare with memory, larger?
+;        POP     BX
+;        PUSH    BX    

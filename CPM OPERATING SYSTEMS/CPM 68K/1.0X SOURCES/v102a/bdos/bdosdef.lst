@@ -1,0 +1,184 @@
+1File: BDOSDEF.H                                                           Page       1
+     1    
+     2   /********************************************************
+     3   *							*
+     4   *		CP/M-68K header file 			*
+     5   *    Copyright (c) 1982 by Digital Research, Inc.	*
+     6   *    Structure definitions for BDOS globals		*
+     7   *	and BDOS data structures			*
+     8   *							*
+     9   *	Desecrated 6-Aug-83 (sw) for type-ahead		*
+    10   *							*
+    11   ********************************************************/
+    12    
+    13   /**************************************************************************
+    14   The BDOS data structures, especially those relating to global variables,
+    15   are structured in a way that hopefully will enable this BDOS, in the future,
+    16   to easily become a re-entrant multi-tasking file system.  Consequently,
+    17   the BDOS global variables are divided into two classes.  Those that are
+    18   truly global, even in the case of multiple tasks using the file system
+    19   concurrently, are simply declared as global variables in bdosmain.c.
+    20   Only a few "globals" are really global in this sense.
+    21    
+    22   The majority of the "global" variables are actually state variables that
+    23   relate to the state of the task using the file system.  In CP/M-68K, these
+    24   are "global", since there's only one task, but in a multi-thread model they're
+    25   not.  This type of variables is put into a data structure, with the
+    26   intention that in the multi-task environment this structure will be based.
+    27    
+    28   The following declarations take this philosophy into account, and define
+    29   a simple structure for the single thread environment while leaving the
+    30   possibilities open for the multi-thread environment.
+    31   ****************************************************************************/
+    32    
+    33   #define snglthrd TRUE
+    34   			/* TRUE for single-thread environment
+    35   			FALSE to create based structure for re-entrant model */
+    36   #if snglthrd
+    37   #define GBL gbls
+    38   				/* In single thread case, GBL just names
+    39   					the structure */
+    40   #define BSETUP  EXTERN struct stvars gbls;
+    41   				/* and BSETUP defines the extern structure */
+    42   #endif
+    43    
+    44   #if ! snglthrd
+    45   #define GBL (*statep)
+    46   				/* If multi-task, state vars are based */
+    47   #define BSETUP  REG struct stvars *statep; \
+    48   	  statep = &gbls;
+    49   				/* set up pointer to state variables */
+    50   			/* This is intended as an example to show the intent */
+    51   #endif
+    52    
+    53    
+    54   /* Note that there are a few critical regions in the file system that must
+    55      execute without interruption.  They pertain mostly to the manipulation of
+    56      the allocation vector.  This isn't a problem in a single-thread model, but
+    57      must be provided for in a multi-tasking file system.  Consequently, the
+    58      primitives LOCK and UNLOCK are defined and used where necessary in the
+    59      file system.  For the single thread model, they are null routines       */
+1File: BDOSDEF.H                                                           Page       2
+    60    
+    61   #define LOCK    /**/
+    62   #define UNLOCK  /**/
+    63   /* Be sure LOCK and UNLOCK are implemented to allow recursive calls to LOCK.
+    64      That is, if a process that calls LOCK already owns the lock, let it proceed,
+    65      but remember that only the outer-most call to UNLOCK really releases the
+    66      file system.		*/
+    67    
+    68    
+    69   #define VERSION 0x2022		/* Version number for CP/M-68K		   */
+    70   #define robit 0			/* read-only bit in file type field of fcb */
+    71   #define arbit 2			/* archive bit in file type field of fcb   */
+    72   #define SECLEN 128		/* length of a CP/M sector		   */
+    73    
+    74    
+    75   /* File Control Block definition */
+    76   struct fcb
+    77   {
+    78   	UBYTE	drvcode;	/* 0 = default drive, 1..16 are drives A..P */
+    79   	UBYTE	fname[8];	/* File name (ASCII)			*/
+    80   	UBYTE	ftype[3];	/* File type (ASCII)			*/
+    81   	UBYTE	extent;		/* Extent number (bits 0..4 used)	*/
+    82   	UBYTE	s1;		/* Reserved				*/
+    83   	UBYTE	s2;		/* Module field (bits 0..5), write flag (7) */
+    84   	UBYTE	rcdcnt;		/* Nmbr rcrds in last block, 0..128	*/
+    85   	union
+    86   	{
+    87   	  UBYTE	small[16];	/* 16 block numbers of 1 byte		*/
+    88   	  WORD	big[8];		/* or 8 block numbers of 1 word		*/
+    89   	}	dskmap;
+    90   	UBYTE	cur_rec;	/* current record field			*/
+    91   	UBYTE	ran0;		/* random record field (3 bytes)	*/
+    92   	UBYTE	ran1;
+    93   	UBYTE	ran2;
+    94   };
+    95    
+    96    
+    97   /* Declaration of directory entry	*/
+    98   struct dirent
+    99   {
+   100   	UBYTE	entry;		/* 0 - 15 for user numbers, E5 for empty */
+   101   				/* the rest are reserved		*/
+   102   	UBYTE	fname[8];	/* File name (ASCII)			*/
+   103   	UBYTE	ftype[3];	/* File type (ASCII)			*/
+   104   	UBYTE	extent;		/* Extent number (bits 0..4 used)	*/
+   105   	UBYTE	s1;		/* Reserved				*/
+   106   	UBYTE	s2;		/* Module field (bits 0..5), write flag (7) */
+   107   	UBYTE	rcdcnt;		/* Nmbr rcrds in last block, 0..128	*/
+   108   	union
+   109   	{
+   110   	  UBYTE	small[16];	/* 16 block numbers of 1 byte		*/
+   111   	  WORD	big[8];		/* or 8 block numbers of 1 word		*/
+   112   	}	dskmap;
+   113   };
+   114    
+   115    
+   116   /* Declaration of disk parameter tables		*/
+   117   struct dpb			/* disk parameter table		*/
+   118   {
+1File: BDOSDEF.H                                                           Page       3
+   119   	UWORD	spt;		/* sectors per track 		*/
+   120   	UBYTE	bsh;		/* block shift factor		*/
+   121   	UBYTE	blm;		/* block mask			*/
+   122   	UBYTE	exm;		/* extent mask			*/
+   123   	UBYTE	dpbdum;		/* dummy byte for fill		*/
+   124   	UWORD	dsm;		/* max disk size in blocks	*/
+   125   	UWORD	drm;		/* max directory entries	*/
+   126   	UWORD	dir_al;		/* initial allocation for dir	*/
+   127   	UWORD	cks;		/* number dir sectors to checksum */
+   128   	UWORD	trk_off;	/* track offset			*/
+   129   };
+   130    
+   131   struct	dph			/* disk parameter header	*/
+   132   {
+   133   	UBYTE	*xlt;		/* pointer to sector translate table	*/
+   134   	UWORD	hiwater;	/* high water mark for this disk	*/
+   135   	UWORD	dum1;		/* dummy (unused)			*/
+   136   	UWORD	dum2;
+   137   	UBYTE	*dbufp;		/* pointer to 128 byte directory buffer	*/
+   138   	struct dpb *dpbp;	/* pointer to disk parameter block	*/
+   139   	UBYTE	*csv;		/* pointer to check vector		*/
+   140   	UBYTE	*alv;		/* pointer to allocation vector		*/
+   141   };
+   142    
+   143    
+   144   /* Declaration of structure containing "global" state variables */
+   145   #define	TBUFSIZ	126		/*sw # typed-ahead characters		   */
+   146   struct stvars
+   147   {
+   148   	UBYTE	kbchar;		/* keyboard type-ahead buffer count	   */
+   149   	UBYTE	delim;		/* Delimiter for function 9		   */
+   150   	BOOLEAN	lstecho;	/* True if echoing console output to lst:  */
+   151   	BOOLEAN echodel;	/* Echo char when getting <del> ?	   */
+   152   	UWORD	column;		/* CRT column number for expanding tabs	   */
+   153   	UBYTE	*chainp;	/* Used for chain to program call	   */
+   154   	UBYTE	curdsk;		/* Currently selected disk		   */
+   155   	UBYTE	dfltdsk;	/* Default disk (last selected by fcn 14)  */
+   156   	UBYTE	user;		/* Current user number			   */
+   157   	struct dph *dphp;	/* pointer to disk parm hdr for cur disk   */
+   158   	struct dirent *dirbufp; /* pointer for directory buff for process  */
+   159   				/* stored here so that each process can	   */
+   160   				/* have a separate dirbuf.		   */
+   161   	struct dpb *parmp;	/* pointer to disk parameter block for cur */
+   162   				/* disk. Stored here to save ref calc	   */
+   163   	UWORD	srchpos;	/* position in directory for search next   */
+   164   	UBYTE	*dmaadr;	/* Disk dma address			   */
+   165   	struct fcb *srchp;	/* Pointer to search FCB for function 17   */
+   166   	UBYTE	*excvec[18];	/* Array of exception vectors		   */
+   167   	UBYTE	*insptr;	/*sw Insertion pointer for typeahead	   */
+   168   	UBYTE	*remptr;	/*sw Removal pointer for typeahead	   */
+   169   	UBYTE	t_buff[TBUFSIZ]; /*sw Type-ahead buffer itself		   */
+   170   };
+   171    
+   172    
+   173   /* Console buffer structure declaration */
+   174   struct	conbuf
+   175   {
+   176   	UBYTE	maxlen;		/* Maximum length from calling routine */
+   177   	UBYTE	retlen;		/* Length actually found by BDOS */
+1File: BDOSDEF.H                                                           Page       4
+   178   	UBYTE	cbuf[];		/* Console data			 */
+   179   };
+   180    

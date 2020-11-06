@@ -1,0 +1,826 @@
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE SEARCH
+OBJECT MODULE PLACED IN SEARCH
+COMPILER INVOKED BY:  :F0: SEARCH.PLM DEBUG OBJECT(SEARCH) OPTIMIZE(3) XREF
+
+
+
+              $title ('SDIR - Search For Files')
+   1          search:
+              do;
+                              /* search module for extended dir */
+
+              $include (comlit.lit)
+          =
+   2   1  =   declare
+          =           lit                literally          'literally',
+          =           dcl                lit                'declare',
+          =           true               lit                '0ffh',
+          =           false              lit                '0',
+          =           boolean            lit                'byte',
+          =           forever            lit                'while true',
+          =           cr                 lit                '13',
+          =           lf                 lit                '10',
+          =           tab                lit                '9',
+          =           ctrlc              lit                '3',
+          =           ff                 lit                '12',
+          =           page$len$offset    lit                '1ch',
+          =           nopage$mode$offset lit                '2Ch',
+          =           sectorlen          lit                '128';
+              $include (mon.plm)
+          =
+          =                   /* definitions for assembly interface module        */
+   3   1  =   declare
+          =       fcb (33) byte external,        /* default file control block    */
+          =       maxb address external,         /* top of memory                 */
+          =       buff(128)byte external;        /* default buffer                */
+          =
+   4   1  =   mon1: procedure(f,a) external;
+   5   2  =       declare f byte, a address;
+   6   2  =       end mon1;
+          =
+   7   1  =   mon2: procedure(f,a) byte external;
+   8   2  =       declare f byte, a address;
+   9   2  =       end mon2;
+          =
+  10   1  =   mon3: procedure(f,a) address external;
+  11   2  =       declare f byte, a address;
+  12   2  =       end mon3;
+          =
+
+  13   1      dcl debug boolean external;
+
+  14   1      dcl first$pass boolean external;
+  15   1      dcl get$all$dir$entries boolean external;
+  16   1      dcl usr$vector address external;
+  17   1      dcl active$usr$vector address external;
+  18   1      dcl used$de address public;                /* used directory entries        */
+  19   1      dcl filesfound address public;             /* num files collected in memory */
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   2
+
+
+
+              $include(fcb.lit)
+          =
+  20   1  =   declare
+          =       f$drvusr          lit '0',        /* drive/user byte               */
+          =       f$name            lit '1',        /* file name                     */
+          =       f$namelen         lit '8',        /* file name length              */
+          =       f$type            lit '9',        /* file type field               */
+          =       f$typelen         lit '3',        /* type length                   */
+          =       f$rw              lit '9',        /* high bit is R/W attribute     */
+          =       f$dirsys          lit '10',       /* high bit is dir/sys attribute */
+          =       f$arc             lit '11',       /* high bit is archive attribute */
+          =       f$ex              lit '12',       /* extent                        */
+          =       f$s1              lit '13',       /* module byte                   */
+          =       f$rc              lit '15',       /* record count                  */
+          =       f$diskmap         lit '16',       /* file disk map                 */
+          =       diskmaplen        lit '16',       /* disk map length               */
+          =       f$drvusr2         lit '16',       /* fcb2                          */
+          =       f$name2           lit '17',
+          =       f$type2           lit '25',
+          =       f$cr              lit '32',       /* current record                */
+          =       f$rrec            lit '33',       /* random record                 */
+          =       f$rreco           lit '35';       /*   "      "    overflow        */
+          =
+              $include(xfcb.lit)
+          =
+  21   1  =   declare                                 /* XFCB                        */
+          =       xfcb$type          lit '10h',       /* identifier on disk          */
+          =       xf$passmode        lit '12',        /* pass word protection mode   */
+          =       xf$pass            lit '16',        /* XFCB password               */
+          =       passlen            lit '8',         /* password length             */
+          =       xf$create          lit '24',        /* creation/access time stamp  */
+          =       xf$update          lit '28';        /* update time stamp           */
+          =
+  22   1  =   declare                       /* directory label: special case of XFCB */
+          =       dirlabeltype       lit '20h',       /* identifier on disk          */
+          =       dl$password        lit '128',       /* masks on data byte          */
+          =       dl$access          lit '64',
+          =       dl$update          lit '32',
+          =       dl$makexfcb        lit '16',
+          =       dl$exists          lit '1';
+          =
+  23   1  =   declare                                 /* password mode of xfcb       */
+          =       pm$read            lit '80h',
+          =       pm$write           lit '40h',
+          =       pm$delete          lit '20h';
+          =
+
+  24   1      declare
+                  sfcb$type lit '21H',
+                  deleted$type lit '0E5H';
+                  
+              $include (search.lit)
+          =
+  25   1  =   declare                       /* what kind of file user wants to find       */
+          =       find$structure lit 'structure (
+          =       dir byte,
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   3
+
+
+          =       sys byte,
+          =       ro  byte,
+          =       rw  byte,
+          =       pass byte,
+          =       xfcb byte,
+          =       nonxfcb byte,
+          =       exclude byte)';
+          =
+  26   1  =   declare
+          =       max$search$files literally '10';
+          =
+  27   1  =   declare
+          =       search$structure lit 'structure(
+          =       drv byte,
+          =       name(8) byte,
+          =       type(3) byte,
+          =       anyfile boolean)';        /* match on any drive if true */
+          =
+  28   1      dcl find find$structure external;      /* what kind of files to look for */
+  29   1      dcl num$search$files byte external;
+  30   1      dcl search (max$search$files) search$structure external;
+                                                     /* file specs to match on         */
+
+                      /* other globals        */
+
+  31   1      dcl cur$usr byte external,
+                  cur$drv byte external,        /* current drive   "     "           */
+                  dir$label byte public;      /* directory label for BDOS 3.0      */
+
+
+              /* -------- BDOS calls -------- */
+
+  32   1      read$char: procedure byte;
+  33   2          return mon2 (1,0);
+  34   2      end read$char;
+
+
+              /* -------- in sort.plm -------- */
+
+  35   1      mult23: procedure(f$info$index) address external;
+  36   2          dcl f$info$index address;
+  37   2      end mult23;
+
+
+              /* -------- in util.plm -------- */
+
+  38   1      print: procedure(string$adr) external;
+  39   2          dcl string$adr address;
+  40   2      end print;
+
+  41   1      print$char: procedure(char) external;
+  42   2          dcl char byte;
+  43   2      end print$char;
+
+  44   1      pdecimal:procedure(val,prec,zsup) external;
+  45   2          dcl (val, prec) address;
+  46   2          dcl zsup boolean;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   4
+
+
+  47   2      end pdecimal;
+
+  48   1      printfn: procedure(fnameadr) external;
+  49   2          dcl fnameadr address;
+  50   2      end printfn;
+
+  51   1      crlf: procedure external;   /* print carriage return, linefeed */
+  52   2      end crlf;
+
+  53   1      add3byte: procedure(byte3adr,num) external;
+  54   2            dcl (byte3adr,num) address;
+  55   2      end add3byte;
+
+                      /* add three byte number to 3 byte accumulater */ 
+  56   1      add3byte3: procedure(totalb,numb) external;
+  57   2            dcl (totalb,numb) address;
+  58   2      end add3byte3;
+
+                      /* divide 3 byte value by 8 */
+  59   1      shr3byte: procedure(byte3adr) external;
+  60   2            dcl byte3adr address;
+  61   2      end shr3byte;
+
+              /* -------- In dpb86.plm -------- */
+
+              $include(dpb.lit)
+          =
+          =   /* indices into disk parameter block, used as parameters to dpb procedure */
+          =
+  62   1  =   dcl        spt$w        lit        '0',
+          =              blkshf$b     lit        '2',
+          =              blkmsk$b     lit        '3',
+          =              extmsk$b     lit        '4',
+          =              blkmax$w     lit        '5',
+          =              dirmax$w     lit        '7',
+          =              dirblk$w     lit        '9',
+          =              chksiz       lit        '11',
+          =              offset$w     lit        '13';
+          =
+
+  63   1      dcl k$per$block byte external;        /* set in dpb module */
+
+  64   1      base$dpb: procedure external;
+  65   2      end base$dpb;
+
+  66   1      dpb$byte: procedure(param) byte external;
+  67   2          dcl param byte;
+  68   2      end dpb$byte;
+
+  69   1      dpb$word: procedure(param) address external;
+  70   2          dcl param byte;
+  71   2      end dpb$word;
+
+
+              /* -------- Some Utility Routines -------- */
+
+  72   1      check$console$status: procedure byte;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   5
+
+
+  73   2          return mon2 (11,0);
+  74   2      end check$console$status;
+
+  75   1      search$first: procedure (fcb$address) byte public;
+  76   2          declare fcb$address address;             /* shared with disp.plm */
+  77   2          return mon2 (17,fcb$address);            /* for short display    */
+  78   2      end search$first;
+
+  79   1      search$next: procedure byte public;          /* shared with disp.plm */
+  80   2          return mon2 (18,0);
+  81   2      end search$next;
+
+  82   1      terminate: procedure external;               /* in main.plm */
+  83   2      end terminate;
+
+  84   1      set$vec: procedure(vector,value) external;   /* in main.plm */
+  85   2      dcl vector address,
+                  value byte;
+  86   2      end set$vec;
+
+              /*break: procedure public;                      shared with disp.plm */
+              /*    dcl x byte;
+                  if check$console$status then
+                  do;
+                      x = read$char;
+                      call terminate;
+                  end;
+              end break;*/
+
+
+              /* -------- file information record declaration -------- */
+
+              $include(finfo.lit)
+          =
+          =   /* file info record for SDIR - note if this structure changes in size  */
+          =   /* the multXX: routine in the sort.plm module must also change         */
+          =
+  87   1  =   declare
+          =           f$info$structure lit 'structure(
+          =               usr byte, name (8) byte, type (3) byte, onekblocks address,
+          =               kbytes address, recs$lword address, recs$hbyte byte,
+          =               hash$link address, x$i$adr address)';
+  88   1  =   declare
+          =           x$info$structure lit 'structure (
+          =               create (4) byte,
+          =               update (4) byte,
+          =               passmode byte)';
+          =
+
+  89   1      declare
+                      buf$fcb$adr address public,     /* index into directory buffer */
+                      buf$fcb based buf$fcb$adr (32) byte,
+                                                      /* fcb template for dir        */
+                      (first$f$i$adr, f$i$adr, last$f$i$adr) address public,
+                                                 /* indices into file$info array    */
+                      file$info based f$i$adr f$info$structure,
+                      sfcb$adr address,
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   6
+
+
+                      dir$type based sfcb$adr byte,
+                      sfcbs$present byte,
+                      x$i$adr address public,
+                      xfcb$info based x$i$adr x$info$structure;
+
+  90   1      compare: procedure(length, str1$adr, str2$adr) boolean;
+  91   2          dcl (length,i) byte,
+                      (str1$adr, str2$adr) address,
+                      str1 based str1$adr (1) byte,
+                      str2 based str2$adr (1) byte;
+                          /* str2 is the possibly wildcarded filename we are looking for */
+
+  92   2          do i = 0 to length - 1;
+  93   3              if ((str1(i) and 7fh) <> (str2(i) and 7fh)) and str2(i) <> '?' then
+  94   3                  return(false);
+  95   3          end;
+  96   2          return(true);
+  97   2      end compare;
+
+  98   1      match: procedure boolean public;
+  99   2      dcl i byte,
+                  temp address;
+ 100   2          if (i := (buf$fcb(f$drvusr) and 0fh)) <> cur$usr then
+ 101   2              if not get$all$dir$entries then       /* Not looking for this user  */
+ 102   2                  return(false);                    /* and not buffering all other*/
+                      else                                  /* specified user files on    */
+ 103   2              do; temp = 0;                         /* this drive.                */
+ 105   3                  call set$vec(.temp,i);
+ 106   3                  if (temp and usr$vector) = 0 then /* Getting all dir entries,   */
+ 107   3                      return(false);                /* with user number corresp'g */
+ 108   3              end;                                  /* to a bit on in usr$vector  */
+
+ 109   2          if usr$vector <> 0 and i <> 0 and first$pass <> 0 then
+ 110   2              call set$vec(.active$usr$vector,i);   /* skip cur$usr files         */
+                                                /* build active usr vector for this drive */
+
+ 111   2          do i = 0 to num$search$files - 1;
+ 112   3              if search(i).drv = 0ffh or search(i).drv = cur$drv then
+                                    /* match on any drive if 0ffh */
+ 113   3                  if search(i).anyfile = true then
+ 114   3                       return(not find.exclude);    /* file found */
+ 115   3                  else if compare(11,.buf$fcb(f$name),.search(i).name(0)) then
+ 116   3                       return(not find.exclude);    /* file found */
+                  end;
+ 118   2          return(find.exclude);     /* file not found */
+ 119   2      end match;                    /* find.exclude = the exclude option value   */
+
+ 120   1      dcl hash$table$size lit '128',               /* must be power of 2         */
+                  hash$table (hash$table$size) address at (.memory),
+                                                           /* must be initialized on each*/
+                  hash$entry$adr address,                  /* disk scan                  */
+                  hash$entry based hash$entry$adr address; /* where to put a new entry's */
+                                                           /* address                    */
+
+ 121   1      hash$look$up: procedure boolean;
+ 122   2          dcl (i,found,hash$index) byte;
+ 123   2          hash$index = 0;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   7
+
+
+ 124   2          do i = f$name to f$namelen + f$typelen;
+ 125   3              hash$index = hash$index + (buf$fcb(i) and 7fh); /* attributes may   */
+ 126   3          end;                                     /* only be set w/ 1st extent   */
+ 127   2          hash$index = hash$index + cur$usr;
+ 128   2          hash$index = hash$index and (hash$table$size - 1);
+ 129   2          hash$entry$adr = .hash$table(hash$index); /* put new entry in table if  */
+ 130   2          f$i$adr = hash$table(hash$index);         /* unused ( = 0)              */
+                  
+ 131   2          found = false;
+ 132   2          do while f$i$adr <> 0 and not found;
+ 133   3              if file$info.usr = (buf$fcb(f$drvusr) and 0fh) and
+                          compare(f$namelen + f$typelen,.file$info.name(0),.buf$fcb(f$name))
+                          then
+ 134   3                  found = true;
+                      else                                  /* table entry used - collison */
+ 135   3                  do; hash$entry$adr = .file$info.hash$link; /* resolve by linked  */
+ 137   4                  f$i$adr = file$info.hash$link;             /* list               */
+ 138   4                  end;
+ 139   3          end;
+ 140   2          if f$i$adr = 0 then
+ 141   2              return(false);   /* didn't find it, used hash$entry to keep new info */
+ 142   2          else return(true);   /* found it, file$info at matched entry             */
+ 143   2      end hash$look$up;
+
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   8
+
+
+              $eject
+ 144   1      store$file$info: procedure boolean;
+                      /* Look for file name of last found fcb or xfcb in fileinfo       */
+                      /* array, if not found put name in fileinfo array.   Copy other   */
+                      /* info to fileinfo or xfcbinfo.   The lookup is hash coded with  */
+                      /* collisions handled by linking up file$info records through     */
+                      /* the hash$link field of the previous file$info record.          */
+                      /* The file$info array grows upward in memory and the xfcbinfo    */
+                      /* grows downward.                                                */
+                      /*
+                                        
+                                      -------------------------<---.memory
+                     __               |      HASH TABLE       |
+              hash = \ of filename -->| root of file$info list|------------>-----------| 
+              func   /__ letters      |          .            |                        |
+                                      |          .            |                        |
+                      lower memory    ------------------------- <-- first$f$i$adr      |
+                                      |    file$info entry    |                        |
+                    (hash)    -----<--|          .            | <----------------------|
+                  (collision) |       |          .            |
+                              ------->|          .            |
+                                      |          .            |-------------------->|
+                                      | last file$info entry  | <- last$f$i$adr     |
+                                      |-----------------------|                     |
+                                      |                       |                     |
+                                      |                       |                     |
+                                      |   unused by dsearch,  |                     |
+                                      |     used by dsort     |                     |
+                                      |      for indices      |                     |
+                                      |                       |                     |
+                                      |                       |                     | 
+                                      |-----------------------|                     |
+                                      |    last$xfcb entry    | <- x$i$adr          |
+                                      |           .           |                     |
+                                      |           .           |                     |
+                                      |           .           | <-------------------|
+                                      |   first xfcb entry    |
+                                      |-----------------------|
+                                      |   un-usuable memory   | <- maxb
+                higher memory         -------------------------                        */
+
+
+ 145   2          dcl (i, j, d$map$cnt) byte,
+                      temp address;
+
+ 146   2          store$file: procedure;
+ 147   3             call move(f$namelen + f$typelen, .buf$fcb(f$name),.file$info.name);
+                                  /* attributes are not in XFCBs to copy again in case    */
+                                  /* XFCB came first in directory                         */
+                      
+ 148   3              file$info.name(f$arc-1) = file$info.name(f$arc-1) and buf$fcb(f$arc);
+                                             /* 0 archive bit if it is 0 in any dir entry */
+ 149   3              d$map$cnt = 0;         /* count kilobytes for current dir entry     */
+ 150   3              i = 1;                            /* 1 or 2 byte block numbers ?    */
+ 151   3              if dpb$word(blk$max$w) > 255 then
+ 152   3                  i = 2;
+ 153   3              do j = f$diskmap to f$diskmap + diskmaplen - 1 by i;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE   9
+
+
+ 154   4                  temp = buf$fcb(j);
+ 155   4                  if i = 2 then                      /* word block numbers        */
+ 156   4                      temp = temp or buf$fcb(j+1);
+ 157   4                  if temp <> 0 then                  /* allocated                 */
+ 158   4                      d$map$cnt = d$map$cnt + 1;
+ 159   4              end;
+ 160   3              if d$map$cnt > 0 then
+ 161   3              do;
+ 162   4                call add3byte
+                          (.file$info.recs$lword,
+                            d$map$cnt * (dpb$byte(blkmsk$b) + 1) -
+                            (  (128 - buf$fcb(f$rc)) and dpb$byte(blkmsk$b)  )
+                          );
+ 163   4                file$info.onekblocks = file$info.onekblocks +
+                          d$map$cnt * k$per$block -
+                          shr( (128 - buf$fcb(f$rc)) and dpb$byte(blkmsk$b), 3 );
+                           /* treat each directory entry separately for sparse files */
+                           /* if copied to single density diskette, the number of 1kblocks */
+ 164   4                file$info.kbytes = file$info.kbytes + d$map$cnt * k$per$block;
+ 165   4             end;
+ 166   3           end;
+                
+ 167   2        if buf$fcb(f$drvusr) <> sfcb$type then do; /* don't put SFCB's in table */
+ 169   3          if not hash$look$up then           /* not in table already            */ 
+                                         /* hash$entry is where to put adr of new entry */ 
+ 170   3            do;                  /* copy to new position in file info array     */
+ 171   4              if (temp := mult23(files$found + 1)) > x$i$adr then
+ 172   4                  return(false);                     /* out of memory           */
+ 173   4              if (temp < first$f$i$adr) then
+ 174   4                  return(false);                 /* wrap around - out of memory */
+ 175   4              f$i$adr = (last$f$i$adr := last$f$i$adr + size(file$info));
+ 176   4              filesfound = filesfound + 1;
+ 177   4              call move(f$namelen + f$typelen, .buf$fcb(f$name),.file$info.name);
+ 178   4              file$info.usr = buf$fcb(f$drvusr) and 0fh;
+ 179   4              file$info.onekblocks,file$info.kbytes,file$info.recs$lword,
+                          file$info.recs$hbyte, file$info.x$i$adr,file$info.hash$link = 0;
+ 180   4              hash$entry = f$i$adr;           /* save the address of file$info    */
+ 181   4          end;                                /* zero totals for the new file     */
+ 182   3        end;
+
+                  /* else hash$lookup has set f$i$adr to the file entry already in the    */
+                  /* hash table                       */  
+
+ 183   2          if sfcbs$present then do;         /* save sfcb,xfcb or fcb type info    */
+ 185   3            if (buf$fcb(f$drvusr) and xfcb$type) = 0 then do;
+ 187   4              if buf$fcb(f$drvusr) <> sfcb$type then do;
+ 189   5                if buf$fcb(f$ex) <= dpb$byte(extmsk$b) then do;  
+                          /* first extent? then store sfcb info into xfcb table */
+ 191   6                  if last$f$i$adr + size(file$info) > x$i$adr - size(xfcb$info) then
+ 192   6                    return(false);    /* out of memory */
+ 193   6                  x$i$adr = x$i$adr - size(xfcb$info);
+ 194   6                  call move(9,sfcb$adr,.xfcb$info.create);
+ 195   6                  file$info.x$i$adr = x$i$adr;
+ 196   6            end;
+ 197   5                call store$file;
+ 198   5              end;
+ 199   4            end;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  10
+
+
+ 200   3          end;
+ 201   2          else do;                           /* no SFCB's present */
+ 202   3            if (buf$fcb(f$drvusr) and xfcb$type) <> 0 then do;            /* XFCB */
+ 204   4              if last$f$i$adr + size(file$info) > x$i$adr - size(xfcb$info) then
+ 205   4                  return(false);                /* out of memory                  */
+ 206   4              x$i$adr = x$i$adr - size(xfcb$info);
+ 207   4              call move(8,.buf$fcb(xf$create),.xfcb$info.create);
+ 208   4              xfcb$info.passmode = buf$fcb(xf$passmode);
+ 209   4              file$info.x$i$adr = x$i$adr;
+ 210   4            end;
+ 211   3            else call store$file;        /* must be a regular fcb then */
+ 212   3          end;
+ 213   2        return(true);                             /* success                    */
+ 214   2      end store$file$info;
+
+
+                                 /* Module Entry Point */
+
+ 215   1      get$files: procedure public;       /* with one scan through directory get   */
+ 216   2          dcl dcnt byte;                 /* files from currently selected drive   */
+
+ 217   2          last$f$i$adr = first$f$i$adr - size(file$info);
+                                                 /* after hash table                */
+                  /* last$f$i$adr is the address of the highest file info record    */
+                  /* in memory                                                      */
+
+ 218   2          do dcnt = 0 to hash$table$size - 1;   /* init hash table                */
+ 219   3              hash$table(dcnt) = 0;
+ 220   3          end;
+
+ 221   2          x$i$adr = maxb;               /* top of mem, put xfcb info here         */
+ 222   2          call base$dpb;
+ 223   2          dir$label,filesfound, used$de = 0;
+                  
+ 224   2          fcb(f$drvusr) = '?';                           /* match all dir entries */
+ 225   2          dcnt = search$first(.fcb);
+ 226   2          sfcb$adr = 96 + .buff;           /* determine if SFCB's are present */
+ 227   2          if dir$type = sfcb$type then
+ 228   2          do;
+ 229   3            sfcbs$present = true;
+ 230   3            used$de = shr(1+dpb$word(dirmax$w),2);       /* count all sfcb's once */
+ 231   3          end;
+                  else
+ 232   2            sfcbs$present = false;
+ 233   2          do while dcnt <> 255;
+ 234   3              buf$fcb$adr = shl(dcnt and 11b,5)+.buff;  /* dcnt mod 4 * 32        */
+ 235   3              if sfcbs$present then
+ 236   3                sfcb$adr = 97 + (dcnt * 10) + .buff;  /* SFCB time & date stamp adr */
+ 237   3              if (buf$fcb(f$drvusr) <> deleted$type) then
+ 238   3              do;
+ 239   4                if (buf$fcb(f$drvusr) <> sfcb$type) then
+ 240   4                  used$de = used$de + 1;
+ 241   4                if buf$fcb(f$drvusr) = dirlabel$type then   /* dir label ?        */
+ 242   4                    dir$label = buf$fcb(f$ex);           /* save label info       */
+ 243   4                else if match then
+ 244   4                do;
+ 245   5                    if not store$file$info then         /* store fcb or xfcb info */
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  11
+
+
+ 246   5                    do;                                 /* out of space           */
+ 247   6                        call print (.('Out of Memory',cr,lf,'$'));
+ 248   6                        return; 
+ 249   6                    end;
+ 250   5                end;
+                      end;
+                      /*call break;*/
+ 252   3              dcnt = search$next;                   /* to next entry in directory */
+ 253   3          end; /* of do while dcnt <> 255 */
+
+ 254   2      end get$files;
+
+ 255   1      search$init: procedure public;                /* called once from main.plm  */
+ 256   2          if (first$f$i$adr := (.hash$table + size(hash$table))) + size(file$info)
+                      > maxb then
+ 257   2          do;
+ 258   3              call print(.('Not Enough Memory',cr,lf,'$'));
+ 259   3              call terminate;
+ 260   3          end;
+ 261   2      end search$init;
+
+ 262   1      end search;
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  12
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+      7  0000H     2  A. . . . . . . . .     WORD PARAMETER         8 
+     10  0000H     2  A. . . . . . . . .     WORD PARAMETER        11 
+      4  0000H     2  A. . . . . . . . .     WORD PARAMETER         5 
+     17  0000H     2  ACTIVEUSRVECTOR. .     WORD EXTERNAL(10)         110 
+     53  0000H        ADD3BYTE . . . . .     PROCEDURE EXTERNAL(22) STACK=0000H       162 
+     56  0000H        ADD3BYTE3. . . . .     PROCEDURE EXTERNAL(23) STACK=0000H
+     30  000CH     1  ANYFILE. . . . . .     BYTE MEMBER(SEARCH)       113 
+     64  0000H        BASEDPB. . . . . .     PROCEDURE EXTERNAL(26) STACK=0000H       222 
+     62               BLKMAXW. . . . . .     LITERALLY       151 
+     62               BLKMSKB. . . . . .     LITERALLY       162  163 
+     62               BLKSHFB. . . . . .     LITERALLY
+      2               BOOLEAN. . . . . .     LITERALLY        13   14   15   30   46   90   98  121  144 
+      3  0000H   128  BUFF . . . . . . .     BYTE ARRAY(128) EXTERNAL(2)         226  234  236 
+     89  0000H    32  BUFFCB . . . . . .     BYTE BASED(BUFFCBADR) ARRAY(32)          100  115  125  133  147  148
+                                              154  156  162  163  167  177  178  185  187  189  202  207  208  237
+                                              239  241  242 
+     89  0004H     2  BUFFCBADR. . . . .     WORD PUBLIC           89  100  115  125  133  147  148  154  156  162
+                                              163  167  177  178  185  187  189  202  207  208  234  237  239  241
+                                              242 
+     59  0000H     2  BYTE3ADR . . . . .     WORD PARAMETER        60 
+     53  0000H     2  BYTE3ADR . . . . .     WORD PARAMETER        54 
+     41  0000H     1  CHAR . . . . . . .     BYTE PARAMETER        42 
+     72  000FH    15  CHECKCONSOLESTATUS     PROCEDURE BYTE STACK=0008H
+     62               CHKSIZ . . . . . .     LITERALLY
+     90  003DH    65  COMPARE. . . . . .     PROCEDURE BYTE STACK=0008H          115  133 
+      2               CR . . . . . . . .     LITERALLY       247  258 
+     89  0000H     4  CREATE . . . . . .     BYTE ARRAY(4) MEMBER(XFCBINFO)      194  207 
+     51  0000H        CRLF . . . . . . .     PROCEDURE EXTERNAL(21) STACK=0000H
+      2               CTRLC. . . . . . .     LITERALLY
+     31  0000H     1  CURDRV . . . . . .     BYTE EXTERNAL(15)         112 
+     31  0000H     1  CURUSR . . . . . .     BYTE EXTERNAL(14)         100  127 
+      2               DCL. . . . . . . .     LITERALLY
+    216  0020H     1  DCNT . . . . . . .     BYTE       218  219  225  233  234  236  252 
+     13  0000H     1  DEBUG. . . . . . .     BYTE EXTERNAL(6)
+     24               DELETEDTYPE. . . .     LITERALLY       237 
+     28  0000H     1  DIR. . . . . . . .     BYTE MEMBER(FIND)
+     62               DIRBLKW. . . . . .     LITERALLY
+     31  0016H     1  DIRLABEL . . . . .     BYTE PUBLIC          223  242 
+     22               DIRLABELTYPE . . .     LITERALLY       241 
+     62               DIRMAXW. . . . . .     LITERALLY       230 
+     89  0000H     1  DIRTYPE. . . . . .     BYTE BASED(SFCBADR)       227 
+     20               DISKMAPLEN . . . .     LITERALLY       153 
+     22               DLACCESS . . . . .     LITERALLY
+     22               DLEXISTS . . . . .     LITERALLY
+     22               DLMAKEXFCB . . . .     LITERALLY
+     22               DLPASSWORD . . . .     LITERALLY
+     22               DLUPDATE . . . . .     LITERALLY
+    145  001FH     1  DMAPCNT. . . . . .     BYTE       149  158  160  162  163  164 
+     66  0000H        DPBBYTE. . . . . .     PROCEDURE BYTE EXTERNAL(27) STACK=0000H       162  163  189 
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  13
+
+
+     69  0000H        DPBWORD. . . . . .     PROCEDURE WORD EXTERNAL(28) STACK=0000H       151  230 
+     30  0000H     1  DRV. . . . . . . .     BYTE MEMBER(SEARCH)       112 
+     28  0007H     1  EXCLUDE. . . . . .     BYTE MEMBER(FIND)         114  116  118 
+     62               EXTMSKB. . . . . .     LITERALLY       189 
+      4  0000H     1  F. . . . . . . . .     BYTE PARAMETER         5 
+     10  0000H     1  F. . . . . . . . .     BYTE PARAMETER        11 
+      7  0000H     1  F. . . . . . . . .     BYTE PARAMETER         8 
+      2               FALSE. . . . . . .     LITERALLY        94  102  107  131  141  172  174  192  205  232 
+     20               FARC . . . . . . .     LITERALLY       148 
+      3  0000H    33  FCB. . . . . . . .     BYTE ARRAY(33) EXTERNAL(0)          224  225 
+     75  0004H     2  FCBADDRESS . . . .     WORD PARAMETER AUTOMATIC        76   77 
+     20               FCR. . . . . . . .     LITERALLY
+     20               FDIRSYS. . . . . .     LITERALLY
+     20               FDISKMAP . . . . .     LITERALLY       153 
+     20               FDRVUSR. . . . . .     LITERALLY       100  133  167  178  185  187  202  224  237  239  241
+     20               FDRVUSR2 . . . . .     LITERALLY
+     20               FEX. . . . . . . .     LITERALLY       189  242 
+      2               FF . . . . . . . .     LITERALLY
+     89  0008H     2  FIADR. . . . . . .     WORD PUBLIC           89  130  132  133  136  137  140  147  148  162
+                                              163  164  175  177  178  179  180  195  209 
+     89  0000H    23  FILEINFO . . . . .     STRUCTURE BASED(FIADR)         133  136  137  147  148  162  163  164
+                                              175  177  178  179  191  195  204  209  217  256 
+     19  0002H     2  FILESFOUND . . . .     WORD PUBLIC          171  176  223 
+     28  0000H     8  FIND . . . . . . .     STRUCTURE EXTERNAL(11)         114  116  118 
+     25               FINDSTRUCTURE. . .     LITERALLY        28 
+     35  0000H     2  FINFOINDEX . . . .     WORD PARAMETER        36 
+     87               FINFOSTRUCTURE . .     LITERALLY        89 
+     89  0006H     2  FIRSTFIADR . . . .     WORD PUBLIC          173  217  256 
+     14  0000H     1  FIRSTPASS. . . . .     BYTE EXTERNAL(7)          109 
+     20               FNAME. . . . . . .     LITERALLY       115  124  133  147  177 
+     20               FNAME2 . . . . . .     LITERALLY
+     48  0000H     2  FNAMEADR . . . . .     WORD PARAMETER        49 
+     20               FNAMELEN . . . . .     LITERALLY       124  133  147  177 
+      2               FOREVER. . . . . .     LITERALLY
+    122  001BH     1  FOUND. . . . . . .     BYTE       131  132  134 
+     20               FRC. . . . . . . .     LITERALLY       162  163 
+     20               FRREC. . . . . . .     LITERALLY
+     20               FRRECO . . . . . .     LITERALLY
+     20               FRW. . . . . . . .     LITERALLY
+     20               FS1. . . . . . . .     LITERALLY
+     20               FTYPE. . . . . . .     LITERALLY
+     20               FTYPE2 . . . . . .     LITERALLY
+     20               FTYPELEN . . . . .     LITERALLY       124  133  147  177 
+     15  0000H     1  GETALLDIRENTRIES .     BYTE EXTERNAL(8)          101 
+    215  043AH   234  GETFILES . . . . .     PROCEDURE PUBLIC STACK=0016H
+    120  0000H     2  HASHENTRY. . . . .     WORD BASED(HASHENTRYADR)       180 
+    120  0012H     2  HASHENTRYADR . . .     WORD       120  129  136  180 
+    122  001CH     1  HASHINDEX. . . . .     BYTE       123  125  127  128  129  130 
+     89  0013H     2  HASHLINK . . . . .     WORD MEMBER(FILEINFO)          136  137  179 
+    121  0146H   189  HASHLOOKUP . . . .     PROCEDURE BYTE STACK=000EH          169 
+    120  0000H   256  HASHTABLE. . . . .     WORD ARRAY(128) AT        129  130  219  256 
+    120               HASHTABLESIZE. . .     LITERALLY       120  128  218 
+    145  001DH     1  I. . . . . . . . .     BYTE       150  152  153  155 
+     99  0019H     1  I. . . . . . . . .     BYTE       100  105  109  110  111  112  113  115 
+    122  001AH     1  I. . . . . . . . .     BYTE       124  125 
+     91  0018H     1  I. . . . . . . . .     BYTE        92   93 
+    145  001EH     1  J. . . . . . . . .     BYTE       153  154  156 
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  14
+
+
+     89  000EH     2  KBYTES . . . . . .     WORD MEMBER(FILEINFO)          164  179 
+     63  0000H     1  KPERBLOCK. . . . .     BYTE EXTERNAL(25)         163  164 
+     89  000AH     2  LASTFIADR. . . . .     WORD PUBLIC          175  191  204  217 
+     90  0008H     1  LENGTH . . . . . .     BYTE PARAMETER AUTOMATIC        91   92 
+      2               LF . . . . . . . .     LITERALLY       247  258 
+      2               LIT. . . . . . . .     LITERALLY         2   20   21   22   23   24   25   27   62   87   88
+                                              120 
+     98  007EH   200  MATCH. . . . . . .     PROCEDURE BYTE PUBLIC STACK=000CH        243 
+      3  0000H     2  MAXB . . . . . . .     WORD EXTERNAL(1)          221  256 
+     26               MAXSEARCHFILES . .     LITERALLY        30 
+         0000H        MEMORY . . . . . .     BYTE ARRAY(0)        120 
+      4  0000H        MON1 . . . . . . .     PROCEDURE EXTERNAL(3) STACK=0000H
+      7  0000H        MON2 . . . . . . .     PROCEDURE BYTE EXTERNAL(4) STACK=0000H         33   73   77   80 
+     10  0000H        MON3 . . . . . . .     PROCEDURE WORD EXTERNAL(5) STACK=0000H
+                      MOVE . . . . . . .     BUILTIN         147  177  194  207 
+     35  0000H        MULT23 . . . . . .     PROCEDURE WORD EXTERNAL(16) STACK=0000H       171 
+     89  0001H     8  NAME . . . . . . .     BYTE ARRAY(8) MEMBER(FILEINFO)      133  147  148  177 
+     30  0001H     8  NAME . . . . . . .     BYTE ARRAY(8) MEMBER(SEARCH)        115 
+     28  0006H     1  NONXFCB. . . . . .     BYTE MEMBER(FIND)
+      2               NOPAGEMODEOFFSET .     LITERALLY
+     53  0000H     2  NUM. . . . . . . .     WORD PARAMETER        54 
+     56  0000H     2  NUMB . . . . . . .     WORD PARAMETER        57 
+     29  0000H     1  NUMSEARCHFILES . .     BYTE EXTERNAL(12)         111 
+     62               OFFSETW. . . . . .     LITERALLY
+     89  000CH     2  ONEKBLOCKS . . . .     WORD MEMBER(FILEINFO)          163  179 
+      2               PAGELENOFFSET. . .     LITERALLY
+     69  0000H     1  PARAM. . . . . . .     BYTE PARAMETER        70 
+     66  0000H     1  PARAM. . . . . . .     BYTE PARAMETER        67 
+     28  0004H     1  PASS . . . . . . .     BYTE MEMBER(FIND)
+     21               PASSLEN. . . . . .     LITERALLY
+     89  0008H     1  PASSMODE . . . . .     BYTE MEMBER(XFCBINFO)          208 
+     44  0000H        PDECIMAL . . . . .     PROCEDURE EXTERNAL(19) STACK=0000H
+     23               PMDELETE . . . . .     LITERALLY
+     23               PMREAD . . . . . .     LITERALLY
+     23               PMWRITE. . . . . .     LITERALLY
+     44  0000H     2  PREC . . . . . . .     WORD PARAMETER        45 
+     38  0000H        PRINT. . . . . . .     PROCEDURE EXTERNAL(17) STACK=0000H       247  258 
+     41  0000H        PRINTCHAR. . . . .     PROCEDURE EXTERNAL(18) STACK=0000H
+     48  0000H        PRINTFN. . . . . .     PROCEDURE EXTERNAL(20) STACK=0000H
+     32  0000H    15  READCHAR . . . . .     PROCEDURE BYTE STACK=0008H
+     89  0012H     1  RECSHBYTE. . . . .     BYTE MEMBER(FILEINFO)          179 
+     89  0010H     2  RECSLWORD. . . . .     WORD MEMBER(FILEINFO)          162  179 
+     28  0002H     1  RO . . . . . . . .     BYTE MEMBER(FIND)
+     28  0003H     1  RW . . . . . . . .     BYTE MEMBER(FIND)
+      1  0000H        SEARCH . . . . . .     PROCEDURE STACK=0000H
+     30  0000H   130  SEARCH . . . . . .     STRUCTURE ARRAY(10) EXTERNAL(13)         112  113  115 
+     75  001EH    16  SEARCHFIRST. . . .     PROCEDURE BYTE PUBLIC STACK=000AH        225 
+    255  0524H    30  SEARCHINIT . . . .     PROCEDURE PUBLIC STACK=0006H
+     79  002EH    15  SEARCHNEXT . . . .     PROCEDURE BYTE PUBLIC STACK=0008H        252 
+     27               SEARCHSTRUCTURE. .     LITERALLY        30 
+      2               SECTORLEN. . . . .     LITERALLY
+     84  0000H        SETVEC . . . . . .     PROCEDURE EXTERNAL(30) STACK=0000H       105  110 
+     89  000CH     2  SFCBADR. . . . . .     WORD        89  194  226  227  236 
+     89  0017H     1  SFCBSPRESENT . . .     BYTE       183  229  232  235 
+     24               SFCBTYPE . . . . .     LITERALLY       167  187  227  239 
+                      SHL. . . . . . . .     BUILTIN         234 
+                      SHR. . . . . . . .     BUILTIN         163  230 
+PL/M-86 COMPILER    SDIR - SEARCH FOR FILES                                                                     PAGE  15
+
+
+     59  0000H        SHR3BYTE . . . . .     PROCEDURE EXTERNAL(24) STACK=0000H
+                      SIZE . . . . . . .     BUILTIN         175  191  193  204  206  217  256 
+     62               SPTW . . . . . . .     LITERALLY
+    146  0338H   258  STOREFILE. . . . .     PROCEDURE STACK=000CH          197  211 
+    144  0203H   309  STOREFILEINFO. . .     PROCEDURE BYTE STACK=0012H          245 
+     91  0000H     1  STR1 . . . . . . .     BYTE BASED(STR1ADR) ARRAY(1)         93 
+     90  0006H     2  STR1ADR. . . . . .     WORD PARAMETER AUTOMATIC        91   93 
+     91  0000H     1  STR2 . . . . . . .     BYTE BASED(STR2ADR) ARRAY(1)         93 
+     90  0004H     2  STR2ADR. . . . . .     WORD PARAMETER AUTOMATIC        91   93 
+     38  0000H     2  STRINGADR. . . . .     WORD PARAMETER        39 
+     28  0001H     1  SYS. . . . . . . .     BYTE MEMBER(FIND)
+      2               TAB. . . . . . . .     LITERALLY
+    145  0014H     2  TEMP . . . . . . .     WORD       154  156  157  171  173 
+     99  0010H     2  TEMP . . . . . . .     WORD       104  105  106 
+     82  0000H        TERMINATE. . . . .     PROCEDURE EXTERNAL(29) STACK=0000H       259 
+     56  0000H     2  TOTALB . . . . . .     WORD PARAMETER        57 
+      2               TRUE . . . . . . .     LITERALLY        96  113  134  142  213  229 
+     89  0009H     3  TYPE . . . . . . .     BYTE ARRAY(3) MEMBER(FILEINFO)
+     30  0009H     3  TYPE . . . . . . .     BYTE ARRAY(3) MEMBER(SEARCH)
+     89  0004H     4  UPDATE . . . . . .     BYTE ARRAY(4) MEMBER(XFCBINFO)
+     18  0000H     2  USEDDE . . . . . .     WORD PUBLIC          223  230  240 
+     89  0000H     1  USR. . . . . . . .     BYTE MEMBER(FILEINFO)          133  178 
+     16  0000H     2  USRVECTOR. . . . .     WORD EXTERNAL(9)          106  109 
+     44  0000H     2  VAL. . . . . . . .     WORD PARAMETER        45 
+     84  0000H     1  VALUE. . . . . . .     BYTE PARAMETER        85 
+     84  0000H     2  VECTOR . . . . . .     WORD PARAMETER        85 
+     28  0005H     1  XFCB . . . . . . .     BYTE MEMBER(FIND)
+     89  0000H     9  XFCBINFO . . . . .     STRUCTURE BASED(XIADR)         191  193  194  204  206  207  208 
+     21               XFCBTYPE . . . . .     LITERALLY       185  202 
+     21               XFCREATE . . . . .     LITERALLY       207 
+     21               XFPASS . . . . . .     LITERALLY
+     21               XFPASSMODE . . . .     LITERALLY       208 
+     21               XFUPDATE . . . . .     LITERALLY
+     89  000EH     2  XIADR. . . . . . .     WORD PUBLIC           89  171  191  193  194  195  204  206  207  208
+                                              209  221 
+     89  0015H     2  XIADR. . . . . . .     WORD MEMBER(FILEINFO)          179  195  209 
+     88               XINFOSTRUCTURE . .     LITERALLY        89 
+     44  0000H     1  ZSUP . . . . . . .     BYTE PARAMETER        46 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 0542H   1346D
+     CONSTANT AREA SIZE = 0024H     36D
+     VARIABLE AREA SIZE = 0021H     33D
+     MAXIMUM STACK SIZE = 0016H     22D
+     553 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

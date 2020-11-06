@@ -1,0 +1,116 @@
+
+;*****************************************************
+;*
+;*	MP/M-86 Supervisor Initialization 
+;*
+;*****************************************************
+
+	cseg
+	org	0
+
+	jmp	init		;system initialization
+	jmp	entry		;intermodule entry pt.
+
+sysdat		dw	0		;sysdat segment
+supervisor	dw	entry		;Supervisor entry point
+		dw	0		;  (segment address)
+
+		db	'COPYRIGHT (C) 1981,'
+		db	' DIGITAL RESEARCH '
+serial		db	'654321'
+ver		db	13,10,10
+		db	'MP/M-86 2.0 '
+		db	'[5 Oct 81]'
+		db	13,10
+		db	'Copyright (C) 1981, Digital Research'
+		db	13,10,10,'$'
+
+;====
+init:
+;====
+; system initialization
+; assume DS = Sysdat Segment
+;
+		;  set up stack,remember DSEG
+
+	mov ax,ds
+	mov ss,ax ! mov sp,offset (init_tos)
+	mov sysdat,ax
+
+		; set up supervisor entry point
+	mov bx,(offset supmod)+2 ! mov ax,[bx]
+	mov si,offset supervisor
+	mov cs:2[si],ax
+
+	mov version,offset ver
+	mov tick_tos,offset notick
+	mov idle_tos,offset idle
+
+		;  set up mpm entry point
+
+	mov ax,ds ! sub bx,bx ! mov ds,bx
+
+	mov i_mpm_ip,offset user_entry
+	mov i_mpm_cs,cs
+	mov ds,ax
+
+		;initialize init uda
+
+	mov bx,offset initpd
+	mov ax,offset inituda
+	mov cl,4 ! shr ax,cl
+	add ax,sysdat ! mov p_uda[bx],ax
+	mov es,ax
+	mov u_wrkseg,ds
+
+		;initialize modules
+
+	mov bx,mod_init
+	push bx ! callf dword ptr rtmmod[bx] ! pop bx		; init RTM
+	push bx ! callf dword ptr memmod[bx] ! pop bx		; init MEM
+	test module_map,bdosmod_bit ! jz nbdom
+	    push bx ! callf dword ptr bdosmod[bx] ! pop bx	; init BDOS
+nbdom:	test module_map,ciomod_bit ! jz nciom
+	    push bx ! callf dword ptr ciomod[bx] ! pop bx	; init CIO
+nciom:	test module_map,xiosmod_bit ! jz nxiom
+	    push ds ! push es
+	    callf dword ptr xiosmod[bx] ! pop es ! pop ds	; init XIOS
+nxiom:
+		;if intflag is non-zero, interrupts
+		;are explicitly turned on at the RTM
+		;entry point.
+
+	mov intflag,0ffh
+
+		;  reset interrupt vectors
+
+	mov ax,ds ! sub bx,bx ! mov ds,bx
+	mov i_mpm_ip,offset user_entry
+	mov i_mpm_cs,cs
+	mov ds,ax
+
+		; get Character Dev Info from XIOS
+
+	mov ax,io_maxconsole ! call xiosif
+	mov ncondev,bl ! mov nciodev,bl
+	mov ax,io_maxlist ! call xiosif
+	mov nlstdev,bl ! add nciodev,bl
+
+		; Start RSPs
+nrsp:					;loop til done
+	mov ds,sysdat			;reset DS
+	mov cx,rspseg ! jcxz rsp_out	;?all done?
+	    mov es,cx			;ES->RSP
+	    mov ax,es:.rsp_link		;save next RSP
+	    mov rspseg,ax
+	    mov es:.rsp_link,ds		;give Sysdat to RSP
+	    mov si,rsp_pd		;get PD
+	    mov ds,cx			;DS = RSP Data Seg
+	    mov cl,f_createproc		;Create RSP Process(s)
+	    mov dx,si ! int mpmint
+	    jmps nrsp			;Do another...
+rsp_out:
+		; terminate init process
+	mov cl,f_terminate
+	mov dl,0ffh ! int mpmint
+

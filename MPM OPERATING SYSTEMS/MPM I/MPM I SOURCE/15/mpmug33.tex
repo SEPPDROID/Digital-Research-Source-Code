@@ -1,0 +1,410 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 107
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+3.4  System File Components
+.pp
+The MP/M system file, 'MPM.SYS' consists of five components: the
+system data page, the customized XIOS, the BDOS or ODOS, the XDOS, and the
+resident system processes.
+MPM.SYS resides in the directory with a user code of 0 and is
+usually read only.  The MP/M loader reads and relocates the MPM.SYS
+file to bring up the MP/M system.
+.SP 2
+.ce
+SYSTEM DATA
+.sp
+.PP
+The system data page contains 256 bytes used by the loader to
+dynamically configure the system.  The system data page can be
+prepared using the GENSYS program or it can be manually prepared
+using DDT or SID.  The following table describes the byte
+assignments:
+.LI
+
+	Byte	Assignment
+	----    ----------
+
+	000-000 Top page of memory
+	001-001 Number of consoles
+	002-002 Breakpoint restart number
+	003-003 Allocate stacks for user system calls, boolean
+	004-004 Bank switched memory, boolean
+	005-005 Z80 CPU, boolean
+	006-006 Banked BDOS file manager, boolean
+	007-015 Unassigned, reserved
+	016-047 Initial memory segment table
+	048-079 Breakpoint vector table, filled in by DDTs
+	080-111 Stack addresses for user system calls
+	112-122 Scratch area for memory segments
+	123-127 Unassigned, reserved
+	128-143 Submit flags
+	144-255 Reserved
+
+.AD
+.SP 2
+.ce
+CUSTOMIZED XIOS
+.sp
+.PP
+The customized XIOS is obtained from a file named 'XIOS.SPR'. The
+'XIOS.SPR' file is actually a file of type PRL containing the
+page relocatable version of the user customized XIOS.  A submit
+file on the distribution diskette named 'MACSPR.SUB' or 'ASMSPR.SUB' can be used
+to generate the user customized XIOS.  The following sequence of
+commands will produce a 'XIOS.SPR' file given a user 'XIOS.ASM'
+file:
+.LI
+
+	A>SUBMIT MACSPR XIOS
+
+.AD
+.sp 2
+.ce
+BDOS/ODOS
+.sp
+.pp
+The Basic Disk Operating System (BDOS) file named 'BDOS.SPR' is a page
+relocatable
+file essentially containing the CP/M 2.0 disk file management.
+This module handles all the BDOS system calls providing both multiple
+console support and disk file management.
+.pp
+In systems with a banked BDOS, the file named 'ODOS.SPR' is a page
+relocatable file containing the resident portion of the banked BDOS.
+.SP 2
+.ce
+XDOS
+.sp
+.PP
+The XDOS file named 'XDOS.SPR' is a page relocatable file
+containing the priority driven MP/M nucleus.  The nucleus contains
+the following code pieces: root module, dispatcher,
+queue management, flag management, memory management, terminal
+handler, terminal message process, command line interpreter, file
+name parser, and time base management.
+.SP 2
+.ce
+RESIDENT SYSTEM PROCESSES
+.sp
+.PP
+Resident system processes are identified by a file type of RSP.  The
+RSP files distributed with MP/M include: run-time system
+status display (MPMSTAT), printer spooler (Spool), abort named
+process (ABORT), and a scheduler (SCHED).
+.PP
+At system generation time the user is prompted to select which RSPs
+are to be concatenated to the 'MPM.SYS' file.
+.PP
+It is possible for the user to prepare custom resident system
+processes.  The resident system processes must follow these rules:
+.PP
+* The file itself must be page relocatable. Page relocatable files
+can be simply generated using the submit file 'MACSPR.SUB' or 'ASMSPR.SUB'
+and then renaming the file to change the type from 'SPR' to 'RSP'.
+.PP
+* The first two bytes of the resident system process are reserved
+for the address of the BDOS/XDOS.  Thus a resident system process can
+access the BDOS/XDOS by loading the two bytes at relative 0000-0001H
+and then performing a PCHL.
+.PP
+* The process descriptor for the resident system process must begin at
+the third byte position.  The contents of the process descriptor are
+described in section 2.3.
+.SP 2
+.ce
+BNKBDOS
+.sp
+.PP
+In addition to the MPM.SYS file a file named 'BNKBDOS.SPR' is used in
+systems with a banked BDOS.  It is a page relocatable file containing
+the non-resident portion of the banked BDOS.
+This file is not used by systems without banked memory.
+.bp
+.sp
+.pp
+3.5 System Generation
+.pp
+MP/M system generation consists of the preparation of a system
+data file and the concatenation of both required and optional code
+files to produce a file named 'MPM.SYS'.  The operation is performed
+using a GENSYS program which can be run under either MP/M or
+CP/M.  The GENSYS automates the system generation process by
+prompting the user for optional parameters and then prepares the
+'MPM.SYS' file.
+.PP
+The operation of GENSYS is illustrated with two sample executions
+shown below:
+.LI
+
+	A>GENSYS
+
+	MP/M System Generation
+	======================
+
+	Top page of memory = ff
+	Number of consoles = 2
+	Breakpoint RST #   = 6
+	Add system call user stacks (Y/N)? y
+	Z80 CPU (Y/N)? y
+	Bank switched memory (Y/N)? n
+	Memory segment bases, (ff terminates list)
+	 : 00
+	 : 50
+	 : a0
+	 : ff
+	Select Resident System Processes: (Y/N)
+	ABORT    ? n
+	SPOOL    ? n
+	MPMSTAT  ? y
+	SCHED    ? y
+
+.pp
+The queries made during the system generation shown above are
+described as follows:
+.sp
+.pp
+Top page of memory:  Two hex ASCII digits are to be entered giving
+the top page of memory.  A value of 0 can be entered in which case
+the MP/M loader will determine the size of memory at load time
+by finding the top page of RAM.
+.pp
+Number of consoles:  Each console specified will require 256
+bytes of memory.  MP/M release 1 supports up to 16 consoles.
+During MP/M initialization an XIOS call is made to obtain the
+actual maximum number of physical consoles supported by the
+XIOS.  This number is used if it is less than the number specified
+during the GENSYS.
+.pp
+Breakpoint RST #:  The breakpoint restart number to be used by the
+SID and DDT debuggers is specified.  Restart 0 is not allowed.
+Other restarts required by the XIOS should also not be used.
+.pp
+Add system call user stacks (Y/N)?:  If you desire to
+execute CP/M *.COM files then your response should be Y.  A 'Y'
+response forces a stack switch with each system call from a
+user program.
+MP/M requires more stack space than CP/M.
+.pp
+Bank switched memory (Y/N)?:  If your system does not have bank switched
+memory then you should respond with a 'N'.  Otherwise
+respond with a 'Y' and additional questions and responses (as shown in
+the second example) will be required.
+.pp
+Memory segment bases:  Memory segmentation is defined by the
+entries which are made.
+Care must be taken in the entry of memory bases as all entries
+must be made with successively higher bases.
+If your system has ROM at 0000H then the first memory segment
+base which you specify should be your first actual RAM location.
+Only page relocatable (PRL) programs can be run in systems that
+do not have RAM at location 0000H.
+.pp
+Select Resident System Processes:  A directory search is made for
+all files of type RSP.  Each file found is listed and included in
+the generated system file if you respond with a 'Y'.
+.sp 2
+.pp
+The second example illustrates a more complicated GENSYS in which
+a system is setup with bank switched memory and a banked BDOS.
+This procedure requires an intial GENSYS and MPMLDR execution to
+determine the exact size of the operating system, followed by
+a second GENSYS.
+.li
+
+	A>GENSYS
+
+	MP/M System Generation
+	======================
+
+	Top page of memory = ff
+	Number of consoles = 2
+	Breakpoint RST #   = 6
+	Add system call user stacks (Y/N)? y
+	Z80 CPU (Y/N) y
+	Bank switched memory (Y/N)? y
+	Banked BDOS file manager (Y/N)? y
+	Enter memory segment table: (ff terminates list)
+	 Base,size,attrib,bank = 0,50,0,0
+	 Base,size,attrib,bank = ff
+	Select Resident System Processes: (Y/N)
+	ABORT    ? n
+	SPOOL    ? n
+	MPMSTAT  ? n
+	SCHED    ? y
+
+.ad
+.pp
+The queries made during the system generation shown above
+which relate to bank switched memory are described as follows:
+.sp
+.pp
+Bank switched memory:  Respond with a 'Y'.
+.pp
+Bank switched BDOS file manager:  Respond with a 'Y' if
+a bank switched BDOS is to be used, this will provide an additional
+0C00H bytes of common area for large XIOS's and possibly some
+RSP's.
+The banked BDOS is slower than the non-banked because FCB's must
+be copied from the bank of the calling program to common and then
+back again each time a BDOS disk function is invoked.
+.pp
+Memory segment bases:  When bank switched memory has been
+specified, you are prompted for the base, size, attributes, and
+bank for each memory segment.
+Extreme care must be taken when making these entries as there is
+no error checking done by GENSYS regarding this function.  The first
+entry made will determine the bank in which the banked BDOS is to
+reside.  It is further assumed that the bank specified in the first
+entry is the bank which is switched in at the time the MPMLDR is
+executed.
+The attribute byte is normally defined as 00.   However, if 
+you  wish  to pre-allocate a memory segment a value of  FFH 
+should  be  specified.   The bank byte  value  is  hardware 
+dependent  and  is  usually  the value  sent  to  the  bank 
+switching hardware to select the specified bank.
+.sp 3
+Then execute the MPMLDR in order to obtain the base address of
+the operating system.  The base address in this example will be
+the address of BNKBDOS.SPR (BC00H).
+.li
+
+	A>MPMLDR
+
+	MP/M Loader
+	===========
+
+	Number of consoles =  2
+	Breakpoint RST #   =  6
+	Z80 CPU
+	Banked BDOS file manager
+	Top of memory      =  FFFFH
+
+	Memory Segment Table:
+	SYSTEM  DAT  FF00H  0100H
+	CONSOLE DAT  FD00H  0200H
+	USERSYS STK  FC00H  0100H
+	XIOS    SPR  F600H  0600H
+	BDOS    SPR  EE00H  0800H
+	XDOS    SPR  CF00H  1F00H
+	Sched   RSP  CA00H  0500H
+	BNKBDOS SPR  BC00H  0E00H
+	-------------------------
+	Memseg  Usr  0000H  5000H  Bank 00H
+
+
+.ad
+Using the information obtained from the initial GENSYS and MPMLDR
+execution the following GENSYS can be executed:
+.li
+
+	A>GENSYS
+
+	MP/M System Generation
+	======================
+
+	Top page of memory = ff
+	Number of consoles = 2
+	Breakpoint RST #   = 6
+	Add system call user stacks (Y/N)? y
+	Z80 CPU (Y/N)? y
+	Bank switched memory (Y/N)? y
+	Banked BDOS file manager (Y/N)? y
+	Enter memory segment table: (ff terminates list)
+	 Base,size,attrib,bank = 0,bc,0,0
+	 Base,size,attrib,bank = 0,c0,0,1
+	 Base,size,attrib,bank = 0,c0,0,2
+	 Base,size,attrib,bank = ff
+	Select Resident System Processes: (Y/N)
+	ABORT    ? n
+	SPOOL    ? n
+	MPMSTAT  ? n
+	SCHED    ? y
+
+.ad
+.bp
+.sp
+.pp
+3.6 MP/M Loader
+.pp
+The MPMLDR program loads the 'MPM.SYS' file and dynamically relocates
+and configures the MP/M operating system.  MPMLDR can be run
+under CP/M
+or loaded from the first two tracks of a disk by the cold start loader.
+.PP
+The MPMLDR provides a display of the system loading and configuration.
+It does not require any operator interaction.
+.pp
+In the following example
+the 'MPM.SYS' file prepared by the first GENSYS example shown in
+section 3.5 is loaded:
+.LI
+
+	A>MPMLDR
+
+	MP/M Loader
+	===========
+
+	Number of consoles = 2
+	Breakpoint RST #   = 6
+	Z80 CPU
+	Top of memory      = FFFFH
+
+	Memory Segment Table:
+	SYSTEM  DAT  FF00H  0100H
+	CONSOLE DAT  FD00H  0200H
+	USERSYS STK  FC00H  0100H
+	XIOS    SPR  F600H  0600H
+	BDOS    SPR  E200H  1400H
+	XDOS    SPR  C300H  1F00H
+	MPMSTAT RSP  B600H  0D00H
+	Sched   RSP  B100H  0500H
+	-------------------------
+	Memseg  Usr  A000H  1100H
+	Memseg  Usr  5000H  5000H
+	Memseg  Usr  0000H  5000H
+
+	MP/M
+ 	0A>
+.ad
+.sp 2
+.cp 30
+In the following example
+the 'MPM.SYS' file prepared by the second GENSYS example shown in
+section 3.5 is loaded:
+.LI
+
+	A>MPMLDR
+
+	MP/M Loader
+	===========
+
+	Number of consoles = 2
+	Breakpoint RST #   = 6
+	Z80 CPU
+	Banked BDOS file manager
+	Top of memory      =  FFFFH
+
+	Memory Segment Table:
+	SYSTEM  DAT  FF00H  0100H
+	CONSOLE DAT  FD00H  0200H
+	USERSYS STK  FC00H  0100H
+	XIOS    SPR  F600H  0600H
+	BDOS    SPR  EE00H  0800H
+	XDOS    SPR  CF00H  1F00H
+	Sched   RSP  CA00H  0500H
+	BNKBDOS SPR  BC00H  0E00H
+	-------------------------
+	Memseg  Usr  0000H  C000H  Bank 02H
+	Memseg  Usr  0000H  C000H  Bank 01H
+	Memseg  Usr  0000H  BC00H  Bank 00H
+
+	MP/M
+	0A>
+
+.br
+

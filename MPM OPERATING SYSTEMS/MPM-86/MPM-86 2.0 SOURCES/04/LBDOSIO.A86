@@ -1,0 +1,169 @@
+;***************** BDOS byte I/O module ****************
+;
+;       console handlers
+ret0:   RET                             ;carry set if not graphic
+;
+conbrk:                                 ;check for character ready
+        MOV     AL,kbchar
+        OR      AL,AL
+        JNZ     conb1                   ;skip if active kbchar
+                                        ;no active kbchar,
+                                        ;check external break
+        CALL    constf
+        AND     AL,1
+        jz      ret0                    ;rz
+                                        ;character ready, read it
+        CALL    coninf                  ;to A
+        CMP     AL,ctls
+        JNZ     conb0                   ;check stop screen function
+                                        ;found ctls, read next char
+        CALL    coninf                  ;to A
+        CMP     AL,ctlc
+        JNZ     L_10
+        JMP     wbootf
+L_10:                                   ;ctlc implies re-boot
+                                        ;not a reboot,
+                                        ;act as if nothing happened
+        XOR     AL,AL
+        RET                             ;with zero in accumulator
+conb0:
+                                        ;character in accum, save it
+        MOV     kbchar,AL
+conb1:
+                                        ;return with true set
+        MOV     AL,1
+        RET
+;
+conout:
+        ;compute character position/write conso
+                                        ;compcol = true if computing
+                                        ;column position
+        MOV     AL,compcol
+        OR      AL,AL
+        JNZ     compout
+                                        ;write the character,
+                                        ;then compute column
+                                        ;write console char from CL
+        PUSH    CX
+        CALL    conbrk                  ;check for screen stop func.
+        POP     CX
+        PUSH    CX                      ;recall/save character
+        CALL    conouf                  ;externally, to console
+        POP     CX
+        PUSH    CX                      ;recall/save character
+                                        ;may be copying to list dev.
+        cmp     listcp,0
+        JZ      L_11
+        CALL    listf
+L_11:                                   ;to printer, if so
+        POP     CX                      ;recall the character
+compout:
+        MOV     AL,CL                   ;recall the character
+                                        ;and compute column position
+        LEA     BX,column               ;A = char, BX = .column
+        CMP     AL,rubout
+        jz      ret1                    ;no column change if nulls
+        INC     b[bx]                   ;column = column + 1
+        CMP     AL,' '
+        jae     ret1                    ;rnc
+                                        ;not graphic, reset column
+        DEC     b[bx]                   ;column = column - 1
+        MOV     AL,[bx]
+        OR      AL,AL
+        jz      ret1                    ;return if at zero
+                                        ;not at zero, may be 
+                                        ;bacspace or end of line
+        MOV     AL,CL                   ;character back to A
+        CMP     al,ctlh
+        JNZ     notbacksp
+                                        ;backspace character
+        DEC     b[bx]                   ;column = column - 1
+ret1:   RET
+notbacksp:
+                                        ;not backspace, eol ?
+        CMP     AL,lf
+        jnz     ret1                    ;return if not
+                                        ;end of line, column = 0
+        MOV     b[bx],0                 ;column = 0
+        RET
+;
+tabout:
+                                        ;expand tabs to console
+        CMP     cl,tab
+        jnz     conout                  ;direct to conout if not
+                                        ;tab encountered, move to
+                                        ;next tab position
+tab0:
+        MOV     CL,' '
+        CALL    conout                  ;another blank
+        MOV     AL,column
+        AND     AL,111b                 ;column mod 8 = 0 ?
+        JNZ     tab0                    ;back for another if not
+ret2:   RET
+;
+crlf:
+        ;carriage return line feed sequence
+        MOV     CL,cr
+        CALL    conout
+        MOV     CL,lf
+        JMP     conout
+                                        ;ret
+;
+print:
+        ;print message until M(BC) = '$'
+         MOV     SI,CX
+         LODS    al
+         CMP     AL,'$'
+         jz      ret2                   ;  rz
+                                        ;more to print
+         INC     CX
+         PUSH    CX
+         MOV     CL,AL                   ;char to C
+         push    ds                      ;restore data segment
+         push    ss
+         pop     ds
+         CALL    tabout                  ;another character printed
+         pop     ds
+         POP     CX
+        jmps    print
+ 
+return:	ret
+func1	equ	return
+func2   EQU     tabout
+func3	equ	return
+func6	equ	return
+func7	equ	return
+func8	equ	return
+;
+func9:
+        ;write line until $ encountered
+;
+        MOV     CX,DX                   ;CX=string address
+        push    ds                      ;read from user segment
+        mov     ds,parametersegment
+        call    print                   ;out to console 
+        pop     ds
+        ret
+;
+func10	equ	return
+
+func11	equ	return
+        ;check console status
+                                        ;(drop through to sta$ret)
+staret:
+                                        ;store the A register to aret
+        MOV     lret,al
+funcret:                                ;
+        RET                             ;jmp goback
+                                        ;(pop stack for non CP/M func)
+;
+setlret1:
+                                        ;set lret = 1
+        MOV     AL,1
+        jmps    staret
+;
+;       end of Basic I/O System
+;
+;*****************************************************************
+end
+

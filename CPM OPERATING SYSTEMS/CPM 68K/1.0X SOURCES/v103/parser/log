@@ -1,0 +1,439 @@
+.he "C68 Parser"Change Log"Page %"
+.de bg
+.sp
+.in +5
+..
+.de eg
+.sp
+.ne 8
+.in -5
+..
+1. 4/12/82 - Undefined symbols not being detected
+.bg
+This was caused by expr setting the defined flag for the symbol and
+then setting its type to label.  Solution was to check for undefined
+symbol in expr and output error message there, since the only place
+an undefined symbol can occur in a statement is after a goto.
+This results in all undefined symbols in statements having one error
+message output on the line the symbol is used, and all undefined
+labels error messages being output once at the end of the function.
+.eg
+2. 4/12/82 - Operand stack underflow problem
+.bg
+Error recovery not very effective, skipped over closing right bracket,
+which cascaded errors.  Changed synerr to put back the syncronizing
+token, no matter which it was.  Also changed stmt to not call expr
+when the first token on the line was right bracket.  This resulted
+in "operand stack underflow" errors when a label immediately preceded
+a right bracket, e.g. at the end of a function or at the end of
+a switch statement.  Also added logic in expr and popopd so that
+the "invalid expression" error would be output rather than
+"operand stack underflow".
+.eg
+3. 4/13/82 - Error message cleanup
+.bg
+Changed "expression too complex" messages and "invalid
+structure proto" message.
+.eg
+4. 4/13/82 - Missing =% operator
+.bg
+Lex did not check for =% operator, added it.
+.eg
+5. 4/16/82 - Bad function declarations
+.bg
+The functions lookup, tnalloc and sbrk were not declared as returning
+pointers.
+.eg
+6. 4/19/82 - Added static declarations
+.bg
+Declaring functions and external variables as static did not work.
+Added fixes to gettype, doextdef, dodecl and expr to correctly handle
+static variable and function declartions.
+.eg
+7. 4/23/82 - Typedef stuff again....
+.bg
+Adding declarator info to typedef declaration in cast did not work
+correctly.  This required adding typedef info carefully into the
+type info already obtained from gettype.  The routine addtdtype
+was added to do all this jazz correctly.  Also, declarator was changed
+so that it would return the super-type info in the correct (rather
+than reverse) order.  Both expr and dodecl were changed to reflect the
+the addtdtype routine.  Also, it turned out that expr was being
+recursively called the declarator (via cexpr).  This required the
+careful setting of the pointers (opp, opdp, exprp, opap) to the
+expression stacks and workspace.  This resulted in changes to doreturn
+and to copyargs, which require the expression area be set up.
+.eg
+8. 4/26/82 - structure pointer initialization
+.bg
+A pointer to a structure could not be initialized, problem in
+initlist checking only for a structure being an aggregate type.
+added (btype(type)==STRUCT) && notpointer(type) into aggregate
+type test.
+.eg
+9. 4/26/82 - memory fault after invalid conversion error
+.bg
+cvopgen was not setting rtp pointer if invalid conversion, resulting
+in invalid address in tree.  Changed cvopgen so it would return
+tp upon invalid conversion problem.
+.eg
+10. 5/4/82 - external definition syntax loop
+.bg
+The error "external definition syntax" would not necessarily skip
+the offending token.  Changed next(RCURBR) to gettok()!=RCURBR to
+insure token was skipped.
+.eg
+11. 5/4/82 - Char pointer array string init error
+.bg
+The syntax: char *x[] {"xx"}; would not work because the type
+given to oneinit was ARRAY of CHAR.  Added code in initlist to
+give oneinit the "basic" type of the data structure.  Also added
+routine revsp.
+This routine
+doesn't fix anything, but it's probably clearer what's going on...
+.eg
+12. 5/4/82 - Declarator syntax problem
+.bg
+The syntax: int (*x)(); would not work because the check for a
+valid declarator in getdecl was to check sp, a local register,
+rather than dsp, the declarator symbol pointer.  The parenthesis
+caused a recursive call, and the local sp was set in the recursive
+instance, rather than the one that did the check.
+.eg
+13. 5/5/82 - Missing } error for non-aggregate inits
+.bg
+Got "missing }" for: char *p {"xx"}; had mistakenly changed
+next(RCURBR)==0 to next(RCURBR) in initlist when fixing bug 10.
+.eg
+14. 5/10/82 - Braces around string init for char array
+.bg
+Got "invalid initializer" for: char x[] {"xx"}; was not checking for
+this case in initlist.  Added code in initlist to check for this.
+.eg
+15. 5/12/82 - Integer initialization in long or pointer data type
+.bg
+The case: char *x[] { 0 }; only resulted in an integer initialization.
+Fixed oneinit to extend int to long and output as long constant.
+.eg
+16. 5/20/82 - Long -1 initialization
+.bg
+The syntax: long x -1; initialized x to 1, added check in cexpr to
+add check after '-' for CINT as well as CLONG.
+.eg
+17. 5/27/82 - sizeof structure prototype
+.bg
+The syntax: sizeof( struct x ) where x is a structure prototype name
+was not working (although this is not part of OFFICIAL C syntax anyway).
+Added code in expr to do right thing with type STRUCT.  Also saw and
+fixed some STRPROTO bugs in gettype and dodecl.
+.eg
+18. 6/1/82 - int to pointer conversion not getting error
+.bg
+Test in maketree for integer to pointer conversion was not correct.
+Changed test in maketree to flag any INT or UNSN assignment conversion if
+the right hand side was not an constant.
+.eg
+19. 6/2/82 - int to pointer conversion again
+.bg
+Test in maketree fixing bug 18 was not quite correct, did not allow
+*p =+ i; added check in maketree for only assignment operator.
+.eg
+20. 6/2/82 - line numbers on error messages
+.bg
+Line numbers on error messages sometimes off by one.  This is because
+expr or stmt can gobble up one or two tokens, thereby incrementing the
+line number.
+.eg
+21. 6/17/82 - unsigned initialization
+.bg
+Couldn't do: unsigned x = 1; There were no entries in oneinit for a
+base type of UNSIGNED...
+.eg
+22. 11/23/82 - nonunique structure names
+.bg
+Added the system III capability to handle structures which have
+elements which have the same name, but different types and/or
+structure offsets.
+.eg
+23. 12/06/82 - forward referenced structures
+.bg
+Forward referenced structures are now allowed, checking to be sure
+that they are defined is left until end of file is reached.
+.eg
+24. 12/13/82 - structure assignments						[vlh] 4.0
+.bg
+One structure may be assigned to another provided that the one on
+the right is smaller than or equal to the left one in size.
+.eg
+25. 12/16/82 - Don't generate .globl's for external func's	[vlh] 4.0
+.bg
+Don't automatically generate .globl's for external functions, avoids
+automatically loading routines which may never be used (like stdio).
+.eg
+26. 1/5/83 - sizeof as array size specification				[vlh] 4.0
+.bg
+Recursive call to 'getdecl' caused the size specified using sizeof
+to be lost.
+.eg
+27. 1/12/83 - procedure/function name as identifier			[vlh] 4.0
+.bg
+Generated "tst.l #_ident" for "if (ident) ;" where ident is a procedure
+or function name.  Changed this to generate as true instead.
+.eg
+28. 1/25/83 - outgoto macro									[vlh] 4.0
+.bg
+Made the outgoto procedure a macro, requires it's single parameter to
+be a constant.
+.eg
+29. 2/8/83 - typedef of forward referenced structures		[vlh] 4.0
+.bg
+The dimension table pointer of a typedefed forward referenced structure
+was being initialized incorrectly.
+.eg
+30.  2/12/83 - Pointer to structure comparisons to integers	[vlh] 4.0
+.bg
+Previously the integer value was being multiplied by the size of the 
+structure in words.
+.eg
+31.  2/19/83 - Pointers assigned to structure array element [vlh] 4.1
+.bg
+struct {char d[10];} *p; char *q; q = &p->d;
+.eg
+32.  2/28/83 - For loop construction						[vlh] 4.1
+.bg
+Altered the code that is generated so that only one branch is inside
+the for loop.  Better code is now generated.
+.eg
+33.  3/1/83 - While loop construction						[vlh] 4.1
+.bg
+Altered the code that is generated so that only one branch is inside the
+while loop.  Better code is now generated.
+.eg
+34.  3/1/83 - Char and char * casting						[vlh] 4.1
+.bg
+Added the docast unary operator to fix the char cast problem in the
+parser, changed the char * cast to do a int to long conv in the case
+of a char *.
+.eg
+35.  3/7/83 - Unsigned/int global initialization			[vlh] 4.1
+.bg
+Initialization of integer to -32768 generated an error, as did unsigned
+initializations > 32767.
+.eg
+36.  3/29/83 - string defines								[vlh] 4.1
+.bg
+Initialization's of strings has been broken up into dc.b's of no greater
+than 32 bytes at a time.  This is to avoid building one which is too
+long for the assembler and the editor.
+.eg
+37.  4/21/83 - structure alignment							[vlh] 4.1
+.bg
+Fixed the structure alignment call to salign which caused character pointers
+to not be aligned properly.
+.eg
+38.  4/22/83 - structure fields with same names				[vlh] 4.1
+.bg
+Structure fields with the same names were only being inserted into the
+symbol table once.  Required a test to ensure that all declarations of
+fields are inserted and just statement handling is allowed to short
+circuit it.
+.eg
+39.  5/2/83 - added '\f' recognization						[vlh] 4.1
+.bg
+Added recognizing and proper treatment of the form feed escaped 
+character '\f'.
+.eg
+40.  5/10/83 - multi-dimensional arrays						[vlh] 4.1
+.bg
+The indices into multi-dimensional arrays were being computed incorrectly.
+The arrayref routine was setting the proper dimension table pointer, and
+then resetting it to it's parent's value.
+.eg
+41. 5/11/83 - int to long constant conversion				[vlh] 4.1
+.bg
+Constants were not being converted until the code generation pass.  For
+this reason certain constants were not being calculated correctly.
+The long constant 0x8000 was left as an integer constant value of -32768
+and passed to the code generator.  The codegenerator does not know what
+the original value was.  Constant conversions from integers to longs needed 
+to be done in the parser.
+.eg
+42. 6/6/83 - return with null expression					[vlh] 4.1
+.bg
+A return call which included parenthesis but a null expression caused the
+parser to generate an error and bus error.  There was no test of expr's
+return value in case of an error in which the expression tree would be
+non-existent.  Need to check for parens without expression.
+.eg
+43. 6/8/83 - sizeof array as a structure field				[vlh] 4.1
+.bg
+The sizeof all types of values was being treated as a single node.  If the
+item in question was an array element ensconsed in a structure the value
+was always determined to be the size of a pointer.  This required the addition
+of a new subroutine which in the case of an array inside a structure traversed
+the tree and took into account the two nodes nearest to the tips of the tree.
+.eg
+44. 6/13/83 - added block declarations						[vlh] 4.2
+.bg
+Reworked original link and movem to be done at the bottom of the routine
+at which time the number of variables register and stack will be known.
+This requires an extra branch at the top and bottom of each function.
+.eg
+45. 6/14/83 - added auto initilization						[vlh] 4.2
+.bg
+Added the recognizing of the equal sign as a local variable initialization.
+Faked out expression by handling the symbol internally.  Turned on commastop
+to ensure only one variable is parsed at a time.
+.eg
+46. 6/15/83 - local/global same name						[vlh] 4.2
+.bg
+Added the facility to the parser to allow for local/global/block/nested block
+variables with the same name.  This required the addition of a scope level
+to the symbol table node.  Global scope is 0.  Function parameters and
+local variables are at level 1, etcetera.  Each left curly brace signifies
+and additional nesting level.  This requires freeing symbols at every
+right curly brace if there are any at that level.  Added an array to keep
+track of what levels have variables declared so that the symbol table did
+not have to be searched for every curly brace.
+.eg
+47. 6/21/83 - link file										[vlh] 4.2
+.bg
+Added the link file.  Writes link information (link and movem instructions)
+into this file for remerging by the codegenerator.  This was added in order
+to produce cleaner code with the addition of block variables and
+local initializations.
+.eg
+48. 6/22/83 - structures									[vlh] 4.2
+.bg
+Rewrote all the code to deal with structures and their elements and how
+and where they are put into the symbol table.  Necessitated the addition
+of two more symbol table pointers: a child link (pointer from structure
+to it's first element), and a sibling link (linking together all the
+elements in a structure).  Every unnamed structure is now being added to
+the symbol table with a fake name.
+.eg
+49. 6/27/83 - asm											[vlh] 4.2
+.bg
+Added the asm instruction to the parser in order to generate assembly
+language code directly into the C source.
+.eg
+50. 6/28/83 - bit fields									[vlh] 4.2
+.bg
+Bit fields where not being aligned on a word boundary when necessary.
+Also the value of s_dp which was used to decided the bit offset of
+the field was not being reset if an int bit field followed a character
+bit field.
+.eg
+51. 6/28/83 - structure initialization and alignment        [vlh] 4.2
+.bg
+Rewrote all code which deals with initializing structures.  It now
+compares the sizes and types of the structure fields against the
+objects which are used to initialize the structures.  It defines
+space for padding properly.  Arrays inside of structures are now
+being initialized properly.  They are truncated at the appropriate
+space if required, otherwise they are terminated by a null byte
+and padded to the appropriate size.  If they are truncated then
+the parser generates a warning message.
+.eg
+52. 7/7/83 - scope problem                                  [vlh] 4.2
+.bg
+Variables which were declared on more than one scoping level were
+not always being identified properly.  In particular, if a variable
+is accessed on a nesting level different from it's declaration
+it would not always choose the right declaration.
+.eg
+53. 7/13/83 - long vs. short vs. int						[vlh] 4.2
+.bg
+All references to int variables have been changed to shorts.  This is
+for the sake of portability between regulus and the vax.
+.eg
+54. 7/20/83 - bit field initialization						[vlh] 4.2
+.bg
+Added a routine called bfield_init which outputs the word or character
+once it is built.  Added code to oneinit to build the bit fields as
+they were evaluated.
+.eg
+55. 7/20/83 - symbolic debugger flag						[vlh] 4.2
+.bg
+Added recognizing of the '-g' flag.  Output the label required before
+the link instruction.
+.eg
+56. 7/25/83 - fixed structure assignments again             [vlh] 4.2
+.bg
+Move the structure assignment size test into the maketree routine.
+Make a right side structure larger than a left only a warning.
+Determine the size of the structures in the maketree routine before
+the original tree nodes are altered beyond comprehension.
+.eg
+57. 7/25/83 - unsigned char/long							[vlh] 4.2
+.bg
+Initial changes required to allow unsigned char and unsigned long
+types.
+.eg
+58. 7/29/83 - long constant conversion to int				[vlh] 4.2
+.bg
+Operations in which one operand is a long constant and the other is
+an integer will cause the long constant to be converted at all times.
+Caused an additional condition to be added to the conversion code in
+the maketree routine.
+.eg
+59. 8/1/83 - frstruct pointer as struct element				[vlh] 4.2
+.bg
+A pointer to a forward referenced structure was being incorrectly
+linked into the structure declaration.  Required several tests
+and some additional code in the get_s_or_u and get_type routines.
+.eg
+60. 8/5/83 - function label test							[vlh] 4.2
+.bg
+Bad code was being generated for a statement of the form "if(func_name)".
+The immediate value of the function label was being tested.  Fixed this
+by adding a test in funcref() to not generate addresses if the operand is
+a SYMBOL or NOT.
+.eg
+61. 8/8/83 - constant expression evaluation					[vlh] 4.2
+.bg
+Added a test to tree() to avoid adding conversion ops to an expression
+which involves only long/short constants.  This ensures that they will
+be evaluated by the parser in binopeval.
+.eg
+62. 8/9/83 - source file to cgen							[vlh] 4.2
+.bg
+Altered the macro which outputs the line number to the intermediate file
+to also output the file name, for use in generating errors in the
+code generator pass.
+.eg
+63. 8/10/83 - constant test for long						[vlh] 4.2
+.bg
+Changed the gettok() routines test of a constant as a long to check to
+see if any of the high bits (0xffff0000) are set in the value.  As all
+numbers are positive at the time of this evaluation it is the most sure
+fire way to decide.
+.eg
+64. 8/12/83 - array dimension using sizeof					[vlh] 4.2
+.bg
+Fixed a rather obscure parser bug which involved specifying the dimensions 
+of an array of structures using the sizeof operator on a structure.
+Required a reset in the getdecl routine of dp if cdp had been changed
+because of a sizeof operation.
+.eg
+65. 8/24/83 - 16 bit hex and octal constants				[vlh] 4.2
+.bg
+By definition of Kernighan and Ritchie all octal and hex constants which
+fit as unsigned values into an integer size are defined to be integers.
+.eg
+66. 8/25/83 - 2 dimensional array initialization			[vlh] 4.2
+.bg
+Two dimensional arrays were not being initialized properly in 4.2...
+Requires multiple calls to str_init.
+.eg
+67. 9/2/83 - labels and function names						[vlh] 4.2
+.bg
+Fixed the compiler to handle local-globals with local labels which have
+the same name as functions.  Fixes in stmt.c to force a new symbol table
+entry for the label.
+.eg
+68. 9/6/83 - floating point constant, w/o preceding digit   [vlh] 4.2
+.bg
+Added a gettok entry for PERIOD to check for a floating point constant
+which does not contain a leading digit and thus process it as such.
+.eg

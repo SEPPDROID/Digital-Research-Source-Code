@@ -1,0 +1,1418 @@
+	title	'Concurrent CP/M Loader BIOS'
+;*******************************************************
+;	Last Modification:	02/16/84
+;
+;		  L  B  I  O  S  -  8  6
+;		  ======================
+;
+;	   Concurrent CP/M Loader I/O System
+;			   for
+;		CompuPro Computer System
+;
+;	Separate Code and Data:
+;	-----------------------
+;	  The code segment is separate from the data
+;	segment.  The code is ORG'd at 0000h and the
+;	data is ORG'd at 0180h relative to the System
+;	Data Area.
+;
+;	high	+---------------------+
+;		|   Ldr Program Data  |
+;		+ - - - - - - - - - - +
+;		|   Ldr BIOS Data     |
+;		+---------------------+ <- 0180h
+;		|   Ldr BDOS Data     |
+;		+---------------------+ <- 0000h
+;		+---------------------+
+;		|   Ldr Program Code  |
+;		+ - - - - - - - - - - +
+;		|   Ldr BIOS Code     |
+;		+---------------------+ <- 0000h
+;		+---------------------+
+;		|   Ldr BDOS Code     |
+;	low	+---------------------+ <- 0000h
+;
+;*******************************************************
+;
+;	The following commands are used to generate CPMLDR.SYS
+;		RASM86 LBIOS
+;		RASM86 LPROG
+;		LINK86 LBIOS3.SYS = LBIOS,LPROG [DATA[ORIGIN[0180]]]
+;		GENLDR [nnnn]
+;
+;	The following commands are used to generate the
+;	boot tracks image BOOTTRKS
+;		SID86
+;		#RDSKBOOT.SYS		;strips header and
+;		#WBOOT,180,37F		;default base page
+;		PIP BOOTTRKS = BOOT[O],CPMLDR.SYS[O]
+;
+;*******************************************************
+;
+;	Register usage for BIOS interface routines:
+;
+;	Entry:	AL = function number (in entry)
+;		CX = first parameter
+;		DX = second parameter
+;		DS = ES = system data segment (in entry and init)
+;	Exit:	AX = return or BIOS error code
+;		BX = AX (in exit)
+;		DS = ES = preserved through call
+;		SS,SP must also be preserved
+;		CX,DX,SI,DI,BP can be changed by the BIOS
+;
+;*******************************************************
+;
+;	Loader IOS Coding Conventions
+;
+;*******************************************************
+;
+;	@ as the first character of a symbol denotes
+;		a public variable
+;
+;	? as the first character of a symbol denotes
+;		a public label
+;
+;	All labels, and code are in lower-case
+;		for easier reading.
+;
+;	All immediate values (literals) are in uppercase.
+;
+;	Fields within data structures have leading
+;	letters followed by an underbar and the field
+;	name.  The data structures defined are:
+;
+;		BH_	-	BIOS Header
+;		DPB_	-	Disk Parameter Block
+;		DPH_	-	Disk Parameter Header
+;		IOPB_	-	I/O Parameter Block
+;
+;	Underscores are used for readiablity otherwise
+;	Symbols, code mnemonics, registers are in all upper-case
+;	within comments to distinquish them from the code.
+;
+;*******************************************************
+;
+;	Character I/O Equates
+;
+;*******************************************************
+
+;	CompuPro System Support serial definitions
+
+SS_BASE		equ	050h		;base address
+
+SS_MODE		equ	SS_BASE+0Eh	;CompuPro System Support mode
+SS_COMMAND	equ	SS_BASE+0Fh	;CompuPro System Support command
+SS_STATUS	equ	SS_BASE+0Dh	;CompuPro System Support status
+SS_DATA		equ	SS_BASE+0Ch	;CompuPro System Support data
+
+SS_TRANS_READY	equ	00000001b	;System Support transmit buffer empty
+SS_RECV_READY	equ	00000010b	;System Support data available
+SS_DSR		equ	10000000b	;System Support data set ready
+
+;*******************************************************
+;
+;	Disk Parameter Header Equates
+;
+;*******************************************************
+;
+;	+-----+-----+-----+-----+-----+------+-----+-----+
+;  00h	|    XLT    |                 | DOPEN|           |
+;	+-----+-----+-----+-----+-----+------+-----+-----+
+;  08h 	|    DPB    |    CSV    |    ALV     |   DIRBCB  |
+;	+-----+-----+-----+-----+-----+------+-----+-----+
+;  10h	|   DATBCB  |   HSHTBL  |    INIT    |   LOGIN   |
+;	+-----+-----+-----+-----+-----+------+-----+-----+
+;  18h	|    READ   |   WRITE   | UNIT| CHNNL| FCNT|
+;	+-----+-----+-----+-----+-----+------+-----+
+
+DPH_XLT		equ	word ptr 0
+DPH_DOPEN	equ	byte ptr 5
+DPH_DPB		equ	word ptr 8
+DPH_CSV		equ	word ptr 10
+DPH_ALV		equ	word ptr 12
+DPH_DIRBCB	equ	word ptr 14
+DPH_DATBCB	equ	word ptr 16
+DPH_HSHTBL	equ	word ptr 18
+DPH_INIT	equ	word ptr 20
+DPH_LOGIN	equ	word ptr 22
+DPH_READ	equ	word ptr 24
+DPH_WRITE	equ	word ptr 26
+DPH_UNIT	equ	byte ptr 28
+DPH_CHNNL	equ	byte ptr 29
+DPH_FCNT	equ	byte ptr 30
+
+;*******************************************************
+;
+;	Disk Parameter Block Equates
+;
+;*******************************************************
+;
+;	+-----+-----+-----+-----+-----+-----+-----+-----+
+;  00h	|    SPT    | BSH | BLM | EXM |    DSM    |  DRM..
+;	+-----+-----+-----+-----+-----+-----+-----+-----+
+;  08h	..DRM | AL0 | AL1 |    CKS    |    OFF    | PSH |
+;	+-----+-----+-----+-----+-----+-----+-----+-----+
+;  10h	| PHM |
+;	+-----+
+
+DPB_SPT		equ	word ptr 0
+DPB_BSH		equ	byte ptr 2
+DPB_BLM		equ	byte ptr 3
+DPB_EXM		equ	byte ptr 4
+DPB_DSM		equ	word ptr 5
+DPB_DRM		equ	word ptr 7
+DPB_AL0		equ	byte ptr 9
+DPB_AL1		equ	byte ptr 10
+DPB_CKS		equ	word ptr 11
+DPB_OFF		equ	word ptr 13
+DPB_PSH		equ	byte ptr 15
+DPB_PHM		equ	byte ptr 16
+
+;*******************************************************
+;
+;	Input/Output Parameter Block Definition
+;
+;*******************************************************
+;
+;  Read and Write disk parameter equates
+;
+;  At the disk read and write entries,
+;   all disk I/O parameters are on the stack
+;   and the stack at these entries appears as
+;   follows:
+;
+;           +-------+-------+
+;       +14 |  DRV  | MCNT  |   Drive and Multi sector count
+;           +-------+-------+
+;       +12 |     TRACK     |   Track number
+;           +-------+-------+
+;       +10 |    SECTOR     |   Physical sector number
+;           +-------+-------+
+;        +8 |    DMA_SEG    |   DMA segment
+;           +-------+-------+
+;        +6 |    DMA_OFF    |   DMA offset
+;           +-------+-------+
+;        +4 |    RET_SEG    |   BDOS return segment
+;           +-------+-------+
+;        +2 |    RET_OFF    |   BDOS return offset
+;           +-------+-------+
+;      BP+0 |    RET_ADR    |   Local ENTRY return address
+;           +-------+-------+    (assumes one level of call
+;                                 from ENTRY routine)
+;
+;  These parameters may be indexed and modified
+;   directly on the stack and will be removed
+;   by the BDOS after the function is complete
+
+iopb_mcnt	equ     byte ptr 15[bp]
+iopb_drive	equ     byte ptr 14[bp]
+iopb_track	equ     word ptr 12[bp]
+iopb_sector	equ     word ptr 10[bp]
+iopb_dmaseg	equ     word ptr 8[bp]
+iopb_dmaoff	equ     word ptr 6[bp]
+
+;*******************************************************
+;
+;	Disk I/O Equates
+;
+;*******************************************************
+
+
+DPH_FMB		equ	byte ptr 31	;floppy mode byte used by driver
+
+;*******************************************************
+;							
+;	Floppy Disk Drivers for Qume Drives
+;	  and a DISK 1 Controller Board
+;
+;*******************************************************
+
+;	Floppy mode bits
+
+FM_D_DENSITY	equ	0000$0001b
+FM_TWO_SIDED	equ	0000$0010b
+FM_N_MASK	equ	0000$1100b
+
+;	read/write control string equates for the Intel 8272 FDC
+
+D		equ	byte ptr 1	;D stands for the drive and head
+					; to be used to perform a read/write
+C		equ	byte ptr 2	;C stands for the current Cylinder
+					; track number 0 - 76 of the medium
+H		equ	byte ptr 3	;H stands for head number 0 or 1, as
+					; specified in ID field
+R		equ	byte ptr 4	;R stands for the Sector number, which
+					; will be read or written
+N		equ	byte ptr 5	;N stands for the number of data bytes
+					; written in a Sector
+EOT		equ	byte ptr 6	;EOT stands for the final Sector number
+					; of a Cylinder
+GPL		equ	byte ptr 7	;GPL stands for the length of Gap 3
+					; (spacing between Sectors excluding
+					; VCO Sync Field)
+DTL		equ	byte ptr 8	;When N is defined as 00, DTL stands
+					; for the data length which is going to
+					; be read out or write into the sector
+
+;	Floppy controler port addresses
+
+FD_PORT		equ	0C0h		;base port address of DISK1 controller
+FDC_S		equ	FD_PORT		;8272 status register
+FDC_D		equ	FD_PORT + 1	;8272 data register
+D1_DMA		equ	FD_PORT + 2	;DISK1 dma addr when write
+D1_INTS		equ	FD_PORT + 2	;DISK1 interrupt status when read
+
+;	Main status register bits
+
+MSTR_RQM	equ	1000$0000b	;master status request
+MSTR_DIO	equ	0100$0000b	;master status direction
+MSTR_CB		equ	0001$0000b	;command busy status
+
+FDC_INT		equ	1000$0000b	;FDC interrupt output is asserted
+
+RQM_DELAY	equ	5		;12us delay count for master status
+
+;	Floppy controler function definitions
+
+F_SPEC		equ	03h		;specify
+F_DSTS		equ	04h		;sense drive status
+F_RDAT		equ	06h		;read data
+F_RECA		equ	07h		;recalibrate
+F_RSTS		equ	08h		;sense interrupt status
+F_RDID		equ	0Ah		;read id
+F_SEEK		equ	0Fh		;seek
+
+F_MFM		equ	0100$0000b	;double density, MFM mode bit
+
+;	Floppy retry equate
+
+RETRY_COUNT	equ	10
+
+;	Floppy disk status field equates
+
+ST0		equ	0		;status register 0
+ST1		equ	1		;status register 1
+ST2		equ	2		;status register 2
+ST_N		equ	6		;result field N
+PCN		equ	1		;present cylinder no. result
+
+;	Status field bit equates
+
+ST0_INTCODE_MSK	equ	1100$0000b
+ST0_STRT_NO_END	equ	0100$0000b
+ST0_SE		equ	0010$0000b	;seek end
+ST0_NR		equ	0000$1000b	;not ready
+ST0_UNIT_MASK	equ	0000$0011b	;unit mask
+
+ST0_RECAL_MASK	equ	1111$1100b
+ST0_RECAL_TEST	equ	0010$0000b	;seek complete signal
+
+ST0_SEEK_MASK	equ	1111$1100b
+ST0_VALID_SEEK	equ	0010$0000b	;seek complete signal
+
+ST1_EOT_END	equ	1000$0000b	;end of cylinder
+
+ST3_READY	equ	0010$0000b	;ready signal
+ST3_TWO_SIDED	equ	0000$1000b	;two sided disk
+
+ST_N_MASK	equ	0000$0011b	;N field mask
+
+;	Equates for the floppy disk code readability
+
+OK		equ	00h
+ERROR		equ	0FFh
+
+HEAD_BIT	equ	0000$0100b
+
+RW_ERROR	equ	01h
+WR_PROT_ERROR	equ	02h
+RW_MEDIA_CHANGE	equ	0FFh
+
+SELDSK_ERROR	equ	0
+
+CYLINDER_2	equ	2
+
+;	CCP/M disk control block equates which define the
+;	disk types and maximum storage capability of each
+;	disk type.
+
+;	CCP/M to host disk constants
+
+CPMSIB		equ	1024/128	;standard sectors in block
+FPYSIB		equ	2048/128	;sectors in floppy disk block
+
+S1DSM		equ	((77-2)*26)/CPMSIB
+S2DSM		equ	((77-2)*2*26)/FPYSIB
+D1DSM		equ	((77-2)*2*26)/FPYSIB
+D2DSM		equ	((77-2)*2*2*26)/FPYSIB
+D3DSM		equ	((77-2)*4*15)/FPYSIB
+D4DSM		equ	((77-2)*2*4*15)/FPYSIB
+D5DSM		equ	((77-2)*8*8)/FPYSIB
+D6DSM		equ	((77-2)*2*8*8)/FPYSIB
+
+;*******************************************************
+;
+;	8259A Programmable Interrupt Controller Equates
+;
+;*******************************************************
+;
+; PIC EQUATES: see pages 7-120 -> ... in the 1982 INTEL DATA CATALOG
+;
+; Interupt Structure
+;
+;  MASTER PIC:	IRQ0 = 
+;		IRQ1 = DISK 2
+;		IRQ2 = interfacer 3 receive ready
+;		IRQ3 = interfacer 3 transmit ready
+;		IRQ4 = DISK 1
+;		IRQ5 = 
+;		IRQ6 = 
+;		IRQ7 = Slave input
+;
+;  SLAVE PIC:	IRQ0 = 
+;		IRQ1 = Timer 0 ( tick )
+;		IRQ2 = Timer 1 ( free )
+;		IRQ3 = Timer 2 ( free )
+;		IRQ4 = 9511 svrq
+;		IRQ5 = 9511 end
+;		IRQ6 = SS Tx int
+;		IRQ7 = SS Rx int
+
+DISABLE_INTS	equ	0FFh		;mask to turn off all interrupts
+
+NS_EOI		equ	20h		;Non specific end of interrupt
+MASTER_PIC_PORT	equ	50h
+SLAVE_PIC_PORT	equ	52h
+
+MASTER_ICW_1	equ	15h		;basic operational mode of chip
+MASTER_ICW_2	equ	40h		;base of chips interrupt vectors
+MASTER_ICW_3	equ	80h		;master/slave map
+MASTER_ICW_4	equ	01h		;interrupt response mode
+
+SLAVE_ICW_1	equ	MASTER_ICW_1
+SLAVE_ICW_2	equ	MASTER_ICW_2 + 8
+SLAVE_ICW_3	equ	07h		;slave I.D. number
+SLAVE_ICW_4	equ	MASTER_ICW_4
+
+;*******************************************************
+;
+;	BIOS Kernel Code Publics and Externals
+;
+;*******************************************************
+	CSEG
+
+	public	@sysdat			;force CS over-ride
+	public	?conout, ?pmsg
+	extrn	?start:near
+
+;*******************************************************
+;
+;	BIOS Code Header
+;
+;*******************************************************
+	org	0000h
+
+	jmp init			;I/O system initialization
+	jmp entry			;I/O system function entry
+	jmp ?start			;start of loader program
+
+@sysdat		rw	1		;OS Data Segment
+
+;*******************************************************
+;
+;	BIOS Kernel Data Publics and Externals
+;
+;*******************************************************
+	DSEG
+
+	public	@bh_dphtable, @dpha
+
+;*******************************************************
+;
+;	BIOS Data Header
+;
+;*******************************************************
+	org	0000h
+		;use the LINK-86 [data[origin[0180]]] option
+		;to set the origin of the data segment at 0180h
+
+;	disk parameter header offset table
+
+@bh_dphtable	dw	offset @dpha	;drive A:
+
+;*******************************************************
+;
+;	BIOS Code Segment
+;
+;*******************************************************
+	CSEG
+
+;====
+init:
+;====
+;	Entry:	DS = ES = system data segment
+;	Exit:	DS = ES = preserved through call
+
+	cli				;disable interrupts
+	cld				;set forward direction
+
+;	set up the master PIC
+
+	mov al,MASTER_ICW_1
+	out MASTER_PIC_PORT,al
+	mov al,MASTER_ICW_2		;interupts start at interupt 40h
+	out MASTER_PIC_PORT + 1,al
+	mov al,MASTER_ICW_3 		;only IRQ 7 has a slave attached
+	out MASTER_PIC_PORT + 1,al
+	mov al,MASTER_ICW_4		;Set for 8088 mode
+	out MASTER_PIC_PORT + 1,al
+	mov al,DISABLE_INTS		;turn off all interupts for now
+	out MASTER_PIC_PORT + 1,al
+
+;	set up the slave PIC
+
+	mov al, SLAVE_ICW_1
+	out SLAVE_PIC_PORT,al
+	mov al,SLAVE_ICW_2		;base of the slave vectors AT 48H
+	out SLAVE_PIC_PORT + 1,al
+	mov al,SLAVE_ICW_3  		;slave ID number = 7
+	out SLAVE_PIC_PORT + 1,al
+	mov al,SLAVE_ICW_4		;8088 mode
+	out SLAVE_PIC_PORT + 1,al
+	mov al,DISABLE_INTS		;turn off the ints for now
+	out SLAVE_PIC_PORT + 1,al
+
+	sti
+
+;	initialize the console on the System Support board
+
+	mov al,0EEh			;AL = mode register 1 ,async 16x rate
+	out SS_MODE,al			;send mode register 1
+	mov al,07Eh			;AL = mode register 2, internal clock
+	out SS_MODE,al			;send mode register 2
+	mov al,00$1$0$0$1$1$1b		;trans. on,dtr low,rec. on,no break,
+					;...no reset,rts low
+	out SS_COMMAND,al		;set up command port
+
+;	Floppy disk controller initialization.
+;	Set up the values for the fdc's three internal timers.
+;	  HUT (head unload time)	= (0fh * 16ms) [240ms]
+;	  SRT (step rate)		= (0fh - 0dh * 1ms increments) [3ms] 
+;	  HLT (head load time) 		= (31H * 2ms) [98ms]
+;	and it sets up the DMA mode
+;	  ND (non-dma bit)		= DMA mode [0]
+;
+;	see pages 41 and 38 of the CompuPro DISK 1 manual
+
+	mov bx,offset specify_cmd	;specify command
+	mov cl,length specify_cmd	;sets up initial fdc counter values
+	call send_command
+
+	mov si,offset signon		;signon message defined in INIT module
+	call ?pmsg			;print the BIOS signon message
+	retf
+
+;*******************************************************
+;
+;	BIOS Entry Function Dispatch
+;
+;*******************************************************
+
+;=====
+entry:		; BIOS Entry Point
+;=====
+; All calls to the BIOS after INIT, enter through this code
+;  with a CALLF and must return with a RETF.
+;	Entry:	AL = function number
+;		CX = first parameter
+;		DX = second parameter
+;		DS = ES = system data segment
+;	Exit:	AX = BX = return or BIOS error code
+;		DS = ES = preserved through call
+;		SS,SP must also be preserved
+;		CX,DX,SI,DI,BP can be changed by the BIOS
+
+	cld				;clear direction flag
+	xor ah,ah ! shl ax,1		;index into BIOS function table
+	mov bx,ax
+	call functab[bx]		;call BIOS kernel routine
+        mov bx,ax			;BX = AX
+	retf
+
+;*******************************************************
+;
+;	BIOS Character Output Routines
+;
+;*******************************************************
+
+?conout:	;BIOS function 2
+;=======
+;	Entry:	CL = character
+;	Exit:	None
+
+	in al,SS_STATUS			;get uart status
+	test al,SS_TRANS_READY		;test if buffer empty
+	jz ?conout
+
+	mov al,cl
+	out SS_DATA,al
+	ret
+
+?pmsg:		;Print String
+;=====
+;	Entry:	DS:SI = offset of string terminated by 0.
+;	Exit:	None
+
+	mov cl,[si]			;get character from buffer
+	or cl,cl ! jz pmsg_exit		;check for 0 terminater
+	  push si
+	  call ?conout			;output character in CL
+	  pop si
+	  inc si
+	  jmps ?pmsg			;get next character
+pmsg_exit:
+	ret
+
+;*******************************************************
+;
+;	BIOS Disk I/O Routines
+;
+;*******************************************************
+
+io_seldsk:	;BIOS function 9
+;=========
+;	Entry:	CL = disk to be selected
+;		DL = (Bit 0): 0 if first select
+;	Exit:	AX = 0 if illegal select
+;		   = offset of DPH relative to OS data segment
+
+	xor bx,bx
+	cmp cl,0 ! jne sel_ret		;if not valid drive exit
+	  mov bx,@bh_dphtable		;get DPH from drive table
+	  test dl,1 ! jnz sel_ret	;first time select?
+	    call DPH_LOGIN[bx]		; yes
+sel_ret:
+	mov ax,bx
+	ret
+
+io_read:	;BIOS function 10
+;=======
+;	Entry:	IOPB filled in (on stack)
+;	Exit:	AL =    0 if no error
+;		   =    1 if physical error
+;		   = 0FFH if media density has changed
+
+	mov bp,sp			;SS:BP points to IOPB
+	cmp iopb_drive,0 ! jne ret_error
+	  mov bx,@bh_dphtable		;get DPH address
+	  jmp DPH_READ[bx]		;jump to DPH read routine
+ret_error:
+	mov al,1			;return error if not valid
+	ret
+
+io_notimp:	;BIOS function not implemented
+;=========
+	xor ax,ax			;return success
+	ret
+
+;*******************************************************
+;
+;	Floppy Disk I/O Code Segment
+;
+;*******************************************************
+
+fd_login:	;Login routine for the floppy disk drive
+;========
+;	This routine figures out 
+;	1]	what kind of floppy is in the drive
+;	2]	does a recal, homes the head
+;	3]	saves the floppy mode byte in the DPH.
+;	4]	sets up the current floppy mode byte.
+;	5]	sets up the dph's 
+;	6]	returns the addr of the DPH
+; NOTES:
+;	there is a DPB for each of the possible disk configurations.
+;	1]	SD	128
+;	2]	DD	256
+;	3]	DD	512
+;	4]	DD	1024
+;	5-8]	same as 1 - 4 with double sided disks.
+;
+;	Entry:	BX = DPH offset
+;		CL = selected disk
+;	Exit:	BX = 0 if illegal select
+;		   = offset of DPH relative to O.S. data segment
+
+	push bx
+	call get_media_type
+	pop bx				;BX = DPH offset
+	cmp al,ERROR ! jne fd_1
+	  mov bx,SELDSK_ERROR		;set up the error code for CCP/M
+	  jmps fd_login_exit
+fd_1:
+	mov DPH_FMB[bx],al		;save the current floppy mode byte
+					; for this drive in the DPH
+	xor ah,ah			;set up the xlat table addr in DPH
+	mov di,ax			;save DI for index into DPB table
+	shr al,1 ! and al,0FEH
+	mov si,ax
+	mov ax,xtable[si]		;get the translation table
+	mov DPH_XLT[bx],ax		;put the xlat table addr in DPH
+	and di,0FFFEh			;get the proper dpb
+	mov ax,drv_tbl[di]		;index into the dpb table
+	mov DPH_DPB[bx],ax		;and put it in the dph
+fd_login_exit:
+	ret				;BX = DPH offset
+
+
+fd_read:	;Read routine for the floppy disk drive
+;=======
+;		BX = DPH offset
+;	Exit:	AL =    0 if no error
+;		   =    1 if physical error
+;		   = 0FFH if media density has changed
+
+	mov al,DPH_FMB[bx]		;get saved floppy mode
+	mov c_fmb,al			;set current floppy mode byte
+	mov ax,DPH_XLT[bx]		;get the xlat table
+	mov xltbl,ax			;save translation table address
+	mov bx,DPH_DPB[bx]		;get the DPB from the DPH
+	mov ax,DPB_SPT[bx]
+	mov maxsec,ax			;save maximum sector per track
+	mov cl,DPB_PSH[bx]
+	mov ax,128 ! shl ax,cl		;compute physical record size
+	mov secsiz,ax			; and save it
+	cmp iopb_mcnt,0 ! jne rw_1
+	  mov al,1
+	  ret
+rw_1:
+	mov ax,iopb_sector		;is sector < max sector/track
+	cmp ax,maxsec ! jb same_trk
+	  inc iopb_track		; next track
+	  xor ax,ax
+	  mov iopb_sector,ax		; initialize sector to 0
+same_trk:
+	mov bx,xltbl			;get translation table address
+	or bx,bx ! jz no_trans		;if xlt <> 0
+	  xlat al			; translate sector number
+no_trans:
+	mov isector,al			;store sector #
+	mov ax,iopb_track		;get track # from IOPB
+	mov itrack,ax
+	mov ax,iopb_dmaoff		;get dma offset from table
+	mov idmaoff,ax
+	mov ax,iopb_dmaseg		;get dma segment from IOPB
+	mov idmaseg,ax
+	call phys_rw			;call read routine
+	or al,al ! jnz err_ret		;if error occured return
+	  mov ax,secsiz			;increment dma offset by the
+	  add iopb_dmaoff,ax		; physical sector size
+	  inc iopb_sector		;next sector
+	  dec iopb_mcnt			;decrement multi sector count
+	  jnz rw_1			;if MCNT <> 0 store next sector dma
+
+	  xor ax,ax
+err_ret:
+	ret				;return with error code in AL
+
+phys_rw:	;these are the physical drivers for the CompuPro
+;-------	
+; physical read does the actual read from the floppy.
+;
+;	Entry:	itrack	= the track to read from
+;		isector	= the sector to read from
+;		idmaoff	= the dma offset to read to or from
+;		idmaseg	= the dma segment to read to or from
+;
+;	Exit:	AL =    0 if no error
+;		   =    1 if physical error
+;		   =    2 if Read/Only disk
+;		   = 0FFH if media density has changed
+
+	mov rw_retries,RETRY_COUNT
+rw_retry_lp:
+
+;	setup D, C, H, R, N, EOT, GPL, and DTL fields of RW_CMD
+
+	mov al,isector	 		;put sector in the control strings
+	inc al				;the bdos expects 0 relative sectors
+	mov (rw_cmd + R),al		;record 
+	mov (rw_cmd + EOT),al		;and the end of track fields
+	mov al,F_RDAT			;setup for read command
+	test c_fmb,FM_D_DENSITY		;check if double density
+	jz rw_not_dd
+	  or al,F_MFM			;yes - set MFM bit
+rw_not_dd:
+	mov rw_cmd,al			;set r/w command in control string
+
+	mov al,c_fmb
+	and al,FM_N_MASK		;get the N value from the mode byte
+	shr al,1 ! shr al,1		; and shift the N bit field to the lsbs
+	mov (rw_cmd + N),al		; then stuff the control string
+	mov (rw_cmd + DTL),0FFh		;set dtl for all DD operations
+	cmp al,0 ! jne zero_dtl		;this checks for a SD floppy
+	  mov (rw_cmd + DTL),128	; set for SD operation
+zero_dtl:
+	xor ah,ah			;get the gpl as per the
+	mov si,ax ! mov al,gpl_tbl[si]	;N value in the FMB
+	mov (rw_cmd + GPL),al
+
+	mov ax,itrack
+	test c_fmb,FM_TWO_SIDED
+	jz ssided
+	  shr ax,1			;two sided drive
+					;so seek trk/2 + bit(0)
+ssided:
+;	set the cylinder number for the seek and control string
+
+	mov (seek_cmd + C),al		;set up the seek control
+	mov (rw_cmd + C),al		;now the read control
+
+;	set the drive and head
+
+	xor al,al			;set the drive
+	mov (rw_cmd + H),0
+	test c_fmb,FM_TWO_SIDED
+	jz side0			;if double sided
+	  test itrack,1			;and track is odd
+	  jz side0 			;set the head bit
+	    or al,HEAD_BIT		;set the head bit for the drive field
+	    mov (rw_cmd + H),1		;set the head field in the RW_CMD
+side0:
+	mov (seek_cmd + D),al		;stuff the seek drive field
+	mov (rw_cmd + D),al		; and the RW_CMD drive field
+	call seek			;seek to the desired cylinder
+	cmp al,ERROR ! je phys_rw_3
+
+;	set up the floppy controllers dma address
+
+	  mov ax,idmaseg		;get the segment
+	  mov cl,4 ! rol ax,cl		;(para to bytes) shift add to offset
+	  mov dx,ax			;save lower 16 bits of paragraph
+	  and al,0Fh			;get upper nibble of paragraph
+	  and dx,0FFF0h
+	  add dx,idmaoff		;add in the offset
+	  adc al,0			;add carry into upper nibble
+					;send 24 bits to controler
+	  out D1_DMA,al			;msb
+	  mov al,dh ! out D1_DMA,al
+	  mov al,dl ! out D1_DMA,al	;lsb
+
+	  mov bx,offset rw_cmd		;send out the command string
+	  mov cl,length rw_cmd
+	  call send_command
+	  call int_wait			;wait for the read
+	  mov bx,offset rw_res		;get the results of the read
+	  mov cl,length rw_res
+	  call get_results
+					;check the interupt code
+	  mov al,(rw_res + ST0)		;get the interupt code
+	  and al,ST0_INTCODE_MSK	;check for start but no end
+	  cmp al,ST0_STRT_NO_END
+	  jne phys_rw_4			;due to EOT 
+	    mov al,(rw_res + ST1)
+	    cmp al,ST1_EOT_END
+	    jne phys_rw_4
+	      mov al,OK			;good read so exit
+	      jmps p_read_exit
+phys_rw_3:
+	call recalibrate		;recalibrate on seek errors
+phys_rw_4:
+	dec rw_retries
+	jz phys_rw_err
+	  jmp rw_retry_lp
+phys_rw_err:
+	mov al,RW_ERROR
+p_read_exit:
+	ret
+
+get_media_type:	;determine media type for a disk select
+;--------------	
+; figures out what kind of disk is in the drive specified
+; Then it builds the Floppy mode byte(C_FMB)
+; It sets the two sided bit, the density bit, and the sector
+; size bits (2, 3) if the disk is DD
+;	Exit:	AL = current floppy mode byte (C_FMB)
+;		AL = ERROR if there was an error
+;		     C_FMB is set
+
+	call recalibrate		;recalibrate drive
+	cmp al,ERROR			;check for a error in recal
+	je media_type_exit		;return on error
+
+;	Put head 0 over cylinder 2 to sample the disk at the start
+;	of the directory.  Track 0 is SD on the CompuPro DD disk.
+
+	mov (seek_cmd + D),0
+	mov (seek_cmd + C),CYLINDER_2
+	mov fc_retries,RETRY_COUNT	;initialize retry count
+fc_retry_lp:
+	call seek			;seek to cylinder 2
+	cmp al,ERROR ! jne cylinder_2_now
+	  dec fc_retries ! jnz fc_retry_lp
+
+	  jmps media_type_exit		;return with error
+cylinder_2_now:
+	mov c_fmb,0			;set current floppy mode byte to 0
+
+;	get the number of sides from the FDD's status byte
+
+	test sdst_res,ST3_TWO_SIDED
+	jz single_sided
+	  or c_fmb,FM_TWO_SIDED		;set two sided field
+single_sided:
+;	resolve the density either SD or DD we should be over cylinder 2
+;	if the read id for a DD disk fails try a SD disk
+
+	mov rd_id_cmd,F_RDID + F_MFM	;set read id for DD
+	call read_id
+	jz sec_size
+	  mov rd_id_cmd,F_RDID		;set read id for SD
+	  call read_id
+	  jz f_sel_com
+	    dec fc_retries ! jnz single_sided
+
+	    mov al,ERROR
+	    jmps media_type_exit
+sec_size:
+;	first set the d_density bit in the c_fmb
+;	get the sector size from the N field returned by the FDC
+
+	  or c_fmb,FM_D_DENSITY		;or in the DD bit in the FMB
+	  mov al,(rd_id_res + ST_N)	;get the N field
+	  and al,ST_N_MASK		;mask for validity
+	  shl al,1 ! shl al,1		;setup mask for C_FMB
+	  or c_fmb,al			;or the mask into the current mode byte
+f_sel_com:
+	mov al,c_fmb
+media_type_exit:
+	ret
+
+sense_drv_stat:		;sense drive status
+;--------------
+;	Exit:	AL = OK if drive is ready
+;		AL = ERROR if the drive is not ready
+
+	mov bx,offset sdst_cmd
+	mov D[bx],0			;set the drive, head = 0
+	mov cl,length sdst_cmd
+	call send_command		;Sense drive status command
+	mov bx,offset sdst_res
+	mov cl,length sdst_res
+	call get_results
+
+;	Note:
+;	  the status byte returned by this call has the fdd's
+;	  ready line status bit in it (bit(3))
+;	  if the upper nibble = 2 the door is closed.
+;	  else if the upper nibble = 4 the is open.
+
+	xor al,al
+	test sdst_res,ST3_READY		;make sure the drive is ready
+	jnz sds_exit
+	  mov al,ERROR
+sds_exit:
+	ret
+
+recalibrate:		;recalibrate drive
+;-----------
+;	Exit:	AL = OK if everthing went OK
+;		AL = ERROR if it could not find the track 0
+;		     or the drive was off line
+
+	call sense_drv_stat		;Sense drive status
+	cmp al,ERROR ! je recal_exit
+	  mov bx,offset recal_cmd
+	  mov D[bx],0			;stuff the control string
+	  mov cl,length recal_cmd
+	  call send_command		;send the recal command
+	  call int_wait			;wait for the recal to happen
+	  mov al,(sist_res + ST0)
+	  and al,ST0_RECAL_MASK		;get status register 0
+	  cmp al,ST0_RECAL_TEST		; and make sure recal was ok
+	  mov al,OK
+	  je recal_exit
+	    mov al,ERROR
+recal_exit:
+	ret
+
+seek:		;seek sends the seek command to the fdc
+;----
+;	Entry:	SEEK_CMD must be set up on the way in
+;
+;	Exit:	AL = OK if everthing went OK
+;		AL = ERROR if it could not find the right track
+;		     or the drive was off line
+
+	call sense_drv_stat		;sense drive status
+	cmp al,ERROR ! je sk_exit
+	  mov bx,offset seek_cmd	;send the seek command
+	  mov cl,length seek_cmd
+	  call send_command
+	  call int_wait			;wait for the seek
+	  mov al,(sist_res + ST0)	;get status register 0
+	  and al,ST0_SEEK_MASK		; and make sure its ok
+	  cmp al,ST0_VALID_SEEK ! jne sk_err_exit
+	    mov al,(seek_cmd + C)	;compare the cylinder we're over
+	    cmp al,(sist_res + PCN)	;to the one we wanted
+	    mov al,OK
+	    je sk_exit
+sk_err_exit:
+	  mov al,ERROR 
+sk_exit:
+	ret
+
+read_id:
+;-------
+; read ID expects the control byte set up before it is called.
+;	Entry:	RD_ID_CMD (read ID control string set up)
+;	Exit:	Z flag set if it could read an ID
+;		Z flag reset if the drive was not ready
+
+	mov bx,offset rd_id_cmd
+	mov D[bx],0			;set the drive, head = 0
+	mov cl,length rd_id_cmd
+	call send_command		;send the read id command
+	call int_wait			;wait for the read
+	mov bx,offset rd_id_res		;get the results
+	mov cl,length rd_id_res
+	call get_results
+	mov al,rd_id_res + ST0		;get the results
+	and al,ST0_INTCODE_MSK		;mask for the interupt code
+	cmp al,OK			;set Z flag if no error
+	ret
+
+send_command:	;send command to 8272
+;------------
+;	Entry:	BX = address of the command string
+;		CL = the length of the command string
+
+	in al,FDC_S
+	test al,MSTR_CB ! jnz send_command
+
+	xor ch,ch
+	cli
+snd_cmd1:
+	mov al,RQM_DELAY		;must delay 12us before polling
+snd_cmd2:				;FDC status to insure valid results
+	dec al ! jnz snd_cmd2
+snd_cmd3:
+	in al,FDC_S			;get master status from 8272
+	test al,MSTR_RQM ! jz snd_cmd3
+	test al,MSTR_DIO ! jnz snd_cmd3
+
+	mov al,[bx] ! out FDC_D,al	;send command string to 8272
+	inc bx
+	loop snd_cmd1			;next byte of command string
+
+        sti
+	ret
+
+get_results:	;get results form 8272
+;-----------
+;	Entry:	CL = number of bytes to expect from the fdc
+;		BX = addr of where to put the results
+;	Exit:	the location starting where BX was pointing
+;		for a length of CX will have the results from the 
+;		fdc result phase
+
+	in al,FDC_S
+	test al,MSTR_CB ! jz get_results
+
+	xor ch,ch
+get_res1:
+	mov al,RQM_DELAY		;must delay 12us before polling
+get_res2:				;FDC status to insure valid results
+	dec al ! jnz get_res2
+get_res3:
+	in al,FDC_S			;get master status from 8272
+	test al,MSTR_RQM ! jz get_res3
+	test al,MSTR_DIO ! jz get_res3
+
+	in al,FDC_D			;get the result status
+ 	mov [bx],al ! inc bx
+	loop get_res1
+
+	ret
+
+int_wait:	;interupt wait
+;--------
+; this routine does a flag wait on the fdc operation.
+
+	push bp
+
+int_w1:
+	in al,D1_INTS			;wait for FDC interrupt to be asserted
+	test al,FDC_INT ! jz int_w1
+
+;	check the direction of data xfer from the FDC's main status port
+
+flint_lp:
+	in al,FDC_S			;wait for the fdc to become ready
+	test al,MSTR_RQM ! jz flint_lp	; for data xfer
+
+	test al,MSTR_DIO		;if the fdc want to send us data,
+	jnz fdc_to_processor		; it must be our expected status
+	  				;the fdc is expecting a command,
+	  				; so query the interrupt status
+;	Note:
+;		neither the recalibrate or the seek commands have
+;		a result phase. Therefore it is mandatory to issue the
+;		rdcsist command to properly terminate these commands.
+;		See the 8272 spec sheet for the details.
+
+fdcsist:
+	  in al,FDC_S
+	  test al,MSTR_CB ! jnz fdcsist
+
+fdcsist1:
+	  in al,FDC_S			;poll the fdc to be ready for data com
+	  test al,MSTR_RQM ! jz fdcsist1
+	  test al,MSTR_DIO ! jnz fdcsist1
+
+	  mov al,F_RSTS ! out FDC_D,al	;send sense interrupt status command
+	  mov bx,offset sist_res
+	  mov cl,length sist_res	;get the two byte result from the
+	  call get_results		;fdc
+fdc_to_processor:
+	pop bp
+	ret
+
+;*******************************************************
+;
+;	BIOS Data Segment
+;
+;*******************************************************
+	DSEG
+
+;	BIOS Function Table
+
+functab		dw	io_notimp	; 0 - console status
+		dw	io_notimp	; 1 - console input
+		dw	io_notimp	; 2 - console output
+		dw	io_notimp	; 3 - list output status
+		dw	io_notimp	; 4 - list output
+		dw	io_notimp	; 5 - aux input
+		dw	io_notimp	; 6 - aux output
+		dw	io_notimp	; 7 - CCP/M function
+		dw	io_notimp	; 8 - CCP/M function
+		dw	io_seldsk	; 9 - select disk
+		dw	io_read		;10 - read sector
+		dw	io_notimp	;11 - write sector
+		dw	io_notimp	;12 - flush buffers
+		dw	io_notimp	;13 - CCP/M function
+		dw	io_notimp	;14 - char. device init
+		dw	io_notimp	;15 - console output status
+		dw	io_notimp	;16 - aux input status
+		dw	io_notimp	;17 - aux output status
+
+signon		db	13,10
+		db	'Concurrent CP/M CompuPro Loader IOS',13,10,0
+
+;*******************************************************
+;
+;	Floppy Disk I/O Data Segment
+;
+;*******************************************************
+
+imcnt		db	0
+itrack		dw	0
+isector		db	0
+idmaoff		dw	0
+idmaseg		dw	0
+
+				; sides	density	bytes/sec
+drv_tbl		dw	dpbs1		;ss,sd, 128
+		dw	dpbs2		;ds,sd, 128
+		dw	dpbd1		;ss,dd, 256
+		dw	dpbd2		;ds,dd, 256
+		dw	dpbd3		;ss,dd, 512
+		dw	dpbd4		;ds,dd, 512
+		dw	dpbd5		;ss,dd, 1024
+		dw	dpbd6		;ds,dd, 1024
+
+;	GAP 3 Length, these values indicate spacing between
+;	sectors excluding VCO and Sync Field
+
+gpl_tbl		db	7		;SD 128 byte sectors
+		db	1ah		;DD 256 byte sectors
+		db	0fh		;DD 512 byte sectors
+		db	08		;DD 1024 byte sectors
+
+; FLOPPY MODE BYTE AND TABLE
+;	B B B B B B B B 
+;	7 6 5 4 3 2 1 0
+;	        \ / | +	-------	set = double density, reset = single density
+;		 |  +----------	set = two sided, reset = single sided
+;	         +-------------	0 = 128 byte sectors
+;				1 = 256 byte sectors
+;				2 = 512 byte sectors
+;				3 = 1024 byte sectors
+
+c_fmb		db	0		;the current floppy mode byte
+
+;*******************************************************
+;
+;	Intel 8272 FDC Command Set Data Strctures
+;
+;*******************************************************
+
+;	READ/WRITE DATA Command String
+;		           D  C  H  R  N  EOT  GPL   DTL
+rw_cmd		db	0, 0, 0, 0, 0, 0,  0,   0,    0	
+
+; r/w result string
+;			S  S  S  			
+;			T  T  T
+;			0  1  2  C  H  R  N
+rw_res		db	0, 0, 0, 0, 0, 0, 0 
+
+;	READ ID Command String
+;
+rd_id_cmd	db	0, 0
+;			|  +---	head and drive
+;	  		+------	control byte
+;			S  S  S  		;read ID result string
+;			T  T  T
+;			0  1  2  C  H  R  N
+rd_id_res	db	0, 0, 0, 0, 0, 0, 0 
+
+;	RECALIBRATE Command and Result String
+;
+recal_cmd	db	F_RECA, 0	;re-cal command string
+
+;	SENSE INTERRUPT STATUS Result String
+;
+sist_res	db	0, 0	; returned status from an interrupt
+;			|  +---	present cylinder number
+;			+------	fdc status byte 0
+
+;	SPECIFY Command String
+					;SRT = 3ms, HUT = 240ms
+					;HLT = 112ms, DMA = on
+specify_cmd	db	F_SPEC, 1101$1111b, 0111000$0b
+
+;	SENSE DRIVE STATUS Command/Result Strings
+;
+sdst_cmd	db	F_DSTS, 0	;sense drive status control string
+sdst_res	db	0		;sense drive status result byte ST3
+
+;	SEEK Command String
+;
+seek_cmd	db	F_SEEK, 0, 0
+;				|  +---	new cylinder number
+;				+------	head and drive
+
+;	Retry counter variables
+
+rw_retries	db	0
+fc_retries	db	0		;first call retries for first recal
+
+;*******************************************************
+;							
+; these are the disk parameters used by the disk routines
+;
+;*******************************************************
+
+xltbl		dw	0		;translation table address
+maxsec		dw	0		;max sectors per track
+secsiz		dw	0		;sector size
+
+; floppy disk 0
+@dpha		dw	xltd3
+		db	0, 0, 0		;scratch area
+		db	0		;door open flag
+		db	0, 0		;scratch area
+		dw	dpbd6		;disk paramater table
+		dw	0FFFFH, 0FFFFH	;checksum, allocation vector
+		dw	0FFFFH		;directory bcb
+		dw	0FFFFH		;data bcb
+		dw	0FFFFH		;hash table
+
+		dw	0		;init routine
+		dw	fd_login	;login routine
+		dw	fd_read		;read routine
+		dw	0		;write routine
+		db	0		;unit
+		db	0		;channel 0
+		db	1		;one flag used
+
+		db	0		;floppy mode byte used by driver
+
+;	 1944:	128 Byte Record Capacity
+;	  243:	Kilobyte Drive  Capacity
+;	   64:	32 Byte Directory Entries
+;	   64:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	    8:	128 Byte Records / Block
+;	    8:	128 Byte Records / Track
+;	    2:	Reserved  Tracks
+
+dpbs1:			;single density, single sided.
+		DW	26		;sectors per track
+		DB	3, 7, 0		;block size=1k, exm=0
+		DW	S1DSM-1, 64-1	;dsm, drm
+		DB	0C0h,000h	;2 blocks for directory
+		DW	8010h		;64/4 cks
+		DW	2		;offset by 2 tracks
+		db	0		;physical sector shift
+		db	0		;physical sector mask
+
+;	 3888:	128 Byte Record Capacity
+;	  486:	Kilobyte Drive  Capacity
+;	  128:	32 Byte Directory Entries
+;	  128:	Checked Directory Entries
+;	  256:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	   26:	128 Byte Records / Track
+;	    4:	Reserved  Tracks
+
+dpbs2:			;single density, double sided.
+		DW	26		;sectors per track
+		DB	4, 15, 1	;block size=2k, exm=1
+		DW	S2DSM-1, 128-1	;dsm, drm
+		DB	0C0h,000h	;2 blocks for directory
+		DW	8020h		;128/4 cks
+		DW	2*2		;offset by 4 tracks
+		db	0		;physical sector shift
+		db	0		;physical sector mask
+
+;	 3888:	128 Byte Record Capacity
+;	  486:	Kilobyte Drive  Capacity
+;	  128:	32 Byte Directory Entries
+;	  128:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	   52:	128 Byte Records / Track
+;	    2:	Reserved  Tracks
+
+dpbd1:			;double density, single sided. (256 byte sectors)
+		DW	26		;physical sectors per track
+		DB	4, 15, 0	;block size = 2k, exm=0 (should be 1)
+		DW	D1DSM-1, 128-1	;dsm, drm
+		DB	0C0h,000h	;2 blocks for directory
+		DW	8020h		;128/4 cks
+		DW	2		;offset 2 tracks
+		db	1		;physical sector shift
+		db	1		;physical sector mask
+
+;	 7792:	128 Byte Record Capacity
+;	  974:	Kilobyte Drive  Capacity
+;	  256:	32 Byte Directory Entries
+;	  256:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	   52:	128 Byte Records / Track
+;	    4:	Reserved  Tracks
+
+dpbd2:			;double density, double sided. (256 byte sectors)
+		DW	26		;physical sectors per track
+		DB	4, 15, 0	;2k block size, exm=0
+		DW	D2DSM-1, 256-1	;dsm, drm
+		DB	0F0h,000h	;4 directory blocks
+		DW	8040h		;256/4 cks
+		DW	2*2		;offset 4 tracks
+		db	1		;physical sector shift
+		db	1		;physical sector mask
+
+;	 4496:	128 Byte Record Capacity
+;	  562:	Kilobyte Drive  Capacity
+;	  128:	32 Byte Directory Entries
+;	  128:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	   60:	128 Byte Records / Track
+;	    2:	Reserved  Tracks
+
+dpbd3:			;double density, single sided. (512 byte sectors)
+		DW	15		;physical sectors per track
+		DB	4, 15, 0	;2k block size, exm=0
+		DW	D3DSM-1, 128-1	;dsm, drm
+		DB	0C0h,000h	;2 directory blocks
+		DW	8020h		;128/4 cks
+		DW	2		;offset 2 tracks
+		db	2		;physical sector shift
+		db	3		;physical sector mask
+
+;	 8992:  Byte Record Capacity
+;	 1124:	Kilobyte Drive  Capacity
+;	  256:	32 Byte Directory Entries
+;	  256:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	   60:	128 Byte Records / Track
+;	    4:	Reserved  Tracks
+
+dpbd4:			;double density, double sided. (512-byte sectors)
+		DW	15		;physical sectors per track
+		DB	4, 15, 0	;2k block size, exm=0
+		DW	D4DSM-1, 256-1	;dsm, drm
+		DB	0F0h,000h	;4 directory blocks
+		DW	8040h		;256/4 cks
+		DW	2*2		;offset 4 tracks
+		db	2		;physical sector shift
+		db	3		;physical sector mask
+
+;	 4800:	128 Byte Record Capacity
+;	  600:	Kilobyte Drive  Capacity
+;	  128:	32 Byte Directory Entries
+;	  128:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	    8:	128 Byte Records / Track
+;	    2:	Reserved  Tracks
+
+dpbd5:			;double density, single sided. (1024-byte sectors)
+		DW	8		;physical sectors per track
+		DB	4, 15, 0	;2k block size, exm=0
+		DW	D5DSM-1, 128-1	;dsm, drm
+		DB	0C0h,000h	;2 directory blocks
+		DW	8020h		;128/4 cks, semi-permanent
+		DW	2		;offset 2 tracks
+		db	3		;physical sector shift
+		db	7		;physical sector mask
+
+;	 9600:	128 Byte Record Capacity
+;	 1200:	Kilobyte Drive  Capacity
+;	  256:	32 Byte Directory Entries
+;	  256:	Checked Directory Entries
+;	  128:	128 Byte Records / Directory Entry
+;	   16:	128 Byte Records / Block
+;	    8:	128 Byte Records / Track
+;	    4:	Reserved  Tracks
+
+dpbd6:			;double density, double sided. (1024-byte sectors)
+		DW	8		;physical sectors per track
+		DB	4, 15, 0	;2k block size, exm=0
+		DW	D6DSM-1, 256-1	;dsm, drm
+		DB	0F0h,000h	;4 directory blocks
+		DW	8040h		;256/4 cks, semi-permanent
+		DW	2*2		;offset 4 tracks
+		db	3		;physical sector shift
+		db	7		;physical sector mask
+
+;	THESE ARE THE SKEW TABLES
+;	sector translation tables (for floppy disks)
+
+xtable		dw	xlts		;single 128
+		dw	xltd1		;double 256
+		dw	xltd2		;double 512
+		dw	xltd3		;double 1024
+
+xlts		db	0,6,12,18,24,4,10,16,22,2,8,14,20  ;physical skew = 6
+		db	1,7,13,19,25,5,11,17,23,3,9,15,21  ;26 sectors/track
+							   ;128 byte sectors
+xltd1		db	0,9,18,1,10,19,2,11,20,3,12,21	;physical skew = 9
+		db	4,13,22,5,14,23,6,15,24,7,16,25	;26 sectors/track
+		db	8,17				;256 byte sectors
+
+xltd2		db	0,4,8,12,1,5,9,13	;physical skew = 4
+		db	2,6,10,14,3,7,11	;15 sectors/track
+						;512 byte sectors
+xltd3		DB	0,3,6,1,4,7,2,5		;physical skew = 3
+						;8 sectors per track
+						;1024 byte sectors
+
+	END
+

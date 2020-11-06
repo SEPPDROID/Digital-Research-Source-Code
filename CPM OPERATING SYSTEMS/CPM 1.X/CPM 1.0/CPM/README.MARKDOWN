@@ -1,0 +1,1 @@
+This is a version of CP/M that is VERY early. It says "Copyright Gary Killdall". It may even be before he formed Digital Research. The source is in PLM. Text in the src calls it FDOS.

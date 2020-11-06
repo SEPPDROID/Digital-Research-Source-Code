@@ -1,0 +1,865 @@
+1File: SYMT.C                                                              Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "as68.h"
+     9    
+    10   /* symbol table and misc routines*/
+    11    
+    12   int errno;
+    13   char *ermsg[];
+    14   char tfilname[];
+    15   char initfnam[];
+    16   char ldfn[];
+    17   char tlab1[];
+    18   int stdofd;
+    19   int ftudp;
+    20   int poslab;
+    21    
+    22   /*output it for beginning of statement*/
+    23   opitb()
+    24   {
+    25   	stbuf[0].itty = ITBS;	/*beginning of statement*/
+    26   	stbuf[0].itop = (fchr!=EOLC) ? absln : absln-1;
+    27   	stbuf[1].itty = ITSY;	/*label entry*/
+    28   	stbuf[1].itop.ptrw2 = lblpt;	/*pointer to symbol or 0*/
+    29    
+    30   /*put opcode in it buffer*/
+    31   	stbuf[2].itty = ITSY;
+    32   	stbuf[2].itrl = modelen;	/*mode of instr(byte, word, long)*/
+    33   	stbuf[2].itop.ptrw2 = opcpt;	/*pointer to opcode in main table*/
+    34   	stbuf[3].itty = ITCN;
+    35   	stbuf[3].itrl = rlflg;		/*relocation base*/
+    36   	stbuf[3].itop = loctr;		/*pass1 location counter*/
+    37   	itwc = ITOP1;				/*next available slot-currently 4*/
+    38   	pitw = &stbuf[ITOP1].itty;	/*init the pointer*/
+    39   }
+    40    
+    41   /*
+    42    *  get an input term  (symbol, constant, or special character)
+    43    * 	call with:
+    44    * 		the first character in fchr
+    45    * 	returns:
+    46    * 		item type in itype
+    47    * 		item value in ival if item is a constant or special character
+    48    * 		if it is a symbol it is placed at the end of the main table
+    49    
+    50    * meaning of state table:
+    51    
+    52    * currently getting:		symbol(0)	constant(1)		beginning(2)
+    53    
+    54    * next char:
+    55    * digit(0)					0			1				1
+    56    
+    57    * letter(3)				0			3				0
+    58    
+    59    * special char(6)			3			3				3
+1File: SYMT.C                                                              Page       2
+    60    
+    61    * contents of the state table is the next state.  processing stops when
+    62    * state 3 is encountered.  state 2 is the beginning state.
+    63    */
+    64   int sttbl[] {0,1,1,0,3,0,3,3,3};	/*state table for parser*/
+    65    
+    66   gterm(constpc)
+    67   int constpc;
+    68   {
+    69   	register smode, i;
+    70   	register char *p;
+    71   	register int tmode;
+    72   	register char *j;
+    73   	long num;
+    74   	char istr[80];
+    75    
+    76   /*	if(fchr == '\'' || fchr == '"') */	/* Fucking Whitesmith's */
+    77   	if(fchr == 047  || fchr == 042)
+    78   		if(astring())		/*maybe ascii string*/
+    79   			return;
+    80   	smode = 2;	/*beginning state*/
+    81   	i = 0;
+    82   	p = istr;
+    83    
+    84   /*loop to put item on istr*/
+    85   	while(fchr>=' ') {		/*until a control char*/
+    86   		if(smode==2 && fchr=='.')
+    87   			tmode = 3;
+    88   		else if(isalpha(fchr) || fchr=='~' || fchr=='_' || (fchr=='$'&&i))
+    89   			tmode=3;
+    90   		else if(isdigit(fchr))
+    91   			tmode=0;
+    92   		else
+    93   			tmode = 6;
+    94   		tmode = sttbl[tmode+smode];	/*new state*/
+    95   		if(tmode==3) break;			/*end of item*/
+    96   		smode = tmode;
+    97   		*p++ = fchr;			/*save character*/
+    98   		i++;
+    99   		fchr=gchr();
+   100   	}
+   101    
+   102   /* end of item*/
+   103   	switch(smode) {
+   104    
+   105   	case 0:			/*symbol*/
+   106   		*p = '\0';		/*end of symbol*/
+   107   		itype = ITSY;		/*symbol*/
+   108   		pack(istr,lmte);	/*put symbol at end of main table*/
+   109   		j = lemt(sirt,FALSE);
+   110   		if(istr[0]!='~' && !poslab && (j->flags&(SYEQ|SYER))==SYEQ) {
+   111   			itype = (j->flags&SYRM) ? ITRM : ITCN;	/* [vlh] */
+   112   			ival = j->vl1;
+   113   			reloc = ((j->flags)&SYRO) ? TEXT : ((j->flags)&SYRA) ? DATA :
+   114   				((j->flags)&SYBS) ? BSS : ABS;
+   115   		}
+   116   		return;
+   117    
+   118   	case 1:			/*constant*/
+1File: SYMT.C                                                              Page       3
+   119   		if(!constant(&num,istr,i)) {
+   120   			uerr(17);			/*illegal constant*/
+   121   			num = 0;
+   122   		}
+   123   		ival = num;
+   124   		itype = ITCN;
+   125   		reloc = ABS;
+   126   		return;
+   127    
+   128   	case 2:			/*just a special char*/
+   129   		switch(fchr) {
+   130    
+   131   		case '*':			/*location counter*/
+   132   			if(starmul) {	/*multiply*/
+   133   				starmul = 0;
+   134   				goto specsy;
+   135   			}
+   136   			refpc++;	/*referenced pgm ctr*/
+   137   			reloc = rlflg;	/*relocation of location counter*/
+   138   			ival = loctr;
+   139   			itype = (constpc) ? ITCN : ITPC;
+   140   			break;
+   141    
+   142    
+   143   		case '$':			/*hex constant*/
+   144   			oconst(16);
+   145   			return;
+   146    
+   147   		case '@':			/*octal const*/
+   148   			oconst(8);
+   149   			return;
+   150    
+   151   		case '%':			/*binary const*/
+   152   			oconst(2);
+   153   			return;
+   154    
+   155   		case '#':
+   156   			immed[opdix]++;
+   157   			goto specsy;
+   158    
+   159   		case '(':
+   160   			indir[opdix]++;
+   161   			plevel++;
+   162   			goto specsy;
+   163    
+   164   		case ')':
+   165   			plevel--;
+   166   			goto specsy;
+   167    
+   168   		default:
+   169   specsy:
+   170   			itype = ITSP;		/*return special char*/
+   171   			ival = fchr;
+   172   		}
+   173   		if(fchr != EOLC)
+   174   			fchr=gchr();		/*get next char*/
+   175   		if((ival=='>' && fchr=='>') || (ival=='<' && fchr=='<'))
+   176   			fchr=gchr();			/*shift op, ignore second char*/
+   177   		return;
+1File: SYMT.C                                                              Page       4
+   178    
+   179   	default:
+   180   		abort();		/*not possible*/
+   181   	}
+   182   }
+   183    
+   184   /*check for an ascii string enclosed in single quotes*/
+   185    
+   186   astring()
+   187   {
+   188   	register char delim;
+   189    
+   190   /*	if(fchr != '\'' && fchr != '"')		*//*valid delimiter*/
+   191   	if(fchr != 047  && fchr != 042)
+   192   		return;
+   193   	delim = fchr;
+   194   	if(equflg || (itype==ITSP && ival.wd2=='#')) {	/*immediate operand*/
+   195   		if(astr1(delim)) {
+   196   			fchr = gchr();
+   197   			if(fchr!=delim)
+   198   				xerr(19);
+   199   			fchr=gchr();
+   200   		}
+   201   		return((equflg) ? 1 : 0);
+   202   	}
+   203   	while(astr1(delim)) {
+   204   		itype = ITSP;
+   205   		ival = ',';			/*separate by commas*/
+   206   		reloc = ABS;
+   207   		opitoo();
+   208   	}
+   209   	return(0);
+   210   }
+   211    
+   212   astr1(adelim)
+   213   {
+   214   	register delim,i,retv;
+   215   	register long l;
+   216    
+   217   	delim = adelim;
+   218   	i = 0; l = 0;
+   219   	retv = 1;
+   220   	while((fchr=gchr()) != EOF) {
+   221   		if(fchr==delim) {
+   222   			fchr = gchr();
+   223   			if(fchr != delim) {
+   224   				retv = 0;		/*end of string*/
+   225   				break;
+   226   			}
+   227   		}
+   228   		if(fchr == EOLC) {
+   229   			xerr(19);
+   230   			retv = 0;	/*end of string*/
+   231   			break;
+   232   		}
+   233   		l = (l<<8) | fchr;
+   234   		if(++i >= modelen) {
+   235   			if((fchr=gchr()) == delim) {
+   236   				fchr = gchr();
+1File: SYMT.C                                                              Page       5
+   237   				retv = 0;		/*end of string*/
+   238   			}
+   239   			else
+   240   				peekc = fchr;	/*next char in string*/
+   241   			break;			/*filled one bucket*/
+   242   		}
+   243   	}
+   244   	while(i < modelen) {
+   245   		l =<< 8;
+   246   		i++;
+   247   	}
+   248   	itype = ITCN;
+   249   	ival = l;
+   250   	reloc = ABS;
+   251   	if(!equflg)
+   252   		opitoo();			/*output one operand*/
+   253   	return(retv);
+   254   }
+   255    
+   256   /*get constant given radix*/
+   257   oconst(ardx)
+   258   {
+   259   	register trdx,j;
+   260   	register long i;
+   261    
+   262   	switch (ardx) {		/* radix as power of 2 */
+   263   		case 16 : trdx = 4; break;
+   264   		case  8 : trdx = 3; break;
+   265   		case  2 : trdx = 1; break;
+   266   		default :
+   267   			rpterr("invalid radix in oconst");
+   268   			abort();
+   269   	}
+   270   	i=0;
+   271   	while(1) {
+   272   		fchr=gchr();
+   273   		j=fchr;
+   274   		if(isdigit(j))
+   275   			j =- '0';
+   276   		else if((j=tolower(j))>='a' && j<='f')
+   277   			j = j-'a'+10;
+   278   		else
+   279   			break;			/*not valid numeric char*/
+   280   		if(j>=0 && j<ardx)
+   281   			i = (i<<trdx)+j;
+   282   		else
+   283   			break;
+   284   	}
+   285   	ival = i;
+   286   	itype = ITCN;
+   287   	reloc = ABS;
+   288   }
+   289    
+   290    
+   291   /*convert ascii constant to binary*/
+   292   constant(pnum,pstr,idx)
+   293   long *pnum;
+   294   char *pstr;
+   295   {
+1File: SYMT.C                                                              Page       6
+   296   	register i,j;
+   297   	register char *p;
+   298   	register long l;
+   299    
+   300   	p = pstr;
+   301   	l = 0;
+   302   	for(i=0; i<idx; i++) {
+   303   		j = *pstr++;
+   304   		if(isdigit(j))
+   305   			j =- '0';
+   306   		if(j<0 || j>=10)
+   307   			return(0);
+   308   		l = (l<<3) + (l<<1) + j;	/* l = l*10 + j*/
+   309   	}
+   310   	*pnum = l;
+   311   	return(1);
+   312   }
+   313    
+   314   /*
+   315    * method for looking up entries in the main table
+   316    *
+   317    * Note:	The entry to be looked up must be placed at the end
+   318    *			of the main table.  The global cell 'lmte'(last main
+   319    *			entry) points to the next available entry in the main
+   320    *			table.  The address of an initial reference table must
+   321    *			also be provided.
+   322    *
+   323    *	1)	Compute the hash code for the symbol and add it to the base address
+   324    *		of the initial reference table given as input.  Thus, two words are
+   325    *		accessed which define the chain on which the symbol must be if it
+   326    *		is in the table at all.
+   327    *
+   328    *	2)	Alter the table link of the last symbol in the chain so that it
+   329    *		points to the symbol being looked up.  Note that the symbol to be
+   330    *		looked up is always placed at the end of the main table before
+   331    *		calling the lookup routine.  This essentially adds one more element
+   332    *		to the end of the chain, namely the symbol to be looked up.
+   333    *
+   334    *	3)	Now start at the first symbol in the chain and follow the chain
+   335    *		looking for a symbol equal to the smbol being looked up.  It is
+   336    *		guaranteed that such a symbol will be found because it is always
+   337    *		the last symbol on the chain.
+   338    *
+   339    *	4)	When the symbol is found, check to see if it is the last symbol
+   340    *		on the chain.  If not, the symbol being looked for is in the table
+   341    *		and has been found.  If it is the last symbol, the symbol being
+   342    *		looked up is not in the table.
+   343    *
+   344    *	5)	In the case the looked up symbol is not found, it is usually added
+   345    *		to the end of the table.  This is done simply b changing the
+   346    *		initial reference table entry which points to the previous
+   347    *		last symbol on the chain so that is now points to the symbol at the
+   348    *		end of the main table.  In case the symbol just looked up is not to
+   349    *		be added to the main table then no action is needed .  This means
+   350    *		that the table link of the last symbol on a chain may point any-
+   351    *		where.
+   352    *
+   353    * look up entry in the main table
+   354    *		call with:
+1File: SYMT.C                                                              Page       7
+   355    *			address of initial reference table
+   356    *			entry to be looked up at the end of the main table
+   357    *		returns:
+   358    *			a pointer to the entry.  if this pointer is equal to
+   359    *			lmte then the symbol was not previously in the table.
+   360    */
+   361    
+   362   char *lemt(airt,oplook)
+   363   char **airt;
+   364   int oplook;		/* if true then looking in opcode table */
+   365   {
+   366   	register char *mtpt;
+   367   	register int *p1, *p2;
+   368   	register int i, j;
+   369    
+   370   	if (oplook) {	/* [vlh] get rid of preceding '.', to lowercase */
+   371   		if (lmte->name[0]=='.') {
+   372   			lmte->name[NAMELEN-1] = NULL;	/* in case of '.' */
+   373   			j = 1;
+   374   		}
+   375   		else j = 0;
+   376   		for (i=0; j<NAMELEN; i++, j++)
+   377   			lmte->name[i] = tolower(lmte->name[j]);
+   378   	}
+   379    
+   380   	pirt = airt + hash();	/*hashed ptr to irt*/
+   381   	mtpt = pirt->irfe;		/*pointer to first entry in chain*/
+   382   	if(!mtpt)				/*empty chain*/
+   383   		mtpt = lmte;		/*start at end of main table*/
+   384   	else
+   385   		(pirt->irle)->tlnk = lmte;	/*last entry in chain is new symbol*/
+   386    
+   387   /*loop to locate entry in main table*/
+   388   lemtl:
+   389   	p1 = &mtpt->name[0];
+   390   	p2 = &lmte->name[0];
+   391   	i = NAMELEN/(sizeof i);
+   392   	while(i) {
+   393   		if(*p1++ != *p2++) {
+   394   			mtpt = mtpt->tlnk;	/*go to next entry in chain*/
+   395   			goto lemtl;
+   396   		}
+   397   		i--;
+   398   	}
+   399   	return(mtpt);
+   400   }
+   401    
+   402   /* compute a hash code for the last entry in the main table*/
+   403   /*	returns the hash code*/
+   404   hash()
+   405   {
+   406   	register int i;
+   407   	register ht1;
+   408   	register char *p;
+   409    
+   410   	ht1 = 0;
+   411   	p = &lmte->name[0];
+   412   	for(i=0; i<NAMELEN; i++)
+   413   		ht1 =+ *p++;
+1File: SYMT.C                                                              Page       8
+   414   	return(ht1&(SZIRT-2));	/*make hash code even and between 0 & SZIRT-2*/
+   415   }
+   416    
+   417   /*
+   418    * Make an entry in the main table
+   419    * assumes :
+   420    *   entry to be made is pointed at by lmte
+   421    *   pirt points to the correct initial reference table entry.
+   422    */
+   423   mmte()
+   424   {
+   425   	pirt->irle = lmte;		/*pointer to last entry in chain*/
+   426   	if(pirt->irfe == 0)		/*first entry in chain*/
+   427   		pirt->irfe = lmte;
+   428   	lmte =+ STESIZE;			/*bump last main table entry pointer*/
+   429   	if(lmte>=emte) {		/*main table overflow*/
+   430   		if(sbrk(STESIZE*ICRSZMT) == -1){	/*get more memory*/
+   431   			rpterr("symbol table overflow\n");
+   432   			endit();
+   433   		}
+   434   		else {
+   435   			emte =+ STESIZE*ICRSZMT;	/*move end of main table*/
+   436   			cszmt =+ ICRSZMT;
+   437   		}
+   438   	}
+   439   }
+   440    
+   441   /*
+   442    * make an entry in the main table for a directive
+   443    *	call with:
+   444    *		pointer to string containing directive name
+   445    *		address of routine to handle directive in pass one
+   446    *		address of routine to handle directive in pass two
+   447    */
+   448   mdemt(mdstr,dirnum)
+   449   char *mdstr;
+   450   {
+   451   	register char *mdept;
+   452    
+   453   	pack(mdstr,lmte);		/*pack name at end of main table*/
+   454   	mdept=lemt(oirt,TRUE);		/*look up in opcode table*/
+   455   	if(mdept != lmte) {		/*best not be there already*/
+   456   		uerr(5);
+   457   		abort();
+   458   		return;
+   459   	}
+   460   	mmte();					/*make main table entry*/
+   461   	mdept->flags =| OPDR|SYIN;	/*directive*/
+   462   	mdept->vl1 = dirnum;		/*directive #*/
+   463   }
+   464    
+   465   /*
+   466    * pack a string into an entry in the main table
+   467    *	call with:
+   468    *		pointer to the string
+   469    *		pointer to desired entry in the main table
+   470    */
+   471   pack(apkstr,apkptr)
+   472   char *apkstr, *apkptr;
+1File: SYMT.C                                                              Page       9
+   473   {
+   474   	register i;
+   475   	register char *pkstr, *pkptr;
+   476    
+   477   	pkstr = apkstr;
+   478   	pkptr = apkptr;
+   479   	i = NAMELEN;
+   480   	while(*pkstr && i) {
+   481   		*pkptr++ = *pkstr++;
+   482   		i--;
+   483   	}
+   484   	while(i--)
+   485   		*pkptr++ = '\0';	/*pad with nulls*/
+   486   }
+   487    
+   488   /* function to get characters for source file*/
+   489   int	xcol = 0;		/* Column Counter	*/
+   490   int	spcnt = 0;		/* Space count for tab expansion */
+   491   gchr()
+   492   {
+   493   	register chr1;
+   494    
+   495   	if(peekc) {
+   496   		chr1 = peekc;
+   497   		peekc = 0;
+   498   		if(chr1 != SOH)
+   499   			xcol--;
+   500   	}
+   501   	else if (spcnt)
+   502   	{
+   503   		spcnt--;
+   504   		return(' ');
+   505   	}
+   506   	else
+   507   	{
+   508   gchr1:
+   509   		if(sbuflen<=0){		/*nothing on input buffer*/
+   510   			sbuflen=read(ifn,sbuf,512);	/*read in source*/
+   511   			if(sbuflen<=0)
+   512   				return(EOF);		/*end of file*/
+   513   			psbuf = sbuf;
+   514   		}
+   515   		chr1 = *psbuf++;
+   516   		sbuflen--;
+   517   	}
+   518   	if (chr1 == SOH)	/*preprocessor flag*/
+   519   		goto gchr1;		/*ignore it*/
+   520   	if(chr1 == EOLC) {		/*end of line*/
+   521   		xcol = -1;		/* Clear column counter */
+   522   		if(!p2flg)		/*pass 1 only*/
+   523   			absln++;
+   524   	}
+   525   	if(chr1=='\t') 		/*convert tabs to spaces*/
+   526   	{
+   527   		spcnt += 7 - (xcol&7);		/* This many spaces	*/
+   528   		xcol   += spcnt;		 /* New column number   */
+   529   		chr1 = ' ';
+   530   	}
+   531   	xcol++;
+1File: SYMT.C                                                              Page      10
+   532   	return(chr1);
+   533   }
+   534    
+   535   /*
+   536    * write out intermediate text for one statement
+   537    *	call with
+   538    *		the it for the statement in stbuf
+   539    */
+   540   wostb()
+   541   {
+   542   	register int woix;
+   543   	register short *itwo;
+   544   	register int i;
+   545    
+   546   	if(stbuf[0].itty != ITBS) abort();	/*not beginning of stmt*/
+   547   	itwo = &stbuf;
+   548   	woix = stbuf[0].itrl & 0377;	/*unsigned byte*/
+   549   	while(woix--) {
+   550   		for(i=0; i<(sizeof stbuf[0])/(sizeof *itwo); i++) {
+   551   				doitwr(*itwo++);
+   552   			}
+   553   	}
+   554   /*	debug();		//call debug package*/
+   555   }
+   556    
+   557   doitwr(word)
+   558   short	word;
+   559   {
+   560   	short i;
+   561    
+   562   	if( pitix < itbuf || pitix > &itbuf[ITBSZ] ) {
+   563   		printf("doitwr: it buffer botch\n");
+   564   		endit();
+   565   	}
+   566   	if( pitix >= &itbuf[ITBSZ]) {
+   567   		if(write(itfn,itbuf,ITBSZ*(sizeof i)) != ITBSZ*(sizeof i)) {
+   568   			rpterr("it write error errno=%o\n",errno);
+   569   			endit();
+   570   		}
+   571   		pitix = itbuf;
+   572   	}
+   573   	*pitix++ = word;
+   574   }
+   575    
+   576   /*
+   577    * user source error
+   578    *	call with:
+   579    *		number to indicate reason for error
+   580    *	types the error number and the line number on which
+   581    *	the error occured.
+   582    */
+   583   uerr(errn)
+   584   {
+   585   	if(p2flg) {	/*pass 2 gets two ampersands*/
+   586   		in_err++;	/* [vlh] instrlen <- pass1 estimation */
+   587   		printf("&& %d: %s\n",p2absln,ermsg[errn-1]);
+   588   	}
+   589   	else
+   590   		printf("& %d: %s\n",(fchr==EOLC)?absln-1:absln,ermsg[errn-1]);
+1File: SYMT.C                                                              Page      11
+   591   	nerror++;
+   592   }
+   593   /*
+   594    * user error that causes the statement to be abandoned
+   595    *	call with:
+   596    *		error number
+   597    */
+   598   xerr(xern)
+   599   {
+   600   	uerr(xern);		/*type error message*/
+   601   	if(!p2flg)		/*pass one*/
+   602   		igrst();	/*pass rest of source*/
+   603   }
+   604    
+   605   /* abort the assembly*/
+   606   abort()
+   607   {
+   608   	rpterr("as68 abort\n");
+   609   	nerror++;
+   610   	endit();
+   611   }
+   612    
+   613   /*ignore rest of statement*/
+   614   igrst()
+   615   {
+   616   	while(fchr!=EOLC && fchr!=EOF)	/*until end of line*/
+   617   		fchr=gchr();
+   618   	while((fchr=gchr())==EOLC) ;	/*ignore null lines*/
+   619   }
+   620    
+   621   /*ignore blanks after a label*/
+   622   ligblk()
+   623   {
+   624   	if(fchr == EOF) return;
+   625   	igblk();
+   626   	if(fchr==EOLC) {
+   627   		fchr=gchr();
+   628   		ligblk();
+   629   	}
+   630   }
+   631    
+   632   rubout()
+   633   {
+   634   	nerror = -1;
+   635   	endit();
+   636   }
+   637    
+   638   /* exit from the assembler*/
+   639   endit()
+   640   {
+   641   	LASTCHTFN = itfnc;
+   642   	unlink(tfilname);		/*delete temporary files*/
+   643   	LASTCHTFN = trbfnc;
+   644   	unlink(tfilname);
+   645   	LASTCHTFN = dafnc;
+   646   	unlink(tfilname);
+   647   	LASTCHTFN = drbfnc;
+   648   	unlink(tfilname);
+   649   	if(nerror != -1) {		/*not rubout*/
+1File: SYMT.C                                                              Page      12
+   650   		if(ftudp)
+   651   			putchar('\n');
+   652   	}
+   653   	if(nerror > 0) {
+   654   		fprintf(stderr,"& %d errors\n",nerror);
+   655   	}
+   656   	if (initflg)
+   657   		unlink(ldfn);	/* [vlh] get rid of empty .o file */
+   658   	exit(nerror!=0);
+   659   }
+   660    
+   661   /*
+   662    * open files
+   663    *	call with:
+   664    *		pointer to name of file to open
+   665    *		flag for how to open
+   666    *			0 => read
+   667    *			1 => write
+   668    */
+   669   openfi(pname,hflag)
+   670   char *pname;
+   671   {
+   672   	register fd;
+   673    
+   674   	fd = (hflag==1) ? creat(pname,0666,1) : open(pname,hflag,1);
+   675   	if(fd < 0) {	/*open failed*/
+   676   		rpterr("can't open %s errno=%o\n",pname,errno);
+   677   		endit();
+   678   	}
+   679   	return(fd);
+   680   }
+   681    
+   682   /* get a temp file for the intermediate text*/
+   683   char lastfile = 'A';
+   684   gettempf()
+   685   {
+   686   	register i,j;
+   687   	register char *p;
+   688    
+   689   	LASTCHTFN = lastfile++;	/* Creat temp name	*/
+   690   	if((j=creat(tfilname,0600,1)) >= 0)
+   691   		return(j);	/* File created OK	*/
+   692   	rpterr("Unable to open temporary file\n");
+   693   	endit();
+   694   }
+   695    
+   696   /* move label name from lbt to main table entry pointed to by lmte*/
+   697   setname()
+   698   {
+   699   	register i;
+   700   	register int *p1, *p2;
+   701    
+   702   	p1 = &lmte->name[0];
+   703   	for(p2 = &lbt[0]; p2 < &lbt[NAMELEN]; ) {
+   704   		*p1++ = *p2;
+   705   		*p2++ = 0;
+   706   	}
+   707   }
+   708    
+1File: SYMT.C                                                              Page      13
+   709   /* get the initialized main table and initial reference tables from*/
+   710   /*	the initialize file*/
+   711   getsymtab()
+   712   {
+   713   		 long j;		/* length for read / write */
+   714   	register char **p;
+   715   	register struct symtab *p1;
+   716   	register char *p2;
+   717   	register fd,i;
+   718    
+   719   	if((fd=open(initfnam,0,1)) < 0) {
+   720   rerr:
+   721   		printf("& Unable to read init file: %s\n", initfnam);
+   722   		endit();
+   723   	}
+   724   	if(read(fd,sirt,SZIRT*(sizeof sirt[0])) != SZIRT*(sizeof sirt[0])) {
+   725   		goto rerr;
+   726   	}
+   727    
+   728   	if(read(fd,oirt,SZIRT*(sizeof sirt[0])) != SZIRT*(sizeof sirt[0]))
+   729   		goto rerr;
+   730    
+   731   	if(read(fd,&j,(sizeof j)) != (sizeof j))	/* Read Count	*/
+   732   		goto rerr;				/* Y-U-K!!!	*/
+   733    
+   734   	if((i=read(fd,bmte,(int)j)) != j)		/* Read table	*/
+   735   		goto rerr;
+   736    
+   737   	if((i%STESIZE) != 0)
+   738   		goto rerr;
+   739    
+   740   	lmte = bmte + i;
+   741   	p2 = bmte-1;
+   742   	for(p=sirt; p<&sirt[SZIRT]; p++) {
+   743   		if(*p)
+   744   			*p =+ (long)p2;
+   745   	}
+   746   	for(p=oirt; p<&oirt[SZIRT]; p++) {
+   747   		if(*p)
+   748   			*p =+ (long)p2;
+   749   	}
+   750   	for(p1=bmte; p1<lmte; p1++) {
+   751   		if(p1->tlnk)
+   752   			p1->tlnk =+ (long)p2;
+   753   	}
+   754   	close(fd);
+   755   }
+   756    
+   757   /* write the initialization file*/
+   758   putsymtab()
+   759   {
+   760   		 long j;
+   761   	register char **p;
+   762   	register struct symtab *p1;
+   763   	register char *p2;
+   764   	register fd,i;
+   765    
+   766   	if((fd=creat(initfnam,0644,1))<0) {
+   767   		printf("& Cannot create init: %s\n", initfnam);
+1File: SYMT.C                                                              Page      14
+   768   		return;
+   769   	}
+   770   /*
+   771    * change all pointers so that they are relative to the beginning
+   772    * of the symbol table
+   773    */
+   774   	p2 = bmte-1;
+   775   	for(p=sirt; p<&sirt[SZIRT]; p++) {
+   776   		if(*p)
+   777   			*p =- (long)p2;
+   778   	}
+   779   	for(p=oirt; p<&oirt[SZIRT]; p++) {
+   780   		if(*p)
+   781   			*p =- (long)p2;
+   782   	}
+   783   	for(p1=bmte; p1<lmte; p1++) {
+   784   		if(p1->tlnk)
+   785   			p1->tlnk =- (long)p2;
+   786   	}
+   787    
+   788   	if(write(fd,sirt,SZIRT*(sizeof sirt[0])) != SZIRT*(sizeof sirt[0])) {
+   789   		goto werr;
+   790   	}
+   791    
+   792   	if(write(fd,oirt,SZIRT*(sizeof oirt[0])) != SZIRT*(sizeof oirt[0]))
+   793   		goto werr;
+   794    
+   795   	i = lmte - bmte;		/*length of current main table*/
+   796   	if((i % STESIZE) != 0) {
+   797   		goto werr;
+   798   	}
+   799   	j = i;
+   800   	if(write(fd,&j,(sizeof j)) != (sizeof j))	/* Y-U-K!!	*/
+   801   		goto werr;
+   802    
+   803   	if(write(fd,bmte,i) != i) {
+   804   werr:
+   805   		printf("& Write error on init file: %s\n",initfnam);
+   806   		return;
+   807   	}
+   808   	close(fd);
+   809   }
+   810    
+   811   /* print an error on file descriptor 2*/
+   812   /*	used for errors with disasterous consequences*/
+   813   rpterr(ptch,x1,x2,x3,x4,x5,x6)
+   814   char *ptch;
+   815   {
+   816   	if(prtflg==0)		/* Check for paging output	*/
+   817   		page();		/* Perform page checks		*/
+   818   	fprintf(stderr,"& %d: ",absln);
+   819   	fprintf(stderr,ptch,x1,x2,x3,x4,x5,x6);
+   820   }
+   821    
+   822   /* set the file name for the relocatable object file (sourcefile.o)*/
+   823   setldfn(ap)
+   824   char *ap;
+   825   {
+   826   	register char *p1,*p2;
+1File: SYMT.C                                                              Page      15
+   827    
+   828   	p1 = ap;
+   829   	p2 = ldfn;
+   830   	while(*p1) {
+   831   		*p2++ = *p1++;
+   832   	}
+   833   	if(*(p2-2) != '.') {	/*not name.?*/
+   834   		*p2++ = '.';
+   835   		*p2++ = 'o';
+   836   	}
+   837   	else {			/* is name.? */
+   838   		*(p2-1) = 'o';
+   839   	}
+   840   	*p2 = '\0';
+   841   }
+   842    
+   843   savelab()
+   844   {
+   845   	register int *p1, *p2;
+   846    
+   847   	p2 = &lmte->name[0];
+   848   	for(p1= &tlab1[0]; p1 < &tlab1[NAMELEN]; )
+   849   		*p1++ = *p2++;
+   850   }

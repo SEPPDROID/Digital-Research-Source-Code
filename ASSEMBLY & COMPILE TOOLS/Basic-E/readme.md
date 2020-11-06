@@ -1,0 +1,1 @@
+Developed by Gordon Eubanks for his master's thesis, it was based on a BASIC compiler originally written by Gary Kildall. It's the predecessor of CBASIC. 

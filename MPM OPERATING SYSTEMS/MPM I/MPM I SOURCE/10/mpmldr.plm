@@ -1,0 +1,553 @@
+$title ('MP/M 1.1  Loader')
+mpmldr:
+do;
+
+/*
+  Copyright (C) 1979,1980
+  Digital Research
+  P.O. Box 579
+  Pacific Grove, CA 93950
+
+  Revised:
+    18 Jan 80 by Thomas Rolander
+*/
+
+  declare true literally '0FFFFH';
+  declare false literally '0';
+  declare forever literally 'while true';
+  declare boolean literally 'byte';
+
+  declare start label;
+  declare jmp$to$start structure (
+    jmp$instr byte,
+    jmp$location address  ) data (
+      0C3H,.start-3);
+
+  declare copyright (*) byte data (
+    'COPYRIGHT (C) 1980,');
+  declare company$name (*) byte data (
+    ' DIGITAL RESEARCH ');
+  declare serial$number (6) byte data (
+    '654321');
+
+  declare err$msgadr address initial (.default$err$msg);
+  declare default$err$msg (*) byte data (
+    'Disk read error','$');
+
+  declare mon1 literally 'ldmon1';
+  declare mon2 literally 'ldmon2';
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+  /**************************************
+   *                                    *
+   *       B D O S   Externals          *
+   *                                    *
+   **************************************/
+
+  system$reset:
+    procedure;
+      declare dummy address;
+      dummy = 0;
+      stackptr = .dummy;
+    end system$reset;
+
+  write$console:
+    procedure (char);
+      declare char byte;
+      call mon1 (2,char);
+    end write$console;
+
+  print$buffer:
+    procedure (buffer$address);
+      declare buffer$address address;
+      call mon1 (9,buffer$address);
+    end print$buffer;
+
+  reset$disk$system:
+    procedure;
+      call mon1 (13,0);
+    end reset$disk$system;
+
+  open$file:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (15,fcb$address);
+    end open$file;
+
+  read$record:
+    procedure (fcb$address) byte;
+      declare fcb$address address;
+      return mon2 (20,fcb$address);
+    end read$record;
+
+  set$DMA$address:
+    procedure (DMA$address);
+      declare DMA$address address;
+      call mon1 (26,DMA$address);
+    end set$DMA$address;
+  
+
+  /**************************************
+   *                                    *
+   *      Misc. BDOS        procs       *
+   *                                    *
+   **************************************/
+
+  crlf:
+    procedure;
+      call write$console (0dh);
+      call write$console (0ah);
+    end crlf;
+
+  printnib:
+    procedure (n);
+      declare n byte;
+      if n > 9
+        then call write$console (n+'A'-10);
+        else call write$console (n+'0');
+   end printnib;
+
+  printhex:
+    procedure (b);
+      declare b byte;
+      call printnib (shr(b,4));
+      call printnib (b and 0fh);
+    end printhex;
+
+  printaddr:
+    procedure (a);
+      declare a address;
+      call write$console (' ');
+      call write$console (' ');
+      call printhex (high(a));
+      call printhex (low(a));
+      call write$console ('H');
+    end printaddr;
+
+  printname:
+    procedure (nadr);
+      declare nadr address;
+      declare n based nadr (1) byte;
+      declare i byte;
+      do i = 0 to 10;
+        call write$console (n(i));
+      end;
+    end printname;
+
+  printitems:
+    procedure (nadr,base,size);
+      declare (nadr,base,size) address;
+      call print$name (nadr);
+      call printaddr (base);
+      call printaddr (size);
+      call crlf;
+    end printitems;
+
+  match$serial:
+    procedure (cpyrtadr,memadr);
+      declare (cpyrtadr,memadr) address;
+      declare (i,j) byte;
+      declare cpyrt based cpyrtadr (1) byte;
+      declare mem based memadr (1) byte;
+
+      do forever;
+        i,j = -1;
+        do while cpyrt(i:=i+1) = mem(j:=j+1);
+          ;
+        end;
+        if i > 23 then return;
+        if (memadr = 0) or (i > 17) then
+        do;
+          err$msgadr = .('Synchronization','$');
+          go to error;
+        end;
+        memadr = memadr + 1;
+      end;
+    end match$serial;
+
+  declare (base,cur$top,prev$top) address;
+  declare sysdatadr address;
+  declare MPMbase based cur$top structure (
+    jmpinstr (3) byte,
+    sysdat address );
+
+  declare (nrec,mask,ret,offset) byte;
+  declare notdone boolean;
+  declare (i,j) address;
+
+  declare fcb (33) byte initial (
+    0,'MPM     ','SYS',0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+  declare banked$bdos$fcb (33) byte initial (
+    0,'BNKBDOS ','SPR',0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+  declare entry$point (3) address;
+  declare header (256) byte at (2000h);
+  declare code$size address at (.header(1));
+  declare data$size address at (.header(4));
+
+  declare system$data (256) byte at (2100h);
+
+  /*
+      System Data: byte assignments
+      -----------------------------
+
+      000-000 Mem$top, top page of memory
+      001-001 Nmb$cns, number of consoles
+      002-002 Brkpt$RST, breakpoint RST #
+      003-003 Add system call user stacks, boolean
+      004-004 bank switched memory, boolean
+      005-005 Z80 version, boolean
+      006-006 banked bdos, boolean
+      007-008 base address of banked bdos
+      009-014 Unassigned
+      015-015 Max$mem$seg, max memory segment number
+      016-047 Memory segment table, filled in by GENSYS if
+                memory bank switched, otherwise by MPMLDR
+      048-079 Breakpoint vector table, filled in by DDTs
+      080-111 System call user stacks
+      112-121 Scratch area used for memory segmentation
+      122-127 Unassigned
+      128-143 Subflg, submit flag array
+      144-251 Unassigned
+      252-253 Sysdatadr, MP/M data page address
+      254-255 Rspl, resident system process link, the address
+                of the next Rsp, list terminates with a zero.
+  */
+
+  declare mem$top byte at (.system$data(000));
+  declare nmb$cns byte at (.system$data(001));
+  declare brkpt$RST byte at (.system$data(002));
+  declare sys$call$stks boolean at (.system$data(003));
+  declare bank$switched boolean at (.system$data(004));
+  declare z80$cpu boolean at (.system$data(005));
+  declare banked$bdos boolean at (.system$data(006));
+  declare base$banked$bdos address at (.system$data(007));
+  declare nmb$mem$seg byte at (.system$data(015));
+  declare mem$seg$tbl (8) structure (
+    base byte,
+    size byte,
+    attrib byte,
+    bank byte  )
+    at (.system$data(016));
+  declare user$stacks (16) address at (.system$data(080));
+  declare tmp$mem$segs (9) byte at (.system$data(112));
+  declare rspl address at (.system$data(254));
+  declare option$temp byte at (005dh);
+  declare option byte;
+  declare buffer (1) byte at (2200h);
+  declare sector$size literally '128';
+  declare destination based cur$top (1) byte;
+  declare link based cur$top address;
+  declare test$byte based cur$top byte;
+
+  declare bitmap$adr address;
+  declare bitmap based bitmap$adr (1) byte;
+
+  load$PRL:
+    procedure (get$name,fcb$adr) byte;
+      declare get$name boolean;
+      declare fcb$adr address;
+
+      call set$DMA$address (.header);
+      if (ret := read$record (fcb$adr)) <> 0 then
+      do;
+        if ret = 1 then return false;
+        err$msgadr = .('Bad first record of SPR/RSP header','$');
+        go to error;
+      end;
+      call set$DMA$address (.header(128));
+      if (ret := read$record (fcb$adr) <> 0) then
+      do;
+        err$msgadr = .('Bad second record of SPR/RSP header','$');
+        go to error;
+      end;
+      nrec = shr(code$size+
+                 shr(code$size,3)+
+                 7FH,
+                 7);
+      base = .buffer;
+      /* read PRL+bitmap file into memory */
+      do i = 1 to nrec;
+        call set$DMA$address (base);
+        base = base + sector$size;
+        if (ret := read$record (fcb$adr)) <> 0 then
+        do;
+          err$msgadr = .('Unexpected end of file, or disk read error','$');
+          go to error;
+        end;
+      end;
+
+      /* offset by destination */
+      prev$top = cur$top;
+      cur$top = prev$top-((code$size+data$size+0FFH) and 0FF00H);
+      if not get$name then
+      do;
+        call printaddr (cur$top);
+        call printaddr (prev$top - cur$top);
+      end;
+      offset = high(cur$top);
+      /* bitmap directly follows last byte of code */
+      bitmap$adr = .buffer + code$size;
+      j = 0;
+      mask = 80H;
+      /* loop through entire bit map */
+      do i = 0 to code$size-1;
+        if (bitmap(j) and mask) <> 0 then
+        /* copy & offset the byte where a bitmap bit is on */
+        do;
+          destination(i) = buffer(i) + offset;
+        end;
+        else
+        /* simply copy it to destination */
+        do;
+          destination(i) = buffer(i);
+        end;
+        /* move mask bit one position to the right */
+        if (mask := shr(mask,1)) = 0 then
+        /* re-initialize mask and get next bitmap byte */
+        do;
+          mask = 80H;
+          j = j + 1;
+        end;
+      end;
+      if get$name then
+      do;
+        call move (3,.('RSP'),.buffer(16));
+        call printitems (.buffer(8),
+                         cur$top,prev$top - cur$top);
+        return true;
+      end;
+      call crlf;
+      return true;
+
+    end load$PRL;
+
+  load$banked$bdos:
+    procedure;
+
+      call set$DMA$address (.header);
+      if open$file (.banked$bdos$fcb) = 0ffh then
+      do;
+        go to error;
+      end;
+      if not load$PRL (false,.banked$bdos$fcb) then
+      do;
+        go to error;
+      end;
+      base$banked$bdos = cur$top;
+
+    end load$banked$bdos;
+
+  load$system$data:
+    procedure;
+      declare cntr byte;
+
+      call set$DMA$address (.system$data);
+      if open$file (.fcb) = 0ffh then
+      do;
+        err$msgadr = .('MPM.SYS does not exist','$');
+        go to error;
+      end;
+      if (ret := read$record (.fcb)) <> 0 then
+      do;
+        go to error;
+      end;
+      call set$DMA$address (.system$data(128));
+      if (ret := read$record (.fcb)) <> 0 then
+      do;
+        go to error;
+      end;
+      if mem$top = 0 then
+      /* determine size of memory */
+      do;
+        cur$top = 0ff00h;
+        not$done = true;
+        do while not$done;
+          test$byte = 5ah;
+          if test$byte = 5ah
+            then not$done = false;
+            else cur$top = cur$top - 0100h;
+        end;
+        mem$top = high(cur$top);
+      end;
+      sysdatadr,
+      cur$top = shl(double(mem$top),8);
+      call print$buffer (.(
+        'Number of consoles =  ','$'));
+      call printnib (nmb$cns);
+      call print$buffer (.(0dh,0ah,
+        'Breakpoint RST #   =  ','$'));
+      call printnib (brkpt$RST);
+      if z80$cpu then
+        call print$buffer (.(0dh,0ah,
+          'Z80 CPU','$'));
+      if banked$bdos then
+        call print$buffer (.(0dh,0ah,
+          'Banked BDOS file manager','$'));
+      call print$buffer (.(0dh,0ah,
+        'Top of memory      =','$'));
+      call printaddr (cur$top + 255);
+      call print$buffer (.(0dh,0ah,0ah,
+        'Memory Segment Table:',0dh,0ah,'$'));
+      call printitems (.('SYSTEM  DAT'),cur$top,256);
+      cur$top = cur$top - (prev$top := nmb$cns*256);
+      call printitems (.('CONSOLE DAT'),cur$top,prev$top);
+      if sys$call$stks then
+      do;
+        do cntr = 0 to nmb$mem$seg-1;
+          user$stacks(cntr) = cur$top - cntr*64;
+        end;
+        cur$top = cur$top
+                - (prev$top := (shr(nmb$mem$seg-1,2)+1)*256);
+        call printitems (.('USERSYS STK'),cur$top,prev$top);
+      end;
+    end load$system$data;
+
+  display$mem$map:
+    procedure;
+
+      if bank$switched then
+      do;
+        nrec = nmb$mem$seg;
+      end;
+      else
+      do;
+        nrec = 1;
+        notdone = true;
+        do while notdone;
+          if tmp$mem$segs(nrec) >= high(cur$top) then
+          do;
+            tmp$mem$segs(nrec) = high(cur$top);
+            nrec = nrec - 1;
+            nmb$mem$seg = nrec;
+            notdone = false;
+          end;
+          else
+          do;
+            nrec = nrec + 1;
+          end;
+        end;
+      end;
+      call print$buffer (.(
+        '-------------------------',0dh,0ah,'$'));
+      do while nrec <> 0;
+        nrec = nrec - 1;
+        call print$buffer (.('Memseg  Usr','$'));
+        if not bank$switched then
+        do;
+          mem$seg$tbl(nrec).base = tmp$mem$segs(nrec+1);
+          mem$seg$tbl(nrec).size = tmp$mem$segs(nrec+2) -
+                               tmp$mem$segs(nrec+1);
+          mem$seg$tbl(nrec).attrib = 0;
+          mem$seg$tbl(nrec).bank = 0;
+        end;
+        call printaddr (shl(double(mem$seg$tbl(nrec).base),8));
+        call printaddr (shl(double(mem$seg$tbl(nrec).size),8));
+        if bank$switched then
+        do;
+          call print$buffer (.('  Bank ','$'));
+          call printhex (mem$seg$tbl(nrec).bank);
+          call write$console ('H');
+        end;
+        call crlf;
+      end;
+    end display$mem$map;
+
+  Restart$instr:
+    procedure;
+      disable;      /* this disable is overlayed with RST x */
+    end Restart$instr;
+
+  xeq$mpm:
+    procedure;
+      declare brkpt$adr address data (.Restart$instr);
+      declare brkpt based brkpt$adr byte;
+
+      stack$ptr = .entry$point(2);
+      /* if command tail starts with 'B' then break */
+      if option = 'B' then
+      do;
+        brkpt = 1100$0111b or shl(brkpt$RST,3);
+        call Restart$instr;
+      end;
+    end xeq$mpm;
+
+  /*
+    Main Program
+  */
+
+  start:
+    disable;  /* allows mpmldr to run under MP/M */
+    option = option$temp;
+    call reset$disk$system;
+    call print$buffer (.(0dh,0ah,0ah,
+      'MP/M 1.1 Loader',0dh,0ah,
+      '===============',0dh,0ah,0ah,'$'));
+    call load$system$data;
+    call print$buffer (err$msgadr:=.('XIOS    SPR','$'));
+    if not load$PRL (false,.fcb) then
+    do;
+      go to error;
+    end;
+    call print$buffer (err$msgadr:=.('BDOS    SPR','$'));
+    if not load$PRL (false,.fcb) then
+    do;
+      go to error;
+    end;
+    call print$buffer (err$msgadr:=.('XDOS    SPR','$'));
+    if not load$PRL (false,.fcb) then
+    do;
+      go to error;
+    end;
+
+    MPMbase.sysdat = sysdatadr;
+    entry$point(2) = cur$top;
+    call match$serial (.company$name,.system$data);
+
+    /*
+      Load Optional RSP Files
+    */
+    rspl = 0;
+    do while load$PRL (true,.fcb);
+      link = rspl;
+      rspl = cur$top;
+    end;
+
+    if banked$bdos then
+    do;
+      call print$buffer (err$msgadr:=.('BNKBDOS SPR','$'));
+      call load$banked$bdos;
+    end;
+
+    call display$mem$map;
+
+    call move (256,.system$data,sysdatadr);
+
+    call xeq$mpm;
+
+  error:
+    call print$buffer (.(0dh,0ah,
+      'MP/M Loader error: ','$'));
+    call print$buffer (err$msgadr);
+    do forever;
+      stackptr = 0;
+      disable;
+      halt;
+    end;
+
+end mpmldr;
+

@@ -1,0 +1,2 @@
+Here is the source for CP/M-86, version # unknown. This is a disassembly, but well commented.
+The BDOS source (BDOS.A86) has the same date string ("12 january 82") as the CPM.SYS in cpm86-11.zip. I'd give this source a tentative ID as CP/M-86 v1.1, then. 

@@ -1,0 +1,161 @@
+	.title	mopen
+;	copyright (c) 1980 by Whitesmiths, Ltd.
+;	allocate fab+rab and open/create
+
+	.globl	$_close, $_merase, $_mopen, $_read, $_write
+	.globl	lib$get_vm
+	$devdef
+
+	.psect	c$text,shr,nowrt,quad
+$_close:
+	.word	^O0		; (&rab)
+	movl	4(ap),r0
+	movl	rab$l_fab(r0),r0
+	$close	fab=r0
+	extzv	#0,#1,r0,r0
+	ret
+
+$_merase:
+	.word	^O0		; (name, len)
+	$fab_store	fab=tfab,fna=@4(ap),fns=8(ap)
+	$erase	fab=tfab
+	blbc	r0,$0
+	clrl	r0
+	ret
+$0:
+	mcoml	#0,r0
+	ret
+
+$_mopen:
+	.word	^O774	; (name, len, &facc, rsize, &rab, &eofblk)
+	movl	20(ap),r6
+	bneq	$1
+	pushl	#0
+	pushal	(sp)
+	pushal	rfsize
+	calls	#2,G^lib$get_vm
+	movl	(sp)+,r6
+	blbs	r0,$1
+	clrl	r0
+	ret
+$1:
+	addl3	r6,#profab-prorab,r7
+	movl	@12(ap),r8
+	movc3	rfsize,prorab,(r6)
+	$fab_store fab=r7,fna=@4(ap),fns=8(ap)
+	movl	16(ap),r1
+	beql	$2
+	$fab_store	fab=r7,rfm=fix,mrs=r1
+	brb		$3
+$2:
+	$fab_store	fab=r7,rfm=var
+$3:
+	tstl	r1
+	beql	$4
+	movl	#fab$m_bio,r1
+	$rab_store rab=r6,rop=bio
+$4:
+	blbc	r8,$5
+	bisl2	#fab$m_get,r1
+$5:
+	bitl	#2,r8
+	beql	$6
+	bisl2	#fab$m_put,r1
+$6:
+	movb	r1,fab$b_fac(r7)
+	bitl	#4,r8
+	beql	$7
+	$fab_store	fab=r7,xab=hdrxab
+	$open	fab=r7
+	movl	hdrxab+xab$l_ebk,@24(ap)
+	brb		$8
+$7:
+	$create	fab=r7
+$8:
+	blbs	r0,$81
+	clrl	r0
+	ret
+$81:
+	$rab_store	rab=r6,fab=(r7)
+	$connect	rab=r6
+	blbs	r0,$82
+	clrl	r0
+	ret
+$82:
+	bitl	#dev$m_trm,fab$l_dev(r7)
+	beql	$9
+	bisl2	#8,r8
+$9:
+	bitb	#fab$m_cr,fab$b_rat(r7)
+	beql	$10
+	bisl2	#16,r8
+$10:
+	movl	r8,@12(ap)
+	movl	r6,r0
+	ret
+
+$_read:
+	.word	^O0		; (&rab, &buf, size, bno)
+	movl	4(ap),r0
+	$rab_store rab=r0,ubf=@8(ap),usz=12(ap)
+	movl	16(ap),r1
+	bneq	$12
+	$get	rab=r0
+	brb		$13
+$12:
+	$rab_store	rab=r0,bkt=r1
+	$read	rab=r0
+$13:
+	blbc	r0,$14
+	movl	4(ap),r0
+	movzwl	rab$w_rsz(r0),r0
+	ret
+$14:
+	cmpl	#rms$_eof,r0
+	bneq	$15
+	mcoml	#0,r0
+	ret
+$15:
+	movl	#-2,r0
+	ret
+
+$_write:
+	.word	^O0		; (&rab, &buf, size, bno)
+	movl	4(ap),r0
+	$rab_store rab=r0,rbf=@8(ap),rsz=12(ap)
+	movl	16(ap),r1
+	bneq	$16
+	$put	rab=r0
+	brb		$17
+$16:
+	$rab_store	rab=r0,bkt=r1
+	$write	rab=r0
+$17:
+	blbc	r0,$18
+	movl	12(ap),r0
+	ret
+$18:
+	cmpl	#rms$_ext,r0
+	beql	$21
+$20:
+	mcoml	#0,r0
+	ret
+$21:
+	movl	4(ap),r0
+	movl	rab$l_fab(r0),r0
+	$extend	fab=r0
+	blbc	r0,$20
+	brw		$_write+2
+
+	.psect	c$data,noexe,quad
+hdrxab:
+	$xabfhc
+prorab:
+	$rab
+profab:
+	$fab
+rfsize:
+	.long	.-prorab
+tfab:
+	$fab
+	.end

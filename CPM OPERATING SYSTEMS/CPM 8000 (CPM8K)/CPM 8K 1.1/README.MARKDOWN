@@ -1,0 +1,1 @@
+Set of the 4 distribution disks of CP/M-8000 v. 1.1 from 1984 (for the Olivetti Z8001). Contains sources and binaries. Included are the 4 disk images in RAW format (IMG) and extracted files.

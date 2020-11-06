@@ -1,0 +1,655 @@
+/*
+	Copyright 1982
+	Alcyon Corporation
+	8716 Production Ave.
+	San Diego, Ca.  92121
+*/
+
+char *version "@(#) c68 preprocessor 4.0 - Feb 10, 1983";
+#include "preproc.h"
+
+#define	NARGS	64
+#define NINCL	10
+#define	ARGSIZE	1024
+#define	ICODE	0
+#define	STRINGS	1
+#define	MTEMP	2
+#define	ASTEMP	3
+#define	NTEMPS	4
+
+char *fargs[NARGS+1];
+char **fargp;
+char argbuf[ARGSIZE];
+char *cfiles[NARGS+1];
+char *loadargs[NARGS+1];
+char *fns[NTEMPS];
+char *tfns[NTEMPS];
+int ndefs;
+char *incl[NINCL];
+int nincl;
+char *argp	&argbuf[0];
+int cflag;
+int nflag;
+int fflag;		/* [vlh] 3.4 fast floating point format and library */
+int eflag;		/* [vlh] 3.4 ieee floating point format and library */
+int lflag;
+int oflag;
+int pflag;
+int sflag;
+int wflag;		/* [vlh] turn on warning messages */
+int verbose;	/* [vlh] 3.4 force printing of file being processed */
+int xflag;
+int v6flag;		/* [vlh] 3.4 compile for version 6 */
+int v7flag;		/* [vlh] 3.4 */
+int s3flag;		/* [vlh] 3.4 */
+int s5flag;		/* [vlh] 3.4 */
+int optimize;	/* [vlh] 3.4 recognize optimization flag '-O' */
+int status;
+int oneflag;
+int errno;
+char *cptrone 1;
+
+char *parser	"/lib/c068";
+char *cgen		"/lib/c168";
+char *onepass	"/lib/c0168";
+char *pref		"/lib/c680.o";
+char *loader	"/bin/lo68";
+char *asmprog	"/bin/as68";
+
+char *deflib	"/lib/lib7.a";
+char *deflibfp	"/lib/libF.a";	/* [vlh] 3.4 */
+char *deflibep	"/lib/libE.a";	/* [vlh] 3.4 */
+char *v6lib		"/lib/libv6.a";	/* [vlh] 3.4 */
+char *v7lib		"/lib/libv7.a";	/* [vlh] 3.4 */
+char *s3lib		"/lib/libs3.a";	/* [vlh] 3.4 */
+char *s5lib		"/lib/libs5.a";	/* [vlh] 3.4 */
+
+char *v6incl	"/usr/include/v6/\0";	/* [vlh] 3.4 */
+char *v7incl	"/usr/include/v7/\0";	/* [vlh] 3.4 */
+char *s3incl	"/usr/include/sys3/\0";	/* [vlh] 3.4 */
+char *s5incl	"/usr/include/sys5/\0";	/* [vlh] 3.4 */
+
+char *ldflg		"-r";
+int mmuflag;					/*[vlh]replace nommu #ifdef'd var*/
+
+/* cexit - exit from C compiler driver*/
+/*		This deletes any existing temps and exits with the error status.*/
+cexit()									/* returns - none*/
+{
+	register int i;
+
+	if( !pflag )
+		for( i = 0; i < NTEMPS; i++ )
+			if( fns[i] )
+				unlink(fns[i]);
+	exit(status);
+}
+
+/*
+ * main - main routine for c68 Compiler system
+ *		Handles the C68 arguments.  For each C file given, the macro
+ *		pre-processor is called, then the parser, code generator and
+ *		assember are fexec'd.  The loader arguments are collected and
+ *		the loader is fexec'd.
+ */
+main(argc,argv)
+int argc;
+char **argv;
+{
+	register char *arg, **p, **cfilep, **loadp, *sp;
+	register int nloadfiles, c, i, j, x;
+
+#ifdef NOFORKS
+	if (argc != 3) {
+		error("usage: c68 inputfile outputfile");
+		exit(-1);
+	}
+	pflag++;
+	domacro(argv[1],argv[2],ndefs);
+#else
+	cfilep = &cfiles[0];
+	loadp = &loadargs[0];
+	nloadfiles = 0;
+	sysinfo(0,&mmuflag);		/*[vlh] mmu system ??*/
+	if (!mmuflag) {				/*[vlh] default args*/
+		*loadp = ldflg;
+		lflag++;
+	}
+	for( p = argv, j = argc; --j > 0; ) {		/*process arguments*/
+		if( *(arg= *++p) == '-' ) {
+			arg++;
+			for( i = 0; c = *arg++; i++ ) {
+				switch( c ) {
+
+				case 'c':
+					cflag++;
+					continue;
+
+				case '1':
+					oneflag++;
+					parser = onepass;
+					continue;
+
+				case 'D':
+					defs[ndefs].ptr = arg;
+					if ((x=index(arg,'=')) != -1) {
+						defs[ndefs++].value = (arg+x+1);
+						arg[x] = 0;		/* get rid of value */
+					}
+					else defs[ndefs++].value = 0;
+					i++;
+					break;
+
+				case 'I':
+					incl[nincl++] = arg;
+					i++;
+					break;
+
+				case 'N':
+					nflag++;
+					continue;
+
+				case 'e':	/* [vlh] 3.4 */
+					eflag++;
+					if (fflag)
+						ferror("incompatible flags : '-f' and '-e'");
+					continue;
+
+				case 'f':	/* [vlh] 3.4 */
+					fflag++;
+					if (eflag)
+						ferror("incompatible flags : '-f' and '-e'");
+					continue;
+
+				case 'L':
+					lflag++;
+					continue;
+
+				case 'o':
+					if( --j <= 0 )
+						ferror("bad -o option");
+					*loadp++ = *p++;
+					if( strend(*p,".c") || strend(*p,".s") ||
+							strend(*p,".o") ) {
+						sp = makecopy(*p);
+						sp[strlen(sp)-2] = '\0';
+						*loadp++ = sp;
+						*loadp++ = setend(*p,'o');
+						nloadfiles++;
+						if( !strend(*p,".o") )
+							*cfilep++ = *p;
+					}
+					else
+						*loadp++ = *p;
+					continue;
+
+				case 'P':
+					pflag++;
+					cflag++;
+					continue;
+
+				case 'S':
+					sflag++;
+					cflag++;
+					nflag++;
+					continue;
+
+				case 't':
+					if( (c= *arg++) == '0' )
+						parser = "/usr/c68/c068";
+					else if( c == '1' )
+						cgen = "/usr/c68/c168";
+					else if( c == '\0' )
+						arg--;
+					continue;
+
+				case 'w':		/* [vlh] */
+					wflag++;
+					continue;
+
+				case 'O':		/* [vlh] 3.4 */
+					optimize++;
+					continue;
+
+				case 'v':		/* [vlh] 3.4 print file name */
+					verbose++;
+					continue;
+
+				case '6':		/* [vlh] 3.4 v6 compatibility */
+					v6flag++;
+					incl[nincl++] = v6incl;
+					continue;
+
+				case '7':		/* [vlh] 3.4 v7 compatibility */
+					v7flag++;
+					incl[nincl++] = v7incl;
+					continue;
+
+				case '3':		/* [vlh] 3.4 s3 compatibility */
+					s3flag++;
+					incl[nincl++] = s3incl;
+					continue;
+
+				case '5':		/* [vlh] 3.4 s5 compatiblity */
+					s5flag++;
+					incl[nincl++] = s5incl;
+					continue;
+
+				default:
+					if( loadp >= &loadargs[NARGS] )
+						ferror("too many loader args");
+					*loadp++ = *p;
+					i++;
+					break;
+				}
+				break;
+			}
+			if( i )
+				continue;
+		}
+		if( strend(arg,".c") || strend(arg,".s") ) {
+
+	/*C or Assembler files to process*/
+
+			if( cfilep >= &cfiles[NARGS] )
+				ferror("too many files");
+			*cfilep++ = arg;
+			nloadfiles++;
+			if( !chkdup(arg) ) {
+				if( loadp >= &loadargs[NARGS] )
+					ferror("too many loader args");
+				*loadp++ = setend(arg,'o');
+			}
+		}
+		else if( !chkdup(arg) ) {	/*check for loader args*/
+			if( loadp >= &loadargs[NARGS] )
+				ferror("too many loader args");
+			*loadp++ = arg;
+			if( strend(arg,".o") )
+				nloadfiles++;
+		}
+	}
+	if( cfilep != &cfiles[0] ) {		/*had a C file?*/
+		if( signal(2,cexit) == cptrone )	/*catch rubouts, check ignore*/
+			signal(2,cptrone);
+		for( i = 0; i < NTEMPS; i++ )	/*allocate temps*/
+			fns[i] = maketemp(i);
+		for( p = &cfiles[0]; arg = *p++; ) {	/*handle each C file*/
+			for( i = 0; i < NTEMPS; i++ )
+				tfns[i] = fns[i];
+			if( cfilep != &cfiles[1] || verbose )
+				printf("%s:\n",arg);
+	/*
+	 * the following sets things up for the parser, the macro pre-processor
+	 * is called (not forked), then the parser is fexec'd.
+	 */
+			asflag = strend(arg,".s");
+			if( pflag || asflag )
+				tfns[MTEMP] = setend(arg,'i');
+			if( domacro(arg,tfns[MTEMP],ndefs) == 0 || pflag ) {
+				cflag++;
+				status =+ mfail;	/* preprocessor failure */
+				continue;
+			}
+			if( !asflag ) {
+				tfns[ASTEMP] = setend(arg,'s');
+				initfargs();
+				addfarg(parser);
+				addfarg(tfns[MTEMP]);
+				if( oneflag ) {
+					addfarg(tfns[ASTEMP]);
+					addfarg(tfns[STRINGS]);
+					if( lflag )
+						addfarg("-L");
+					if( sflag || nflag )
+						addfarg("-D");
+					addfarg("-1");
+				}
+				else {
+					addfarg(tfns[ICODE]);
+					addfarg(tfns[STRINGS]);
+					if ( fflag )	/* [vlh] 3.4 */
+						addfarg("-f");
+					else if ( eflag )	/* [vlh] 3.4 */
+						addfarg("-e");
+					if ( wflag )
+						addfarg("-w");
+				}
+				endfargs();
+				if( fexec(parser,fargs) ) {
+					status++;
+					cflag++;
+					continue;
+				}
+
+	/*this sets things up for the code generator*/
+
+				if( !oneflag ) {
+					initfargs();
+					addfarg(cgen);
+					addfarg(tfns[ICODE]);
+					addfarg(tfns[ASTEMP]);
+					if( !sflag )
+						fns[ASTEMP] = tfns[ASTEMP];
+					if( lflag )
+						addfarg("-L");
+					if( nflag || sflag )
+						addfarg("-D");
+					endfargs();
+					if( fexec(cgen,fargs) ) {
+						status++;
+						cflag++;
+						continue;
+					}
+				}
+				if( sflag )
+					continue;
+			}
+			else
+				tfns[ASTEMP] = tfns[MTEMP];
+
+	/*this sets things up for the assembler*/
+
+			initfargs();
+			addfarg(asmprog);
+			if( !asflag )
+				addfarg("-u");
+			if( lflag )
+				addfarg("-L");
+			addfarg(tfns[ASTEMP]);
+			endfargs();
+			if( fexec(asmprog,fargs) ) {
+				cflag++;
+				status++;
+			}
+			unlink(tfns[ASTEMP]);
+		}
+	}
+	if( !cflag && (loadp != &loadargs[0] || cfilep != &cfiles[0] )) {
+	/*
+	 * set things up for the loader, this means that we need to add the
+	 * C preface at the beginning of the program which has the jsr to
+	 * main and then exits after return from main.
+	 */
+		initfargs();
+		addfarg(loader);
+		addfarg("-X");
+		i = 1;
+		for( p = loadargs; *p ; p++ ) {
+			if( i && strend(*p,".o") ) {		//insert pref before 1st .o
+				i = 0;
+				addfarg(pref);
+			}
+			addfarg(*p);
+		}
+		if (fflag)		/* [vlh] 3.4 */
+			addfarg(deflibfp);
+		if (eflag)		/* [vlh] 3.4 */
+			addfarg(deflibep);
+		if (v6flag)		/* [vlh] 3.4 */
+			addfarg(v6lib);
+		if (v7flag)		/* [vlh] 3.4 */
+			addfarg(v7lib);
+		if (s3flag)		/* [vlh] 3.4 */
+			addfarg(s3lib);
+		if (s5flag)		/* [vlh] 3.4 */
+			addfarg(s5lib);
+		addfarg(deflib);
+		endfargs();
+		status =| fexec(loader,fargs);
+	/*
+	 * if we were given one C file and there is one ".o" file, we remove
+	 * the ".o" file.
+	 */
+		if( cfilep == &cfiles[1] && nloadfiles == 1 )
+			unlink(setend(cfiles[0],'o'));
+	}
+#endif
+	cexit();
+}
+
+/* fexec - fork and exec*/
+/*		This forks a new task, then does an execv to execute the given*/
+/*		program with the given arguements.*/
+fexec(fname,args)					/* returns 1 if error, 0 otherwise*/
+char *fname;						/* file to execute*/
+char **args;						/* arguments to pass*/
+{
+	register int pid, i;
+	int fstat;
+
+/*	if( (pid=fork()) == 0 ) {			//child process*/
+/*		execv(fname,args);*/
+/*		printf("can't execv %s errno=%d\n",fname,errno);*/
+/*		exit(1);*/
+/*	}*/
+	pid = maketask(fname,0,0,args);	/*do fork & exec*/
+	if( pid < 0 ) {
+		printf("can't maketask %s err=%o\n",fname,errno);
+		return(1);
+	}
+	while( pid != wait(&fstat) )		/*wait for child*/
+		;
+	if( (i=fstat&0377) != 0 && i != 14 ) {
+		if( i != 2 )
+			printf("%s error terminated, status %xH\n",fname,fstat);
+		status++;
+		cexit();
+	}
+	return( (fstat>>8) & 0377 );
+}
+
+/* setend - set the end character of a string*/
+/*		This grabs a copy of the string and sets the last character to*/
+/*		the given character.  This is used to generate ".o", ".i" and*/
+/*		".s" file names.*/
+char *setend(s,c)						/* returns pointer to string*/
+char *s;								/* pointer to old string*/
+int c;									/* character to end string with*/
+{
+	register char *p;
+
+	p = makecopy(s);
+	p[strlen(p)-1] = c;
+	return(p);
+}
+
+/* chkdup - checks for duplicate ".o" files in file list*/
+/*		Goes thru the loader argument list checking for the given*/
+/*		".o" file name.*/
+chkdup(s)							/* returns 1 if found, 0 otherwise*/
+char *s;							/* pointer to argument*/
+{
+	register char **l;
+
+	if( strend(s,".o") ) {
+		for( l = &loadargs[0]; *l; )
+			if( !strcmp(*l++,s) )
+				return(1);
+	}
+	return(0);
+}
+
+/* makecopy - makes a copy of a string*/
+/*		This allows for manipulating the file name, while allowing the*/
+/*		saving of the old file name.*/
+char *makecopy(s)						/* returns pointer to string*/
+char *s;								/* string to copy*/
+{
+	register char *p;
+	register int ndx;
+
+	if (strncmp("/tmp/",s,5) != 0) /* don't truncate tmp file names */
+		while ((ndx = index(s,'/')) != -1) s =+ ndx+1;	/* [vlh] */
+	for( p = argp; *argp++ = *s++; )
+		;
+	return(p);
+}
+
+/* initfargs - initialize fexec arg block*/
+/*		This sets the arg block pointer to the beginning of the block.*/
+initfargs()								/* returns - none*/
+{
+	fargp = &fargs[0];
+}
+
+/* addfarg - add fexec argument*/
+/*		This takes the given arguement and adds it to the argment block*/
+addfarg(s)
+char *s;
+{
+	if( fargp >= &fargs[NARGS] )
+		ferror("too many args");
+	*fargp++ = s;
+}
+
+/* endfargs - end fexec argument block*/
+/*		This ends the argument block with a zero pointer.*/
+endfargs()								/* returns - none*/
+{
+	*fargp = 0;
+}
+
+/* ferror - fatal error*/
+/*		Outputs error message and exits with error status.*/
+ferror(s,x1,x2,x3,x4,x5,x6)				/* returns - none*/
+char *s;								/* printf string*/
+int x1, x2, x3, x4, x5, x6;				/* printf args*/
+{
+	printf(s,x1,x2,x3,x4,x5,x6);
+	printf("\n");
+	status++;
+	cexit();
+}
+
+/* maketemp - make a temporary file name*/
+/*		Generates unique file name with process id*/
+char *maketemp(arb)						/* returns file name*/
+int arb;								/* arbitrary number*/
+{
+#ifndef NOFORKS
+	char *p, tmp[6];
+
+	p = makecopy("/tmp/ct6");
+	argp--;
+	itoa(getpid(),tmp,1);
+	makecopy(tmp);
+	argp--;
+	makecopy(".");
+	argp--;
+	itoa(arb,tmp,1);
+	makecopy(tmp);
+	return(p);
+#endif
+}
+
+/* strcmp - string comparison*/
+/*		Compares two strings for equality, less or greater.*/
+strcmp(s,t)								/* returns 0 for equality,*/
+										/* neg for < and pos for >.*/
+char *s;								/* first string*/
+char *t;								/* second string*/
+{
+	for( ; *s == *t; s++, t++ )
+		if( *s == '\0' )
+			return(0);
+	return( *s - *t );
+}
+
+/* strncmp - string comparison*/
+/*		Compares two strings for equality, less or greater.*/
+strncmp(s,t,n)							/* neg for < and pos for >.*/
+char *s;								/* first string*/
+char *t;								/* second string*/
+{
+	for( ; *s == *t && n; s++, t++, n--)
+		if( *s == '\0' )
+			return(0);
+	return((n) ?  *s - *t : 0);
+}
+
+/* strlen - string length*/
+/*		Computes number of bytes in string.*/
+strlen(s)								/* returns string length*/
+char *s;								/* string to compute length*/
+{
+	register int n;
+
+	for( n = 0; *s++ != '\0'; )
+		n++;
+	return(n);
+}
+
+/* itoa - integer to ASCII conversion*/
+/*		Converts integer to ASCII string, handles '-'.*/
+itoa(n,s,w)								/* returns - none*/
+int n;									/* number to convert*/
+char *s;								/* resulting string*/
+int w;									/* minimum width of string*/
+{
+	register char *tp;
+	register int sign, i;
+	char temp[6];
+
+	if( (sign=n) < 0 )
+		n = -n;
+	i = 0;
+	tp = &temp;
+	do {
+		i++;
+		*tp++ = n % 10 + '0';
+	} while( (n =/ 10) > 0 );
+	if( sign < 0 ) {
+		i++;
+		*tp++ = '-';
+	}
+	while( --w >= i )					/*pad on left with blanks*/
+		*s++ = ' ';
+	while( --i >= 0 )					/*move chars reversed*/
+		*s++ = *--tp;
+	*s = '\0';
+}
+
+/* strend - set string end*/
+/*		This is used to compare the endings of file names for ".c", etc.*/
+strend(s,t)							/* returns 1 if match, 0 otherwise*/
+char *s;							/* string to compare*/
+char *t;							/* string ending*/
+{
+	int ls, lt;
+
+	if( (ls=strlen(s)) < (lt=strlen(t)) )
+		return(0);
+	if( !strcmp(&s[ls-lt],t) )
+		return(1);
+	return(0);
+}
+
+v6flush(v6buf)
+struct iobuf *v6buf;
+{
+	register i;
+
+	i = BLEN - v6buf->nunused;
+	v6buf->nunused = BLEN;
+	v6buf->xfree = &(v6buf->buff[0]);
+	if(write(v6buf->fildes,v6buf->xfree,i) != i)
+		return(-1);
+	return(0);
+}
+
+/* index - find the index of a character in a string*/
+/*		This is identical to Software Tools index.*/
+index(str,chr)						/* returns index of c in str or -1*/
+char *str;							/* pointer to string to search*/
+char chr;							/* character to search for*/
+{
+	register char *s;
+	register int i;
+
+	for( s = str, i = 0; *s != '\0'; i++ )
+		if( *s++ == chr )
+			return(i);
+	return(-1);
+}
+

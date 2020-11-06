@@ -1,0 +1,138 @@
+$TITLE ('UDI DECODE EXCEPTION')
+$LARGE
+/*************************************************************************/
+/*                                                                       */
+/*               D I S C L A I M E R   N O T I C E                       */
+/*               -------------------   -----------                       */
+/*                                                                       */
+/*  This document and/or portions of the material and data furnished     */
+/*  herewith, was developed under sponsorship of the U. S. Government.   */
+/*  Neither the U.S. nor the U.S.D.O.E., nor the Leland Stanford Junior  */
+/*  University, nor their employees, nor their respective contractors,   */
+/*  subcontractors, or their employees, makes any warranty, express or   */
+/*  implied, or assumes any liability or responsibility for accuracy,    */
+/*  completeness or usefulness of any information, apparatus, product    */
+/*  or process disclosed, or represents that its use will not infringe   */
+/*  privately-owned rights.  Mention of any product, its manufacturer,   */
+/*  or suppliers shall not, nor is it intended to, imply approval, dis-  */
+/*  approval, or fitness for any particular use.  The U. S. and the      */
+/*  University at all times retain the right to use and disseminate same */
+/*  for any purpose whatsoever.  Such distribution shall be made by the  */
+/*  National Energy Software Center at the Argonne National Laboratory   */
+/*  and only subject to the distributee furnishing satisfactory proof    */
+/*									 */
+/*-----------------------------------------------------------------------*/
+/*                                                                       */
+/*              R E V I S I O N   H I S T O R Y                          */
+/*                                                                       */
+/*    14JAN82  Alex Hunter  1. Change value of E$SUPPORT per Series III  */
+/*                             Programmer's Reference Manual Rev. B.     */
+/*			    2. No longer necessary to use COMMON to      */
+/*                             place messages in high core.              */
+/*    03FEB82  Alex Hunter  1. Change module name.                       */
+/*                          2. Implicit dimension for exception, place   */
+/*                             in ROM psect.                             */
+/*                          3. Change test in search loop.               */
+/*                                                                       */
+/*************************************************************************/
+DQ_DECODE: do;
+ 
+$INCLUDE (PLM$UDI:EXCEPT.LIT)
+ 
+declare PTR literally 'POINTER';
+ 
+declare text literally '(*) byte data';
+ 
+declare
+ 
+        M$OK            text ('OK--Normal completion.'),
+        M$CONTEXT       text ('CONTEXT--Illegal context.'),
+        M$CROSSFS       text ('CROSSFS--Illegal cross volume rename.'),
+        M$EXIST         text ('EXIST--Object does not exist.'),
+        M$FACCESS       text ('FACCESS--File access violation.'),
+        M$FEXIST        text ('FEXIST--File already exists.'),
+        M$FNEXIST       text ('FNEXIST--File does not exist.'),
+        M$MEM           text ('MEM--Insufficient memory.'),
+        M$NOPEN         text ('NOPEN--File is not open.'),
+        M$OPEN          text ('OPEN--File is already open.'),
+        M$OREAD         text ('OREAD--File open for read only.'),
+        M$OWRITE        text ('OWRITE--File open for write only.'),
+        M$PARAM         text ('PARAM--Illegal parameter.'),
+        M$PTR           text ('PTR--Illegal pointer.'),
+        M$SHARE         text ('SHARE--Can''t share file.'),
+        M$SIX           text ('SIX--Too many open connections.'),
+        M$SPACE         text ('SPACE--Directory is full.'),
+        M$STRING$BUF    text ('STRING$BUF--String too long for buffer.'),
+        M$SUPPORT       text ('SUPPORT--Operation not supported.'),
+        M$SYNTAX        text ('SYNTAX--Illegal pathname.'),
+        M$UNSAT         text ('UNSAT--Unresolved external symbols.'),
+        M$ADDRESS       text ('ADDRESS--Bad address in overlay.'),
+        M$BAD$FILE      text ('BAD$FILE--Invalid object file.'),
+        M$ZERO$DIVIDE   text ('ZERO$DIVIDE--Attempt to divide by zero.'),
+        M$OVERFLOW      text ('OVERFLOW--Arithmetic overflow.'),
+	M$8087		text ('8087--NDP error.'),
+        M$HUH           text ('???--Unrecognized exception code.'),
+ 
+ 
+        exception (*) structure (code word, msg$p pointer, msg$size byte)
+        data   (        E$OK,           @M$OK,          size(M$OK),
+                        E$CONTEXT,      @M$CONTEXT,     size(M$CONTEXT),
+                        E$CROSSFS,      @M$CROSSFS,     size(M$CROSSFS),
+                        E$EXIST,        @M$EXIST,       size(M$EXIST),
+                        E$FACCESS,      @M$FACCESS,     size(M$FACCESS),
+                        E$FEXIST,       @M$FEXIST,      size(M$FEXIST),
+                        E$FNEXIST,      @M$FNEXIST,     size(M$FNEXIST),
+                        E$MEM,          @M$MEM,         size(M$MEM),
+                        E$NOPEN,        @M$NOPEN,       size(M$NOPEN),
+                        E$OPEN,         @M$OPEN,        size(M$OPEN),
+                        E$OREAD,        @M$OREAD,       size(M$OREAD),
+                        E$OWRITE,       @M$OWRITE,      size(M$OWRITE),
+                        E$PARAM,        @M$PARAM,       size(M$PARAM),
+                        E$PTR,          @M$PTR,         size(M$PTR),
+                        E$SHARE,        @M$SHARE,       size(M$SHARE),
+                        E$SIX,          @M$SIX,         size(M$SIX),
+                        E$SPACE,        @M$SPACE,       size(M$SPACE),
+                        E$STRING$BUF,   @M$STRING$BUF,  size(M$STRING$BUF),
+                        E$SUPPORT,      @M$SUPPORT,     size(M$SUPPORT),
+/* old E$SUPPORT */	010BH,		@M$SUPPORT,	size(M$SUPPORT),
+                        E$SYNTAX,       @M$SYNTAX,      size(M$SYNTAX),
+                        E$UNSAT,        @M$UNSAT,       size(M$UNSAT),
+                        E$ADDRESS,      @M$ADDRESS,     size(M$ADDRESS),
+                        E$BAD$FILE,     @M$BAD$FILE,    size(M$BAD$FILE),
+                        E$ZERO$DIVIDE,  @M$ZERO$DIVIDE, size(M$ZERO$DIVIDE),
+                        E$OVERFLOW,     @M$OVERFLOW,    size(M$OVERFLOW),
+                        E$8087,         @M$8087,        size(M$8087),
+                        0FFFFH,         @M$HUH,         size(M$HUH),
+		),
+ 
+        preface (*) byte data ('EXCEPTION nnnnH E$'),
+ 
+        hex (*) byte data ('0123456789ABCDEF');
+ 
+DQ$DECODE$EXCEPTION: procedure (exception$code,message$p,excep$p) public;
+	declare exception$code word,
+		(message$p,excep$p) PTR;
+	declare (message based message$p) (1) byte,
+		(status based excep$p) word;
+	declare (i,j) integer;
+ 
+	j=0;
+        do while exception(j).code<>exception$code and j<last(exception);
+	    j=j+1;
+	end;
+ 
+	message(0) = size(preface) + exception(j).msg$size;
+ 
+        call MOVB (@preface, @message(1), size(preface));
+ 
+	do i=0 to 3;
+	    message(i+11)=hex(SHR(exception$code,(3-i)*4) AND 0FH);
+	end;
+ 
+        call MOVB (exception(j).msg$p, @message(size(preface)+1),
+                   exception(j).msg$size);
+ 
+	status=E$OK;
+	end DQ$DECODE$EXCEPTION;
+ 
+end DQ_DECODE;

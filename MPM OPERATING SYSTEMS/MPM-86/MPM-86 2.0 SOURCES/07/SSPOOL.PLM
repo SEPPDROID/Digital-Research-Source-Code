@@ -1,0 +1,122 @@
+$title('MP/M-86 2.0 Stop Spooler Program')
+stopsplr:
+do;
+
+$include (copyrt.lit)
+
+$include (vaxcmd.lit)
+
+$include (comlit.lit)
+
+  declare fcb (1) byte external;
+  declare fcb16 (1) byte external;
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+ mon3:
+   procedure (f,a) address external;
+     dcl f byte, a address;
+   end mon3;
+
+  print$console$buffer:
+    procedure (buff$adr);
+      declare buff$adr address;
+      call mon1 (9,buff$adr);
+    end print$console$buffer;
+
+  system$reset:
+    procedure;
+      call mon1 (0,0);
+    end system$reset;
+
+  console$number:
+    procedure byte;
+      return mon2 (153,0);
+    end console$number;
+
+  abort$process:
+    procedure (abort$pb$adr) byte;
+      declare abort$pb$adr address;
+      return mon2 (157,abort$pb$adr);
+    end abort$process;
+
+  dcl mpm$version   lit '12';
+  dcl mpm$terminate lit '143';
+
+  declare abort$param$block structure (
+    pd address,
+    term address,
+    cns byte,
+    net byte,
+    pname (8) byte) initial (
+    0,00ffh,0,0,'SPOOL   ');
+
+  dcl mpm$86 lit '1130H';
+  dcl i byte;
+  dcl console address;
+  dcl plmstart label public;
+
+/*
+  plmstart:
+*/
+
+ 
+plmstart:
+  if mon3(mpm$version,0) <> mpm$86 then
+  do;
+    call print$console$buffer(.(cr,lf,'Requires MP/M-86$'));
+    call mon1(0,0);
+  end;
+  if fcb(1) = ' ' then
+  do;
+    abort$param$block.cns = console$number;
+  end;
+  else
+  do;
+    i = 1; console = 0;
+    do while fcb(i) <> ' ' and i < 4;  
+      if (fcb(i) := fcb(i) - '0') <= 9 then
+      do;
+        console = fcb(i) + 10 * console;
+        i = i + 1;
+      end;
+      else
+        i = 255;                           /* non - numeric */
+    end;
+    if console > 253 or i = 255 then
+    do;
+      call print$console$buffer (.(cr,lf,
+        'Illegal Console, Use 0-253 $'));
+      call mon1(mpm$terminate,0);
+    end;
+    abort$param$block.cns = low(console);
+  end;
+
+
+  if abort$process (.abort$param$block) = 0 then
+  do;
+    do while abort$process (.abort$param$block) = 0;
+      ;
+    end;
+    call print$console$buffer (.(
+           'Spooler aborted','$'));
+  end;
+  else
+  do;
+    call print$console$buffer (.(
+           'Spooler not running','$'));
+  end;
+  call system$reset;
+
+end stopsplr;
+

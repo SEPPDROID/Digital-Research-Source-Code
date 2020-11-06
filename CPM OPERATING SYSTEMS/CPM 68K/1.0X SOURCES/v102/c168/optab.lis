@@ -1,0 +1,328 @@
+1File: OPTAB.C                                                             Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9    
+    10   #define	I_NULL	0
+    11   #define	I_ADD	1
+    12   #define	I_INC	2
+    13   #define	I_SUB	3
+    14   #define	I_DEC	4
+    15   #define	I_MULS	5
+    16   #define	I_MULU	6
+    17   #define	I_DIVS	7
+    18   #define	I_DIVU	8
+    19   #define	I_ASR	9
+    20   #define	I_LSR	10
+    21   #define	I_ASL	11
+    22   #define	I_LSL	12
+    23   #define	I_AND	13
+    24   #define	I_OR	14
+    25   #define	I_EOR	15
+    26   #define	I_NEG	16
+    27   #define	I_NOT	17
+    28   #define	I_MOVE	18
+    29   #define	I_CLR	19
+    30   #define	I_CMP	20
+    31   #define	I_TST	21
+    32   #define	I_LMUL	22
+    33   #define	I_LDIV	23
+    34   #define	I_LREM	24
+    35   #define	I_LEML	25
+    36   #define	I_LERM	27
+    37   #define	I_BEQ	28
+    38   #define	I_BNE	29
+    39   #define	I_BGT	30
+    40   #define	I_BGE	31
+    41   #define	I_BLT	32
+    42   #define	I_BLE	33
+    43   #define	I_BLS	34
+    44   #define	I_BLO	35
+    45   #define	I_BCC	36
+    46   #define	I_BHI	37
+    47   #define	I_BRA	38
+    48   #define	I_NOP	39
+    49   #define	I_BTST	40
+    50    
+    51   char *mnemonics[] {
+    52   	"",
+    53   	"add",
+    54   	"inc",
+    55   	"sub",
+    56   	"dec",
+    57   	"muls",
+    58   	"mulu",
+    59   	"divs",
+1File: OPTAB.C                                                             Page       2
+    60   	"divu",
+    61   	"asr",
+    62   	"lsr",
+    63   	"asl",
+    64   	"lsl",
+    65   	"and",
+    66   	"or",
+    67   	"eor",
+    68   	"neg",
+    69   	"not",
+    70   	"move",
+    71   	"clr",
+    72   	"cmp",
+    73   	"tst",
+    74   	"lmul",
+    75   	"_ldiv",
+    76   	"lrem",
+    77   	"almul",
+    78   	"aldiv",
+    79   	"alrem",
+    80   	"beq",
+    81   	"bne",
+    82   	"bgt",
+    83   	"bge",
+    84   	"blt",
+    85   	"ble",
+    86   	"bls",
+    87   	"blo",
+    88   	"bcc",
+    89   	"bhi",
+    90   	"jmp",
+    91   	"*nop",
+    92   	"btst",
+    93   };
+    94    
+    95   #define	FE_EQOP		1
+    96   #define	FE_ASSIGN	2
+    97   #define	FE_EQSHFT	3
+    98   #define	FE_EQXOR	4
+    99   #define	FE_EQADDR	5
+   100   #define	FC_FIX		6
+   101   #define	FC_REL		7
+   102   #define	FC_BTST		8
+   103   #define	FS_OP		9
+   104   #define	FS_ITL		10
+   105   #define	FS_LD		11
+   106   #define	FR_ADD		12
+   107   #define	FR_MULT		13
+   108   #define	FR_DIV		14
+   109   #define	FR_SHFT		15
+   110   #define	FR_XOR		16
+   111   #define	FR_NEG		17
+   112   #define	FR_EQOP		18
+   113   #define	FR_POSTOP	19
+   114   #define	FR_ASSIGN	20
+   115   #define	FR_EQMULT	21
+   116   #define	FR_EQDIV	22
+   117   #define	FR_EQSHFT	23
+   118   #define	FR_EQXOR	24
+1File: OPTAB.C                                                             Page       3
+   119   #define	FR_CALL		25
+   120   #define	FR_ITL		26
+   121   #define	FR_LTI		27
+   122   #define	FR_LD		28
+   123   #define	FR_EQADDR	29
+   124   #define	FR_EQNOT	30
+   125   #define	FE_EQNOT	31
+   126   #define	FR_DOCAST	32
+   127   #define	FS_DOCAST	33
+   128   #define	FR_FTOL		34
+   129   #define	FR_LTOF		35
+   130   #define	FR_FTOI		36
+   131   #define	FR_ITOF		37
+   132   #define FE_EQMULT	38
+   133   #define FE_EQDIV	39
+   134   #define FE_EQMOD	40
+   135   #define FR_TOCHAR	41
+   136    
+   137   char
+   138   	fe_eqop[],						/* 1=FE_EQOP */
+   139   	fe_assign[],					/* 2=FE_ASSIGN */
+   140   	fe_eqshft[],					/* 3=FE_EQSHFT */
+   141   	fe_eqxor[],						/* 4=FE_EQXOR */
+   142   	fe_eqaddr[],					/* 5=FE_EQADDR */
+   143   	fc_fix[],						/* 6=FC_FIX */
+   144   	fc_rel[],						/* 7=FC_REL */
+   145   	fc_btst[],						/* 8=FC_BTST */
+   146   	fs_op[],						/* 9=FS_OP */
+   147   	fs_itl[],						/* 10=FS_ITL */
+   148   	fs_ld[],						/* 11=FS_LD */
+   149   	fr_op[],						/* 12=FR_OP */
+   150   	fr_mult[],						/* 13=FR_MULT */
+   151   	fr_div[],						/* 14=FR_DIV */
+   152   	fr_shft[],						/* 15=FR_SHFT */
+   153   	fr_xor[],						/* 16=FR_XOR */
+   154   	fr_neg[],						/* 17=FR_NEG */
+   155   	fr_eqop[],						/* 18=FR_EQOP */
+   156   	fr_postop[],					/* 19=FR_POSTOP */
+   157   	fr_assign[],					/* 20=FR_ASSIGN */
+   158   	fr_eqmult[],					/* 21=FR_EQMULT */
+   159   	fr_eqdiv[],						/* 22=FR_EQDIV */
+   160   	fr_eqshft[],					/* 23=FR_EQSHFT */
+   161   	fr_eqxor[],						/* 23=FR_EQXOR */
+   162   	fr_call[],						/* 24=FR_CALL */
+   163   	fr_itl[],						/* 25=FR_ITL */
+   164   	fr_lti[],						/* 26=FR_LTI */
+   165   	fr_ld[],						/* 27=FR_LD */
+   166   	fr_eqaddr[],					/* 28=FR_EQADDR */
+   167   	fr_eqnot[],						/* 29=FR_EQNOT */
+   168   	fe_eqnot[],						/* 30=FE_EQNOT */
+   169   	fr_docast[],					/* 31=FR_DOCAST */
+   170   	fs_docast[],					/* 32=FS_DOCAST */
+   171   	fr_ftol[],						/* 34=FE_FTOL */
+   172   	fr_ltof[],						/* 35=FE_LTOF */
+   173   	fr_ftoi[],						/* 36=FE_FTOI */
+   174   	fr_itof[],						/* 37=FE_ITOF */
+   175   	fe_eqmult[],					/* 38=FE_EQMULT */
+   176   	fe_eqdiv[],						/* 39=FE_EQDIV */
+   177   	fe_eqmod[],						/* 40=FE_EQMOD */
+1File: OPTAB.C                                                             Page       4
+   178   	fr_tochar[];					/* 41=FR_TOCHAR */
+   179    
+   180   char *codeskels[] {
+   181   	0,								/*NULL*/
+   182   	fe_eqop,						/*1=FE_EQOP*/
+   183   	fe_assign,						/*2=FE_ASSIGN*/
+   184   	fe_eqshft,						/*3=FE_EQSHFT*/
+   185   	fe_eqxor,						/*4=FE_EQXOR*/
+   186   	fe_eqaddr,						/*5=FE_EQADDR*/
+   187   	fc_fix,							/*6=FC_FIX*/
+   188   	fc_rel,							/*7=FC_REL*/
+   189   	fc_btst,						/*8=FC_BTST*/
+   190   	fs_op,							/*9=FS_OP*/
+   191   	fs_itl,							/*10=FS_ITL*/
+   192   	fs_ld,							/*11=FS_LD*/
+   193   	fr_op,							/*12=FR_OP*/
+   194   	fr_mult,						/*13=FR_MULT*/
+   195   	fr_div,							/*14=FR_DIV*/
+   196   	fr_shft,						/*15=FR_SHFT*/
+   197   	fr_xor,							/*16=FR_XOR*/
+   198   	fr_neg,							/*17=FR_NEG*/
+   199   	fr_eqop,						/*18=FR_EQOP*/
+   200   	fr_postop,						/*19=FR_POSTOP*/
+   201   	fr_assign,						/*20=FR_ASSIGN*/
+   202   	fr_eqmult,						/*21=FR_EQMULT*/
+   203   	fr_eqdiv,						/*22=FR_EQDIV*/
+   204   	fr_eqshft,						/*23=FR_EQSHFT*/
+   205   	fr_eqxor,						/*24=FR_EQXOR*/
+   206   	fr_call,						/*25=FR_CALL*/
+   207   	fr_itl,							/*26=FR_ITL*/
+   208   	fr_lti,							/*27=FR_LTI*/
+   209   	fr_ld,							/*28=FE_LD*/
+   210   	fr_eqaddr,						/*29=FE_EQADDR*/
+   211   	fr_eqnot,						/*30=FE_EQNOT*/
+   212   	fe_eqnot,						/*31=FE_EQNOT*/
+   213   	fr_docast,						/*32=FE_DOCAST*/
+   214   	fs_docast,						/*33=FS_DOCAST*/
+   215   	fr_ftol,						/*34=FE_FTOL*/
+   216   	fr_ltof,						/*35=FE_LTOF*/
+   217   	fr_ftoi,						/*36=FE_FTOI*/
+   218   	fr_itof,						/*37=FE_ITOF*/
+   219   	fe_eqmult,						/*38=FE_EQMULT*/
+   220   	fe_eqdiv,						/*39=FE_EQDIV*/
+   221   	fe_eqmod,						/*40=FE_EQMOD*/
+   222   	fr_tochar,						/*41=FR_TOCHAR*/
+   223   };
+   224   	/*
+   225   	 *This is the major table directing the code generation process.
+   226   	 *It is indexed by an O_op operator, which is obtained from the
+   227   	 *opinfo table for an intermediate code operator.  The actual
+   228   	 *code skeleton macros are in cskels.c, which are in a linked
+   229   	 *list in order of decreasing order of difficulty.
+   230   	 */
+   231   char optab[][6] {
+   232    
+   233   /*	I		I2		effect		cc's	stack	register*/
+   234    
+   235   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	I_NULL,		/*0=NULL*/
+   236   	I_ADD,	I_INC,	I_NULL,		FC_FIX,	FS_OP,	FR_ADD,		/*1=ADD*/
+1File: OPTAB.C                                                             Page       5
+   237   	I_SUB,	I_DEC,	I_NULL,		FC_FIX,	FS_OP,	FR_ADD,		/*2=SUB*/
+   238   	I_MULS,	I_MULU,	I_NULL,		FC_FIX,	I_NULL,	FR_MULT,	/*3=MULT*/
+   239   	I_DIVS,	I_DIVU,	I_NULL,		FC_FIX,	I_NULL,	FR_DIV,		/*4=DIV*/
+   240   	I_DIVS,	I_DIVU,	I_NULL,		I_NULL,	I_NULL,	FR_DIV,		/*5=MOD*/
+   241   	I_ASR,	I_LSR,	I_NULL,		FC_FIX,	I_NULL,	FR_SHFT,	/*6=RSH*/
+   242   	I_ASL,	I_LSL,	I_NULL,		FC_FIX,	I_NULL,	FR_SHFT,	/*7=LSH*/
+   243   	I_AND,	I_AND,	I_NULL,		FC_FIX,	FS_OP,	FR_ADD,		/*8=AND*/
+   244   	I_OR,	I_OR,	I_NULL,		FC_FIX,	FS_OP,	FR_ADD,		/*9=OR*/
+   245   	I_EOR,	I_EOR,	I_NULL,		FC_FIX,	I_NULL,	FR_XOR,		/*10=XOR*/
+   246   	I_NULL,	I_NULL,	I_NULL,		FC_FIX,	I_NULL,	I_NULL,		/*11=NOT*/
+   247   	I_NEG,	I_NEG,	I_NULL,		FC_FIX,	I_NULL,	FR_NEG,		/*12=NEG*/
+   248   	I_NOT,	I_NOT,	I_NULL,		I_NULL,	I_NULL,	FR_NEG,		/*13=COMPL*/
+   249   	I_SUB,	I_DEC,	FE_EQOP,	FC_FIX,	I_NULL,	FR_EQOP,	/*14=PREDEC*/
+   250   	I_ADD,	I_INC,	FE_EQOP,	FC_FIX,	I_NULL,	FR_EQOP,	/*15=PREINC*/
+   251   	I_SUB,	I_DEC,	FE_EQOP,	I_NULL,	I_NULL,	FR_POSTOP,	/*16=POSTDEC*/
+   252   	I_ADD,	I_INC,	FE_EQOP,	I_NULL,	I_NULL,	FR_POSTOP,	/*17=POSTINC*/
+   253   	I_MOVE,	I_CLR,	FE_ASSIGN,	I_NULL,	I_NULL,	FR_ASSIGN,	/*18=ASSIGN*/
+   254   	I_ADD,	I_INC,	FE_EQOP,	I_NULL,	I_NULL,	FR_EQOP,	/*19=EQADD*/
+   255   	I_SUB,	I_DEC,	FE_EQOP,	I_NULL,	I_NULL,	FR_EQOP,	/*20=EQSUB*/
+   256   	I_MULS,	I_MULU,	FE_EQMULT,	FC_FIX,	I_NULL,	FR_EQMULT,	/*21=EQMULT*/
+   257   	I_DIVS,	I_DIVU,	FE_EQDIV,	FC_FIX,	I_NULL,	FR_EQDIV,	/*22=EQDIV*/
+   258   	I_DIVS,	I_DIVU,	FE_EQMOD,	I_NULL,	I_NULL,	FR_EQDIV,	/*23=EQMOD*/
+   259   	I_ASR,	I_LSR,	FE_EQSHFT,	I_NULL,	I_NULL,	FR_EQSHFT,	/*24=EQRSH*/
+   260   	I_ASL,	I_LSL,	FE_EQSHFT,	I_NULL,	I_NULL,	FR_EQSHFT,	/*25=EQLSH*/
+   261   	I_AND,	I_AND,	FE_EQOP,	I_NULL,	I_NULL,	FR_EQOP,	/*26=EQAND*/
+   262   	I_OR,	I_OR,	FE_EQOP,	I_NULL,	I_NULL,	FR_EQOP,	/*27=EQOR*/
+   263   	I_EOR,	I_EOR,	FE_EQXOR,	FC_FIX,	I_NULL,	FR_EQXOR,	/*28=EQXOR*/
+   264   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_CALL,	/*29=FJSR*/
+   265   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*30=EQUALS*/
+   266   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*31=NEQUALS*/
+   267   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*32=GREAT*/
+   268   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*33=GREATEQ*/
+   269   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*34=LESS*/
+   270   	I_CMP,	I_TST,	I_NULL,		FC_REL,	I_NULL,	I_NULL,		/*35=LESSEQ*/
+   271   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	FS_ITL,	FR_ITL,		/*36=INT2L*/
+   272   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_LTI,		/*37=LONG2I*/
+   273   	I_BTST,	I_BTST,	I_NULL,		FC_BTST,	I_NULL,	I_NULL,	/*38=BTST*/
+   274   	I_CMP,	I_TST,	I_NULL,		FC_REL,	FS_LD,	FR_LD,		/*39=LOAD*/
+   275   	I_MULS,	I_MULU,	I_NULL,		I_NULL,	I_NULL,	FR_MULT,	/*40=LMULT*/
+   276   	I_DIVS,	I_DIVU,	I_NULL,		I_NULL,	I_NULL,	FR_DIV,		/*41=LDIV*/
+   277   	I_DIVS,	I_DIVU,	I_NULL,		I_NULL,	I_NULL,	FR_DIV,		/*42=LMOD*/
+   278   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	I_NULL,		/*43=NULL*/
+   279   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	I_NULL,		/*44=NULL*/
+   280   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	I_NULL,		/*45=NULL*/
+   281   	I_NULL,	I_NULL,	FE_EQADDR,	I_NULL,	I_NULL,	FR_EQADDR,	/*46=EQADDR*/
+   282   	I_NOT,	I_NOT,	FE_EQNOT,	I_NULL,	I_NULL,	FR_EQNOT,	/*47=EQNOT*/
+   283   	I_NEG,	I_NEG,	FE_EQNOT,	I_NULL,	I_NULL,	FR_EQNOT,	/*48=EQNEG*/
+   284   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	FS_DOCAST,	FR_DOCAST,	/*49=DOCAST*/
+   285   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	I_NULL,		/*50=STASSIGN*/
+   286   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_LTOF,	/*51=LONG2F*/
+   287   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_FTOL,	/*52=FLOAT2L*/
+   288   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_ITOF,	/*53=INT2F*/
+   289   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_FTOI,	/*54=FLOAT2I*/
+   290   	I_NULL,	I_NULL,	I_NULL,		I_NULL,	I_NULL,	FR_TOCHAR,	/*55=TOCHAR*/
+   291   };
+   292    
+   293    
+   294   	/*this maps comparison operators and comparison types into the*/
+   295   	/*actual branch opcode used.*/
+1File: OPTAB.C                                                             Page       6
+   296   char brtab[][2] {
+   297   	I_BEQ,	I_BEQ,					/*EQUALS*/
+   298   	I_BNE,	I_BNE,					/*NEQUALS*/
+   299   	I_BGT,	I_BHI,					/*GREAT*/
+   300   	I_BGE,	I_BCC,					/*GREATEQ*/
+   301   	I_BLT,	I_BLO,					/*LESS*/
+   302   	I_BLE,	I_BLS,					/*LESSEQ*/
+   303   };
+   304    
+   305   	/*turns !x>y into x<=y*/
+   306   int invrel[] { NEQUALS, EQUALS, LESSEQ, LESS, GREATEQ, GREAT };
+   307    
+   308   	/*turns x>y into y<=x*/
+   309   int swaprel[] { EQUALS, NEQUALS, LESS, LESSEQ, GREAT, GREATEQ };
+   310    
+   311   	/*code skeleton built-in strings*/
+   312   char *strtab[] {
+   313   	"move",							/*MOV*/
+   314   	"move.l",						/*MOVL*/
+   315   	"jsr",							/*JSR*/
+   316   	"clr",							/*CLR*/
+   317   	"clr.l",						/*CLRL*/
+   318   	"ext.w",						/*EXTW*/
+   319   	"ext.l",						/*EXTL*/
+   320   	"lea",							/*LEA*/
+   321   	"(sp)",							/*STK*/
+   322   };

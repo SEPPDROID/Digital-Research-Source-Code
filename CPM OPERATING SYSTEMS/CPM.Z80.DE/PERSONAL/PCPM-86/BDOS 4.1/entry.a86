@@ -1,0 +1,566 @@
+
+		include	equates.a86
+		include	system.a86
+		dseg
+
+		cseg
+
+		extrn	rtm_sysflag:near
+		extrn	cio_keyboard:near
+		extrn	rtm_timeslice:near
+
+		public	bdos_start
+		public	bdos_rsx
+		public	bdos_callback
+		public	far_ret_1
+		public	bdos_dseg
+	
+		jmp	bdos_start
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+		jmp	bdos_int_E0
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+bdos_dseg	dw 	seg bdos_segment
+					; ...
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_start:				; CODE XREF: bdos:0000j
+		cli	
+		cld	
+		sub	ax, ax
+		mov	ds, ax
+		mov	word ptr INT_E0, offset	bdos_int_E0
+		mov	word ptr INT_E0+2, cs
+		mov	bx, cs:bdos_dseg
+		mov	ds, bx
+		mov	ax, rlr
+		mov	cl, 4
+		shr	ax, cl
+		add	ax, bx
+		mov	rlr, ax
+		mov	process_table, ax
+		mov	bdos_conowner, ax
+		mov	ss, ax
+		mov	sp, 160h
+
+init_proctab:				; CODE XREF: bdos:0054j
+		mov	es, ax
+		mov	es:word ptr proc_onblock, offset far_ret_1
+
+g003f:					; DATA XREF: P_TERMCPM+16r
+		mov	es:word ptr proc_onblock+2, cs
+		mov	ax, es:proc_nextseg
+		test	ax, ax
+		jz	procs_inited
+		shr	ax, cl
+		add	ax, bx
+		mov	es:proc_nextseg, ax
+		jmps	init_proctab
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+procs_inited:				; CODE XREF: bdos:004Aj
+		mov	es, rlr
+		mov	bdos_segment, cs
+		mov	es:proc_bdos_seg, cs
+		callf	dword ptr lp_xios_init
+		sti	
+		mov	es, rlr
+		mov	al, boot_drive
+		mov	es:proc_drive, al
+		mov	sysvar_144, al
+		cmp	word ptr lp_dos_module+2, 0
+		jz	no_dos
+		callf	dword ptr lp_dos_module
+
+no_dos:					; CODE XREF: bdos:007Bj
+		cmp	word ptr lp_other_init+2, 0
+		jz	no_other
+		callf	dword ptr lp_other_init
+
+no_other:				; CODE XREF: bdos:0086j
+		push	es
+		xor	si, si
+		push	ds
+		mov	ds, si
+
+		mov	word ptr INT_E0, offset	bdos_int_E0
+		mov	word ptr INT_E0+2, cs
+		mov	di, offset proc_int0
+		mov	cx, 4
+		rep movsw
+		mov	cl, 4
+		add	si, cx
+		rep movsw
+		mov	si, offset INT_E0
+		mov	cl, 4
+		rep movsw
+		pop	es
+		pop	ds
+
+		mov	di, offset cpu_vectors
+		mov	si, offset proc_int0
+		mov	cl, 0Ch
+		rep movsw
+		xor	cx, cx
+		mov	dx, cx
+		int	0E0h		; used by BASIC	while in interpreter
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+bdos_functions	db 20h			; DATA XREF: bdos:01F2o
+					; P_TERMCPM
+		db 60h			; C_READ
+		db 61h			; C_WRITE
+		db 62h			; A_READ
+		db 63h			; A_WRITE
+		db 64h			; L_WRITE
+		db 65h			; C_RAWIO
+		db 66h			; A_STATIN
+		db 67h			; A_STATOUT
+		db 68h			; C_WRITESTR
+		db 69h			; C_READSTR
+		db 6Ah			; C_STAT
+		db 0A1h			; S_BDOSVER
+		db 0C0h			; DRV_ALLRESET
+		db 0C1h			; DRV_SET
+		db 0C2h			; F_OPEN
+		db 0C3h			; F_CLOSE
+		db 0C4h			; F_SFIRST
+		db 0C5h			; F_SNEXT
+		db 0C6h			; F_DELETE
+		db 0C7h			; F_READ
+		db 0C8h			; F_WRITE
+		db 0C9h			; F_MAKE
+		db 0CAh			; F_RENAME
+		db 0A2h			; DRV_LOGINVEC
+		db 0A3h			; DRV_GET
+		db 0A4h			; F_DMAOFF
+		db 0CBh			; DRV_ALLOCVEC
+		db 0CCh			; DRV_SETRO
+		db 0A5h			; DRV_ROVEC
+		db 0CDh			; F_ATTRIB
+		db 0CEh			; DRV_DPB
+		db 0A6h			; F_USERNUM
+		db 0CFh			; F_READRAND
+		db 0D0h			; F_WRITERAND
+		db 0D1h			; F_SIZE
+		db 0D2h			; F_RANDREC
+		db 0D3h			; DRV_RESET
+		db 0A0h			; (access drives)
+		db 0D5h			; DRV_FREE
+		db 0D6h			; F_WRITEZF
+		db 0A0h, 0A0h, 0A0h	; MP/M file lock functions
+		db 0A7h			; F_MULTISEC
+		db 0A8h			; F_ERRMODE
+		db 0D9h			; DRV_SPACE
+		db 0			; P_CHAIN
+		db 0DAh			; DRV_FLUSH
+		db 0A9h			; S_SYSVAR
+		db 6Bh			; S_BIOS
+		db 0AAh			; F_DMASEG
+		db 0ABh			; F_DMAGET
+		db 40h			; MC_MAX
+		db 41h			; MC_ABSMAX
+		db 42h			; MC_ALLOC
+		db 43h			; MC_ABSALLOC
+		db 44h			; MC_FREE
+		db 45h			; MC_ALLFREE
+		db 1			; P_LOAD
+		db 0A0h			; P_RSX
+		db 0DBh			; Clean	up disc
+		db 0DCh			; F_TRUNCATE
+		db 0DDh			; DRV_SETLABEL
+		db 0DEh			; DRV_GETLABEL
+		db 0DFh			; F_TIMEDATE
+		db 0E0h			; F_WRITEXFCB
+		db 0ACh			; T_SET
+		db 0ADh			; T_GET
+		db 0E1h			; F_PASSWD
+		db 0AEh			; S_SERIAL
+		db 0AFh			; P_CODE
+		db 6Ch			; C_MODE
+		db 6Dh			; C_DELIMIT
+		db 6Eh			; C_WRITEBLK
+		db 6Fh			; L_WRITEBLK
+		db 0A0h			; PCP/M	direct screen access
+		db 0A0h			; Unused in all	versions
+		db 0A0h			; GSX
+		db 0E2h			; Set file timestamp
+		db 0E4h			; INT13h helper
+		db 4			; 76h
+		db 5			; 77h
+		db 21h			; Wait on system flag
+		db 0A0h			; Set system flag
+		db 0A0h			; Create message queue
+		db 0A0h			; Open message queue
+		db 0A0h			; Delete message queue
+		db 0A0h			; Read message queue
+		db 0A0h			; Conditional read queue
+		db 0A0h			; Write	to message queue
+		db 0A0h			; Conditional write message queue
+		db 22h			; P_DELAY
+		db 23h			; P_DISPATCH
+		db 20h			; P_TERM
+		db 0A0h, 0A0h, 0A0h
+		db 70h			; C_DETACH
+		db 0A0h, 0A0h, 0A0h, 0A0h
+		db 2			; F_PARSE
+		db 0A0h			; Get default console
+		db 0B2h			; S_SYSDATE
+		db 0A0h			; Get system time/date (MP/M)
+		db 0A0h			; Get process descriptor (MP/M)
+		db 0A0h			; Kill process
+		db 0A0h			; L_ATTACH
+		db 0A0h			; L_DETACH
+		db 0A0h			; L_CATTACH
+		db 0A0h			; Select list device
+		db 0A0h			; C_CATTACH
+		db 0B3h			; S_OSVER
+		db 0A0h			; L_GET
+		db 71h			; A_ATTACH
+		db 72h			; A_DETACH
+		db 73h			; A_CATTACH
+		db 74h			; A_SET
+		db 75h			; A_GET
+		db 66h			; Function AAh
+		db 67h			; Function ABh
+		db 76h			; A_READBLK
+		db 77h			; A_WRITEBLK
+		db 0A0h			; Function AEh
+		db 0A0h			; Function AFh
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_int_E0:				; CODE XREF: bdos:0003j
+					; DATA XREF: bdos:000Eo ...
+		push	ds
+		mov	ds, cs:bdos_dseg
+		mov	ax, es
+		mov	es, rlr
+		pop	ds
+		cmp	es:proc_incpm, 0
+		jnz	already_in_cpm
+		mov	es:word ptr userStack+2, ss
+		mov	es:word ptr userStack, sp
+		push	es
+		pop	ss
+		mov	sp, offset proc_cpm_stack
+
+already_in_cpm:				; CODE XREF: bdos:0155j
+		inc	es:proc_incpm
+		sti	
+		cld	
+		mov	es:userES, ax
+		mov	es:proc_fx, cl
+		push	si
+		push	di
+		push	bp
+		callf	es:dword ptr proc_bdos_offs
+		pop	bp
+		pop	di
+		pop	si
+		mov	ax, bx
+		dec	es:proc_incpm
+		jnz	still_in_cpm
+		cli	
+		mov	ss, es:word ptr userStack+2
+		mov	sp, es:word ptr userStack
+
+still_in_cpm:				; CODE XREF: bdos:0188j
+		mov	es, es:userES
+		cmp	ax, 0FFFFh
+		jz	check_result
+		xor	cx, cx
+
+check_result:				; CODE XREF: bdos:019Dj
+		iret	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_rsx:				; DATA XREF: proc1:0052o
+		jmp	bdos_rsx_main
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+		rs	5
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_rsx_main:				; CODE XREF: bdos:01A2j
+		push	es:userDS
+		mov	es:userDS, ds
+		mov	ds, cs:bdos_dseg
+		callf	dword ptr lp_bdos_entry
+		mov	ds, es:userDS
+		pop	es:userDS
+
+far_ret_1:				; DATA XREF: bdos:0038o P_CHAIN+71o
+					; ...
+		retf	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_entry:				; CODE XREF: x_dev_waitflag+2u
+					; x_p_delay+2u
+					; DATA XREF: ...
+		jmp	bdos_func
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+		rs	5
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_func:				; CODE XREF: bdos:01C8j
+		cld	
+		mov	al, cl
+		cmp	al, 3Ch
+		jbe	bdos_gotfunc
+		sub	al, 25h
+		cmp	al, 3Dh
+		jb	bdos_badfunc
+		cmp	al, 52h
+		jbe	bdos_gotfunc
+		sub	al, 0Ch
+		cmp	al, 53h
+		jb	bdos_badfunc
+		cmp	al, 7Ch
+		jbe	bdos_gotfunc
+
+bdos_badfunc:				; CODE XREF: bdos:01DBj bdos:01E5j
+		mov	bx, 0FFFFh
+		mov	cx, 2
+		retf	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+bdos_gotfunc:				; CODE XREF: bdos:01D5j bdos:01DFj
+					; ...
+		mov	bx, offset bdos_functions
+		xlat	cs:byte ptr [bx]
+		mov	cl, al
+		rol	al, 1
+		rol	al, 1
+		rol	al, 1
+		and	al, 7
+		mov	ah, 1Fh
+		cmp	al, 6
+		jb	mask_fxn
+		mov	ah, 3Fh
+		and	al, 6
+
+mask_fxn:				; CODE XREF: bdos:0205j
+		and	cl, ah
+
+entry_bdos:				; DATA XREF: dseg:0010o
+		call	inner_callback
+		retf	
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+inner_callback:		; CODE XREF: bdos:020Dp bdos_callback+8p
+		xor	ah, ah
+		mov	ch, ah
+		mov	di, ax		; AL = function	class
+		shl	di, 1		; CL = function	number within class
+		shl	di, 1
+		mov	si, cx
+		shl	si, 1
+		jmp	function_tables[di]
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+bdos_callback:		; CODE XREF: get_proc_dskdat+Bp
+					; release+3p ...
+		test	ch, ch
+		jz	callback_00
+		dec	ch
+		mov	al, ch
+		call	inner_callback
+		jmps	bdos_cbk_end
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+callback_00:				; CODE XREF: bdos_callback+2j
+		callf	es:dword ptr proc_bdos_offs
+
+bdos_cbk_end:				; CODE XREF: bdos_callback+Bj
+		mov	ax, bx
+		retn	
+
+		extrn	sup_main:near
+		extrn	sup_init:near
+		extrn	rtm_main:near
+		extrn	rtm_init:near
+		extrn	mem_main:near
+		extrn	mem_init:near
+		extrn	cio_main:near
+		extrn	cio_init:near
+		extrn	misc_main:near
+		extrn	misc_init:near
+		extrn	bdos_main:near
+		extrn	bdos_init:near
+
+		dseg
+
+		extrn	freemem:byte
+		extrn	proc1:word
+		extrn	dirname_1:word
+		extrn	dirdata_0:word
+
+		public	function_tables
+		public	bdos_8087_inuse
+		public	rlr
+		public	drl
+		public	pq_disk
+		public	pq_loader
+		public	pq_memmgr
+		public	pq_error
+		public	pq_filesystem
+		public	search_path
+		public	temp_drive
+		public	cpu_vectors
+		public	lp_xios_entry
+		public	lp_dos_module
+		public	lp_sysflag_chg
+		public	lp_kbd_callback
+		public	time_slice
+		public	proc_count
+		public	bdos_conowner
+		public	bdos_sysflags
+		public	ccp_dseg
+		public	cur_x
+		public	max_x
+		public	max_y
+		public	sysvar_131
+		public	sysvar_132
+		public	sysvar_144
+		public	echo_backspaced
+		public	echo_deleted
+		public	boot_drive
+		public	free_dirnames
+		public	free_dirdata
+		public	bdos_ver	
+		public	date_days
+		public	date_secs
+		public	comsize
+		public	page_mode
+
+function_tables	dw offset sup_main	; DATA XREF: inner_callback+Eo
+		dw offset sup_init
+		dw offset rtm_main
+		dw offset rtm_init
+		dw offset mem_main
+		dw offset mem_init
+		dw offset cio_main
+		dw offset cio_init
+		dw offset entry_bdos
+bdos_segment	dw 0			; DATA XREF: bdos:005Aw
+off_A15_14	dw offset misc_main
+		dw offset misc_init
+off_A15_18	dw offset bdos_main
+off_A15_1A	dw offset bdos_init
+a080586		db '08-05-86'
+lp_other_init	dw 0,0			; DATA XREF: bdos:0088r bdos:0081r
+lp_xios_entry	dw 3			; Offset of XIOS entry
+seg_A15_2A	dw seg lp_xios_entry	; -> XIOS segment
+lp_xios_init	dw 0			; Offset of XIOS init function
+		dw seg lp_xios_entry	; -> XIOS segment
+lp_bdos_entry	dw offset bdos_entry	; DATA XREF: bdos:01B9r x_dev_waitflag+2r
+					; ...
+		dw seg bdos_start
+
+lp_timeslice	dw offset rtm_timeslice
+		dw seg rtm_timeslice
+
+lp_sysflag_chg	dw offset rtm_sysflag
+		dw seg rtm_sysflag
+
+lp_kbd_callback	dw offset cio_keyboard
+		dw seg cio_keyboard
+
+lp_dos_module	dw 0,0			; DATA XREF: bdos:007Dr P_CHAIN+A9r
+					; ...
+ccp_dseg	dw 0			; DATA XREF: mc_temp_untempr
+					; get_mcb_pars+38r ...
+					; 0 if no temporary memory blocks allocated
+		dw seg bdos_start
+		dw seg freemem
+bdos_conowner	dw offset proc1		; DATA XREF: bdos:002Ew bdos_sysflag+Ar
+					; ...
+bdos_sysflags	dw SYSFLAGS		; This should get set by GENCPM
+
+rlr		dw offset proc1		; DATA XREF: bdos:001Fr bdos:0028w
+					; ...
+					; Current process
+process_table	dw 0			; DATA XREF: bdos:002Bw
+drl		dw 0			; DATA XREF: P_0207+5r	P_0209+7o
+					; ...
+					; Processes that have just become
+					; ready	to run
+		dw 0
+proc_count	db 1			; DATA XREF: get_new_process+1Dw
+					; P_TERMCPM+5Ew ...
+bdos_ver	dw 1041h		; DATA XREF: S_BDOSVERr
+bdos_8087_inuse	db 0			; DATA XREF: call_p_load+10w
+					; retake_8087+Br ...
+search_path	db 0, 10h, 0FFh, 0FFh
+					; ...
+temp_drive	db 0			; DATA XREF: rsx_find+53o bdos:23AEo
+date_days	dw 2DBh			; DATA XREF: bdos:23B2o bdos:2540o
+					; ...
+date_hours	db 0			; DATA XREF: xios_hook_timer+85w
+					; xios_int08+5Dr ...
+date_mins	db 0			; DATA XREF: xios_hook_timer+7Dw
+					; xios_int08+4Br ...
+date_secs	db 0			; DATA XREF: bdos:2551w bdos:2566r
+					; ...
+cur_x		db 0			; DATA XREF: bdos_char_out+44r
+					; bdos_char_out+70w ...
+max_x		db SCR_MAXX		; DATA XREF: input_putchar+12r
+					; expand_tabs+14r ...
+max_y		db SCR_MAXY		; DATA XREF: bdos:23A2o
+page_mode	db 0FFh			; DATA XREF: bdos:23A6o
+echo_backspaced	db 0			; DATA XREF: input_ctlH+9r
+echo_deleted	db SCR_ECHODEL		; DATA XREF: input_delete+9r
+;
+; Process queues for single-threaded parts of the system.
+;
+; Format of process queue:
+;  DW offset of	next queue, 0 for none
+;  DW segment of process currently in that section, 0 for none
+;  DW linked list of processes waiting for that	section, 0 for none
+;  DW 0
+;
+pq_disk		dw offset pq_loader	; DATA XREF: get_proc_dskdat+5o
+					; release_DMAo	...
+		rw 3
+pq_loader	dw offset pq_filesystem
+		rw 3
+pq_filesystem	dw offset pq_error	; DATA XREF: funcs_F_main+8o
+					; funcs_F_main+124o ...
+		rw 3
+pq_error	dw 8Ah			; DATA XREF: funcs_F_main+136o
+					; funcs_F_main+1C7o ...
+		rw 3
+pq_memmgr	rw 4		; DATA XREF: funcs_MC+2o funcs_MC+24o
+					; ...
+boot_drive	db 0			; DATA XREF: bdos:006Cr bdos:23CEo
+					; ...
+		rb	8
+		db	1,3,4,5,2
+		rb	0F1h
+		db	0
+free_dirnames	dw offset dirname_1	; DATA XREF: proc_dupdirs+Ar
+					; proc_dupdirs+10w ...
+free_dirdata	dw offset dirdata_0	; DATA XREF: proc_dupdirs+22r
+					; proc_dupdirs+2Fw ...
+		rb 1Dh
+comsize		dw 0			; DATA XREF: bdos:23F2o
+		dw 0
+		db 0
+sysvar_144	db 0			; DATA XREF: bdos:0073w bdos:23F6o
+					; ...
+		db 0
+sysvar_131	db 0			; DATA XREF: copy_to_history+14w
+					; bdos:1CFFr ...
+sysvar_132	rb 100h			; DATA XREF: copy_to_history+Do
+					; bdos:1CFAo ...
+time_slice	db 10h			; DATA XREF: delay_dispatch+A2r
+					; bdos:23DEo
+cpu_vectors	rw 12
+
+		end
+
+

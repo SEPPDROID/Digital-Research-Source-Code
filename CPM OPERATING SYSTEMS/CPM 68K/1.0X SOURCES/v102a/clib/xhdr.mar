@@ -1,0 +1,56 @@
+	.title	chdr
+;	copyright (c) 1980 by Whitesmiths, Ltd.
+;	enter and leave from C
+
+	.globl	exit, onexit, $_exit
+	.globl	sys$cli, $_main
+	.globl	$_cleanu		; DRI library cleanup routine
+	.psect	c$text,shr,nowrt,quad
+c$start:
+	.word	^O0
+	pushal	clides
+	calls	#1,@#sys$cli
+	movq	clides+cli$q_rqdesc,r0
+	movzwl	r0,-(sp)
+	pushl	r1
+	calls	#2,$_main
+	pushl	r0
+	calls	#1,exit
+
+exit:
+	.word	^O0		; (status)
+	movl	oncalls,r0
+$1:
+	cmpl	r0,#onexit
+	beql	$2
+	tstl	r0
+	beql	$2
+	calls	#0,(r0)
+	brb		$1
+$2:
+	calls	#0,G^$_cleanu	; Do cleanup operation
+doexit:	movl	4(ap),r0
+	beql	$3
+	movl	#^X18008001,r0
+	brb	$4
+$3:
+	movl	#^X18008004,r0
+$4:
+	$exit_s r0
+$_exit:	.word	0		; 
+	brb	doexit		; Do exit stuff
+onexit:
+	.word	^O0		; (&entry)
+	movl	oncalls,r0
+	movl	4(ap),oncalls
+	ret
+
+	.psect	c$data,noexe,quad
+	.ascii	/V2.1: copyright (c) 1980 by Whitesmiths, Ltd./
+clides:
+	$clireqdesc	rqtype=cli$k_getcmd
+
+	.align	2
+oncalls:
+	.address	onexit
+	.end	c$start

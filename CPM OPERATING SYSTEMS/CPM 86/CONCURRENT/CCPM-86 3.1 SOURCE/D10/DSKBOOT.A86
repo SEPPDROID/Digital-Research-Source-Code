@@ -1,0 +1,361 @@
+	title	'Disk Boot for CompuPro DISK1'
+;*******************************************************
+;	Last Modification: 10/14/83
+;
+;			D i s k	   B O O T
+;
+;	The following code is written onto track 0 sector
+;	0 -3 of the disk.  This routine is read into memory
+;	at location 0000:0100h by the CompuPro PROM.  This
+;	routine then loads the system loader into memory.
+;
+;	The format of the CompuPro Floppy Disk Boot sectors
+;	are as follows:
+;
+;	Trk  Sectors	Description
+;	---  -------	-----------
+;	0    1 thru 4	Disk Boot program (this routine)
+;
+;	     5 		Loader Group Header
+;	     6 thru 26	Loader Part 1
+;
+;	1    1 thru ?	Loader Part 2 (remainder not on track 0)
+;			Number of sectors is determined by
+;			disk density and format.
+;
+;	The following commands are used to generate DSKBOOT.CMD
+;	as an 8080 model routine
+;		RASM86 DSKBOOT
+;		LINK86 DSKBOOT.SYS = DSKBOOT [DATA[ORIGIN[0]]]
+;
+;	The following commands are used to generate the
+;	boot tracks image in the file BOOTTRKS
+;		SID86
+;		#RDSKBOOT.SYS			;strips header and
+;		#WBOOT,180,37F			;default base page
+;		PIP BOOTTRKS = BOOT[O],CPMLDR.SYS[O]
+;
+;*******************************************************
+
+N_TRK		equ	26		;sectors in Track 0
+N_BOOT		equ	4		;sectors for Boot
+
+;	Assembly Constants
+FDPORT		equ	0C0H		;base port address for DISK1 Controller
+FDC_S		equ	FDPORT		;8272 status register
+FDC_D		equ	FDPORT+1	;8272 data register
+D1_DMA		equ	FDPORT+2	;DISK1 DMA address (when write)
+D1_INTS		equ	FDPORT+2	;DISK1 status Register (when read)
+
+DELCNT		equ	5*1000		;delay count for 5 MHz processor
+RQM_DELAY	equ	5		;12us delay count for master status
+
+;	Intel 8272 controller function definitions
+;	Specify (00) command
+F_SPEC		equ	03		;specify
+F_DSTS		equ	04		;drive status
+F_RDAT		equ	06		;read data
+F_RECA		equ	07		;recalibrate
+F_RSTS		equ	08		;read status
+F_RID		equ	0Ah		;read ID
+F_SEEK		equ	0Fh		;seek
+
+SRT		equ	16-8		;shuggart 800s
+HUT		equ	240/16		;head unload = 240 ms
+HLT		equ	(35+1)/2	;head load = 35 ms
+ND		equ	00		;set DMA mode
+
+cgroup	group	code,data		;force code and data into 8080 model
+
+;-------------------------------------------------------
+;	Bootstrap load.
+;	Do not change any addresses from here to START:
+;	Entry	CL= Board switches from CompuPro PROM (0 .. 3)
+
+	CSEG
+	org	0100H			;origin for 8080 model
+
+	nop! nop! nop			;these instructions have already
+	nop! nop! nop			; been prefetched from the
+	nop				; CompuPro boot PROM
+
+;	Start of Boot code.
+;	Save board option value.
+;	Load bios.
+start:
+;=====
+	cli
+	mov ax,cs
+	mov es,ax
+	mov ss,ax			;switch to local stack in base page
+	mov sp,offset stack		;area from 0080h down
+	xor bx,bx! mov ds,bx
+	mov opts,cl			;save DISK1 board options switch
+	mov ds,ax			;DS = CS, 8080 model
+retry:
+	mov si,offset spec		;specify controller parameters
+	mov cl,LSPEC			;length of specify command
+	call send_command		;send command to 8272
+					;SI = offset of recal command
+	mov cl,LRECAL			;length of recal command
+	call send_command		;Recalibrate drive
+end_rcal:
+	in al,D1_INTS			;interrupts are disabled, so we
+	or al,al! jns end_rcal		;poll for command completion
+
+	mov al,F_RSTS			;send sense interrupt status to 8272
+	out FDC_D,al			;required after recal command
+	mov cx,250			;Leave lite on for 1/4 second
+	call delay
+	call wait_rqm			;wait for drive ready
+	in al,FDC_D			;get status 0 from 8272
+	sub al,020h			;remove seek end bit
+	mov cl,al
+	call wait_rqm			;wait for drive ready
+	in al,FDC_D			;get present cylinder number
+	or al,cl! jnz error		;error if not on track 0 after recal
+
+	mov ax,ds			;setup AX to segment address of CMD
+	add ax,offset header_buf/16	; header buffer in base page for DMA
+	mov si,offset read_ghdr		;command to read loader group header
+	call disk_read			;read loader group header
+	jnz error			;if error
+
+	mov word ptr header_buf+1,0	;setup offset for jump far to loader
+	mov ax,word ptr header_buf+3	;AX = segment address of DMA
+	mov si,offset read		;command to read remainder of track 0
+	call disk_read			;read remainder of track 0
+	jz read_c1			;if no errors
+
+error:		; Disk error handler.
+;-----
+	  mov cx,2000			;wait 2 seconds
+	  call delay			; and start all over again
+	  jmps retry
+
+read_c1:
+	mov si,offset seek		;seek to cylinder 1
+	mov cl,LSEEK			;length of seek command
+	call send_command		;send command to 8272
+end_seek:
+	in al,D1_INTS			;interrupts are disabled, so we
+	or al,al! jns end_seek		;poll for command completion
+
+	mov al,F_RSTS			;send sense interrupt status to 8272
+	out FDC_D,al			;required after seek command
+	call wait_rqm			;wait for drive ready
+	in al,FDC_D			;get status 0 from 8272
+	sub al,020h			;remove seek end bit
+	mov cl,al
+	call wait_rqm			;wait for drive ready
+	in al,FDC_D			;get present cylinder number
+	sub al,1			;should be cylinder 1
+	or al,cl! jnz error		;if error then delay and try again
+
+					;determine density and sector
+					;size of cylinder 1
+	mov al,F_RID + 040h		;setup to try double density first
+try_fm:
+	mov si,offset readid		;read id to determine density
+	mov [si],al			;set read command for desired density
+	mov cl,LREADID			;length of read id command
+	call execute			;execute command and read result bytes
+	mov al,status			;get status 0 of result bytes
+	or al,al! jz dens_ok
+	  mov al,readid
+	  xor al,040h			;toggle MFM flag
+	  test al,040h! jnz error	;tried FM and MFM then error
+	  jmps try_fm
+dens_ok:
+	mov bl,status+6			;get N field from result bytes
+	and bx,3! shl bx,1		; to determine sector size
+	mov si,read1[bx]		;SI -> command to read side 0 of cyl 1
+
+	mov ax,word ptr header_buf+3
+	add ax,(128*(26-5))/16		;AX = DMA segment address for cyl 1
+	call disk_read			;read cylinder 1
+	jnz error			;if error delay and try again
+
+	jmpf dword ptr header_buf+1	;the group header has been setup
+					;to point to loader entry
+
+wait_rqm:	;wait for drive ready
+;--------
+	mov al,RQM_DELAY		;must delay 12us before polling
+w_rqm1:					;FDC status to insure valid results
+	dec al ! jnz w_rqm1
+w_rqm2:
+	in al,FDC_S			;get master status from 8272
+	or al,al! jns w_rqm2		;if no master ready bit
+	ret
+
+send_command:		; Send Function to Drive.
+;------------
+;	Entry:	SI -> command bytes
+;		CL = length of command.
+;	Exit:	SI -> end of command + 1.
+
+	call wait_rqm			;wait for drive ready
+	lodsb				;load command byte
+	out FDC_D,al			;send to 8272 controller
+	dec cl! jnz send_command	;if more bytes
+	ret
+
+disk_read:		; Disk Read.
+;---------
+;	Entry:	AX = segment address of DMA
+;		SI -> Command (9 bytes)
+;	Exit:	SI -> End of Command + 1.
+;		Z flag set if successful read
+
+	push ax				;compute 24 bit DMA address
+	mov cl,4			;for DISK1 DMA port
+	shr ax,cl			;AX = most significant 16 bits
+	xchg al,ah
+	out D1_DMA,al			;send highest address byte
+	xchg al,ah
+	out D1_DMA,al			;send middle address byte
+	pop ax
+	shl ax,cl
+	out D1_DMA,al			;send low address byte
+
+	mov cl,LREAD			;length of read command
+execute:
+	call send_command		;send command to controller
+wait_int_1:
+	in al,D1_INTS			;interrupts are disabled, so we
+	or al,al! jns wait_int_1	;poll for command completion
+
+	mov di,offset status		;SI -> to buffer to save result bytes
+	mov cl,7			;number of bytes to save
+get_status:
+	call wait_rqm			;wait for drive ready
+	in al,FDC_D			;read result byte
+	stosb				;save in buffer
+	dec cl! jnz get_status		;wait until all done
+
+	mov ax,word ptr status		;get status 0 and 1
+	sub ax,8040h			;40h - zeros abnormal termination bit
+					;80h - zeros end of cylinder status bit
+	ret
+
+delay:		;Delay process.
+;-----
+;	Entry:	CX = delay count (nominal milliseconds).
+;	Exit:	AL modified
+
+	mov al,DELCNT/26
+dely1:
+	inc cx! dec cx
+	dec al! jnz dely1		;if not one millisecond
+
+	dec cx
+	mov al,ch
+	or al,cl! jnz delay		;if not requested time
+
+	ret
+
+;-------------------------------------------------------
+	DSEG
+
+opts		equ	byte ptr .0040h
+stack		equ	word ptr .0080h
+header_buf	equ	byte ptr .0080h
+
+;	Disk setup command strings.
+spec		db	F_SPEC
+		db	SRT shl 4 + HUT
+		db	HLT shl 1 + ND
+LSPEC		equ	offset $ - offset spec
+
+recal		db	F_RECA
+		db	0
+LRECAL		equ	offset $ - offset recal
+
+;	Read Loader Group Header.
+read_ghdr	db	F_RDAT
+		db	0		;hds,ds1,ds0
+		db	0		;Cylinder
+		db	0		;Head
+		db	N_BOOT+1	;Record (sector) of Group
+		db	0		;Number of data bytes in sector
+		db	N_BOOT+1	;EOT
+		db	7		;GPL
+		db	128		;DTL
+LRGHDR		equ	offset $ - offset read_ghdr
+
+;	Read remainder of track 0, sectors 6-26
+read		db	F_RDAT
+		db	0		;hds,ds1,ds0
+		db	0		;Cylinder
+		db	0		;Head
+		db	N_BOOT+2	;Record (sector) of BIOS
+		db	0		;Number of data bytes in sector
+		db	N_TRK		;Read to end of track
+		db	7		;GPL
+		db	128		;DTL
+LREAD		equ	offset $ - offset read
+
+;	Disk Seek command for controller
+seek		db	F_SEEK
+		db	0
+		db	1
+LSEEK		equ	offset $ - offset seek
+
+readid		db	F_RID + 040h
+		db	0
+LREADID		equ	offset $ - offset readid
+
+status		rb	7		;buffer for status result bytes
+
+read1		dw	read_128
+		dw	read_256
+		dw	read_512
+		dw	read_1024
+
+;	Read function for single density (128 bytes/sec)
+read_128	db	F_RDAT
+		db	0		;hds,ds1,ds0
+		db	1		;Cylinder
+		db	0		;Head
+		db	1		;Record (sector) of BIOS
+		db	0		;Number of data bytes in sector
+		db	26		;Read to end of track
+		db	007h		;GPL
+		db	128		;DTL
+
+;	Read function for double density (256 bytes/sec)
+read_256	db	F_RDAT + 040h
+		db	0		;hds,ds1,ds0
+		db	1		;Cylinder
+		db	0		;Head
+		db	1		;Record (sector) of BIOS
+		db	1		;Number of data bytes in sector
+		db	26		;Read to end of track
+		db	00Eh		;GPL
+		db	255		;DTL
+
+;	Read function for double density (512 bytes/sec)
+read_512	db	F_RDAT + 040h
+		db	0		;hds,ds1,ds0
+		db	1		;Cylinder
+		db	0		;Head
+		db	1		;Record (sector) of BIOS
+		db	2		;Number of data bytes in sector
+		db	15		;Read to end of track
+		db	01Bh		;GPL
+		db	255		;DTL
+
+;	Read function for double density (1024 bytes/sec)
+read_1024	db	F_RDAT + 040h
+		db	0		;hds,ds1,ds0
+		db	1		;Cylinder
+		db	0		;Head
+		db	1		;Record (sector) of BIOS
+		db	3		;Number of data bytes in sector
+		db	8		;Read to end of track
+		db	035h		;GPL
+		db	255		;DTL
+
+	END
+

@@ -1,0 +1,382 @@
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE TIMESTAMP
+OBJECT MODULE PLACED IN TIMEST
+COMPILER INVOKED BY:  :F0: TIMEST.PLM DEBUG OBJECT(TIMEST) OPTIMIZE(3) XREF
+
+
+
+              $title('SDIR - Display Time Stamps')
+   1          timestamp:
+              do;
+                     /* Display time stamp module for extended directory */
+                     /* Time & Date ASCII Conversion Code            */
+                     /* From MP/M 1.1 TOD program                */
+
+              $include(comlit.lit)
+          =
+   2   1  =   declare
+          =           lit                literally          'literally',
+          =           dcl                lit                'declare',
+          =           true               lit                '0ffh',
+          =           false              lit                '0',
+          =           boolean            lit                'byte',
+          =           forever            lit                'while true',
+          =           cr                 lit                '13',
+          =           lf                 lit                '10',
+          =           tab                lit                '9',
+          =           ctrlc              lit                '3',
+          =           ff                 lit                '12',
+          =           page$len$offset    lit                '1ch',
+          =           nopage$mode$offset lit                '2Ch',
+          =           sectorlen          lit                '128';
+
+   3   1      print$char: procedure (char) external;
+   4   2          declare char byte;
+   5   2      end print$char;
+
+   6   1      terminate: procedure external;
+   7   2      end terminate;
+
+   8   1      declare tod$adr address;
+   9   1      declare tod based tod$adr structure (
+                opcode byte,
+                date address,
+                hrs byte,
+                min byte,
+                sec byte,
+                ASCII (21) byte );
+
+  10   1      declare string$adr address;
+  11   1      declare string based string$adr (1) byte;
+  12   1      declare index byte;
+
+  13   1      emitchar: procedure(c);
+  14   2          declare c byte;
+  15   2          string(index := index + 1) = c;
+  16   2          end emitchar;
+
+  17   1      emitn: procedure(a);
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   2
+
+
+  18   2          declare a address;
+  19   2          declare c based a byte;
+  20   2          do while c <> '$';
+  21   3            string(index := index + 1) = c;
+  22   3            a = a + 1;
+  23   3          end;
+  24   2          end emitn;
+
+  25   1      emit$bcd: procedure(b);
+  26   2          declare b byte;
+  27   2          call emitchar('0'+b);
+  28   2          end emit$bcd;
+
+  29   1      emit$bcd$pair: procedure(b);
+  30   2          declare b byte;
+  31   2          call emit$bcd(shr(b,4));
+  32   2          call emit$bcd(b and 0fh);
+  33   2          end emit$bcd$pair;
+
+  34   1      emit$colon: procedure(b);
+  35   2          declare b byte;
+  36   2          call emit$bcd$pair(b);
+  37   2          call emitchar(':');
+  38   2          end emit$colon;
+
+  39   1      emit$bin$pair: procedure(b);
+  40   2          declare b byte;
+  41   2          call emit$bcd(b/10);    /* makes garbage if not < 10 */
+  42   2          call emit$bcd(b mod 10);
+  43   2          end emit$bin$pair;
+
+  44   1      emit$slant: procedure(b);
+  45   2          declare b byte;
+  46   2          call emit$bin$pair(b);
+  47   2          call emitchar('/');
+  48   2          end emit$slant;
+
+  49   1      declare
+                  base$year lit '78',   /* base year for computations */
+                  base$day  lit '0',    /* starting day for base$year 0..6 */
+                  month$days (*) address data
+                  /* jan feb mar apr may jun jul aug sep oct nov dec */
+                  (  000,031,059,090,120,151,181,212,243,273,304,334);
+
+  50   1      leap$days: procedure(y,m) byte;
+  51   2          declare (y,m) byte;
+                  /* compute days accumulated by leap years */
+  52   2          declare yp byte;
+  53   2          yp = shr(y,2); /* yp = y/4 */
+  54   2          if (y and 11b) = 0 and month$days(m) < 59 then
+                      /* y not 00, y mod 4 = 0, before march, so not leap yr */
+  55   2              return yp - 1;
+                  /* otherwise, yp is the number of accumulated leap days */
+  56   2          return yp;
+  57   2          end leap$days;
+
+  58   1      declare word$value address;
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   3
+
+
+
+  59   1      get$next$digit: procedure byte;
+                  /* get next lsd from word$value */
+  60   2          declare lsd byte;
+  61   2          lsd = word$value mod 10;
+  62   2          word$value = word$value / 10;
+  63   2          return lsd;
+  64   2          end get$next$digit;
+
+  65   1      bcd:
+                procedure (val) byte;
+  66   2          declare val byte;
+  67   2          return shl((val/10),4) + val mod 10;
+  68   2        end bcd;
+
+  69   1      declare (month, day, year, hrs, min, sec) byte;
+
+  70   1      bcd$pair: procedure(a,b) byte;
+  71   2          declare (a,b) byte;
+  72   2          return shl(a,4) or b;
+  73   2          end bcd$pair;
+
+
+  74   1      compute$year: procedure;
+                  /* compute year from number of days in word$value */
+  75   2          declare year$length address;
+  76   2          year = base$year;
+  77   2              do while true;
+  78   3              year$length = 365;
+  79   3              if (year and 11b) = 0 then /* leap year */
+  80   3                  year$length = 366;
+  81   3              if word$value <= year$length then
+  82   3                  return;
+  83   3              word$value = word$value - year$length;
+  84   3              year = year + 1;
+  85   3              end;
+  86   2          end compute$year;
+
+  87   1      declare
+                  week$day  byte, /* day of week 0 ... 6 */
+                  day$list (*) byte data
+                  ('Sun$Mon$Tue$Wed$Thu$Fri$Sat$'),
+                  leap$bias byte; /* bias for feb 29 */
+
+  88   1      compute$month: procedure;
+  89   2          month = 12;
+  90   2              do while month > 0;
+  91   3              if (month := month - 1) < 2 then /* jan or feb */
+  92   3                  leapbias = 0;
+  93   3              if month$days(month) + leap$bias < word$value then return;
+  95   3              end;
+  96   2          end compute$month;
+
+  97   1      declare
+                  date$test byte,    /* true if testing date */
+                  test$value address;   /* sequential date value under test */
+
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   4
+
+
+  98   1      get$date$time: procedure;
+                  /* get date and time */
+  99   2          hrs = tod.hrs;
+ 100   2          min = tod.min;
+ 101   2          sec = tod.sec;
+ 102   2          word$value = tod.date;
+                  /* word$value contains total number of days */
+ 103   2          week$day = (word$value + base$day - 1) mod 7;
+ 104   2          call compute$year;
+                  /* year has been set, word$value is remainder */
+ 105   2          leap$bias = 0;
+ 106   2          if (year and 11b) = 0 and word$value > 59 then
+ 107   2              /* after feb 29 on leap year */ leap$bias = 1;
+ 108   2          call compute$month;
+ 109   2          day = word$value - (month$days(month) + leap$bias);
+ 110   2          month = month + 1;
+ 111   2          end get$date$time;
+
+ 112   1      emit$date$time: procedure;
+ 113   2          if tod.opcode = 0 then
+ 114   2            do;
+ 115   3            call emitn(.day$list(shl(week$day,2)));
+ 116   3            call emitchar(' ');
+ 117   3            end;
+ 118   2          call emit$slant(month);
+ 119   2          call emit$slant(day);
+ 120   2          call emit$bin$pair(year);
+ 121   2          call emitchar(' ');
+ 122   2          call emit$colon(hrs);
+ 123   2          call emit$colon(min);
+ 124   2          if tod.opcode = 0 then
+ 125   2            call emit$bcd$pair(sec);
+ 126   2          end emit$date$time;
+
+ 127   1      tod$ASCII:
+                procedure (parameter);
+ 128   2          declare parameter address;
+ 129   2          declare ret address;
+
+ 130   2          ret = 0;
+ 131   2          tod$adr = parameter;
+ 132   2          string$adr = .tod.ASCII;
+ 133   2          if  (tod.opcode = 0) or (tod.opcode = 3) then
+ 134   2          do;
+ 135   3            call get$date$time;
+ 136   3            index = -1;
+ 137   3            call emit$date$time;
+ 138   3          end;
+                  else
+ 139   2            call terminate;             /* error */
+ 140   2      end tod$ASCII;
+
+ 141   1        declare lcltod structure (
+                  opcode byte,
+                  date address,
+                  hrs byte,
+                  min byte,
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   5
+
+
+                  sec byte,
+                  ASCII (21) byte );
+
+ 142   1      display$time$stamp: procedure (tsadr) public;
+ 143   2          dcl tsadr address,
+                  i byte;
+
+ 144   2           lcltod.opcode = 3;     /* display time and date stamp, no seconds */
+ 145   2           call move (4,tsadr,.lcltod.date);  /* don't copy seconds */
+                      
+ 146   2           call tod$ASCII (.lcltod);
+ 147   2           do i = 0 to 13;
+ 148   3             call printchar (lcltod.ASCII(i));
+ 149   3           end;   
+ 150   2      end display$time$stamp;
+
+ 151   1      dcl last$data$byte byte initial(0);
+
+ 152   1      end timestamp;
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   6
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+     17  0004H     2  A. . . . . . . . .    WORD PARAMETER AUTOMATIC        18   19   20   21   22 
+     70  0006H     1  A. . . . . . . . .    BYTE PARAMETER AUTOMATIC        71   72 
+    141  0006H    21  ASCII. . . . . . .    BYTE ARRAY(21) MEMBER(LCLTOD)       148 
+      9  0006H    21  ASCII. . . . . . .    BYTE ARRAY(21) MEMBER(TOD)          132 
+     34  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        35   36 
+     70  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        71   72 
+     29  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        30   31   32 
+     44  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        45   46 
+     39  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        40   41   42 
+     25  0004H     1  B. . . . . . . . .    BYTE PARAMETER AUTOMATIC        26   27 
+     49               BASEDAY. . . . . .    LITERALLY       103 
+     49               BASEYEAR . . . . .    LITERALLY        76 
+     65  0108H    39  BCD. . . . . . . .    PROCEDURE BYTE STACK=0006H
+     70  012FH    17  BCDPAIR. . . . . .    PROCEDURE BYTE STACK=0006H
+      2               BOOLEAN. . . . . .    LITERALLY
+     13  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC        14   15 
+     19  0000H     1  C. . . . . . . . .    BYTE BASED(A)         20   21 
+      3  0000H     1  CHAR . . . . . . .    BYTE PARAMETER         4 
+     88  0175H    59  COMPUTEMONTH . . .    PROCEDURE STACK=0002H          108 
+     74  0140H    53  COMPUTEYEAR. . . .    PROCEDURE STACK=0002H          104 
+      2               CR . . . . . . . .    LITERALLY
+      2               CTRLC. . . . . . .    LITERALLY
+    141  0001H     2  DATE . . . . . . .    WORD MEMBER(LCLTOD)       145 
+      9  0001H     2  DATE . . . . . . .    WORD MEMBER(TOD)          102 
+     97  0017H     1  DATETEST . . . . .    BYTE
+     69  0010H     1  DAY. . . . . . . .    BYTE       109  119 
+     87  0018H    28  DAYLIST. . . . . .    BYTE ARRAY(28) DATA       115 
+      2               DCL. . . . . . . .    LITERALLY
+    142  02AFH    64  DISPLAYTIMESTAMP .    PROCEDURE PUBLIC STACK=0026H
+     25  0044H    16  EMITBCD. . . . . .    PROCEDURE STACK=000AH           31   32   41   42 
+     29  0054H    27  EMITBCDPAIR. . . .    PROCEDURE STACK=0010H           36  125 
+     39  0082H    39  EMITBINPAIR. . . .    PROCEDURE STACK=0010H           46  120 
+     13  0000H    28  EMITCHAR . . . . .    PROCEDURE STACK=0004H           27   37   47  116  121 
+     34  006FH    19  EMITCOLON. . . . .    PROCEDURE STACK=0016H          122  123 
+    112  021AH    95  EMITDATETIME . . .    PROCEDURE STACK=001AH          137 
+     17  001CH    40  EMITN. . . . . . .    PROCEDURE STACK=0004H          115 
+     44  00A9H    19  EMITSLANT. . . . .    PROCEDURE STACK=0016H          118  119 
+      2               FALSE. . . . . . .    LITERALLY
+      2               FF . . . . . . . .    LITERALLY
+      2               FOREVER. . . . . .    LITERALLY
+     98  01B0H   106  GETDATETIME. . . .    PROCEDURE STACK=0006H          135 
+     59  00E8H    32  GETNEXTDIGIT . . .    PROCEDURE BYTE STACK=0002H
+    141  0003H     1  HRS. . . . . . . .    BYTE MEMBER(LCLTOD)
+     69  0012H     1  HRS. . . . . . . .    BYTE        99  122 
+      9  0003H     1  HRS. . . . . . . .    BYTE MEMBER(TOD)           99 
+    143  0033H     1  I. . . . . . . . .    BYTE       147  148 
+     12  000CH     1  INDEX. . . . . . .    BYTE        15   21  136 
+    151  0034H     1  LASTDATABYTE . . .    BYTE INITIAL
+    141  0018H    27  LCLTOD . . . . . .    STRUCTURE       144  145  146  148 
+PL/M-86 COMPILER    SDIR - DISPLAY TIME STAMPS                                                                  PAGE   7
+
+
+     87  0016H     1  LEAPBIAS . . . . .    BYTE        92   93  105  107  109 
+     50  00BCH    44  LEAPDAYS . . . . .    PROCEDURE BYTE STACK=0006H
+      2               LF . . . . . . . .    LITERALLY
+      2               LIT. . . . . . . .    LITERALLY         2   49 
+     60  000EH     1  LSD. . . . . . . .    BYTE        61   63 
+     50  0004H     1  M. . . . . . . . .    BYTE PARAMETER AUTOMATIC        51   54 
+     69  0013H     1  MIN. . . . . . . .    BYTE       100  123 
+      9  0004H     1  MIN. . . . . . . .    BYTE MEMBER(TOD)          100 
+    141  0004H     1  MIN. . . . . . . .    BYTE MEMBER(LCLTOD)
+     69  000FH     1  MONTH. . . . . . .    BYTE        89   90   91   93  109  110  118 
+     49  0000H    24  MONTHDAYS. . . . .    WORD ARRAY(12) DATA        54   93  109 
+                      MOVE . . . . . . .    BUILTIN         145 
+      2               NOPAGEMODEOFFSET .    LITERALLY
+      9  0000H     1  OPCODE . . . . . .    BYTE MEMBER(TOD)          113  124  133 
+    141  0000H     1  OPCODE . . . . . .    BYTE MEMBER(LCLTOD)       144 
+      2               PAGELENOFFSET. . .    LITERALLY
+    127  0004H     2  PARAMETER. . . . .    WORD PARAMETER AUTOMATIC       128  131 
+      3  0000H        PRINTCHAR. . . . .    PROCEDURE EXTERNAL(0) STACK=0000H        148 
+    129  000AH     2  RET. . . . . . . .    WORD       130 
+     69  0014H     1  SEC. . . . . . . .    BYTE       101  125 
+      9  0005H     1  SEC. . . . . . . .    BYTE MEMBER(TOD)          101 
+    141  0005H     1  SEC. . . . . . . .    BYTE MEMBER(LCLTOD)
+      2               SECTORLEN. . . . .    LITERALLY
+                      SHL. . . . . . . .    BUILTIN          67   72  115 
+                      SHR. . . . . . . .    BUILTIN          31   53 
+     11  0000H     1  STRING . . . . . .    BYTE BASED(STRINGADR) ARRAY(1)       15   21 
+     10  0002H     2  STRINGADR. . . . .    WORD        11   15   21  132 
+      2               TAB. . . . . . . .    LITERALLY
+      6  0000H        TERMINATE. . . . .    PROCEDURE EXTERNAL(1) STACK=0000H        139 
+     97  0008H     2  TESTVALUE. . . . .    WORD
+      1  0000H        TIMESTAMP. . . . .    PROCEDURE STACK=0000H
+      9  0000H    27  TOD. . . . . . . .    STRUCTURE BASED(TODADR)         99  100  101  102  113  124  132  133
+                                            
+      8  0000H     2  TODADR . . . . . .    WORD         9   99  100  101  102  113  124  131  132  133 
+    127  0279H    54  TODASCII . . . . .    PROCEDURE STACK=0020H          146 
+      2               TRUE . . . . . . .    LITERALLY        77 
+    142  0004H     2  TSADR. . . . . . .    WORD PARAMETER AUTOMATIC       143  145 
+     65  0004H     1  VAL. . . . . . . .    BYTE PARAMETER AUTOMATIC        66   67 
+     87  0015H     1  WEEKDAY. . . . . .    BYTE       103  115 
+     58  0004H     2  WORDVALUE. . . . .    WORD        61   62   81   83   93  102  103  106  109 
+     50  0006H     1  Y. . . . . . . . .    BYTE PARAMETER AUTOMATIC        51   53   54 
+     69  0011H     1  YEAR . . . . . . .    BYTE        76   79   84  106  120 
+     75  0006H     2  YEARLENGTH . . . .    WORD        78   80   81   83 
+     52  000DH     1  YP . . . . . . . .    BYTE        53   55   56 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 02EFH    751D
+     CONSTANT AREA SIZE = 0034H     52D
+     VARIABLE AREA SIZE = 0035H     53D
+     MAXIMUM STACK SIZE = 0026H     38D
+     241 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

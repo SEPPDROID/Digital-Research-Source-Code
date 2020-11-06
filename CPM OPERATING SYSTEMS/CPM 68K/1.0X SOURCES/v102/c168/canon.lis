@@ -1,0 +1,1024 @@
+1File: CANON.C                                                             Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #include "cskel.h"
+    10    
+    11   /*
+    12    * canon - expression canonicalization
+    13    *		Top level tree canonicalization.  This fixes any bit field
+    14    *		accesses, then loops on commute and optim until no more
+    15    *		optimizations are done.
+    16    */
+    17   char *canon(tp)						/* returns pointer to tree*/
+    18   struct tnode *tp;					/* pointer to tree to canonicalize*/
+    19   {
+    20   #ifndef NODEBUG
+    21   	if ( oflag )
+    22   		putexpr("pre-canon",tp);
+    23   #endif
+    24   	tp = fixbfield(tp);
+    25   	do {
+    26   		sucomp(tp,0,1);				/*need Sethy-Ullman's for commute*/
+    27   		tp = commute(tp);			/*commute the tree*/
+    28   	} while( optim(&tp) );			/*keep trying for optimizations*/
+    29   #ifndef	NODEBUG
+    30   	if( oflag )
+    31   		putexpr("canon",tp);
+    32   #endif
+    33   	return(tp);
+    34   }
+    35    
+    36   /* fixbfield - fix bit field operators*/
+    37   /*		Fixes bit field assignment and normal usage*/
+    38   char *fixbfield(tp)						/* returns pointer to fixed tree*/
+    39   struct tnode *tp;						/* pointer to tree*/
+    40   {
+    41   	register struct tnode *btp, *stp;
+    42   	register int foff, fmask, op, flen;
+    43    
+    44   	if( leafop(op=tp->t_op) )
+    45   		return(tp);
+    46   	if( asgop(op) && tp->t_left->t_op == BFIELD ) {
+    47   		tp->t_right = fixbfield(tp->t_right);	/* [vlh] 4.0 */
+    48   		btp = tp->t_left;				/*pointer to BFIELD node*/
+    49   		stp = btp->t_left;				/*pointer to son of BFIELD node*/
+    50   		foff = (btp->t_su>>8) & 0377;
+    51   		flen = btp->t_su & 0377;
+    52   		fmask = (1<<flen)-1;
+    53   		if( tp->t_right->t_op == CINT && (op == ASSIGN || op == EQXOR) ) {
+    54   			if( op == EQXOR ) {
+    55   				tp->t_left = stp;
+    56   				tp->t_right->t_value =<< foff;
+    57   				return(tp);
+    58   			}
+    59   			if( !tp->t_right->t_value ) {
+1File: CANON.C                                                             Page       2
+    60   				tp->t_op = EQAND;
+    61   				tp->t_left = stp;
+    62   				tp->t_right->t_value = ~ (fmask << foff);
+    63   				return(tp);
+    64   			}
+    65   			if( (tp->t_right->t_value & fmask) == fmask ) {
+    66   				tp->t_op = EQOR;
+    67   				tp->t_left = stp;
+    68   				tp->t_right->t_value = fmask << foff;
+    69   				return(tp);
+    70   			}
+    71   		}
+    72   		if( fmask == -1 )
+    73   			tp->t_left = stp;
+    74   		else {
+    75   			stp = tcopy(stp);
+    76   			btp = fixbfield(btp);
+    77   			op = tp->t_op;
+    78   			tp = tp->t_right;				/*pointer to expression*/
+    79   			if( op != ASSIGN )				/*=op operator?*/
+    80   				tp = tnalloc(op-(EQADD-ADD),INT,0,0,btp,tp);
+    81   			tp = tnalloc(AND,INT,0,0,tp,cnalloc(INT,fmask));
+    82   			tp = tnalloc(LSH,INT,0,0,tp,cnalloc(INT,foff));
+    83   			btp = tnalloc(AND,INT,0,0,tcopy(stp),
+    84   					cnalloc(INT,~(fmask<<foff)));
+    85   			tp = tnalloc(OR,INT,0,0,btp,tp);
+    86   			tp = tnalloc(ASSIGN,INT,0,0,stp,tp);
+    87   		}
+    88   	}
+    89   	else if( op == BFIELD ) {
+    90   		foff = (tp->t_su>>8) & 0377;
+    91   		fmask = (1<<(tp->t_su&0377))-1;
+    92   		tp = tnalloc(RSH,INT,0,0,tp->t_left,cnalloc(INT,foff));
+    93   		tp = tnalloc(AND,INT,0,0,tp,cnalloc(INT,fmask));
+    94   	}
+    95   	else {
+    96   		tp->t_left = fixbfield(tp->t_left);
+    97   		if( binop(op) )
+    98   			tp->t_right = fixbfield(tp->t_right);
+    99   	}
+   100   	return(tp);
+   101   }
+   102    
+   103   /*
+   104    * optim - optimize expression tree
+   105    *		This takes expression tree and performs the following
+   106    *		translations:  folds auto names to accesses off the local
+   107    *		environment pointer, performs mostly "machine-independent"
+   108    *		optimizations, such as multiply by zero and one, etc.,
+   109    *		turns field accesses into and's and or's, etc.
+   110    *		[vlh] 4.0 added checks for divide/modulos long zero...
+   111    *		[vlh] 4.0 optimize multiply/divide 1L, add/sub 0L...
+   112    */
+   113   optim(tpp)							/* returns pointer to new tree*/
+   114   struct tnode **tpp;
+   115   {
+   116   	register struct tnode *ltp, *rtp, *tp;
+   117   	register char *p;
+   118   	register int i, cval, changes, op, lconst;
+1File: CANON.C                                                             Page       3
+   119   	long lcval;		/* [vlh] 4.0 simple long constant handling */
+   120    
+   121   	tp = *tpp;
+   122   	if( tp->t_type & ~TYPE ) {
+   123   		tp->t_type =& TYPE;
+   124   		tp->t_type =| POINTER;
+   125   	}
+   126   	if( leafop(op=tp->t_op) )
+   127   		return(0);
+   128   	lconst = changes = 0;
+   129   	if( binop(op) )
+   130   		changes =+ optim(&tp->t_right);
+   131   	changes =+ optim(&tp->t_left);
+   132   	for( ; notleafop(op=tp->t_op); changes++ ) {
+   133   #ifndef NODEBUG
+   134   		if( oflag )
+   135   			putexpr("optim",tp);
+   136   #endif
+   137   		*tpp = tp;
+   138   		ltp = tp->t_left;
+   139   		if( binop(op) ) {
+   140   			rtp = tp->t_right;
+   141   /*			if( tp->t_type == CHAR )	[vlh] 4.0 */
+   142   /*				tp->t_type = INT;	[vlh] 4.0 */
+   143   			if (!(p = constant(rtp)))
+   144   				if (rtp->t_op == CLONG) {
+   145   					lconst = 1;
+   146   					lcval = rtp->t_lvalue;
+   147   				}
+   148   		}
+   149   		else
+   150   			if (!(p = constant(ltp)))
+   151   				if (ltp->t_op == CLONG) {
+   152   					lconst = 1;
+   153   					lcval = ltp->t_lvalue;
+   154   				}
+   155   		if( p )
+   156   			cval = p->t_value;
+   157   		switch( op ) {
+   158   	
+   159   		case ADD:
+   160   			if( p ) {
+   161   				if( !cval ) {
+   162   					tp = ltp;
+   163   					continue;
+   164   				}
+   165   				if( ltp->t_op == ADDR ) {
+   166   					ltp->t_left->t_offset =+ cval;
+   167   					tp = ltp;
+   168   					continue;
+   169   				}
+   170   			}
+   171   			else
+   172   				if (lconst && !lcval) {	/* [vlh] 4.0 plus long 0 */
+   173   					tp = ltp;
+   174   					continue;
+   175   				}
+   176   			break;
+   177   	
+1File: CANON.C                                                             Page       4
+   178   		case ASSIGN:
+   179   			if( rtp->t_op == ADD && indexreg(rtp->t_left) &&
+   180   					rtp->t_right->t_op == CINT ) {
+   181   				ltp = rtp->t_left;
+   182   				ltp->t_sc = REGOFF;
+   183   				ltp->t_offset =+ rtp->t_right->t_value;
+   184   				tp->t_right = ltp;
+   185   				tp->t_op = EQADDR;
+   186   				continue;
+   187   			}
+   188   			break;
+   189   	
+   190   		case SUB:
+   191   			if( p ) {
+   192   				if( !cval ) {
+   193   					tp = ltp;
+   194   					continue;
+   195   				}
+   196   				tp->t_op = ADD;
+   197   				p->t_value = -cval;
+   198   				continue;
+   199   			}
+   200   			else
+   201   				if (lconst && !lcval) {	/* [vlh] 4.0 minus long 0... */
+   202   					tp = ltp;
+   203   					continue;
+   204   				}
+   205   			if( (p=constant(ltp)) && !p->t_value ) {	/*0-X=-X*/
+   206   				tp->t_op = UMINUS;
+   207   				tp->t_left = ltp = rtp;
+   208   				continue;
+   209   			}
+   210   			break;
+   211   	
+   212   		case DIV:
+   213   		case EQDIV:
+   214   			if( p ) {
+   215   				if( !cval ) {		/*X/0->error*/
+   216   					error("divide by zero");
+   217   					tp = rtp;
+   218   					continue;
+   219   				}
+   220   				if( cval == 1 ) {
+   221   					tp = ltp;
+   222   					continue;
+   223   				}
+   224   				if( cval == -1 ) {
+   225   					tp->t_op = (tp->t_op == DIV ? UMINUS : EQNEG );
+   226   					continue;
+   227   				}
+   228   			}
+   229   			else
+   230   				if (lconst) {	/* [vlh] 4.0 simple long expr */
+   231   					if (!lcval) {
+   232   						error("divide by zero");
+   233   						tp = rtp;
+   234   						continue;
+   235   					}
+   236   					if (lcval == 1L) {
+1File: CANON.C                                                             Page       5
+   237   						tp = ltp;
+   238   						continue;
+   239   					}
+   240   				}
+   241   			if( (p=constant(ltp)) && !p->t_value ) {
+   242   				tp = ltp;
+   243   				continue;
+   244   			}
+   245   			if( multop(tpp) ) {
+   246   				tp = *tpp;
+   247   				continue;
+   248   			}
+   249   			break;
+   250   	
+   251   		case EQMOD:
+   252   		case MOD:
+   253   			if( p ) {
+   254   				if( !cval ) {		/*X%0->error*/
+   255   					error("modulus by zero");
+   256   					tp = rtp;
+   257   					continue;
+   258   				}
+   259   				if( cval == 1 ) {		/*X%1->0*/
+   260   					p->t_value = 0;
+   261   					if (op == EQMOD)	/*[vlh] 4.0*/
+   262   						tp->t_op = ASSIGN;
+   263   					else
+   264   						tp = rtp;
+   265   					continue;
+   266   				}
+   267   			}
+   268   			else	/* [vlh] 4.0 check for mod long 0 */
+   269   				if (lconst) {
+   270   					if(!lcval) {
+   271   						error("modulus by zero");
+   272   						tp = rtp;
+   273   						continue;
+   274   					}
+   275   					if (lcval == 1L) {
+   276   						rtp->t_lvalue = 0L;
+   277   						if (op == EQMOD)
+   278   							tp->t_op = ASSIGN;
+   279   						else
+   280   							tp = rtp;
+   281   						continue;
+   282   					}
+   283   				}
+   284   			if( (p=constant(ltp)) && !p->t_value ) {
+   285   				tp = ltp;
+   286   				continue;
+   287   			}
+   288   			if( multop(tpp) ) {
+   289   				tp = *tpp;
+   290   				continue;
+   291   			}
+   292   			break;
+   293   	
+   294   		case MULT:
+   295   		case EQMULT:
+1File: CANON.C                                                             Page       6
+   296   			if( p ) {
+   297   				if( !cval ) {
+   298   					if (op == EQMULT)
+   299   						tp->t_op = ASSIGN;
+   300   					else
+   301   						tp = rtp;
+   302   					continue;
+   303   				}
+   304   				if( cval == 1 ) {
+   305   					tp = ltp;
+   306   					continue;
+   307   				}
+   308   				if( cval == -1 ) {
+   309   					tp->t_op = (tp->t_op == MULT ? UMINUS : EQNEG);
+   310   					continue;
+   311   				}
+   312   			}
+   313   			else
+   314   				if (lconst) {	/* [vlh] 4.0 simple long expr */
+   315   					if (!lcval) {
+   316   						if (op == EQMULT)
+   317   							tp->t_op = ASSIGN;
+   318   						else
+   319   							tp = rtp;
+   320   						continue;
+   321   					}
+   322   					if (lcval == 1L) {
+   323   						tp = ltp;
+   324   						continue;
+   325   					}
+   326   				}
+   327   			if( multop(tpp) ) {
+   328   				tp = *tpp;
+   329   				continue;
+   330   			}
+   331   			break;
+   332    
+   333   		case EQUALS:
+   334   		case NEQUALS:
+   335   			if( p && (i=onebit(cval)) >= 0 && ltp->t_op == AND &&
+   336   					(rtp=constant(ltp->t_right)) &&
+   337   					i == onebit(rtp->t_value) ) {
+   338   				tp->t_op = invrel[tp->t_op-EQUALS];
+   339   				p->t_value = 0;
+   340   				continue;
+   341   			}
+   342   			break;
+   343   	
+   344   		case GREATEQ:
+   345   			if( p && !cval && unsign(ltp->t_type) ) {
+   346   				p->t_value = 1;
+   347   				tp = p;
+   348   				continue;
+   349   			}
+   350   			break;
+   351   	
+   352   		case LESS:
+   353   			if( p && !cval && unsign(ltp->t_type) ) {
+   354   				tp = p;
+1File: CANON.C                                                             Page       7
+   355   				continue;
+   356   			}
+   357   			break;
+   358   	
+   359   		case AND:
+   360   			if( p ) {
+   361   				if( !cval ) {
+   362   					tp = rtp;
+   363   					continue;
+   364   				}
+   365   				if( cval == -1 ) {
+   366   					tp = ltp;
+   367   					continue;
+   368   				}
+   369   			}
+   370   			break;
+   371   	
+   372   		case OR:
+   373   			if( p ) {
+   374   				if( !cval ) {
+   375   					tp = ltp;
+   376   					continue;
+   377   				}
+   378   				if( cval == -1 ) {
+   379   					tp = rtp;
+   380   					continue;
+   381   				}
+   382   			}
+   383   			break;
+   384   	
+   385   		case EQXOR:
+   386   		case XOR:
+   387   			if( p ) {
+   388   				if( !cval ) {
+   389   					tp = ltp;
+   390   					continue;
+   391   				}
+   392   				if( cval == -1 ) {
+   393   					tp->t_op = (tp->t_op == XOR ? COMPL : EQNOT);
+   394   					continue;
+   395   				}
+   396   			}
+   397   			break;
+   398   	
+   399   		case LSH:
+   400   		case EQLSH:
+   401   			if( tp->t_type == LONG && rtp->t_op == INT2L &&
+   402   					unsign(rtp->t_left) ) {
+   403   				tp->t_right = rtp->t_left;
+   404   				continue;
+   405   			}
+   406   		case RSH:
+   407   		case EQRSH:
+   408   			if( p ) {
+   409   				if( !cval ) {
+   410   					tp = ltp;
+   411   					continue;
+   412   				}
+   413   				if( p != rtp ) {
+1File: CANON.C                                                             Page       8
+   414   					tp->t_right = p;
+   415   					continue;
+   416   				}
+   417   			}
+   418   			break;
+   419   	
+   420   		case ADDR:
+   421   			if( ltp->t_op == INDR ) {
+   422   				tp = ltp->t_left;
+   423   				continue;
+   424   			}
+   425   			if( ltp->t_op == SYMBOL && ltp->t_sc == REGOFF ) {
+   426   				tp->t_op = ADD;
+   427   				tp->t_right = cnalloc(INT,ltp->t_offset);
+   428   				ltp->t_type = tp->t_type;
+   429   				ltp->t_sc = REGISTER;
+   430   				ltp->t_offset = 0;
+   431   				continue;
+   432   			}
+   433   			break;
+   434   	
+   435   		case INDR:
+   436   			p = ltp->t_left;
+   437   			switch( ltp->t_op ) {
+   438    
+   439   			case ADDR:
+   440   				tp = p;
+   441   				continue;
+   442    
+   443   			case CINT:
+   444   				tp = snalloc(tp->t_type,CINDR,ltp->t_value,0,0);
+   445   				continue;
+   446    
+   447   			case CLONG:
+   448   				tp = snalloc(tp->t_type,CLINDR,ltp->t_lvalue.hiword,0,
+   449   						ltp->t_lvalue.loword);
+   450   				continue;
+   451    
+   452   			case CFLOAT:	/* [vlh] 3.4 */
+   453   				tp = snalloc(tp->t_type,CFINDR,ltp->t_lvalue.hiword,0,
+   454   						ltp->t_lvalue.loword);
+   455   				continue;
+   456    
+   457   			case SYMBOL:
+   458   				if( indexreg(ltp) ) {
+   459   					ltp->t_sc = REGOFF;
+   460   					ltp->t_type = tp->t_type;
+   461   					ltp->t_offset = 0;
+   462   					tp = ltp;
+   463   					continue;
+   464   				}
+   465   				break;
+   466    
+   467   			case ADD:
+   468   				if( p->t_op == SYMBOL && p->t_sc == REGOFF &&
+   469   						(rtp=constant(ltp->t_right)) &&
+   470   						notpointer(p->t_type) ) {
+   471   					p->t_offset =+ rtp->t_value;
+   472   					tp = p;
+1File: CANON.C                                                             Page       9
+   473   					continue;
+   474   				}
+   475   				if( indexreg(p) ) {
+   476   					if( rtp = constant(ltp->t_right) ) {
+   477   	/*
+   478   	 * This combines an address register and a constant into a register
+   479   	 * offset.  This relies on 68000 Addressing scheme somewhat.
+   480   	 */
+   481   						p->t_sc = REGOFF;
+   482   						p->t_type = tp->t_type;
+   483   						p->t_offset =+ rtp->t_value;
+   484   						tp = p;
+   485   						continue;
+   486   					}
+   487   					if( !lflag && ltp->t_right->t_op == ADDR ) {
+   488   	/*
+   489   	 * We can fold *(An+&expr) into *(&expr(An)), but note that &expr
+   490   	 * must be 16 bits for 68000, hence we can only do this if short
+   491   	 * addresses are enabled.  Note that the storage classes are mapped:
+   492   	 * EXTERNAL->EXTOFF, STATIC->STATOFF, REGISTER->REGOFF
+   493   	 */
+   494   						ltp = ltp->t_right->t_left;
+   495   						ltp->t_sc =+ (EXTOFF-EXTERNAL);
+   496   						ltp->t_type = tp->t_type;
+   497   						tp = ltp;
+   498   						continue;
+   499   					}
+   500   				}
+   501   				break;
+   502   	/*
+   503   	 * --X and X++ can be folded into -(An) and (An)+ 68000 instructions
+   504   	 */
+   505   			case PREDEC:
+   506   			case POSTINC:
+   507   				if( indexreg(p) && ltp->t_type == p->t_type ) {
+   508   					p->t_op = (ltp->t_op == PREDEC ? AUTODEC : AUTOINC);
+   509   					p->t_type = tp->t_type;
+   510   					tp = p;
+   511   					continue;
+   512   				}
+   513   			}
+   514   			break;
+   515   	
+   516   		case NOT:
+   517   			if( relop(ltp->t_op) ) {	/*!(X>Y)->X<=Y*/
+   518   				tp = ltp;
+   519   				tp->t_op = invrel[tp->t_op-EQUALS];
+   520   				continue;
+   521   			}
+   522   			break;
+   523   	
+   524   		case UMINUS:
+   525   		case COMPL:
+   526   			if( tp->t_type == CHAR )
+   527   				tp->t_type = INT;
+   528   			if( tp->t_op == ltp->t_op ) {
+   529   				tp = ltp->t_left;
+   530   				continue;
+   531   			}
+1File: CANON.C                                                             Page      10
+   532   			if( ltp->t_op == INT2L ) {	/*~(INT2L X)->INT2L (~X)*/
+   533   				ltp->t_op = tp->t_op;
+   534   				tp->t_op = INT2L;
+   535   				ltp->t_type = INT;
+   536   				continue;
+   537   			}
+   538   			break;
+   539   	
+   540   		case INT2L:
+   541   			if( ltp->t_op == MULT ) {	/*INT2L (X*Y)->X*Y*/
+   542   				ltp->t_type = (ltp->t_type&(~TYPE))|LONG;
+   543   				tp = ltp;
+   544   				continue;
+   545   			}
+   546   			break;
+   547   		}
+   548   		if(!ccexpr(tpp))
+   549   			break;
+   550   		tp = *tpp;
+   551   	}
+   552   	*tpp = tp;
+   553   	return(changes);
+   554   }
+   555    
+   556   /*
+   557    * commute - commutes expression tree to canonical form
+   558    *		This sorts commutable expression trees so that the most
+   559    *		difficult expression is the left-most operand.  Note that
+   560    *		canon assumes that commute has placed constant operands in
+   561    *		the right sub-tree.  This also swaps relationals so that the
+   562    *		most difficult expression is on the left.
+   563    */
+   564   char *commute(tp)					/* returns commuted expression tree*/
+   565   struct tnode *tp;
+   566   {
+   567   	struct tnode *clist[20], *plist[19];
+   568   	register struct tnode **p, **q, *s;
+   569   	struct tnode **plp, **clp;
+   570   	register int op;
+   571    
+   572   	if( relop(op=tp->t_op) ) {
+   573   		s = tp->t_left;
+   574   		if( harder(tp->t_right,s) ) {
+   575   #ifndef	NODEBUG
+   576   			if(oflag)
+   577   				putexpr("swaprel",tp);
+   578   #endif
+   579   			tp->t_op = swaprel[op-EQUALS];
+   580   			tp->t_left = tp->t_right;
+   581   			tp->t_right = s;
+   582   		}
+   583   	}
+   584   	if( commop(op) ) {
+   585   #ifndef	NODEBUG
+   586   		if(oflag)
+   587   			putexpr("commute",tp);
+   588   #endif
+   589   		clp = clist;
+   590   		plp = plist;
+1File: CANON.C                                                             Page      11
+   591   		addtree(tp,&clp,&plp);	/*collect comm. expressions*/
+   592   	/*
+   593   	 * see if any sub-trees can also be commuted (with different operator)
+   594   	 */
+   595   		clp--;
+   596   		plp--;
+   597   		for( p = clist; p <= clp; p++ )
+   598   			*p = commute(*p);
+   599   	/*
+   600   	 * this sorts the expressions in decreasing order of Sethy-Ullman
+   601   	 * values.
+   602   	 */
+   603   		for( p = clist; p <= clp; p++ ) {
+   604   			for( q = p; q <= clp; q++ ) {
+   605   				if( harder(*q,*p) ) {
+   606   					s = *q;
+   607   					*q = *p;
+   608   					*p = s;
+   609   				}
+   610   			}
+   611   		}
+   612   	/*
+   613   	 * Now, we start at the end of the list and collect any constants
+   614   	 * if possible.
+   615   	 */
+   616   		for( q = clp, p = plp; p > plist; p-- ) {
+   617   			s = *p;
+   618   			s->t_right = *q;
+   619   			s->t_left = *--q;
+   620   			if( ccexpr(p) ) {
+   621   				clp--;
+   622   				plp--;
+   623   				*q = *p;	/*[vlh]*/
+   624   			}
+   625   		}
+   626   	/*
+   627   	 * this takes the sorted sub-expression pointers and the pointers
+   628   	 * to the commutable operator nodes (plist) and structures the
+   629   	 * tree so that the left sub-expression is the most complex.  The
+   630   	 * code generation scheme is very sensitive to this...
+   631   	 */
+   632   		q = clist;
+   633   		p = plist;
+   634   		s = *q++;
+   635   		while( p <= plp ) {
+   636   			(*p)->t_left = s;
+   637   			s = *p++;
+   638   			s->t_right = *q++;
+   639   			if(!longorptr(s->t_type)) {
+   640   				if( longorptr(s->t_right->t_type) )
+   641   					s->t_type = s->t_right->t_type;
+   642   				else if( longorptr(s->t_left->t_type) )
+   643   					s->t_type = s->t_left->t_type;
+   644   			}
+   645   		}
+   646   		tp = s;
+   647   #ifndef	NODEBUG
+   648   		if(oflag)
+   649   			putexpr("after commute",tp);
+1File: CANON.C                                                             Page      12
+   650   #endif
+   651   	}
+   652   	else if( binop(op) ) {
+   653   		tp->t_left = commute(tp->t_left);
+   654   		tp->t_right = commute(tp->t_right);
+   655   	}
+   656   	else if( unaryop(op) )
+   657   		tp->t_left = commute(tp->t_left);
+   658   	return(tp);
+   659   }
+   660    
+   661   /*
+   662    * harder - test one sub-expression for being "harder" than another
+   663    *		This requires some special finagling for registers.  The reason
+   664    *		for this is that the code skeletons produce better code if the
+   665    *		register is on the left.  Also note that allowing an address
+   666    *		register on the right can have disastrous effects for AND and OR.
+   667    *		The basic point is: don't mess with this routine unless you're
+   668    *		100% sure you understand the ramifications...
+   669    */
+   670   harder(tp,ntp)							/* returns 1 if tp > ntp, else 0*/
+   671   struct tnode *tp;
+   672   struct tnode *ntp;
+   673   {
+   674   	if( ntp->t_su == SU_VHARD )
+   675   		return(0);
+   676   	if( tp->t_su == SU_VHARD )
+   677   		return(1);
+   678   	if( isreg(ntp) )
+   679   		return(0);
+   680   	if( isreg(tp) )
+   681   		return(1);
+   682   	if( constant(ntp) )
+   683   		return(1);
+   684   	if( constant(tp) )
+   685   		return(0);
+   686   	return( tp->t_su > ntp->t_su );
+   687   }
+   688    
+   689   /*
+   690    * addtree - collect commutable sub-trees for commute
+   691    *		This recurses down the sub-trees looking for groups of
+   692    *		commutable operators.  It collects the sub-trees and their
+   693    *		parent nodes for commute.
+   694    */
+   695   addtree(tp,clist,plist)				/* returns pointer to clist*/
+   696   struct tnode *tp;					/* pointer to tree*/
+   697   struct tnode ***clist;				/* commutable sub-trees*/
+   698   struct tnode ***plist;				/* parent nodes of sub-trees*/
+   699   {
+   700   	register struct tnode ***p, ***c;
+   701    
+   702   	c = clist;
+   703   	p = plist;
+   704   	if( tp->t_op == tp->t_left->t_op )
+   705   		addtree(tp->t_left,c,p);
+   706   	else
+   707   		*(*c)++ = tp->t_left;
+   708   	if( tp->t_op == tp->t_right->t_op )
+1File: CANON.C                                                             Page      13
+   709   		addtree(tp->t_right,c,p);
+   710   	else
+   711   		*(*c)++ = tp->t_right;
+   712   	*(*p)++ = tp;
+   713   }
+   714    
+   715   /* constant - test for tree being a constant node*/
+   716   char *constant(tp)					/* returns 0 or ptr to const node*/
+   717   struct tnode *tp;					/* pointer to tree*/
+   718   {
+   719   	if( tp->t_op == CINT )
+   720   		return(tp);
+   721   	if((tp->t_op==INT2L || tp->t_op==LONG2I) && tp->t_left->t_op==CINT )
+   722   		return(tp->t_left);
+   723   	return(0);
+   724   }
+   725    
+   726   /* indexreg - returns whether node is an address register*/
+   727   /*		For 68000, must be an A register*/
+   728   indexreg(tp)						/* returns whether node is A reg*/
+   729   struct tnode *tp;					/* pointer to tree*/
+   730   {
+   731   	if( tp->t_op == SYMBOL && tp->t_sc == REGISTER &&
+   732   			!(isdreg(tp->t_reg)) )
+   733   		return(1);
+   734   	return(0);
+   735   }
+   736    
+   737   /* ccexpr - compute constant expression*/
+   738   /*		Evaluates constant expressions, including ?: and relationals*/
+   739   ccexpr(tpp)							/* returns 1 if changes, 0 otherwise*/
+   740   struct tnode **tpp;					/* pointer to tree*/
+   741   {
+   742   	register struct tnode *ltp, *rtp, *tp;
+   743   	register int op, i, j, anylong, anyfloat;	/*[vlh] 3.4 anyfloat*/
+   744   	register long rval, lval;
+   745    
+   746   	tp = *tpp;
+   747   	op = tp->t_op;
+   748   	if( leafop(op) )
+   749   		return(0);
+   750   	anylong = anyfloat = 0;
+   751   	ltp = tp->t_left;
+   752   	if( ltp->t_op == CLONG ) {
+   753   		lval = ltp->t_lvalue;
+   754   		anylong++;
+   755   	}
+   756   	else if ( ltp->t_op == CFLOAT) {	/* [vlh] 3.4 */
+   757   		lval = ltp->t_lvalue;
+   758   		anyfloat++;
+   759   	}
+   760   	else if( ltp = constant(ltp) )
+   761   		lval = ltp->t_value;
+   762   	else
+   763   		return(0);
+   764   	if( binop(op) ) {
+   765   		rtp = tp->t_right;
+   766   		if( op == QMARK ) {
+   767   			ltp = rtp->t_left;
+1File: CANON.C                                                             Page      14
+   768   			rtp = rtp->t_right;
+   769   			if( ltp->t_op != CINT || rtp->t_op != CINT )
+   770   				return(0);
+   771   			ltp->t_value = (lval?ltp->t_value:rtp->t_value);
+   772   			*tpp = ltp;
+   773   			return(1);
+   774   		}
+   775   		if( rtp->t_op == CLONG ) {
+   776   			anylong++;
+   777   			rval = rtp->t_lvalue;
+   778   		}
+   779   		else if (rtp->t_op == CFLOAT) {	/* [vlh] 3.4 */
+   780   			anyfloat++;
+   781   			rval = rtp->t_lvalue;
+   782   		}
+   783   		else if( rtp = constant(rtp) )
+   784   			rval = rtp->t_value;
+   785   		else
+   786   			return(0);
+   787   	}
+   788   	i = lval;
+   789   	j = rval;
+   790   	switch( op ) {
+   791    
+   792   	case ADD:
+   793   		lval =+ rval;
+   794   		break;
+   795    
+   796   	case SUB:
+   797   		lval =- rval;
+   798   		break;
+   799    
+   800   	case MULT:
+   801   	case DIV:
+   802   	case MOD:
+   803   	case LSH:
+   804   	case RSH:
+   805   	case XOR:
+   806   		if( anylong || anyfloat )	/* [vlh] 3.4 float */
+   807   			return(0);
+   808   		switch( op ) {
+   809    
+   810   		case MULT:
+   811   			lval = i * j;
+   812   			break;
+   813    
+   814   		case DIV:
+   815   			lval = i / j;
+   816   			break;
+   817    
+   818   		case MOD:
+   819   			lval = i % j;
+   820   			break;
+   821    
+   822   		case RSH:
+   823   			lval = i >> j;
+   824   			break;
+   825    
+   826   		case LSH:
+1File: CANON.C                                                             Page      15
+   827   			lval = i << j;
+   828   			break;
+   829    
+   830   		case XOR:
+   831   			lval = i ^ j;
+   832   			break;
+   833   		}
+   834   		break;
+   835    
+   836   	case GREAT:
+   837   		lval = (lval>rval);
+   838   		break;
+   839    
+   840   	case GREATEQ:
+   841   		lval = (lval>=rval);
+   842   		break;
+   843    
+   844   	case LESS:
+   845   		lval = (lval<rval);
+   846   		break;
+   847    
+   848   	case LESSEQ:
+   849   		lval = (lval<=rval);
+   850   		break;
+   851    
+   852   	case UMINUS:
+   853   		lval = -lval;
+   854   		break;
+   855    
+   856   	case COMPL:
+   857   		lval = ~lval;
+   858   		break;
+   859    
+   860   	case NOT:
+   861   		lval = !lval;
+   862   		break;
+   863    
+   864   	case OR:
+   865   		lval =| rval;
+   866   		break;
+   867    
+   868   	case AND:
+   869   		lval =& rval;
+   870   		break;
+   871    
+   872   	default:
+   873   		return(0);
+   874    
+   875   	}
+   876   	if( anylong )
+   877   		ltp = lcnalloc(LONG,lval);
+   878   	else if ( anyfloat )
+   879   		ltp = fpcnalloc(FLOAT,lval);
+   880   	else
+   881   		ltp->t_value = lval;
+   882   	*tpp = ltp;
+   883   	return(1);
+   884   }
+   885    
+1File: CANON.C                                                             Page      16
+   886   /* power2 - do multiply and divide by powers of two*/
+   887   /*		This changes multiplies and divides by constant powers of two*/
+   888   /*		to shifts.*/
+   889   power2(tpp)							/* returns 0 if not power of two*/
+   890   struct tnode **tpp;					/* pointer to expression tree*/
+   891   {
+   892   	register char *p;
+   893   	register int i, j, op;
+   894   	register struct tnode *tp;
+   895    
+   896   	tp = *tpp;
+   897   	if( p = constant(tp->t_right) ) {
+   898   		if( (i=onebit(p->t_value)) < 0 )
+   899   			return(0);
+   900   		switch( op = tp->t_op ) {
+   901    
+   902   		case MULT:
+   903   			op = LSH;
+   904   			break;
+   905    
+   906   		case EQMULT:
+   907   			op = EQLSH;
+   908   			break;
+   909    
+   910   		case DIV:
+   911   			op = RSH;
+   912   			break;
+   913    
+   914   		case EQDIV:
+   915   			op = EQRSH;
+   916   			break;
+   917    
+   918   		case MOD:
+   919   			op = AND;
+   920   			i = p->t_value - 1;
+   921   			break;
+   922    
+   923   		case EQMOD:
+   924   			op = EQAND;
+   925   			i = p->t_value - 1;
+   926   			break;
+   927    
+   928   		default:
+   929   			return(0);
+   930   		}
+   931   		tp->t_op = op;
+   932   		p->t_value = i;
+   933   		return(1);
+   934   	}
+   935   	return(0);
+   936   }
+   937    
+   938   /* chklong - check for tree being a long*/
+   939   chklong(tp)							/* returns 1 if long, 0 otherwise*/
+   940   struct tnode *tp;					/* pointer to expression tree*/
+   941   {
+   942   	if( tp->t_op == INT2L && !(unsign(tp->t_left->t_type)) )
+   943   		return(0);
+   944   	if( tp->t_op == CLONG )
+1File: CANON.C                                                             Page      17
+   945   		return(1);
+   946   	return( longorptr(tp->t_type) );
+   947   }
+   948    
+   949   /* multop - handle multiplicative operators*/
+   950   /*		This checks for powers of two optimizations, then for a hard*/
+   951   /*		long operation.*/
+   952   multop(tpp)							/* returns ptr to expression tree*/
+   953   struct tnode **tpp;					/* pointer to expression tree*/
+   954   {
+   955   	register struct tnode *ltp, *tp, *rtp, *p;
+   956   	register int change;
+   957   	register long l;
+   958    
+   959   	tp = *tpp;
+   960   	if( change = power2(tpp) )
+   961   		tp = *tpp;
+   962   	if( chklong(rtp=tp->t_right) || chklong(ltp=tp->t_left) ) {
+   963   		switch( tp->t_op ) {
+   964    
+   965   		case MULT:
+   966   			tp->t_op = LMULT;
+   967   			break;
+   968    
+   969   		case DIV:
+   970   		case MOD:
+   971   			if( chklong(rtp) ) {		/*only hard if divisor is long*/
+   972   				tp->t_op =+ (LMULT-MULT);
+   973   				if( rtp->t_op == CLONG )
+   974   					rtp->t_op = DCLONG;
+   975   			}
+   976   			break;
+   977    
+   978   		case EQDIV:
+   979   		case EQMOD:
+   980   			if( !chklong(rtp) )
+   981   				break;
+   982   			if( rtp->t_op == CLONG )
+   983   				rtp->t_op = DCLONG;
+   984   		case EQMULT:
+   985   			tp->t_op =+ (LMULT-EQMULT);
+   986   			*tpp = tnalloc(ASSIGN,tp->t_type,0,0,tcopy(ltp),tp);
+   987   			change++;
+   988   			break;
+   989   		}
+   990   	}
+   991   	return(change);
+   992   }
+   993    
+   994   /* onebit - returns whether constant is power of two (one bit on)*/
+   995   onebit(val)							/* returns bit number or -1*/
+   996   int val;							/* constant value to check*/
+   997   {
+   998   	register int i;
+   999    
+  1000   	for( i = 15; val != 0; val =<< 1, i-- )
+  1001   		if( val & 0100000 )
+  1002   			break;
+  1003   	if (val != 0100000)
+1File: CANON.C                                                             Page      18
+  1004   		return(-1);
+  1005   	return(i);
+  1006   }

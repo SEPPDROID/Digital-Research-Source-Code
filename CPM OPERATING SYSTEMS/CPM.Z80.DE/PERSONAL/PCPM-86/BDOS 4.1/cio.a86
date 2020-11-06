@@ -1,0 +1,2219 @@
+
+include	equates.a86
+include system.a86
+
+		dseg
+		extrn	cur_x:byte
+		extrn	max_x:byte
+		extrn	lp_xios_entry:dword
+		extrn	rlr:word
+		extrn	sysvar_131:byte
+		extrn	sysvar_132:byte
+		extrn	echo_backspaced:byte
+		extrn	echo_deleted:byte
+		extrn	lp_kbd_callback:dword
+
+		cseg
+		extrn	bdos_callback:near
+		extrn	bdos_dseg:word
+
+		public	cio_init
+		public	cio_main
+		public	cio_keyboard
+		public	cio_flags
+
+cio_init:					; DATA XREF: dseg:000Eo
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+cio_functions	dw offset C_READ	; DATA XREF: bdos:17C3o
+		dw offset C_WRITE
+		dw offset A_READ
+		dw offset A_WRITE
+		dw offset L_WRITE
+		dw offset C_RAWIO
+		dw offset A_STATIN
+		dw offset A_STATOUT
+		dw offset C_WRITESTR
+		dw offset C_READSTR
+		dw offset C_STAT
+		dw offset S_BIOS
+		dw offset C_MODE
+		dw offset C_DELIMIT
+		dw offset C_WRITEBLK
+		dw offset L_WRITEBLK
+		dw offset C_DETACH
+		dw offset c_nop
+		dw offset c_nop
+		dw offset c_nop
+		dw offset c_nop
+		dw offset c_nop
+		dw offset A_bdos_AC
+		dw offset A_bdos_AD
+		dw offset callback_0418	; Detach AUX and LST
+		dw offset callback_0419	; Echo character to screen
+		dw offset callback_041A	; Flush	redirected output
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+cio_main:				; DATA XREF: dseg:000Co
+		mov	cx, dx
+		jmp	cs:cio_functions[si]; Detach AUX and LST
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+cio_keyboard:		; CODE XREF: testCtrlAltKeys+CCu
+					; DATA XREF: dseg:003Co
+		push	es
+		mov	es, console_process
+		mov	bl, 0
+		cmp	al, 3		; ^C
+		jz	bdkk_5
+		cmp	al, 10h		; ^P
+		jz	bdkk_4
+		test	es:proc_conmode, 2; Allow ^S / ^Q?
+		jnz	bdkk_1
+		cmp	al, 13h		; ^S
+		jz	bdkk_3
+		cmp	al, 11h		; ^Q
+		jz	bdkk_2
+
+bdkk_1:					; CODE XREF: cio_keyboard+16j
+					; cio_keyboard+2Aj
+					; ...
+		mov	bl, 1
+		pop	es
+		retf	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bdkk_2:					; CODE XREF: cio_keyboard+1Ej
+		test	cio_flags, 80h
+		jz	bdkk_1
+		and	cio_flags, 0FF7Fh
+		pop	es
+		retf	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bdkk_3:					; CODE XREF: cio_keyboard+1Aj
+		or	cio_flags, 80h
+		pop	es
+		retf	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bdkk_4:					; CODE XREF: cio_keyboard+Dj
+		test	es:proc_conmode, 4
+		jnz	bdkk_1
+		xor	cio_flags, 200h
+		pop	es
+		retf	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bdkk_5:					; CODE XREF: cio_keyboard+9j
+		test	es:proc_conmode, 8
+		jnz	bdkk_1
+		or	es:proc_flags, 1
+		and	cio_flags, 0FF7Fh
+		pop	es
+		retf	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+maybe_dispatch:		; CODE XREF: bdos_chk_conin+16p
+					; bdos_chk_conin+23p
+					; ...
+		test	es:proc_flags, 1
+		jz	dont_dispatch
+		push	ax
+		push	bx
+		push	cx
+		mov	cx, 8Eh		; P_DISPATCH
+		call	bdos_callback
+		pop	cx
+		pop	bx
+		pop	ax
+
+dont_dispatch:				; CODE XREF: maybe_dispatch+7j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+bdos_const:		; CODE XREF: C_RAWIO+2Ep C_STAT+Dp
+					; ...
+		cmp	queued_key, 0
+		jnz	bconst_queued
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; CONST	but doesn't check pending key queue
+
+const_noqueue:		; CODE XREF: bdos_chk_conin+1Cj
+					; bdos_char_out+15p
+		call	bdos_statin
+		test	bl, bl
+		jz	bconst_dsptch
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+bdos_chk_conin:		; CODE XREF: bdos_char_out+20p
+		cmp	es:proc_redir_i, 0
+		jnz	bckci_dopoll
+		test	xios_bh_intconi, 0FFh; Console needs polling?
+		jnz	bconst_queued
+
+bckci_dopoll:				; CODE XREF: bdos_chk_conin+6j
+		call	redirect_input
+		callf	dword ptr lp_kbd_callback
+		call	maybe_dispatch
+		cmp	bl, 1
+		jnz	const_noqueue	; CONST	but doesn't check pending key queue
+		mov	queued_key, ax
+
+bconst_queued:				; CODE XREF: bdos_const+5j
+					; bdos_chk_conin+Dj
+		mov	bl, 0FFh
+
+bconst_dsptch:				; CODE XREF: const_noqueue+5j
+		call	maybe_dispatch
+		test	bl, bl
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+bdos_conin:		; CODE XREF: C_READ+19p C_RAWIO+1Dj
+					; ...
+		xor	ax, ax
+		xchg	ax, queued_key
+		test	ax, ax
+		jnz	bci_gotkey
+
+bci_readkey:				; CODE XREF: bdos_conin+26j
+		call	redirect_input
+		cmp	es:proc_redir_i, 0
+		jnz	bci_dopoll
+		test	xios_bh_intconi, 0FFh
+		jnz	bci_gotkey
+
+bci_dopoll:				; CODE XREF: bdos_conin+13j
+		callf	dword ptr lp_kbd_callback
+		call	maybe_dispatch
+		cmp	bl, 1
+		jnz	bci_readkey
+
+bci_gotkey:				; CODE XREF: bdos_conin+8j
+					; bdos_conin+1Aj
+		call	maybe_dispatch
+		mov	bx, ax
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+bdos_char_out:		; CODE XREF: input_putchar+8p
+					; expand_tabs+5j ...
+		test	cio_flags, 8
+		jnz	bco_nobreak
+		push	cx
+		test	xios_bh_intconi, 0FFh
+		jz	bco_doconst
+		call	maybe_dispatch
+		jmps	bco_noconst
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bco_doconst:				; CODE XREF: bdos_char_out+Ej
+		call	const_noqueue	; CONST	but doesn't check pending key queue
+
+bco_noconst:				; CODE XREF: bdos_char_out+13j
+					; bdos_char_out+23j
+		test	cio_flags, 80h
+		jz	bco_noswallow
+		call	bdos_chk_conin
+		jmps	bco_noconst
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bco_noswallow:				; CODE XREF: bdos_char_out+1Ej
+		pop	cx
+		push	cx
+		call	xios_char_out
+		test	cio_flags, 200h
+		jz	bco_noecholst
+		test	es:proc_conmode, 4
+		jnz	bco_noecholst
+		pop	dx
+		push	dx
+		mov	cx, 5
+		call	bdos_callback
+
+bco_noecholst:				; CODE XREF: bdos_char_out+30j
+					; bdos_char_out+39j
+		pop	cx
+
+bco_nobreak:				; CODE XREF: bdos_char_out+6j
+		mov	al, cur_x
+		cmp	cl, 7Fh
+		jz	bco_none
+		inc	al
+		cmp	cl, 20h
+		jnb	bco_ck_rightx
+		dec	al
+		jz	bco_none
+		cmp	cl, 8
+		jnz	bco_notbksp
+		dec	al
+		jmps	bco_setx
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bco_notbksp:				; CODE XREF: bdos_char_out+5Aj
+		cmp	cl, 0Dh
+		jnz	bco_none
+		xor	al, al
+
+bco_ck_rightx:				; CODE XREF: bdos_char_out+51j
+		cmp	al, input_rightx
+		jbe	bco_setx
+		mov	input_rightx, al
+
+bco_setx:				; CODE XREF: bdos_char_out+5Ej
+					; bdos_char_out+6Bj
+		mov	cur_x, al
+
+bco_none:				; CODE XREF: bdos_char_out+4Aj
+					; bdos_char_out+55j ...
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+attach_console:		; CODE XREF: C_RAWIOp simulate_const+8p
+					; ...
+		mov	console_process, es
+		or	es:proc_conmode, 0Eh
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+proc_enter_con:		; CODE XREF: C_READ+16p C_WRITE+8p
+					; ...
+		mov	console_process, es
+		test	es:proc_flags, 8000h
+		jnz	dont_mask_mode
+		and	es:proc_conmode, 0FFF1h
+
+dont_mask_mode:				; CODE XREF: proc_enter_con+Bj
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+is_control_char:		; CODE XREF: input_putcharp
+					; C_READ+1Ep
+		cmp	cl, 0Dh
+		jz	isnt_cc
+		cmp	cl, 0Ah
+		jz	isnt_cc
+		cmp	cl, 9
+		jz	isnt_cc
+		cmp	cl, 8
+		jz	isnt_cc
+		cmp	cl, 20h
+
+isnt_cc:				; CODE XREF: is_control_char+3j
+					; is_control_char+8j
+					; ...
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_putchar:		; CODE XREF: input_echochar+17p
+		call	is_control_char
+		jnb	expand_tabs
+		push	cx
+		mov	cl, '^'
+		call	bdos_char_out
+		pop	cx
+		or	cl, 40h
+		mov	al, cur_x
+		cmp	al, max_x
+		jb	expand_tabs
+		cmp	es:proc_fx, 0Ah
+		jz	ext_ret
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+expand_tabs:		; CODE XREF: input_putchar+3j
+					; input_putchar+16j ...
+		cmp	cl, 9
+		jz	ext_istab
+		jmp	bdos_char_out
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ext_istab:				; CODE XREF: expand_tabs+3j
+					; expand_tabs+18j ...
+		mov	cl, 20h
+		call	bdos_char_out
+		mov	al, cur_x
+		test	al, 7
+		jz	ext_tabbed
+		cmp	al, max_x
+		jb	ext_istab
+		cmp	es:proc_fx, 0Ah
+		jnz	ext_istab
+
+ext_tabbed:				; CODE XREF: expand_tabs+12j
+		mov	cl, 9
+
+ext_ret:				; CODE XREF: input_putchar+1Ej
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_READ:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:178Bo
+		cmp	es:proc_background, 0
+		jz	c_read_fg
+
+abort_minus3:				; CODE XREF: C_RAWIO+20j C_READSTR+8j
+					; ...
+		mov	es:proc_errcode, 0FFFDh
+
+abort:					; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F14o ...
+		xor	cx, cx
+		mov	dx, cx
+		jmp	bdos_callback
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+c_read_fg:				; CODE XREF: C_READ+6j
+		call	proc_enter_con
+		call	bdos_conin
+		mov	cx, ax
+		call	is_control_char
+		jb	c_write_bgproc
+		push	bx
+		call	expand_tabs
+		pop	bx
+
+c_write_bgproc:				; CODE XREF: C_READ+21j C_WRITE+6j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_WRITE:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:178Do
+		cmp	es:proc_background, 0
+		jnz	c_write_bgproc
+		call	proc_enter_con
+		test	es:proc_conmode, 4; Raw	output:	Straight to XIOS
+		jz	j_expand_tabs
+		jmp	xios_char_out
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+j_expand_tabs:				; CODE XREF: C_WRITE+12j
+		jmps	expand_tabs
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+A_READ:		; CODE XREF: bdos:17C3u S_BIOS+1Fu
+					; ...
+		mov	al, 5
+
+aux_xios:				; CODE XREF: A_WRITE+2j A_STATIN+2j
+					; ...
+		call	attach_aux
+		call	call_xios
+		mov	aux_owner, 0FFh
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+attach_aux:		; CODE XREF: A_READ+2p	attach_aux+Cj
+					; ...
+		sti	
+		mov	bl, es:proc_pid
+		cli	
+		cmp	aux_owner, 0FFh
+		jnz	attach_aux
+		mov	aux_owner, bl
+		sti	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+A_WRITE:		; CODE XREF: bdos:17C3u S_BIOS+1Fu
+					; ...
+		mov	al, 6
+		jmps	aux_xios
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+L_WRITE:		; CODE XREF: bdos:17C3u S_BIOS+1Fu
+					; ...
+		mov	al, 4
+
+lst_xios:				; CODE XREF: call_listst+2j
+		call	attach_lst
+		call	call_xios
+		mov	lst_owner, 0FFh
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+attach_lst:		; CODE XREF: L_WRITE+2p attach_lst+Cj
+					; ...
+		sti	
+		mov	bl, es:proc_pid
+		cli	
+		cmp	lst_owner, 0FFh
+		jnz	attach_lst
+		mov	lst_owner, bl
+		sti	
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_RAWIO:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:1795o
+		call	attach_console
+		cmp	cl, 0FDh
+		jnb	c_rawin
+		cmp	es:proc_background, 0
+		jnz	c_rawio_ret
+		jmp	xios_char_out
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+c_rawin:				; CODE XREF: C_RAWIO+6j
+		ja	c_rawconst
+		cmp	es:proc_background, 0
+		jnz	j2_abort_minus3
+		jmp	bdos_conin
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+j2_abort_minus3:			; CODE XREF: C_RAWIO+1Bj
+		jmp	abort_minus3
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+c_rawconst:				; CODE XREF: C_RAWIO+13j
+		xor	bl, bl
+		cmp	es:proc_background, 0
+		jnz	c_rawio_ret
+		push	cx
+		call	bdos_const
+		pop	cx
+		jz	c_rawio_ret
+		cmp	cl, 0FEh
+		jz	c_rawio_ret
+		jmp	bdos_conin
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+c_rawio_ret:				; CODE XREF: C_RAWIO+Ej C_RAWIO+2Bj
+					; ...
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+A_STATIN:		; CODE XREF: bdos:17C3u bdos_statin+1Ej
+					; DATA XREF: ...
+		mov	al, 10h
+		jmp	aux_xios
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+A_STATOUT:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:1799o
+		mov	al, 11h
+		jmp	aux_xios
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_WRITESTR:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:179Bo
+		cmp	es:proc_background, 0
+		jnz	writestr_bg
+		call	proc_enter_con
+		mov	bx, es:userDS
+		mov	al, es:proc_delimiter
+		mov	cx, 0FFFFh
+		push	es
+		mov	di, dx
+		mov	es, bx
+		repne scasb
+		pop	es
+		lea	cx, -1[di]
+		sub	cx, dx
+		mov	di, dx
+		jmp	c_writeblk1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+writestr_bg:				; CODE XREF: C_WRITESTR+6j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_echochar:		; CODE XREF: inp_echo_to_di+13p
+					; inp_x1_to_cur+10p ...
+		mov	al, cur_x
+		cmp	al, max_x
+		jb	inp_canecho
+		cmp	cl, 0Dh
+		jz	inp_canecho
+		cmp	cl, 8
+		jnz	inp_dontecho
+
+inp_canecho:				; CODE XREF: input_echochar+7j
+					; input_echochar+Cj
+		mov	es, rlr
+		call	input_putchar
+		mov	es, word ptr buffer_addr+2
+
+inp_dontecho:				; CODE XREF: input_echochar+11j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_drawline:		; CODE XREF: bdos:1C32p input_ctlG+11p
+					; ...
+		mov	di, buffer_end1
+		mov	si, buffer_end0
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+inp_echo_to_di:		; CODE XREF: inp_echo_to_di+18j
+					; bdos:1CD6p ...
+		cmp	si, di
+		jnb	ietod_end
+		mov	al, cur_x
+		cmp	al, max_x
+		jnb	ietod_end
+		mov	cl, es:[si]
+		inc	si
+		push	di
+		push	si
+		call	input_echochar
+		pop	si
+		pop	di
+		jmps	inp_echo_to_di
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ietod_end:				; CODE XREF: inp_echo_to_di+2j
+					; inp_echo_to_di+Bj
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+inp_x1_to_cur1:		; CODE XREF: bdos:1C21p bdos:1CBEp
+		mov	al, cur_x
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+inp_x1_to_cur:		; CODE XREF: input_ctlG+15p
+					; bdos:1D3Dp
+		push	ax
+		mov	al, cur_x
+		push	ax
+
+space_to_x1:				; CODE XREF: inp_x1_to_cur+13j
+		mov	al, input_rightx
+		cmp	cur_x, al
+		jnb	space_to_x1_don
+		mov	cl, 20h
+		call	input_echochar
+		jmps	space_to_x1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+space_to_x1_don:			; CODE XREF: inp_x1_to_cur+Cj
+		pop	ax
+		mov	input_rightx, al
+		pop	ax
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; Put cursor in	the right place
+
+input_showcur:		; CODE XREF: input_showcur+Dj
+					; input_ctlA+4Dp ...
+		cmp	cur_x, al
+		jbe	isc_done
+		push	ax
+		mov	cl, 8
+		call	input_echochar
+		pop	ax
+		jmps	input_showcur; Put cursor	in the right place
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+isc_done:				; CODE XREF: input_showcur+4j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+set_buf_start:		; CODE XREF: copy_to_history+6p
+					; bdos:1CCFp ...
+		mov	si, word ptr buffer_addr
+		add	si, 2
+		mov	buffer_start0, si
+		mov	buffer_curpos, si
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+echo_upto_end1:		; CODE XREF: echo_upto_end1+1Ej
+					; bdos:1C1Ej ...
+		cmp	di, buffer_end1
+		jnb	eue1_end
+		mov	al, cur_x
+		cmp	al, max_x
+		jnb	eue1_end
+		mov	cl, es:[di]
+		inc	di
+		mov	es:[si], cl
+		inc	si
+		push	di
+		push	si
+		call	input_echochar
+		pop	si
+		pop	di
+		jmps	echo_upto_end1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+eue1_end:				; CODE XREF: echo_upto_end1+4j
+					; echo_upto_end1+Dj
+		mov	buffer_end0, di
+		mov	buffer_curpos, si
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+delete_at_di:		; CODE XREF: delete_at_di+13j
+					; bdos:1CD9j ...
+		cmp	di, si
+		jbe	dad_finish
+		dec	di
+		mov	al, es:[di]
+		dec	buffer_end0
+		mov	bx, buffer_end0
+		mov	es:[bx], al
+		jmps	delete_at_di
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+dad_finish:				; CODE XREF: delete_at_di+2j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+copy_to_history:		; CODE XREF: bdos:1CDCp input_ctlJ+21p
+		xor	al, al
+		mov	cx, buffer_curpos
+		call	set_buf_start
+		cmp	cx, si
+		jbe	cth_done
+		mov	di, offset sysvar_132
+		sub	cx, si
+		mov	al, cl
+		mov	sysvar_131, al
+		push	es
+		push	ds
+		pop	es
+
+		pop	ds
+		rep movsb
+		push	es
+		push	ds
+		pop	es
+		pop	ds
+
+cth_done:				; CODE XREF: copy_to_history+Bj
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_crlf:		; CODE XREF: input_hash+5p
+					; bdos:1C2Ap ...
+		mov	cl, 0Dh
+		call	input_echochar
+		mov	input_rightx, 0
+		mov	cl, 0Ah
+		jmp	input_echochar
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_hash:		; CODE XREF: bdos:1CC8p bdos:1CDFj
+		mov	cl, '#'
+		call	input_echochar
+		call	input_crlf
+
+space_to_inpx0:				; CODE XREF: input_hash+16j
+		mov	al, cur_x
+		cmp	al, input_x0
+		jnb	ihash_1
+		mov	cl, ' '
+		call	input_echochar
+		jmps	space_to_inpx0
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ihash_1:				; CODE XREF: input_hash+Fj
+		mov	ax, buffer_end1
+		mov	buffer_end0, ax
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_ctlA:		; CODE XREF: input_ctlH+10p
+					; C_READSTR+82u
+					; DATA XREF: ...
+		mov	si, buffer_curpos
+		cmp	si, buffer_start0
+		jbe	ctla_atstart
+		dec	si
+		mov	buffer_curpos, si
+		mov	al, es:[si]
+		dec	buffer_end0
+		mov	di, buffer_end0
+		mov	es:[di], al
+		mov	al, cur_x
+		push	ax
+		mov	al, input_x0
+		mov	cur_x, al
+		or	cio_flags, 8
+		mov	di, buffer_start0
+
+ctla_repaint:				; CODE XREF: input_ctlA+40j
+		cmp	di, buffer_curpos
+		jnb	ctla_repainted
+		mov	cl, es:[di]
+		inc	di
+		push	di
+		call	input_echochar
+		pop	di
+		jmps	ctla_repaint
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ctla_repainted:				; CODE XREF: input_ctlA+35j
+		and	cio_flags, 0FFF7h
+		pop	ax
+		xchg	al, cur_x
+		call	input_showcur	; Put cursor in	the right place
+
+ctla_atstart:				; CODE XREF: input_ctlA+8j
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlB:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DB4o
+		mov	di, buffer_end0
+		mov	si, buffer_curpos
+		cmp	si, buffer_start0
+		jbe	ctlb_1
+
+ctlb_0:					; CODE XREF: bdos:1C0Ej
+		dec	si
+		mov	al, es:[si]
+		dec	di
+		mov	es:[di], al
+		cmp	si, buffer_start0
+		ja	ctlb_0
+		mov	buffer_end0, di
+		mov	buffer_curpos, si
+		mov	al, input_x0
+		jmp	input_showcur	; Put cursor in	the right place
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ctlb_1:					; CODE XREF: bdos:1C00j
+		jmp	echo_upto_end1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlE:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DBAo
+		call	inp_x1_to_cur1
+		mov	ax, buffer_curpos
+		mov	buffer_start0, ax
+		call	input_crlf
+		mov	input_x0, 0
+		call	input_drawline
+		mov	cl, 0Dh
+		jmp	input_echochar
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlF:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DBCo
+		mov	ax, buffer_end0
+		cmp	ax, buffer_end1
+		jnb	ctlf_atend
+		mov	al, cur_x
+		cmp	al, max_x
+		jnb	ctlf_atend
+		mov	di, buffer_end0
+		mov	cl, es:[di]
+		inc	buffer_end0
+		mov	si, buffer_curpos
+		mov	es:[si], cl
+		inc	buffer_curpos
+		call	input_echochar
+
+ctlf_atend:				; CODE XREF: bdos:1C41j bdos:1C4Aj
+		retn	
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_ctlG:		; CODE XREF: input_ctlH+13p
+					; C_READSTR+82u
+					; DATA XREF: ...
+		mov	ax, buffer_end0
+		cmp	ax, buffer_end1
+		jnb	ctlg_at_end
+		mov	al, cur_x
+		push	ax
+		inc	buffer_end0
+		call	input_drawline
+		pop	ax
+		call	inp_x1_to_cur
+
+ctlg_at_end:				; CODE XREF: input_ctlG+7j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_ctlH:		; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DC0o
+		mov	ax, buffer_curpos
+		cmp	ax, buffer_start0
+		jbe	ctlh_atstart
+		test	echo_backspaced, 0FFh
+		jnz	del_and_echo
+
+destr_backspace:			; CODE XREF: input_delete+Ej
+					; input_delete+17j
+		call	input_ctlA
+		call	input_ctlG
+
+ctlh_atstart:				; CODE XREF: input_ctlH+7j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_delete:		; CODE XREF: C_READSTR+73p
+		mov	ax, buffer_curpos
+		cmp	ax, buffer_start0
+		jbe	del_atstart
+		test	echo_deleted, 0FFh
+		jz	destr_backspace
+
+del_and_echo:				; CODE XREF: input_ctlH+Ej
+		mov	ax, buffer_end0
+		cmp	ax, buffer_end1
+		jb	destr_backspace
+		dec	buffer_curpos
+		mov	si, buffer_curpos
+		mov	cl, es:[si]
+		call	input_echochar
+
+del_atstart:				; CODE XREF: input_delete+7j
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlK:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DC6o
+		call	inp_x1_to_cur1
+		mov	ax, buffer_end1
+		mov	buffer_end0, ax
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlR:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DD4o
+		call	input_hash
+		mov	di, buffer_curpos
+		call	set_buf_start
+		mov	buffer_curpos, di
+		call	inp_echo_to_di
+		jmp	delete_at_di
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlU:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DDAo
+		call	copy_to_history
+		jmp	input_hash
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlW:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DDEo
+		mov	di, buffer_end0
+		mov	si, buffer_curpos
+		mov	ax, word ptr buffer_addr
+		add	ax, 2
+		cmp	si, ax
+		jnz	ctlw_not_blank
+		cmp	di, buffer_end1
+		jnz	ctlw_not_blank
+		mov	di, offset sysvar_132; Previous	line
+		xor	ch, ch
+		mov	cl, sysvar_131	; Its length
+		jcxz	ctlw_end
+
+ctlw_copy:				; CODE XREF: bdos:1D12j
+		cmp	si, buffer_end1
+		jnb	ctlw_redraw
+		mov	bl, [di]
+		inc	di
+		mov	es:[si], bl
+		inc	si
+		loop	ctlw_copy
+
+ctlw_redraw:				; CODE XREF: bdos:1D09j
+		mov	di, si
+		call	set_buf_start
+		call	inp_echo_to_di
+		mov	buffer_curpos, si
+		jmp	delete_at_di
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ctlw_not_blank:				; CODE XREF: bdos:1CF2j bdos:1CF8j
+		jmp	echo_upto_end1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ctlw_end:				; CODE XREF: bdos:1D03j
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_ctlX:				; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DE0o
+		mov	ax, buffer_curpos
+		call	set_buf_start
+		cmp	ax, si
+		jbe	ctlx_end
+		mov	al, input_x0
+		call	input_showcur	; Put cursor in	the right place
+		call	input_drawline
+		mov	al, input_x0
+		call	inp_x1_to_cur
+
+ctlx_end:				; CODE XREF: bdos:1D2Fj
+		retn	
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_inschar:		; CODE XREF: C_READSTR+82u
+					; C_READSTR+89p
+					; DATA XREF: ...
+		mov	cl, al
+		mov	ax, buffer_curpos
+		cmp	ax, buffer_end0
+		jnb	inschar_full
+		mov	al, cur_x
+		cmp	al, max_x
+		jb	inschar_nowrap
+		push	cx
+		call	input_crlf
+		mov	input_x0, 0
+		mov	ax, buffer_curpos
+		mov	buffer_start0, ax
+		pop	cx
+
+inschar_nowrap:				; CODE XREF: input_inschar+12j
+		mov	si, buffer_curpos
+		mov	es:[si], cl
+		inc	buffer_curpos
+		call	input_echochar
+		mov	al, cur_x
+		push	ax
+		call	input_drawline
+		pop	ax
+		call	input_showcur	; Put cursor in	the right place
+
+inschar_full:				; CODE XREF: input_inschar+9j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+input_ctlJ:		; CODE XREF: C_READSTR+82u
+					; DATA XREF: bdos:1DC4o ...
+		pop	ax
+		mov	cl, 0Dh
+		call	input_echochar
+		mov	di, buffer_end0
+
+ctlj_copyout:				; CODE XREF: input_ctlJ+1Fj
+		cmp	di, buffer_end1
+		jnb	ctlj_copied
+		mov	al, es:[di]
+		inc	di
+		mov	si, buffer_curpos
+		mov	es:[si], al
+		inc	buffer_curpos
+		jmps	ctlj_copyout
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+ctlj_copied:				; CODE XREF: input_ctlJ+Ej
+		call	copy_to_history
+		mov	bx, word ptr buffer_addr
+		mov	es:1[bx], al
+		mov	es, rlr
+
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+input_ctlchars	dw offset input_inschar	; DATA XREF: C_READSTR+82o
+		dw offset input_ctlA
+		dw offset input_ctlB
+		dw offset input_inschar
+		dw offset input_inschar
+		dw offset input_ctlE
+		dw offset input_ctlF
+		dw offset input_ctlG
+		dw offset input_ctlH
+		dw offset input_inschar
+		dw offset input_ctlJ
+		dw offset input_ctlK
+		dw offset input_inschar
+		dw offset input_ctlJ
+		dw offset input_inschar
+		dw offset input_inschar
+		dw offset input_inschar
+		dw offset input_inschar
+		dw offset input_ctlR
+		dw offset input_inschar
+		dw offset input_inschar
+		dw offset input_ctlU
+		dw offset input_inschar
+		dw offset input_ctlW
+		dw offset input_ctlX
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_READSTR:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:179Do
+		cmp	es:proc_background, 0
+		jz	line_input
+		jmp	abort_minus3
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+line_input:				; CODE XREF: C_READSTR+6j
+		call	proc_enter_con
+		mov	bx, dx
+		mov	ax, es:userDS
+		inc	dx
+		jnz	line_input_1
+		mov	ax, es:word ptr proc_dma+2
+		mov	bx, es:word ptr proc_dma
+		lea	cx, 2[bx]
+
+line_input_1:				; CODE XREF: C_READSTR+15j
+		mov	word ptr buffer_addr+2,	ax
+		mov	es, ax
+		mov	word ptr buffer_addr, bx
+		mov	buffer_len, cx
+		call	set_buf_start
+		mov	ax, si
+		add	al, es:[bx]
+		adc	ah, 0
+		mov	buffer_end0, ax
+		mov	buffer_end1, ax
+		mov	al, cur_x
+		mov	input_x0, al
+		mov	input_rightx, al
+
+line_input_loop:			; CODE XREF: C_READSTR+76j
+					; C_READSTR+87j ...
+		mov	si, buffer_len
+		cmp	si, word ptr buffer_addr
+		jz	not_existing
+		lods	es:byte ptr [si]
+		mov	buffer_len, si
+		test	al, al
+		jnz	lil_notblank
+		mov	ax, word ptr buffer_addr
+		mov	buffer_len, ax
+
+not_existing:				; CODE XREF: C_READSTR+52j
+		mov	es, rlr
+		call	bdos_conin
+		mov	es, word ptr buffer_addr+2
+
+lil_notblank:				; CODE XREF: C_READSTR+5Cj
+		cmp	al, 7Fh
+		jnz	input_notdel
+		call	input_delete
+		jmps	line_input_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_notdel:				; CODE XREF: C_READSTR+71j
+		cmp	al, 18h
+		ja	input_notctl
+		mov	bl, al
+		xor	bh, bh
+		shl	bx, 1
+		call	cs:input_ctlchars[bx]
+		jmps	line_input_loop
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+input_notctl:				; CODE XREF: C_READSTR+7Aj
+		call	input_inschar
+		jmps	line_input_loop
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_STAT:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:179Fo
+		xor	bx, bx
+		cmp	es:proc_background, 0
+		jnz	cstat_ret
+		call	proc_enter_con
+		call	bdos_const
+		jz	cstat_ret
+		test	es:proc_conmode, 1
+		jz	c_stat_allkeys	; Check	for ^C only?
+		call	bdos_conin
+		xor	bx, bx
+		cmp	al, 3
+		jnz	cstat_ret
+		mov	queued_key, ax
+
+c_stat_allkeys:				; CODE XREF: C_STAT+19j
+		mov	bl, 1
+
+cstat_ret:				; CODE XREF: C_STAT+8j	C_STAT+10j
+					; ...
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+S_BIOS:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17A1o
+		mov	si, dx
+		push	ds
+		mov	ds, es:userDS
+		mov	al, [si]
+		mov	cx, 1[si]
+		mov	dx, 3[si]
+		pop	ds
+		xor	ah, ah
+		cmp	al, 80h
+		jnb	s_bios_passthro
+		cmp	al, 16h
+		ja	s_bios_notimpl
+		mov	bx, ax
+		shl	bx, 1
+		jmp	cs:s_bios_funcs[bx]
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+s_bios_passthro:			; CODE XREF: S_BIOS+15j call_devini+2j
+					; ...
+		callf	dword ptr lp_xios_entry
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+simulate_const:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F18o
+		cmp	es:proc_background, 0
+		jnz	simconst_0
+		call	attach_console
+		jmp	bdos_const
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+simconst_0:				; CODE XREF: simulate_const+6j
+		xor	bx, bx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+simulate_conin:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F1Ao
+		cmp	es:proc_background, 0
+		jnz	j_abort_minus3
+		call	attach_console
+		jmp	bdos_conin
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+j_abort_minus3:				; CODE XREF: simulate_conin+6j
+		jmp	abort_minus3
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+simulate_conout:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F1Co
+		cmp	es:proc_background, 0
+		jnz	simconout_bg
+		call	attach_console
+		jmp	xios_char_out
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+simconout_bg:				; CODE XREF: simulate_conout+6j
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+s_bios_notimpl:		; CODE XREF: S_BIOS+19j S_BIOS+1Fu
+					; DATA XREF: ...
+		mov	bx, 0FFFFh
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+call_listst:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F32o
+		mov	al, 3
+		jmp	lst_xios
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+call_devini:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F3Eo
+		mov	al, 0Eh
+		jmps	s_bios_passthro
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+call_conost:		; CODE XREF: S_BIOS+1Fu
+					; DATA XREF: bdos:1F40o
+		cmp	es:proc_background, 0
+		jnz	bg_conost
+		call	attach_console
+		mov	al, 0Fh
+		jmps	s_bios_passthro
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bg_conost:				; CODE XREF: call_conost+6j
+		mov	bx, 0FFh
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+s_bios_funcs	dw offset abort		; DATA XREF: S_BIOS+1Fo
+		dw offset abort
+		dw offset simulate_const
+		dw offset simulate_conin
+		dw offset simulate_conout
+		dw offset L_WRITE
+		dw offset A_WRITE
+		dw offset A_READ
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset call_listst
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset s_bios_notimpl
+		dw offset call_devini
+		dw offset call_conost
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_MODE:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17A3o
+		inc	dx
+		jz	c_mode1
+		dec	dx
+		mov	es:proc_conmode, dx
+		or	es:proc_flags, 8000h
+
+c_mode1:				; CODE XREF: C_MODE+1j
+		mov	bx, es:proc_conmode
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_DELIMIT:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17A5o
+		inc	dx
+		jz	c_delimit1
+		dec	dx
+		mov	es:proc_delimiter, dl
+
+c_delimit1:				; CODE XREF: C_DELIMIT+1j
+		mov	bl, es:proc_delimiter
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_WRITEBLK:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17A7o
+		cmp	es:proc_background, 0
+		jnz	c_writeblk3
+		call	proc_enter_con
+		mov	di, dx
+		call	get_chcb	; Load DI,BX,CX	from character control block at	DI
+
+c_writeblk1:				; CODE XREF: C_WRITESTR+26j
+		jcxz	c_writeblk3
+		test	es:proc_conmode, 4
+	if PCPM204E
+		nop
+		nop
+	else
+		jnz	c_raw_writeblk
+	endif
+		mov	si, di
+
+c_writeblk2:				; CODE XREF: C_WRITEBLK+2Dj
+		push	cx
+		push	ds
+		mov	ds, bx
+		lodsb
+		mov	cl, al
+		pop	ds
+		push	si
+		push	bx
+		call	expand_tabs
+		pop	bx
+		pop	si
+		pop	cx
+		loop	c_writeblk2
+
+c_writeblk3:				; CODE XREF: C_WRITEBLK+6j
+					; C_WRITEBLK+10j ...
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+c_raw_writeblk:
+		sub	dx, dx
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+l_writeblk_main:		; CODE XREF: L_WRITEBLK+Bp
+		jcxz	c_writeblk3
+		test	dx, dx
+		jnz	j_l_writeblk1
+		mov	ax, es:proc_redir_o
+		or	ax, ax
+		jz	j_l_writeblk1
+		push	ds
+		mov	ds, ax
+
+		mov	al, redir_mode	; Bit 0: 0=write 1=read
+					; Bits 1-2: 0=file 1=aux 2=lst
+		pop	ds
+
+		mov	dx, 100h
+		cmp	al, 4		; To printer
+		jz	j_l_writeblk1
+		mov	dx, 300h
+		cmp	al, 2		; To AUX
+		jz	l_writeblk1
+		or	al, al
+		jz	redir_writeblk
+		jmps	l_wblk_done
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+j_l_writeblk1:				; CODE XREF: l_writeblk_main+4j
+					; l_writeblk_main+Cj
+					; ...
+		jmp	l_writeblk1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redir_writeblk:				; CODE XREF: l_writeblk_main+25j
+		mov	si, di
+		jcxz	redir_wb_end
+
+redir_wblk_loop:			; CODE XREF: l_writeblk_main+4Cj
+		cmp	es:proc_redir_o, 0
+		jz	redir_wb_end
+		push	bx
+		push	cx
+		push	ds
+		mov	ds, bx
+		lodsb
+		xchg	ax, cx
+		mov	ds, es:proc_redir_o
+		push	si
+		call	redir_write
+		pop	si
+		pop	ds
+		pop	cx
+		pop	bx
+		loop	redir_wblk_loop
+
+redir_wb_end:				; CODE XREF: l_writeblk_main+2Ej
+					; l_writeblk_main+36j
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+l_writeblk1:				; CODE XREF: l_writeblk_main+21j
+					; l_writeblk_main+29j
+					; ...
+		push	dx
+		push	cx
+		push	bx
+		push	di
+		mov	al, 27h
+		callf	dword ptr lp_xios_entry
+		pop	di
+		pop	bx
+		pop	cx
+		pop	dx
+		jcxz	l_wblk_done
+		jmps	l_writeblk1
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+l_wblk_done:				; CODE XREF: l_writeblk_main+27j
+					; l_writeblk_main+5Dj
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+L_WRITEBLK:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17A9o
+		call	attach_lst
+		mov	di, dx
+		call	get_chcb	; Load DI,BX,CX	from character control block at	DI
+		mov	dx, 100h
+		call	l_writeblk_main
+		mov	lst_owner, 0FFh
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; Load DI,BX,CX	from character control block at	DI
+
+get_chcb:		; CODE XREF: C_WRITEBLK+Dp
+					; L_WRITEBLK+5p ...
+		push	ds
+		mov	ds, es:userDS
+		mov	cx, 4[di]
+		mov	bx, 2[di]
+		mov	di, [di]
+		pop	ds
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+C_DETACH:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17ABo
+		mov	cx, 45		; No clock
+		cmp	xios_bh_ticks, 0
+		jz	detach_fail
+		cmp	es:proc_background, 0
+		jz	do_detach
+		mov	cx, 20h		; Don't own the console
+
+detach_fail:				; CODE XREF: C_DETACH+8j
+		mov	bx, 0FFFFh
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+do_detach:				; CODE XREF: C_DETACH+10j
+		mov	cx, 103h
+		jmp	bdos_callback
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+c_nop:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17ADo ...
+		sub	bx, bx
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+A_bdos_AC:				; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17B7o
+		call	attach_aux
+		mov	di, dx
+		mov	dx, 200h
+		jmps	chcb_block_io
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+A_bdos_AD:				; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17B9o
+		call	attach_aux
+		mov	di, dx
+		mov	dx, 300h
+
+chcb_block_io:				; CODE XREF: bdos:2049j
+		call	get_chcb	; Load DI,BX,CX	from character control block at	DI
+		push	dx
+		push	cx
+		push	bx
+		push	di
+		mov	al, 27h
+		callf	dword ptr lp_xios_entry
+		add	sp, 8
+		mov	aux_owner, 0FFh
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+callback_0418:				; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17BBo
+		mov	al, es:proc_pid	; Detach AUX and LST
+		cmp	al, lst_owner
+		jnz	dont_have_lst
+		mov	lst_owner, 0FFh
+
+dont_have_lst:				; CODE XREF: bdos:2071j
+		cmp	al, aux_owner
+		jnz	dont_have_aux
+		mov	aux_owner, 0FFh
+
+dont_have_aux:				; CODE XREF: bdos:207Cj
+		retn	
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+callback_0419:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17BDo
+		push	dx
+		mov	cl, dl
+		xor	dx, dx
+		mov	al, 2		; CONOUT
+		callf	dword ptr lp_xios_entry
+		pop	dx
+		test	cio_flags, 200h
+		jz	no_lp_echo
+		test	es:proc_conmode, 4
+		jnz	no_lp_echo
+		mov	cx, 5		; Echo to printer if necessary
+		call	bdos_callback
+
+no_lp_echo:				; CODE XREF: callback_0419+12j
+					; callback_0419+1Bj
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+bdos_statin:		; CODE XREF: const_noqueuep
+		mov	ax, 0
+		test	es:proc_redir_i, 0FFFFh
+		jz	call_xios	; CONST
+		push	ds
+		mov	ds, es:proc_redir_i
+
+		mov	al, redir_mode	; Bit 0: 0=write 1=read
+					; Bits 1-2: 0=file 1=aux 2=lst
+		pop	ds
+
+		cmp	al, 2
+		jb	j_redir_const
+		cmp	al, 3
+		jnz	bdos_l_statin
+		jmp	A_STATIN
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+bdos_l_statin:				; CODE XREF: bdos_statin+1Cj
+		xor	bx, bx
+		xor	ax, ax
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+j_redir_const:				; CODE XREF: bdos_statin+18j
+		jmp	redir_const
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redirect_input:		; CODE XREF: bdos_chk_conin+Fp
+					; bdos_conin+Ap
+		mov	ax, 1
+		test	es:proc_redir_i, 0FFFFh
+		jz	call_xios
+		mov	ax, es:proc_redir_i
+
+redir_io:				; CODE XREF: bdos:210Fj
+		push	ds
+		mov	ds, ax
+
+		mov	al, redir_mode	; Bit 0: 0=write 1=read
+					; Bits 1-2: 0=file 1=aux 2=lst
+		pop	ds
+
+		mov	bx, 5
+		cmp	al, 4
+		ja	redir_unkdev
+		mov	bl, al
+
+redir_unkdev:				; CODE XREF: redirect_input+1Cj
+		shl	bx, 1
+		jmp	cs:redirects[bx]
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+xios_char_out:		; CODE XREF: bdos_char_out+27p
+					; C_WRITE+14j ...
+		mov	al, 2
+		cmp	es:proc_redir_o, 0
+		jnz	redirect_output
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+call_xios:		; CODE XREF: A_READ+5p	L_WRITE+5p
+					; ...
+		push	cx
+		xor	dx, dx
+		callf	dword ptr lp_xios_entry
+		pop	cx
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redirect_output:			; CODE XREF: xios_char_out+8j
+		mov	ax, es:proc_redir_o
+		jmp	redir_io
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+lst_read:		; CODE XREF: redirect_input+22u
+					; DATA XREF: bdos:2121o
+		xor	ax, ax
+		mov	bx, ax
+		retn	
+
+
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+redirects	dw offset redir_dowrite	; DATA XREF: redirect_input+22o
+		dw offset redir_read
+		dw offset A_WRITE
+		dw offset A_READ
+		dw offset L_WRITE
+		dw offset lst_read
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redir_const:				; CODE XREF: bdos_statin+26j
+		push	ds
+		mov	ds, es:proc_redir_i
+		call	redir_pollbyte	; Reads	a byte from redirected input.
+					; Does not advance the file pointer.
+		pop	ds
+		cmp	bl, 0
+		jnz	redir_rd_ret1
+
+redir_rd_ret0:				; CODE XREF: redir_read+15j
+		xor	bx, bx
+		xor	ax, ax
+		retn	
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redir_rd_ret1:				; CODE XREF: bdos:2130j
+		mov	bx, 1
+		mov	ax, bx
+		retn	
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redir_read:		; CODE XREF: redirect_input+22u
+					; DATA XREF: bdos:2119o
+		push	ds
+		mov	ds, es:proc_redir_i
+
+		call	redir_pollbyte	; Reads	a byte from redirected input.
+					; Does not advance the file pointer.
+		pop	ds
+
+		cmp	bl, 0
+		jnz	redir_rd_noeof
+		cmp	es:proc_background, 0
+		jnz	redir_rd_ret0
+		mov	ax, 1		; End of redirected input, revert to console
+		jmp	call_xios
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redir_rd_noeof:				; CODE XREF: redir_read+Dj
+		push	ds
+		mov	ds, es:proc_redir_i
+
+		inc	redir_buf_count
+		cmp	bl, 0Dh
+		jnz	redir_rd_not_cr
+		call	redir_pollbyte	; Reads	a byte from redirected input.
+					; Does not advance the file pointer.
+		mov	al, bl
+		mov	bl, 0Dh
+		cmp	al, 0Ah		; Skip LF following CR
+		jnz	redir_rd_not_cr
+		inc	redir_buf_count
+
+redir_rd_not_cr:			; CODE XREF: redir_read+2Aj
+					; redir_read+35j
+		pop	ds
+
+		xor	bh, bh
+		mov	ax, bx
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redir_dowrite:		; CODE XREF: redirect_input+22u
+					; DATA XREF: bdos:2117o
+		push	ds
+		mov	ds, es:proc_redir_o
+		call	redir_write
+		pop	ds
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; Flush	redirected output
+
+callback_041A:		; CODE XREF: bdos:17C3u
+					; DATA XREF: bdos:17BFo
+		mov	ax, es:proc_redir_o
+		or	ax, ax
+		jz	redir_noflush
+		push	ds
+		mov	ds, ax
+		mov	cx, 22h
+		call	redir_rdwr
+		pop	ds
+
+redir_noflush:				; CODE XREF: callback_041A+6j
+		retn	
+
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redir_write:		; CODE XREF: l_writeblk_main+45p
+					; redir_dowrite+6p
+		mov	al, redir_buf_count
+		or	al, al		; Buffer full?
+		jns	redir_bufnotful
+		push	cx
+		mov	cx, 22h
+		call	redir_rdwr
+		inc	word ptr redir_fcb+21h
+		jnz	redir_write_noi
+		inc	redir_fcb+23h
+
+redir_write_noi:			; CODE XREF: redir_write+12j
+		push	es
+		push	ds
+		pop	es
+
+		mov	di, offset redir_buf
+		mov	cx, 40h		; Clear	the buffer out again
+		xor	ax, ax
+		rep stosw
+		pop	es
+
+		pop	cx
+		xor	al, al
+		mov	redir_buf_count, al
+
+redir_bufnotful:			; CODE XREF: redir_write+5j
+		xor	ah, ah
+		xchg	ax, si
+		mov	redir_buf[si], cl
+		inc	redir_buf_count
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+; Reads	a byte from redirected input.
+; Does not advance the file pointer.
+
+redir_pollbyte:		; CODE XREF: bdos:2129p redir_read+6p
+					; ...
+		mov	al, redir_buf_count
+		or	al, al
+		jns	redir_buf_is_ok
+		mov	cx, 21h		; Random read
+		inc	word ptr redir_fcb+21h
+		jnz	redir_read_noin
+		inc	redir_fcb+23h
+
+redir_read_noin:			; CODE XREF: redir_pollbyte+Ej
+		call	redir_rdwr
+		xor	al, al
+		mov	redir_buf_count, al
+
+redir_buf_is_ok:			; CODE XREF: redir_pollbyte+5j
+		xor	ah, ah
+		xchg	ax, si
+		mov	bl, redir_buf[si]
+		or	bl, bl		; EOF?
+		jnz	redir_not_eof
+		mov	es:proc_redir_i, 0
+
+redir_not_eof:				; CODE XREF: redir_pollbyte+24j
+		mov	al, bl
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redir_rdwr:		; CODE XREF: callback_041A+Ep
+					; redir_write+Bp ...
+		mov	al, es:proc_multisec
+		mov	ah, es:proc_errmode
+		push	ax
+		push	es:word ptr proc_dma+2
+		push	es:word ptr proc_dma
+		call	redir_swapdir
+		mov	es:proc_errmode, 0FFh
+		mov	es:proc_multisec, 1
+		mov	es:word ptr proc_dma, offset redir_buf
+		mov	es:word ptr proc_dma+2,	ds
+		push	cx
+		mov	cx, 0Fh		; Open file
+		mov	dx, offset redir_fcb
+		call	bdos_callback
+		pop	cx		; BDOS function
+		cmp	bl, 0FFh
+		jz	redir_open_fail
+		mov	dx, offset redir_fcb
+		call	bdos_callback
+		or	bl, bl
+		jz	redir_close
+
+redir_open_fail:			; CODE XREF: redir_rdwr+3Dj
+		cmp	redir_mode, 0	; Bit 0: 0=write 1=read
+					; Bits 1-2: 0=file 1=aux 2=lst
+		jz	redir_mode0
+		mov	redir_buf, 0
+		mov	es:proc_redir_i, 0
+		jmps	redir_close
+;ФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФФ
+
+redir_mode0:				; CODE XREF: redir_rdwr+4Ej
+		mov	es:proc_redir_o, 0
+
+redir_close:				; CODE XREF: redir_rdwr+47j
+					; redir_rdwr+5Cj
+		mov	cx, 10h
+		mov	dx, offset redir_fcb
+		call	bdos_callback
+		cmp	redir_mode, 0	; Bit 0: 0=write 1=read
+					; Bits 1-2: 0=file 1=aux 2=lst
+		jnz	redir_nobytesiz
+		mov	al, redir_buf_count
+		test	al, 7Fh
+		jz	redir_nobytesiz
+		mov	bx, offset redir_fcb
+		mov	cx, 1Eh		; Set attributes
+		mov	dx, bx
+		or	byte ptr 6[bx], 80h; Set file size
+		mov	32[bx], al	; Bytewise size
+		call	bdos_callback
+
+redir_nobytesiz:			; CODE XREF: redir_rdwr+73j
+					; redir_rdwr+7Aj
+		call	redir_swapdir
+		pop	es:word ptr proc_dma
+		pop	es:word ptr proc_dma+2
+		pop	ax
+		mov	es:proc_multisec, al
+		mov	es:proc_errmode, ah
+		retn	
+
+
+
+;лллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллллл
+
+;		S u b r	o u t i	n e
+
+redir_swapdir:		; CODE XREF: redir_rdwr+14p
+					; redir_rdwr+8Ep
+		mov	ax, redir_cwd
+		mov	bx, es:proc_dirname
+		push	es
+		mov	es, cs:bdos_dseg
+
+		or	es:word ptr 34[bx], 800h
+		xchg	ax, es:22[bx]
+		pop	es
+
+		mov	redir_cwd, ax
+		retn	
+
+
+		dseg
+
+		public	aux_owner
+		public	lst_owner
+
+queued_key	dw 0			; DATA XREF: bdos_constr bdos_chk_conin+1Ew
+					; ...
+cio_flags	dw 0			; DATA XREF: cio_keyboard+24r
+					; cio_keyboard+2Cw
+					; ...
+					; Bit 3: Don't check for input when
+					;	 outputting character
+					; Bit 7: Swallow typed characters?
+					; Bit 9: Don't echo to printer
+console_process	dw 0			; DATA XREF: cio_keyboard+1r
+					; attach_consolew ...
+aux_owner	db 0FFh			; DATA XREF: kill_process+Dr
+					; kill_process+13w ...
+lst_owner	db 0FFh			; DATA XREF: kill_process+18r
+					; kill_process+1Ew ...
+buffer_addr	dw 0,0			; DATA XREF: set_buf_startr
+					; bdos:1CEAr ...
+buffer_len	dw 0			; DATA XREF: C_READSTR+2Cw
+					; C_READSTR+4Ar ...
+buffer_start0	dw 0			; DATA XREF: set_buf_start+7w
+					; input_ctlA+4r ...
+buffer_curpos	dw 0			; DATA XREF: set_buf_start+Bw
+					; echo_upto_end1+24w
+					; ...
+buffer_end0	dw 0			; DATA XREF: input_drawline+4r
+					; echo_upto_end1+20w
+					; ...
+buffer_end1	dw 0			; DATA XREF: input_drawliner
+					; echo_upto_end1r ...
+input_x0	db 0			; DATA XREF: input_hash+Br
+					; input_ctlA+21r ...
+input_rightx	db 0			; DATA XREF: bdos_char_out+67r
+					; bdos_char_out+6Dw ...
+

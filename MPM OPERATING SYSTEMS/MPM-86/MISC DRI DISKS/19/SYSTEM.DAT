@@ -1,0 +1,694 @@
+;*****************************************************
+;*
+;*	System Data Area
+;*
+;*****************************************************
+
+	DSEG
+	org	0
+
+	;
+	;This data is initialized by GENSYS
+	;
+
+	;Module Table - contains the FAR CALL addresses
+	;	of each module for their initialization
+	;	and entry routines.
+	;
+	;	+---+---+---+---+---+---+---+---+
+	;	|     entry     |   initialize  |
+	;	+---+---+---+---+---+---+---+---+
+	;
+	;	      entry    init
+	;	      -----    ----
+
+module_table	equ	dword ptr (offset $)
+supmod		equ 	(offset $)
+		dw	3,0,	0,0	;SUP
+
+rtmmod		equ 	(offset $)
+		dw	3,0,	0,0	;RTM
+
+memmod		equ 	(offset $)
+		dw	3,0,	0,0	;MEM
+
+ciomod		equ 	(offset $)
+		dw	3,0,	0,0	;CIO
+
+bdosmod		equ 	(offset $)
+		dw	3,0,	0,0	;BDOS
+
+xiosmod		equ 	(offset $)
+		dw	0d73h,0,0d70h,0	;XIOS
+
+netmod		equ 	(offset $)
+		dw	3,0,	0,0	;NET
+
+dispatcher	equ	(offset $)
+		dw	0,0		;far dispatcher (does IRET)
+
+rtm_pdisp	equ	(offset $)
+		dw	0,0		;far dispatcher (does RETF)
+
+	; location in memory of MP/M-86
+
+mpmseg		dw	1008h	;1st parag. of MP/M
+rspseg		dw	0	;segment of first RSP
+endseg		dw	0	;1st parag. outside of MP/M
+
+module_map	db	03fh	;bit map of modules that exist
+				; in this system.  low order bit
+				; corresponds to 1st module in
+				; module table.  If bit is on,then
+				; module exists.
+
+	; some answers to GENSYS questions
+
+ncns		db	4	;# system console devices
+nlst		db	1	;# system list devices
+nccb		db	5	;# character control blocks
+nflags		db	20h	;# flags
+srchdisk	db	1	;system disk
+mmp		dw	0ffffh	;Max Memory per process
+nslaves		db	0	;Number of network requestors
+dayfile		db	0ffh	;if 0ffh,display command info
+tempdisk	db	0	;Temporary disk
+tickspersec	db	60	;Number of ticks per second
+
+	; data lists created by GENSYS
+
+free_root	dw	0	;locked unused list
+ccb		dw	0	;addr. Console Ctrl Blk Table
+flags		dw	0	;addr. Flag Table
+mdul		dw	030h	;Mem descr. Unused List
+mfl		dw	0	;Memory Free List
+pul		dw	020h	;Proc. descr. Unused List
+qul		dw	020h	;QCB Unused List
+				; MAU for queue buffer info
+qmau		dw	0	;link
+		dw	0	;start segment
+		dw	200h	;length
+		dw	0	;plist
+
+	;
+	;This data is initialized at Assembly time
+	;
+
+rlr		dw	initpd	;Ready List Root
+dlr		dw	0	;Delay List Root
+drl		dw	0	;Dispatcher Ready List
+plr		dw	0	;Poll List Root
+slr		dw	0	;Swap List Root
+thrdrt		dw	initpd	;Process Thread Root
+qlr		dw	mxloadqd;Queue List Root
+mal		dw	0	;Memory Alloc List
+
+	; Version Information
+
+version		dw	unknown	;addr. version str in SUP code segment
+vernum		dw	01130h	;MPM-86 w/BDOS v3.0
+mpmvernum	dw	01120h	;MPM-86 V1.0
+
+	; Time of Day Structure
+
+tod		rw	0
+tod_day		dw	0554H	;day since 1/1/78 (5 Oct 81)
+tod_hr		db	12h	;hour of day
+tod_min		db	00h	;minute of hour
+tod_sec		db	00h	;second of minute
+
+	; info from XIOS
+
+ncondev		db	0		;# console devs in XIOS
+nlstdev		db	0		;# character devs in XIOS
+nciodev		db	0		;# character i/o devices
+					; supported by XIOS.
+syslrec		dw	32		; Total System Locked Records
+syslfil		dw	32		; Total System Open Files
+lock_max	db	16,0		; Max Locked Records/process
+open_max	db	16,0		; Max Open Files/process
+sysltot		dw	48		; Total Lock List Items
+		dw	0,0,0,0		; RESERVED
+		dw	0,0,0,0		; RESERVED
+
+
+	; SYSENT Table - MP/M-86 system function information
+	;	The supervisor calls the appropriate module
+	;	through this table.
+	;
+	;	+-------+-------+-------+
+	;	| module| func #| flags |
+	;	+-------+-------+-------+
+	;
+	;	module - module number
+	;	func # - function to call within module
+	;	flags  - 001h - network intercept
+	;		if on, the network module is called
+	;		first, on return, either the function
+	;		is called or it is considered complete
+	;		depending on the return.
+
+			; standard CPM-2 functions
+
+	;	module	func	flags
+sysent	db	rtm,	0,	0	;  0-system reset
+	db	cio,	0,	0	;  1-conin
+	db	cio,	1,	0	;  2-conout
+	db	cio,	2,	0	;  3-raw conin
+	db	cio,	3,	0	;  4-raw conout
+	db	cio,	4,	0	;  5-list out
+	db	cio,	5,	0	;  6-raw conio
+	db	sup,	0,	0	;  7-getiobyte
+	db	sup,	0,	0	;  8-setiobyte
+	db	cio,	6,	0	;  9-conwrite
+	db	cio,	7,	0	; 10-conread
+	db	cio,	8,	0	; 11-constat
+	db	sup,	2,	0	; 12-get version
+	db	bdos,	0,	0	; 13-diskreset
+	db	bdos,	1,	0	; 14-diskselect
+	db	bdos,	2,	0	; 15-file open
+	db	bdos,	3,	0	; 16-file close
+	db	bdos,	4,	0	; 17-search first
+	db	bdos,	5,	0	; 18-search next
+	db	bdos,	6,	0	; 19-file delete
+	db	bdos,	7,	0	; 20-file read seq
+	db	bdos,	8,	0	; 21-file write seq
+	db	bdos,	9,	0	; 22-file make
+	db	bdos,	10,	0	; 23-file rename
+	db	bdos,	11,	0	; 24-login vector
+	db	bdos,	12,	0	; 25-get def disk
+	db	bdos,	13,	0	; 26-set dma
+	db	bdos,	14,	0	; 27-get alloc vector
+	db	bdos,	15,	0	; 28-write protect
+	db	bdos,	16,	0	; 29-get r/0 vector
+	db	bdos,	17,	0	; 30-set file attr.
+	db	bdos,	18,	0	; 31-get disk parm block
+	db	bdos,	19,	0	; 32-user code
+	db	bdos,	20,	0	; 33-file read random
+	db	bdos,	21,	0	; 34-file write random
+	db	bdos,	22,	0	; 35-file size
+	db	bdos,	23,	0	; 36-set random record
+	db	bdos,	24,	0	; 37-reset drive
+	db	bdos,	25,	0	; 38-access drive
+	db	bdos,	26,	0	; 39-free drive
+	db	bdos,	27,	0	; 40-file write random w/zero fill
+
+			;CPM-3 extensions
+
+	db	bdos,	28,	0	; 41-Test and Write
+	db	bdos,	29,	0	; 42-Lock Record
+	db	bdos,	30,	0	; 43-Unlock Record
+	db	bdos,	31,	0	; 44-Set Multi-sector
+	db	bdos,	32,	0	; 45-Set Bdos Error Mode
+	db	bdos,	33,	0	; 46-Get Disk Free Space
+	db	sup,	12,	0	; 47-Chain to Program
+	db	bdos,	35,	0	; 48-Flush Buffers
+	db	sup,	1,	0	; 49-
+
+			;CPM-86 extensions
+
+	db	sup,	3,	0	; 50-call xios
+	db	bdos,	36,	0	; 51-set dma base
+	db	bdos,	37,	0	; 52-get dma
+	db	mem,	0,	0	; 53-get max mem
+	db	mem,	1,	0	; 54-get abs max mem
+	db	mem,	2,	0	; 55-alloc mem
+	db	mem,	3,	0	; 56-alloc abs mem
+	db	mem,	4,	0	; 57-free mem
+	db	mem,	5,	0	; 58-free all mem
+	db	sup,	4,	0	; 59-load
+	db	sup,	1,	0	; 60-
+	db	sup,	1,	0	; 61-
+	db	sup,	1,	0	; 62-
+	db	sup,	1,	0	; 63-
+
+			;CP/NET functions
+
+	db	net,	64,	0	; 64-network login
+	db	net,	65,	0	; 65-network logoff
+	db	net,	66,	0	; 66-network send msg
+	db	net,	67,	0	; 67-network rcv msg
+	db	net,	68,	0	; 68-network status
+	db	net,	69,	0	; 69-get network config addr
+	db	sup,	1,	0	; 70-
+	db	sup,	1,	0	; 71-
+	db	sup,	1,	0	; 72-
+	db	sup,	1,	0	; 73-
+	db	sup,	1,	0	; 74-
+	db	sup,	1,	0	; 75-
+	db	sup,	1,	0	; 76-
+	db	sup,	1,	0	; 77-
+	db	sup,	1,	0	; 78-
+	db	sup,	1,	0	; 79-
+	db	sup,	1,	0	; 80-
+	db	sup,	1,	0	; 81-
+	db	sup,	1,	0	; 82-
+	db	sup,	1,	0	; 83-
+	db	sup,	1,	0	; 84-
+	db	sup,	1,	0	; 85-
+	db	sup,	1,	0	; 86-
+	db	sup,	1,	0	; 87-
+	db	sup,	1,	0	; 88-
+	db	sup,	1,	0	; 89-
+	db	sup,	1,	0	; 90-
+	db	sup,	1,	0	; 91-
+	db	sup,	1,	0	; 92-
+	db	sup,	1,	0	; 93-
+	db	sup,	1,	0	; 94-
+	db	sup,	1,	0	; 95-
+	db	sup,	1,	0	; 96-
+	db	sup,	1,	0	; 97-
+	db	sup,	1,	0	; 98-
+	db	sup,	1,	0	; 99-
+
+		;CP/M-3 extensions
+
+	db	bdos,	38,	0	;100-Set Dir Label
+	db	bdos,	39,	0	;101-Return Dir Label
+	db	bdos,	40,	0	;102-Read File XFCB
+	db	bdos,	41,	0	;103-Write File XFCB
+	db	bdos,	42,	0	;104-Set Date and Time
+	db	bdos,	43,	0	;105-Get Date and Time
+	db	bdos,	44,	0	;106-Set Default Password
+	db	sup,	13,	0	;107-Return Serial Number
+	db	sup,	1,	0	;108-
+	db	sup,	1,	0	;109-
+	db	sup,	1,	0	;110-
+	db	sup,	1,	0	;111-
+	db	sup,	1,	0	;112-
+	db	sup,	1,	0	;113-
+	db	sup,	1,	0	;114-
+	db	sup,	1,	0	;115-
+	db	sup,	1,	0	;116-
+	db	sup,	1,	0	;117-
+	db	sup,	1,	0	;118-
+	db	sup,	1,	0	;119-
+	db	sup,	1,	0	;120-
+	db	sup,	1,	0	;121-
+	db	sup,	1,	0	;122-
+	db	sup,	1,	0	;123-
+	db	sup,	1,	0	;124-
+	db	sup,	1,	0	;125-
+	db	sup,	1,	0	;126-
+	db	sup,	1,	0	;127-
+
+		; MP/M functions
+
+	db	mem,	6,	0	;128-abs mem req
+	db	mem,	6,	0	;129-rel mem req
+	db	mem,	7,	0	;130-mem free
+	db	rtm,	1,	0	;131-poll device
+	db	rtm,	2,	0	;132-flag wait
+	db	rtm,	3,	0	;133-flag set
+	db	rtm,	4,	0	;134-queue make
+	db	rtm,	5,	0	;135-queue open
+	db	rtm,	6,	0	;136-queue delete
+	db	rtm,	7,	0	;137-queue read
+	db	rtm,	8,	0	;138-cond. queue read
+	db	rtm,	9,	0	;139-queue write
+	db	rtm,	10,	0	;140-cond. queue write
+	db	rtm,	11,	0	;141-delay
+	db	rtm,	12,	0	;142-dispatch
+	db	rtm,	13,	0	;143-terminate
+	db	rtm,	14,	0	;144-create process
+	db	rtm,	15,	0	;145-set priority
+	db	cio,	9,	0	;146-console attach
+	db	cio,	10,	0	;147-console detach
+	db	cio,	11,	0	;148-set def console
+	db	cio,	12,	0	;149-console assign
+	db	sup,	5,	0	;150-CLI
+	db	sup,	6,	0	;151-call RPL
+	db	sup,	7,	0	;152-parse filename
+	db	cio,	13,	0	;153-get def console
+	db	sup,	8,	0	;154-sysdat addr
+	db	sup,	9,	0	;155-time of day
+	db	rtm,	16,	0	;156-get PD addr
+	db	rtm,	17,	0	;157-abort process
+
+		; MPM II extensions
+
+	db	cio,	15,	0	;158-attach list
+	db	cio,	16,	0	;159-detach list
+	db	cio,	17,	0	;160-set list dev
+	db	cio,	18,	0	;161-Cond. Attach list
+	db	cio,	19,	0	;162-Cond. Attach Console
+	db	sup,	11,	0	;163-MP/M Version Number
+	db	cio,	20,	0	;164-get list dev
+	db	sup,	1,	0	;165-
+	db	sup,	1,	0	;166-
+	db	sup,	1,	0	;167-
+	db	sup,	1,	0	;168-
+	db	sup,	1,	0	;169-
+	db	sup,	1,	0	;170-
+	db	sup,	1,	0	;171-
+	db	sup,	1,	0	;172-
+	db	sup,	1,	0	;173-
+	db	sup,	1,	0	;174-
+	db	sup,	1,	0	;175-
+	db	sup,	1,	0	;176-
+	db	sup,	1,	0	;177-
+	db	sup,	1,	0	;178-
+	db	sup,	1,	0	;179-
+	db	sup,	1,	0	;180-
+	db	sup,	1,	0	;181-
+	db	sup,	1,	0	;182-
+	db	sup,	1,	0	;183-
+	db	sup,	1,	0	;184-
+	db	sup,	1,	0	;185-
+	db	sup,	1,	0	;186-
+	db	sup,	1,	0	;187-
+	db	sup,	1,	0	;188-
+	db	sup,	1,	0	;189-
+	db	sup,	1,	0	;190-
+	db	sup,	1,	0	;191-
+
+		;MP/M-86 extensions
+
+	db	sup,	1,	0	;192-set signal
+	db	sup,	1,	0	;193-signal process
+	db	sup,	1,	0	;194-wait for process
+	db	sup,	1,	0	;195-open std file
+	db	sup,	1,	0	;196-close std file
+	db	sup,	1,	0	;197-read std file
+	db	sup,	1,	0	;198-write std file
+	db	sup,	1,	0	;199-flush std file
+	db	sup,	1,	0	;200-mimic std file
+	db	sup,	1,	0	;201-make std file
+	db	sup,	1,	0	;202-
+	db	sup,	1,	0	;203-
+	db	sup,	1,	0	;204-
+	db	sup,	1,	0	;205-
+	db	sup,	1,	0	;206-
+	db	sup,	1,	0	;207-
+	db	sup,	1,	0	;208-
+	db	sup,	1,	0	;209-
+	db	sup,	1,	0	;210-
+	db	sup,	1,	0	;211-
+	db	sup,	1,	0	;212-
+	db	sup,	1,	0	;213-
+	db	sup,	1,	0	;214-
+	db	sup,	1,	0	;215-
+	db	sup,	1,	0	;216-
+	db	sup,	1,	0	;217-
+	db	sup,	1,	0	;218-
+	db	sup,	1,	0	;219-
+	db	sup,	1,	0	;220-
+	db	sup,	1,	0	;221-
+	db	sup,	1,	0	;222-
+	db	sup,	1,	0	;223-
+	db	sup,	1,	0	;224-
+	db	sup,	1,	0	;225-
+	db	sup,	1,	0	;226-
+	db	sup,	1,	0	;227-
+	db	sup,	1,	0	;228-
+	db	sup,	1,	0	;229-
+	db	sup,	1,	0	;230-
+	db	sup,	1,	0	;231-
+	db	sup,	1,	0	;232-
+	db	sup,	1,	0	;233-
+	db	sup,	1,	0	;234-
+	db	sup,	1,	0	;235-
+	db	sup,	1,	0	;236-
+	db	sup,	1,	0	;237-
+	db	sup,	1,	0	;238-
+	db	sup,	1,	0	;239-
+	db	sup,	1,	0	;240-
+	db	sup,	1,	0	;241-
+	db	sup,	1,	0	;242-
+	db	sup,	1,	0	;243-
+	db	sup,	1,	0	;244-
+	db	sup,	1,	0	;245-
+	db	sup,	1,	0	;246-
+	db	sup,	1,	0	;247-
+	db	sup,	1,	0	;248-
+	db	sup,	1,	0	;249-
+	db	sup,	1,	0	;250-
+	db	sup,	1,	0	;251-
+	db	sup,	1,	0	;252-
+	db	sup,	1,	0	;253-
+	db	sup,	1,	0	;254-
+	db	sup,	1,	0	;255-
+
+	; Initialized Queues
+
+mxloadqd	dw	mxcliqd
+		db	0,0
+		dw	qf_keep+qf_mx
+		db	'MXLoad  '
+		dw	0,1,0,0,1,0,0
+mxloadqpb	db	0,0
+		dw	mxloadqd,1,0
+		db	'MXLoad  '
+
+mxcliqd		dw	mxmemqd		;link
+		db	0,0		;net,org
+		dw	qf_keep+qf_mx	;flags
+		db	'MXcli   '	;name
+		dw	0,1,0,0,1,0,0
+mxcliqpb	db	0,0
+		dw	mxcliqd,1,0
+		db	'MXcli   '	;name
+
+mxmemqd		dw	0		;link
+		db	0,0		;net,org
+		dw	qf_keep+qf_mx	;flags
+		db	'MXmemory'	;name
+		dw	0,1,0,0,1,0,0
+mxmemqpb	db	0,0
+		dw	mxmemqd,1,0
+		db	'MXmemory'
+
+	; Data Used by Load Program
+
+load_dma	rb	dskrecl
+load_uda	dw	0
+load_lstk	dw	0
+load_basep	dw	0
+load_8080	db	0
+load_nrelsegs	db	0
+load_nldtabents	dw	0
+load_pd		dw	0
+load_fcb	dw	0
+load_maxwanted	dw	0
+load_minwanted	dw	0
+load_indma	dw	0
+load_chain	db	0
+ldtab		rb	ldtabsiz
+		
+	;
+	; Data Used by Send Cli Command
+	;
+
+cli_dma		rb	dskrecl		;dma buffer
+cli_dma_ofst	rw	1
+cli_dma_seg	rw	1
+cli_chain	rb	1
+cli_term	rb	1
+cli_pflag	rw	1
+
+		;copy of user's clicb
+cli_net		rb	1		;net
+cli_ppd		rw	1		;parent PD
+cli_cmdtail	rb	129		;command sent
+		rb	1
+
+cli_fcb		rb	fcblen+1	;internal FCB
+
+cli_cuspqpb	db	0,0		;QPB of command
+		dw	0,0
+		dw	offset cli_ppd
+		db	'$$$$$$$$'
+
+cli_acb		db	0,0		;cns,match
+		dw	0		;pd
+		db	'$$$$$$$$'	;name
+
+cli_pcb		dw	offset cli_cmdtail	;parse
+		dw	offset cli_fcb		;ctl bk
+
+cli_pd		dw	0	;pd of load prog
+cli_err		dw	0	;error return
+cli_bpage	dw	0	;base page
+cli_lddsk	db	1	;load disk
+
+	;parent information
+
+cli_cns		db	0	;pd.p_cns save
+cli_user	db	0	;pd.p_dsk save
+cli_dsk		db	0	;pd.p_user save
+cli_err_mode	db	0	;u_error_mode save
+cli_dfil	db	0	;dayfile flag
+
+	;
+	;System Initialization Variables
+	;
+
+		;User Data Area of Init process
+
+	org	((offset $)+0fh) AND 0fff0h
+inituda		rb	ulen
+
+		;User Data Area of Idle process
+
+	org	((offset $)+0fh) AND 0fff0h
+idleuda		rw	1		;dparam
+		dw	0		;dma
+		rw	24
+		dw	offset idle_tos	;stack offset
+		rw	13
+		dw	0,0		;init cs,ds
+		dw	0,0		;init es,ss
+		rb	ulen-((offset $)-(offset idleuda))
+
+		;User Data Area of Tick process
+
+	org	((offset $)+0fh) AND 0fff0h
+tickuda		rw	1		;dparam
+		dw	0		;dma
+		rw	24
+		dw	offset tick_tos	;stack offset
+		rw	13
+		dw	0,0		;init cs,ds
+		dw	0,0		;init es,ss
+		rb	ulen-((offset $)-(offset tickuda))
+
+			;Init Process Descriptor
+
+initpd		dw	0		;link
+		dw	0		;thread
+		db	ps_run		;stat
+		db	1		;prior
+		dw	pf_sys+pf_kernal;flag
+		db	'Init    '	;name
+		dw	unknown		;uda segment
+		db	0		;disk
+		db	0		;user
+		db	0,0		;ldsk,luser
+		dw	0		;mem
+		dw	0		;dvract
+		dw	0		;wait
+		db	0,0		;org,net
+		dw	0		;parent
+		db	0		;cns
+		db	0		;abort
+		db	0,0		;cin,cout
+		db	0		;lst
+		db	0,0,0		;sf3,4,5
+		rb	4		;reserved
+		dw	0,0		;pret,scratch
+
+			;Idle process descriptor
+
+idlepd		dw	tickpd		;link
+		dw	0		;thread
+		db	ps_run		;status
+		db	255		;prior
+		dw	pf_sys+pf_kernal+pf_keep
+					;flag
+		db	'Idle    '	;name
+		dw	((offset idleuda)/10h) ;uda
+		db	0,0		;disk,user
+		db	0,0		;ldsk,luser
+		dw	0,0,0		;mem,dvract,wait
+		db	0,0		;org,net
+		dw	0		;parent
+		db	0,0,0,0		;console,abort,cin,cout
+		db	0,0,0,0		;lst,sf3,4,5
+		rb	4		;reserved
+		dw	0,0		;pret,scratch
+
+			;Tick process descriptor
+
+tickpd		dw	0		;link
+		dw	0		;thread
+		db	ps_run		;status
+		db	10		;prior
+		dw	pf_sys+pf_kernal+pf_keep
+					;flag
+		db	'Tick    '	;name
+		dw	((offset tickuda)/10h) ;uda
+		db	0,0,0,0		;disk,user,ldsk,luser
+		dw	0,0,0		;mem,dvract,wait
+		db	0,0		;org,net
+		dw	0		;parent
+		db	0,0,0,0		;cns,abort,cin,cout
+		db	0,0,0,0		;lst,sf3,4,5
+		rb	4		;reserved
+		dw	0,0		;pret,scratch
+
+			;Idle Stack - ready for a RETF
+			;	from RTM
+
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+idle_tos	dw	unknown		;start address
+		dw	unknown		;segment
+		dw	0200h		;init flags
+
+			;Tick Stack 
+
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+tick_tos	dw	unknown		;start address
+		dw	unknown		;segment
+		dw	0200h		;init flags
+
+			;Init Stack
+
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+init_tos	rw	0
+
+	; RTM data
+
+
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+		dw	0cccch,0cccch,0cccch
+dsptchtos	rw	0
+
+indisp	   	db	false	;?currently in dispatch?
+intflag		db	0	;if 0, interrupts not enabled
+
+es_sav		dw	0
+bx_sav		dw	0
+
+	; CIO Data
+
+mxmemowner	dw	0
+mxmemcount	db	0
+

@@ -1,0 +1,41 @@
+
+;*****************************************************
+;*
+;*	TICK Process
+;*
+;*****************************************************
+
+;======
+notick:		;NO ONE ON DELAY LIST
+;======
+	mov bx,rlr ! mov es,p_uda[bx]
+	mov u_wrkseg,ds
+	mov al,io_stopclk ! call xiosif	
+
+tick:		;SOMEONE MAY BE ON DELAY LIST
+;----
+		; flag wait on the TICK flag
+	mov dx,flag_tick ! mov cx,f_flagwait
+	int mpmint
+
+		; see if anyone delaying
+	pushf ! cli
+	mov bx,dlr
+	cmp bx,0 ! jz drl_empty
+
+		; decrement # of ticks to wait
+		; see if done waiting
+	    dec p_wait[bx] ! jnz next_tick
+
+			; our process is done waiting
+enddelay:	mov si,p_link[bx] ! mov dlr,si
+		mov p_stat[bx],ps_run
+		mov ax,drl ! mov p_link[bx],ax
+		mov drl,bx
+
+		cmp si,0 ! je drl_empty
+		    cmp p_wait[si],0 ! jne next_tick
+			mov bx,si ! jmps enddelay
+next_tick:  popf ! jmps tick
+drl_empty:
+	popf ! jmps notick

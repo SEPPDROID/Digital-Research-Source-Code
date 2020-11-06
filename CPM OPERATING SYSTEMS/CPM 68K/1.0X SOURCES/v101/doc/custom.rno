@@ -1,0 +1,138 @@
+.appendix Customizing the C Compiler
+.title Customizing the C Compiler
+.page
+.c
+Customizing the C Compiler
+.c
+--------------------------
+.bl 1
+.i 5
+Compiling a C program requires running three compiler passes.  The output of
+the compiler is assembly language, which must be assembled and linked with
+the C library to produce a runnable program.  The amount of disk storage
+required for the compiler, assembler, and linker load modules, the C library,
+and the system include files is non-trivial.  This appendix contains a 
+discussion of compiler operation, as well as some suggestions for minimizing
+the disk storage requirements for the compilation process.
+.subtitle Compiler operation
+.hl 1 Compiler operation
+.i 5
+The C compiler consists of three components: the Preprocessor (CP68), 
+the Parser (C068), and
+the Code Generator (C168).  The assembler (AS68) and linker (LO68) are also
+used in generating an executable program.
+These components are operated as follows:
+.ls
+.lec'CP68'The preprocessor is invoked to take the original source file 
+and produce
+a file with all '_#define' and '_#include' statements resolved.  The command
+line is:
+.bl 1
+.i 8
+CP68 [-I d:] file.C file.I
+.bl 1
+The "-I" flag is used to indicate that the next argument is a CP/M 
+drive specification.  This drive will be used for all library include
+statements -- those of the form '_#include <file>'.  Drive specifications
+may also appear in the filename portion of a '_#include' statement, but
+this procedure is not recommended.  "file.C" is the source file, and "file.I"
+is the output file.
+.lec'C068'The parser takes the file produced by the and creates an 
+intermediate code file.  The command line is:
+.bl 1
+.i 8
+C068 file.I file.IC file.ST
+.bl 1
+"file.I" is the output from the preprocessor.  "file.IC" is the intermediate
+code file for use by C168.  "file.ST" is a temporary file used to collect
+constant data for inclusion at the end of the intermediate code file.
+.lec'C168'The code generator takes the intermediate code file from C068 and
+produces an assembly-language source file.  The command line is:
+.bl 1
+.i 8
+C168 file.IC file.S [-LD]
+.bl 1
+"file.IC" is the intermediate code output from C068.  "file.S" is the
+assembly language output file.  The "-L" flag is used to indicate that the
+compilation is to assume all address variables are 32 bits.  Default is 16
+bit addresses.
+The "-D" flag
+causes the compiler to include the line numbers from the source file (file.C)
+as comments in the generated assembly language.  This can be very useful for
+debugging.
+.lec'AS68'The assembler is used to translate the compiler output to a form
+suitable for use by the linkage editor.  The command line is:
+.bl 1
+.i 8
+AS68 -L -U [-F d:] [-S d:] file.S
+.bl 1
+The "-L" option is used to indicate that addresses are to be considered
+32 bit quantities.  The "-U" option means that undefined symbols are to be
+considered external references.  The "-F" option specifies a drive to be used
+for the assembler's temporary files.  The "-S" option specifies a drive to be
+used for the assembler's initialization file "AS68SYMB.DAT".  "file.S" is the
+output of C168, and "file.O" is produced by the assembler.
+.lec'LO68'The linker is used to produce an executable file from the output of
+one or more assembler runs.  A startup file and the C library must also
+be included when linking C programs.  The linker command line is:
+.bl 1
+.i 8
+LO68 -R [-F d:] -O file.68K S.O file.O CLIB
+.bl 1
+The "-R" option specifies that the file is to be relocatable.  Relocatable
+files may be run on any CP/M-68K system.  The "-F" option allows placing the
+linker temporary files on a disk drive other than the default.  The 
+"-O file.68K" construct causes the linker to place the executable output
+in "file.68K".  "S.O" is the runtime startup routine.  This file must be
+included as the first file in every C program link.  "file.O" is the
+output of the assembler.  Multiple files may be specified between "S.O" and
+"CLIB" if separate compilation is desired.  "CLIB" is the C library file.
+.els
+.subtitle Supplied SUBMIT files
+.hl 1 Supplied SUBMIT files
+.i 5
+CP/M-68K includes two files, "C.SUB" and "CLINK.SUB", which may be used to 
+compile and link (respectively) a C program.  The use of these files is 
+described in Chapter 1 under "Operating Instructions".  It may be desirable,
+however, to edit these files to specify different disk drives for any of the
+following items:
+.bl 1
+.ls
+.leb;The disk drive on which the compiler passes, assembler and linker reside.
+.leb;The disk drive which is referenced by '_#include <file>' statements in
+the C preprocessor.
+.leb;The disk drive on which the assembler initialization file is kept.
+.leb;The disk drive on which the assembler and linker create temporary files.
+.leb;The disk drive on which the C library file is kept.
+.els
+The default drive is currently used for all of the above items.
+.subtitle Disk Space Optimization
+.hl 1 Disk Space Optimization
+.i 5
+In situations where disk space is at a premium, several things can be done
+to minimize diskette shuffling:
+.ls
+.leb;Use the "reloc" utility on all load modules which are to be used:  the
+compiler, assembler, linker, and editor.  This will significantly reduce file
+size and load time.
+.leb;Place all of the load modules on one disk, and use a second disk for 
+sources and temporary files.  This requires at least two drives.
+.leb;On single density diskette systems, it will be necessary to place 
+the C library file
+and linker on a separate diskette, and to make a diskette swap before 
+linking.
+.els
+.subtitle Speed Optimization
+.hl 1 Speed Optimization
+.i 5
+In addition to the items listed above, it is possible to make the compilation
+process faster by:
+.ls
+.leb;Putting the assembler temp files on a different drive from the source
+and object files.
+.leb;Putting the linker temp files on a different drive from the object
+input, C library, and load module output.
+.leb;Using the linker "-S" (Suppress symbol table), and "-T" (absolute
+load module) switches in place of the "-R" flag.  Note that the resulting
+program will not run on an arbitrary CP/M-68K system if this is done.
+.els

@@ -1,0 +1,1119 @@
+1File: MAIN.C                                                              Page       1
+     1   /*
+     2   	Copyright 1981
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   char *sccs "@(#)as68 - Nov 12, 1982";
+     9    
+    10   /*
+    11    * a two pass relocatable assembler for the Motorola 68000 microprocessor
+    12    
+    13    *  Bill Allen
+    14    *	Modified by Vicki Hutchison
+    15    
+    16    *  after any of this assembler is recompiled, it must be initialized
+    17    *  before it will execute properly.  To initialize, become super user
+    18    *  and execute the command:
+    19    
+    20    *		as68 -i as68init
+    21    
+    22    *  where as68 is the newly compiled version of the assembler.  With-
+    23    *  out this initialization, the assembler will not run (probably bus
+    24    *  error).
+    25    */
+    26    
+    27   /*
+    28    *  Revisions :
+    29    *
+    30    *		Added fix to make location relative equates
+    31    *		correct even if branch optimization occurs.		vlh 15-sep-82
+    32    *  	Recognizes commands in uppercase.				vlh 17-sep-82
+    33    *		Added recognization of upper case directives
+    34    *		which do not have the preceding '.'.			vlh 17-sep-82
+    35    *		Added recognizing of ignored directives
+    36    *		IDNT, ORG and MASK2.							vlh 17-sep-82
+    37    *		Added new directives XDEF, XREF.				vlh 17-sep-82
+    38    *		Added COMLINE and SECTION.						vlh 20-sep-82
+    39    *		Added new directive REG.						vlh 21-sep-82
+    40    *		Added new directives DCB and OFFSET.			vlh 22-sep-82
+    41    *		Recognizes branch extensions and takes
+    42    *		the appropriate action.							vlh 22-sep-82
+    43    *		Added assembler directives ifeq, ifne,
+    44    *		ifle, iflt, ifge, ifgt.							vlh 23-sep-82
+    45    *		Added character '$' to set of legitimate
+    46    *		characters in a symbol.							vlh 23-sep-82
+    47    *		Added new ignored directive OPT.				vlh 23-sep-82
+    48    *		Recognizes non-opcodes starting in column 1
+    49    *		as labels.										vlh 23-sep-82
+    50    *		Added conditional assembler directives
+    51    *		ifc, ifnc.										vlh 27-sep-82
+    52    *		Major reworking of expression handler			vlh  1-oct-82
+    53    *		More revisions to expression stacks				vlh  4-oct-82
+    54    *		Added the recognition and handling of			vlh 26-oct-82
+    55    *		the 'illegal' instruction.
+    56    *		Added handling of the jmp suffixes				vlh 26-oct-82
+    57    *		Fixed problem with -p flag and external			vlh 27-oct-82
+    58    *		variable listings.
+    59    *		Added checking for legitimate command 			vlh 28-oct-82
+1File: MAIN.C                                                              Page       2
+    60    *		suffixes.
+    61    *		Added comma as a legitimate register			vlh 28-oct-82
+    62    *		divisor for the REG directive.
+    63    *		Fixed second pass error/instr len problem		vlh 28-oct-82
+    64    *		Added checking for invalid bit ranges.			vlh  1-nov-82
+    65    *		Added proper 2nd pass handling of the			vlh  2-nov-82
+    66    *		'*' symbol (avoid turning jsr to bra).
+    67    *		Fixed first pass guess if operand is			vlh  4-nov-82
+    68    *		(rx,rx) instead of d(rx,rx).
+    69    *		Check for appropriate range of 16-bit			vlh  5-nov-82
+    70    *		immediate date.
+    71    *		Operand type check for shift/bit manip.			vlh  5-nov-82
+    72    *		Turn and/or/eor #xxx,sr/ccr into the			vlh  5-nov-82
+    73    *		corresponding immediate instruction.
+    74    *		Generate an error when an illegal pc			vlh 10-nov-82
+    75    *		relative ea is specified.
+    76    */
+    77    
+    78   /****************************************************************************/
+    79   /*									    */
+    80   /*			    D R I   H a c k s				    */
+    81   /*			    -----------------				    */
+    82   /*									    */
+    83   /*	The following changes were made to facilitate running as68 under    */
+    84   /*	VMS and CP/M:							    */
+    85   /*									    */
+    86   /*	o	Added "-f" flag to redirect temp files to another directory */
+    87   /*		or CP/M floppy drive.					    */
+    88   /*									    */
+    89   /*	o	Added "-s" flag to redirect symbol table file.		    */
+    90   /*									    */
+    91   /*	o	Added separate source file with initialization of all 	    */
+    92   /*		external variables to be compatible with Whitesmith's C.    */
+    93   /*									    */
+    94   /*	o	Added "VMS", "UNIX", and "CPM" conditional compilation 	    */
+    95   /*		switches for these operating systems.			    */
+    96   /*									    */
+    97   /*	o	Added various listing enhancements so the printed file is   */
+    98   /*		usable on non-UNIX environments.			    */
+    99   /*									    */
+   100   /*	o	Changed I/O calls to be useable with filter library on V7   */
+   101   /*									    */
+   102   /****************************************************************************/
+   103    
+   104    
+   105    
+   106   # include "as68.h"
+   107   char  tfilname[80];			/* Temp filename area 		*/
+   108   char  initfnam[80];			/* Initialization filename area */
+   109   #ifdef	UNIX
+   110   char  tfilbase[] {"a6AXXXXXX"};
+   111   #else
+   112   char  tfilbase[] {"a6xxxxA"};		/* Temp file base name		*/
+   113   #endif
+   114   char  initbase[] {"as68symb.dat"};	/* Init file base name		*/
+   115   #ifdef	VMS				/* On VMS, use			*/
+   116   char *tdname = "";			/* Temps in same directory	*/
+   117   char *idname = "bin:";			/* Init  in the "bin:" directory*/
+   118   #endif					/********************************/
+1File: MAIN.C                                                              Page       3
+   119   #ifdef	UNIX				/*				*/
+   120   char *tdname = "/tmp/";			/* UNIX Temp directory		*/
+   121   char *idname = "/lib/";			/* UNIX Init Directory		*/
+   122   #endif					/********************************/
+   123   #ifdef	CPM				/* On CP/M, defaults for all.	*/
+   124   char *tdname = "";			/* No temp prefix		*/
+   125   char *idname = "";			/* No init prefix		*/
+   126   #endif					/********************************/
+   127    
+   128   char ldfn[40];			/*name of the relocatable object file*/
+   129    
+   130   int brkln1 077777;		/*pass 1 break line number for debugging*/
+   131   int opcval;				/*opcode*/
+   132   int chmvq;
+   133    
+   134   int hopd(), hend(), send(), horg(), sorg(), hequ(), hreg();
+   135   int hds(), sds();
+   136   int sdcb();
+   137   int hdsect(), hpsect(), sdsect(), spsect();
+   138   int hsection(), ssection(), hoffset();
+   139   int hent(), hext();
+   140   int igrst();
+   141   int hbss(), sbss();
+   142   int heven(), seven();
+   143   int hdc(), sdc(), hdcb();
+   144   int hmask2(), hcomline(), hidnt();
+   145   int hifeq(), hifne(), hiflt(), hifle(), hifgt(), hifge(), hendc();
+   146   int hifnc(), hifc(), hopt();
+   147   int hpage(),spage();
+   148   int (*p1direct[])() {
+   149   	hopd,		/*0*/
+   150   	hend,		/*1*/
+   151   	hdsect,		/*2*/
+   152   	hpsect,		/*3*/
+   153   	hequ,		/*4*/
+   154   	hequ,		/*5 .set same as .equ*/
+   155   	0,			/*6*/
+   156   	0,			/*7*/
+   157   	hdc,		/*8*/
+   158   	hent,		/*9*/
+   159   	hext,		/*10*/
+   160   	hbss,		/*11*/
+   161   	hds,		/*12*/
+   162   	heven,		/*13*/
+   163   	horg,		/*14*/
+   164   	hmask2,		/*15*/
+   165   	hreg,		/*16*/
+   166   	hdcb,		/*17*/
+   167   	hcomline,	/*18*/
+   168   	hidnt,		/*19*/
+   169   	hoffset,	/*20*/
+   170   	hsection,	/*21*/
+   171   	hifeq,		/*22*/
+   172   	hifne,		/*23*/
+   173   	hiflt,		/*24*/
+   174   	hifle,		/*25*/
+   175   	hifgt,		/*26*/
+   176   	hifge,		/*27*/
+   177   	hendc,		/*28*/
+1File: MAIN.C                                                              Page       4
+   178   	hifc,		/*29*/
+   179   	hifnc,		/*30*/
+   180   	hopt,		/*31*/
+   181   	hpage,		/*32*/
+   182   	0};
+   183    
+   184   int (*p2direct[])() {
+   185   	0,			/*0*/
+   186   	send,		/*1*/
+   187   	sdsect,		/*2*/
+   188   	spsect,		/*3*/
+   189   	0,			/*4*/
+   190   	0,			/*5*/
+   191   	0,			/*6*/
+   192   	0,			/*7*/
+   193   	sdc,		/*8*/
+   194   	0,			/*9*/
+   195   	0,			/*10*/
+   196   	sbss,		/*11*/
+   197   	sds,		/*12*/
+   198   	seven,		/*13*/
+   199   	sorg,		/*14*/
+   200   	0,			/*15*/
+   201   	0,			/*16*/
+   202   	sdcb,		/*17*/
+   203   	sds,		/*18 comline same as .ds.b*/
+   204   	0,			/*19*/
+   205   	0,			/*20*/
+   206   	ssection,	/*21*/
+   207   	0,			/*22*/
+   208   	0,			/*23*/
+   209   	0,			/*24*/
+   210   	0,			/*25*/
+   211   	0,			/*26*/
+   212   	0,			/*27*/
+   213   	0,			/*28*/
+   214   	0,			/*29*/
+   215   	0,			/*30*/
+   216   	0,			/*31*/
+   217   	spage,			/*32*/
+   218   	0};
+   219    
+   220   char *ermsg[] {
+   221   	"label redefined",					/*1*/
+   222   	"invalid label",					/*2*/
+   223   	"invalid opcode",					/*3*/
+   224   	"no label for operand",					/*4*/
+   225   	"opcode redefined",					/*5*/
+   226   	"illegal expr",						/*6*/
+   227   	"undefined symbol in equate",				/*7*/
+   228   	0,									/*8*/
+   229   	"invalid first operand",			/*9*/
+   230   	"invalid second operand",			/*10*/
+   231   	"absolute value required",			/*11*/
+   232   	"no code or data allowed in offset",	/*12*/
+   233   	"undefined symbol",					/*13*/
+   234   	"illegal index register",			/*14*/
+   235   	"illegal constant",					/*15*/
+   236   	"illegal extension",				/*16*/	/*[vlh]*/
+1File: MAIN.C                                                              Page       5
+   237   	"constant required",				/*17*/
+   238   	"illegal format",					/*18*/
+   239   	"illegal string",					/*19*/
+   240   	"illegal addressing mode",			/*20*/
+   241   	0,									/*21*/
+   242   	"illegal relative address",			/*22*/
+   243   	"invalid bit range",				/*23*/
+   244   	"illegal text delimiter",			/*24*/
+   245   	"unexpected endc",					/*25*/
+   246   	"endc expected",					/*26*/
+   247   	"relocation error",					/*27*/
+   248   	"symbol required",					/*28*/
+   249   	"bad use of symbol",				/*29*/
+   250   	"invalid data list",				/*30*/
+   251   	0,									/*31*/
+   252   	"missing )",						/*32*/
+   253   	"register required",				/*33*/
+   254   	"illegal size",						/*34*/
+   255   	"illegal 8-bit displacement",		/*35*/
+   256   	"illegal external",					/*36*/
+   257   	"illegal shift count",				/*37*/
+   258   	"invalid instruction length",		/*38*/
+   259   	"code or data not allowed in bss",	/*39*/
+   260   	"backward assignment to *",			/*40*/
+   261   	"illegal 16-bit displacement",		/*41*/
+   262   	"illegal 16-bit immediate",			/*42*/
+   263   	"illegal 8-bit immediate",			/*43*/
+   264   	0
+   265   };
+   266    
+   267   int endit();
+   268   int rubout();
+   269   int symcon;
+   270   char endstr[] "end";
+   271   char equstr[] "equ";
+   272   char evnstr[] "even";
+   273   char orgstr[] "~.yxzorg";
+   274    
+   275   int poslab;
+   276   char tlab1[NAMELEN];
+   277   int explmode;	/*explicit mode length given*/
+   278    
+   279   main(argc,argv)
+   280   char **argv;
+   281   {
+   282   	register i, ttmp;
+   283    
+   284   	register xargc;		/* Temp copy of argc		*/
+   285   	xargc = argc;
+   286    
+   287   	initflg = 0;
+   288   	prtchidx = prtchars;
+   289   #ifdef	UNIX			/* Only available with UNIX	*/
+   290   	signal(2,rubout);
+   291   #endif
+   292   	pitix = itbuf;
+   293   	pexti = extbl;
+   294   	ttmp = (STESIZE*SZMT) + 2;
+   295   	bmte = sbrk(ttmp);
+1File: MAIN.C                                                              Page       6
+   296   	if(((long)bmte) == -1L)
+   297   	{
+   298   		rpterr("Symbol Table Overflow\n");
+   299   		abort();
+   300   	}
+   301   	if((long)bmte&1)
+   302   		bmte++;		/*make it even*/
+   303   	emte = bmte + ttmp - 2;		/*end of main table*/
+   304   	if(argc<=1) usage();
+   305   	i = 1;
+   306   	shortadr = -1;	/*short addresses ok*/
+   307   	while(argv[i][0] == '-') {		/*may be print or initialize*/
+   308   		switch(argv[i++][1]) {
+   309    
+   310   		case 'i':		/*initialize the assembler*/
+   311   		case 'I':
+   312   			initflg++;
+   313   			break;
+   314    
+   315   		case 'p':		/*produce a listing*/
+   316   		case 'P':
+   317   			prtflg++;
+   318   			break;
+   319    
+   320   		case 'u':		/*make undefined symbols external*/
+   321   		case 'U':
+   322   			undflg++;
+   323   			break;
+   324    
+   325   		case 'N':		/*no branch optimization*/
+   326   		case 'n':
+   327   			didorg++;
+   328   			break;
+   329    
+   330   		case 'L':		/*long addresses only*/
+   331   		case 'l':
+   332   			shortadr = 0;
+   333   			break;
+   334    
+   335   		case 'f':		/* Change temp files	*/
+   336   		case 'F':
+   337   			tdname = argv[i++];
+   338   			break;
+   339    
+   340   		case 's':		/* Change symbol table name */
+   341   		case 'S':
+   342   			idname = argv[i++];
+   343   			break;
+   344    
+   345   		default:
+   346   			usage();
+   347   		}
+   348   	}
+   349   	strcat (tfilname,tdname);	/* Build temp filenames */
+   350   	strcat (tfilname,tfilbase);	/*			*/
+   351   					/**************************/
+   352   #ifdef	UNIX				/* For UNIX, Need to make */
+   353   	mktemp (tfilname);		/* Unique file name	  */
+   354   #endif					/**************************/
+1File: MAIN.C                                                              Page       7
+   355   	tfilptr = &tfilname[strlen(tfilname)-1];	/* -> changed char */
+   356   #ifdef	UNIX
+   357   	tfilptr -= 6;			/* Back off PID		*/
+   358   #endif
+   359   	
+   360   	strcat (initfnam,idname);	/* Build Symbol table filename	    */
+   361   	strcat (initfnam,initbase);
+   362    
+   363   	if(i>=argc) usage();
+   364   	ifn=open(argv[i],0,0);	/*open source file*/
+   365   	sfname = argv[i];	/* remember source filename */
+   366   	setldfn(argv[i]);	/*create relocatable object file name*/
+   367   	lfn=openfi(ldfn,1);	/*open loader file*/
+   368   	itfn = gettempf();	/*get a temp file for it*/
+   369   	itfnc = LASTCHTFN;	/*remember last char for unlink*/
+   370   	trbfn = gettempf();	/*temp for text relocation bits*/
+   371   	trbfnc = LASTCHTFN;
+   372   	dafn = gettempf();	/*temp for data binary*/
+   373   	dafnc = LASTCHTFN;
+   374   	drbfn = gettempf();	/*temp for data relocation bits*/
+   375   	drbfnc = LASTCHTFN;
+   376   	if(initflg) {		/*initializing te main table*/
+   377   		lmte=bmte;		/*beginning main table*/
+   378   		cszmt = SZMT;	/*current size of main table*/
+   379   		for(i=0; i<=SZIRT-2; i=+2) {
+   380   			sirt[i] = &sirt[i];		/*initialize the initial ref tables*/
+   381   			sirt[i+1] = 0;
+   382   			oirt[i] = &oirt[i];
+   383   			oirt[i+1] = 0;
+   384   		}
+   385    
+   386   /*make entries in main table for directives*/
+   387   		mdemt("opd",0);			/*opcode definition*/
+   388   		mdemt(endstr,1);		/*end statement*/
+   389   		mdemt("data",2);		/*dsect directive(code DATA based)*/
+   390   		mdemt("text",3);		/*psect directive(code TEXT based)*/
+   391   		mdemt(equstr,4);		/*equate*/
+   392   		mdemt("set",5);			/*.set - same as .equ*/
+   393   		mdemt("dc",8);			/*define byte*/
+   394   		mdemt("globl",9);		/*define global (public) symbols*/
+   395   		mdemt("xdef",9);		/*[vl]define global (public symbols*/
+   396   		mdemt("xref",9);		/*[vl]define global (public) symbols*/
+   397   		mdemt("comm",10);		/*define external symbols*/
+   398   		mdemt("bss",11);		/*block storage based*/
+   399   		mdemt("ds",12);			/*block storage based*/
+   400   		mdemt(evnstr,13);		/*round pc*/
+   401   		mdemt(orgstr,14);		/*internal org for *=n*/
+   402   		mdemt("org",14);		/*[vlh]*/
+   403   		mdemt("mask2",15);		/*[vl] assemble for mask2, ignore*/
+   404   		mdemt("reg",16);		/*[vlh] register equate*/
+   405   		mdemt("dcb",17);		/*[vlh] define block*/
+   406   		mdemt("comline",18);	/*[vlh] command line*/
+   407   		mdemt("idnt",19);		/*[vlh] relocateable id record, ignore*/
+   408   		mdemt("offset",20);		/*[vlh] define offsets*/
+   409   		mdemt("section",21);	/*[vlh] define sections*/
+   410   		mdemt("ifeq",22);		/*[vlh] ca if expr = 0*/
+   411   		mdemt("ifne",23);		/*[vlh] ca if expr != 0*/
+   412   		mdemt("iflt",24);		/*[vlh] ca if expr < 0*/
+   413   		mdemt("ifle",25);		/*[vlh] ca if expr <= 0*/
+1File: MAIN.C                                                              Page       8
+   414   		mdemt("ifgt",26);		/*[vlh] ca if expr > 0*/
+   415   		mdemt("ifge",27);		/*[vlh] ca if expr >= 0*/
+   416   		mdemt("endc",28);		/*[vlh] end ca*/
+   417   		mdemt("ifc",29);		/*[vlh] ca if string compare*/
+   418   		mdemt("ifnc",30);		/*[vlh] ca if not string compare*/
+   419   		mdemt("opt",31);		/*[vlh] ignored, assemb options*/
+   420   		mdemt("ttl",31);		/* Ignore title op also */
+   421   		mdemt("page",32);
+   422    
+   423   	}
+   424   	else {	/*not initializing*/
+   425   		getsymtab();		/*read initialized main table*/
+   426   	}
+   427    
+   428   	rlflg = TEXT;			/*code initially TEXT based*/
+   429   	inoffset = 0;			/*[vlh]not in offset mode*/
+   430   	loctr = 0;				/*no generated code*/
+   431   	ca = 0;					/*[vlh]depth of conditional assembly*/
+   432   	extindx = 0;			/*no external symbols yet*/
+   433   	p2flg = 0;				/*pass 1*/
+   434   	ca_true = 1;			/*[vlh]true unless in side false case*/
+   435   	absln = 1;
+   436   	sbuflen = -1;			/*no source yet*/
+   437   	fchr = gchr();			/*get first char*/
+   438   	if(!initflg) {		/*not initializing*/
+   439   		pack(orgstr,lmte);
+   440   		orgptr = lemt(oirt,TRUE);
+   441   		pack(endstr,lmte);
+   442   		endptr = lemt(oirt,TRUE);
+   443   		pack(equstr,lmte);
+   444   		equptr = lemt(oirt,TRUE);
+   445   		pack("add",lmte);
+   446   		addptr = lemt(oirt,TRUE);
+   447   		pack("addi",lmte);
+   448   		addiptr = lemt(oirt,TRUE);
+   449   		pack("addq",lmte);
+   450   		addqptr = lemt(oirt,TRUE);
+   451   		pack("sub",lmte);
+   452   		subptr = lemt(oirt,TRUE);
+   453   		pack("subi",lmte);
+   454   		subiptr = lemt(oirt,TRUE);
+   455   		pack("subq",lmte);
+   456   		subqptr = lemt(oirt,TRUE);
+   457   		pack("cmp",lmte);
+   458   		cmpptr = lemt(oirt,TRUE);
+   459   		pack("adda",lmte);
+   460   		addaptr = lemt(oirt,TRUE);
+   461   		pack("cmpa",lmte);
+   462   		cmpaptr = lemt(oirt,TRUE);
+   463   		pack("suba",lmte);
+   464   		subaptr = lemt(oirt,TRUE);
+   465   		pack("cmpm",lmte);
+   466   		cmpmptr = lemt(oirt,TRUE);
+   467   		pack("and",lmte);
+   468   		andptr = lemt(oirt,TRUE);
+   469   		pack("andi",lmte);
+   470   		andiptr = lemt(oirt,TRUE);
+   471   		pack("or",lmte);
+   472   		orptr = lemt(oirt,TRUE);
+1File: MAIN.C                                                              Page       9
+   473   		pack("ori",lmte);
+   474   		oriptr = lemt(oirt,TRUE);
+   475   		pack("cmpi",lmte);
+   476   		cmpiptr = lemt(oirt,TRUE);
+   477   		pack("eor",lmte);
+   478   		eorptr = lemt(oirt,TRUE);
+   479   		pack("eori",lmte);
+   480   		eoriptr = lemt(oirt,TRUE);
+   481   		pack("move",lmte);
+   482   		moveptr = lemt(oirt,TRUE);
+   483   		pack("moveq",lmte);
+   484   		moveqptr = lemt(oirt,TRUE);
+   485   		pack("exg",lmte);
+   486   		exgptr = lemt(oirt,TRUE);
+   487   		pack("jsr",lmte);
+   488   		jsrptr = lemt(oirt,TRUE);
+   489   		pack("bsr",lmte);
+   490   		bsrptr = lemt(oirt,TRUE);
+   491   		pack("nop",lmte);
+   492   		nopptr = lemt(oirt,TRUE);
+   493   		pack(evnstr,lmte);
+   494   		evenptr = lemt(oirt,TRUE);
+   495   	}
+   496   	mloop();
+   497   }
+   498    
+   499   usage()
+   500   {
+   501        rpterr("Usage: as68 [-p] [-u] [-l] [-n] [-f d:] [-s d:] sourcefile\n");
+   502        endit();
+   503   }
+   504    
+   505    
+   506   /*main loop*/
+   507   mloop()
+   508   {
+   509   	register i;
+   510    
+   511   	while(fchr!=EOF) {
+   512   		if(absln>=brkln1)	/*break for debugging the assembler*/
+   513   			i=0;
+   514   		fcflg = 0;			/*first time thru expr pass one*/
+   515   		cisit();			/*create it for one statement*/
+   516   	}
+   517   	opcpt = endptr;
+   518   	hend();
+   519   }
+   520    
+   521   #define NOCODE ((i>=0&&i<6)||i==9||i==11||i==16||(i>=LOW_CA&&i<=HI_CA))
+   522    
+   523   /*create intermediate text (it) for one statement*/
+   524   /*	call with first character of statement in fchr*/
+   525   cisit()
+   526   {
+   527    
+   528   	register int *p1,*p2;
+   529   	register int (*dirop)();
+   530   	register int i, col1;	/*[vlh] col1 labels in col 1...*/
+   531   	char str[NAMELEN], *l;
+1File: MAIN.C                                                              Page      10
+   532    
+   533   ciss1:
+   534   	immed[0] = immed[1] = indir[0] = indir[1] = numcon[0] = 0;
+   535   	numcon[1] = numsym[0] = numsym[1] = numreg[0] = numreg[1]=0;
+   536   	plevel = numops = opdix = explmode = 0;
+   537   cistop:
+   538   	col1 = 1;
+   539   	if(fchr==EOLC) {
+   540   		fchr = gchr();
+   541   		goto cistop;
+   542   	}
+   543   	if(fchr==' ') {
+   544   		col1 = 0;
+   545   		igblk();
+   546   		if(fchr==EOLC)		/*blank line*/
+   547   			goto cistop;
+   548   		peekc = fchr;
+   549   		if (fchr != EOF) fchr = ' ';	/* [vlh] catch eof... */
+   550   	}
+   551   	if(fchr==EOF) return;
+   552    
+   553   	if(fchr=='*') {			/*ignore comments*/
+   554   		fchr = gchr();
+   555   		if(fchr=='=') {		/*relocation counter assignment*/
+   556   			fchr = gchr();	/*pass the =*/
+   557   			horg();			/*output constants if not bss*/
+   558   		}
+   559   		igrst();
+   560   		fcflg = 0;		/*clear expr first time flag for next stmt*/
+   561   		goto ciss1;
+   562   	}
+   563    
+   564   /* get the opcode and label*/
+   565    
+   566   	mode = 'w';			/*word mode*/
+   567   	igblk();			/*ignore blanks*/
+   568   	poslab = 1;
+   569   	gterm(TRUE);
+   570   	poslab = 0;
+   571   	if(fchr==':' || fchr=='=') {			/*there is a label*/
+   572   label:
+   573   		col1 = 0;
+   574   		if(itype!=ITSY) {			/*not a symbol*/
+   575   			uerr(2);
+   576   			lbt[0] = 0;		/*no label*/
+   577   		}
+   578   		else {
+   579   			p2 = &lmte->name[0];
+   580   			for(p1= &lbt[0]; p1 < &lbt[NAMELEN]; ) {
+   581   				*p1++ = *p2++;
+   582   			}
+   583   			if(fchr==':') fchr=gchr();		/*ignore the colons*/
+   584   		}
+   585   labl1:
+   586   		ligblk();
+   587   		if(fchr == EOF) return;
+   588   		if(fchr == '*') {
+   589   			igrst();		/*comment*/
+   590   			goto labl1;
+1File: MAIN.C                                                              Page      11
+   591   		}
+   592   		gterm(TRUE);
+   593   		if(fchr==':' || fchr=='=') {	/*another label*/
+   594   			if(lbt[0]) {
+   595   				savelab();	/*save current label*/
+   596   				dlabl();	/*define the last one*/
+   597   				pack(tlab1,lmte);	/*restor the old lable*/
+   598   			}
+   599   			goto label;
+   600   		}
+   601   	}
+   602   	else {
+   603   		lbt[0] = 0;			/*no label*/
+   604   	}
+   605   	igblk();
+   606   	if(fchr == '=')
+   607   		goto label;
+   608   	if(itype==ITSP) {
+   609   		if(ival.wd2 == '=') {
+   610   			hequ();
+   611   			return;
+   612   		}
+   613   	}
+   614   	if(itype!=ITSY) {	/*not valid opcode*/
+   615   		goto cisi3;
+   616   	}
+   617   	if (col1) {	/* [vlh] could be a label save as is... */
+   618   		l = &str;
+   619   		strcpy(l,lmte->name,NAMELEN);
+   620   	}
+   621   	if((opcpt=lemt(oirt,TRUE))==lmte) {	/*not in opcode table*/
+   622   		if (col1) {	/* [vlh] it's a label... */
+   623   			strcpy(lmte->name,l,NAMELEN);
+   624   			goto label;
+   625   		}
+   626   cisi3:
+   627   		if (ca_true)	/* [vlh] report error if not in CA false */
+   628   			xerr(3);
+   629   		igrst();
+   630   		return;
+   631   	}
+   632   	getmode();		/*look for .b .w or .l mode flag*/
+   633   	if(opcpt->flags&OPDR) {	/* its a directive*/
+   634   		i = opcpt->vl1;
+   635   		if (!ca_true && (i < LOW_CA || i > HI_CA)) { igrst(); return; }
+   636   		if (inoffset) 	/* [vlh] */
+   637   			if (!(NOCODE)) {	/* can't generate code in offset */
+   638   				xerr(12);
+   639   				return;
+   640   			}
+   641   		dirop = p1direct[i];	/*call routine to handle directive*/
+   642   		(*dirop)();
+   643   		return;
+   644   	}
+   645   	else if (!ca_true) {		/* [vlh] */
+   646   		igrst();
+   647   		return;
+   648   	}
+   649   	else if (inoffset) {		/* [vlh] */
+1File: MAIN.C                                                              Page      12
+   650   		xerr(12);
+   651   		return;
+   652   	}
+   653    
+   654   	opcval = (opcpt->vl1);			/*opcode*/
+   655   	format = (opcpt->flags&OPFF);	/*format of this instr*/
+   656   	if (explmode)
+   657   		if (!modeok()) { xerr(16);  return; }
+   658   	dlabl();			/*define label*/
+   659   	opitb();			/*beginning of statement*/
+   660   	if(format)
+   661   		opito();		/*may have operands*/
+   662   	else
+   663   		igrst();		/*only comments*/
+   664   	format = (opcpt->flags&OPFF);	/* may have changed*/
+   665    
+   666    
+   667   /*end of statement*/
+   668    
+   669   	i = calcilen();
+   670   	stbuf[1].itrl = i;		/*assumed instruction length*/
+   671    
+   672   	stbuf[0].itrl = itwc;	/*number of it entries*/
+   673   	wostb();			/*write out statement buffer*/
+   674   	loctr =+ i;
+   675   }
+   676    
+   677   getmode()
+   678   {
+   679   	if (fchr=='.') {
+   680   		fchr = gchr();
+   681   		switch (fchr) {
+   682   			case 'b':
+   683   			case 'B':
+   684   			case 's':
+   685   			case 'S':
+   686   				modelen = 1;
+   687   				mode = BYTE;
+   688   				break;
+   689   			case 'w':
+   690   			case 'W':
+   691   				modelen = 2;
+   692   				mode = WORD;
+   693   				break;
+   694   			case 'l':
+   695   			case 'L':
+   696   				modelen = 4;
+   697   				mode = LONG;
+   698   				break;
+   699   			default:
+   700   				peekc = fchr;
+   701   				fchr = '.';
+   702   				goto getm1;
+   703   		}
+   704   		explmode++;
+   705   		fchr = gchr();
+   706   		igblk();
+   707   		return;
+   708   	}
+1File: MAIN.C                                                              Page      13
+   709   getm1:
+   710   	if(opcpt == exgptr) {	/*length is long*/
+   711   		modelen = 4;
+   712   		mode = LONG;
+   713   	}
+   714   	else {
+   715   		mode = WORD;		/*default is word*/
+   716   		modelen = 2;
+   717   	}
+   718   }
+   719    
+   720   /* check to be sure specified mode is legal */
+   721   modeok()	/* [vlh] */
+   722   {
+   723   	switch(format) {
+   724   		case 0  :
+   725   		case 14 :
+   726   		case 18 :
+   727   			return(FALSE);
+   728   		case 13 :
+   729   		case 15 :
+   730   		case 20 :
+   731   		case 21 :
+   732   			return(modelen==1?FALSE:TRUE);
+   733   		case 4  :
+   734   		case 25 :
+   735   			return(modelen==1?TRUE:FALSE);
+   736   		case 7  :
+   737   		case 9  :
+   738   			return(modelen==2?FALSE:TRUE);
+   739   		case 5  :
+   740   		case 11 :
+   741   		case 28 :
+   742   			return(modelen==2?TRUE:FALSE);
+   743   		case 6  :
+   744   			return(modelen==4?FALSE:TRUE);
+   745   		case 12 :
+   746   		case 30 :
+   747   		case 22 :
+   748   		case 29 :
+   749   			return(modelen==4?TRUE:FALSE);
+   750   		default :
+   751   			return(TRUE);
+   752   	}
+   753   }
+   754    
+   755   /* calculate the instruction length in bytes*/
+   756   calcilen()
+   757   {
+   758    
+   759   	register i,j;
+   760   	register long l;
+   761   	register char *p;
+   762    
+   763   	i = 2;		/*all instrs at least 2 bytes*/
+   764    
+   765   	switch(format) {
+   766    
+   767   	case 20:
+1File: MAIN.C                                                              Page      14
+   768   		i =+ 2;	/*for reg mask*/
+   769   	case 1:		/*two ea's -- one of which may be a reg*/
+   770   	case 15:
+   771   	case 30:
+   772   	case 26:
+   773   	case 5:
+   774   	case 3:
+   775   	case 21:
+   776   		i =+ lenea(1);
+   777   	case 16:
+   778   	case 24:
+   779   	case 25:
+   780   	case 29:
+   781   		i =+ lenea(0);
+   782   		break;
+   783    
+   784   	case 9:		/* [vlh] explicit jmp length... */
+   785   		if (!explmode)
+   786   			i =+ lenea(0);
+   787   		else
+   788   			return(mode==LONG?6:4);	/*[vlh] explicit jmp.? */
+   789   		break;
+   790    
+   791   	case 7:
+   792   		i =+ (immed[0]) ? 2+lenea(1) : lenea(1);
+   793   		break;
+   794    
+   795   	case 14:
+   796   	case 11:
+   797   	case 19:
+   798   		i =+ 2;		/*always 4 bytes*/
+   799   		break;
+   800    
+   801   	case 6:		/*relative branches*/
+   802   		if(itwc == ITOP1+1) {
+   803   			if(stbuf[ITOP1].itty == ITCN)
+   804   				l = stbuf[ITOP1].itop;
+   805   			else if(stbuf[ITOP1].itty == ITSY) {
+   806   				p = stbuf[ITOP1].itop.ptrw2;
+   807   				if(p->flags&SYDF)
+   808   					l = p->vl1;	/*symbol value*/
+   809   				else
+   810   					goto loffst;
+   811   			}
+   812   			else {
+   813   				goto loffst;
+   814   			}
+   815   			l =- (loctr+2);
+   816   			if(l<=127 && l>=-128)	/*8 bit offset*/
+   817   				break;
+   818   		}
+   819   loffst:
+   820   		if (!explmode || modelen > 1) /*[vlh] recognize br extensions*/
+   821   			i =+ 2;		/*long offset for branches*/
+   822   		break;
+   823    
+   824   	case 2:
+   825   		i =+ (mode==LONG?4:2) + lenea(1);
+   826   		break;
+1File: MAIN.C                                                              Page      15
+   827    
+   828   	case 23:
+   829   		if(immed[0])
+   830   			i =+ (mode==LONG?4:2);
+   831   	case 17:
+   832   	case 22:
+   833   		i =+ lenea(1);
+   834   		break;
+   835    
+   836   	case 8:
+   837   		if(numops==1)		/*memory shift instruction*/
+   838   			i =+ shiftea(0);
+   839   		break;
+   840   	}
+   841    
+   842   	return(i);
+   843   }
+   844    
+   845   /* calc the length of an effective address*/
+   846   lenea(lidx)
+   847   {
+   848   	register i;
+   849    
+   850   	if(immed[lidx])
+   851   		return(mode==LONG?4:2);
+   852   	return(shiftea(lidx));
+   853   }
+   854    
+   855   shiftea(lidx)
+   856   {
+   857   	if(indir[lidx])
+   858   		return((numcon[lidx] || numsym[lidx]) ? 2 : 0);
+   859   	if(numsym[lidx] || numcon[lidx])
+   860   		return((!shortadr || numcon[lidx]==2) ? 4 : 2);
+   861   	return(0);
+   862   }
+   863    
+   864   /*
+   865    *define a label if there is one to define
+   866    *	call with:
+   867    *		label name in lbt if it exists
+   868    *		else lbt[0] == 0
+   869    */
+   870   dlabl()
+   871   {
+   872   	register i;
+   873    
+   874   	if(lbt[0]) {	/*got a label*/
+   875   		pack(lbt,lmte);		/*put label in main table*/
+   876   		lblpt=lemt(sirt,FALSE);	/*look up label*/
+   877   		if(lblpt != lmte) {		/*symbol entered previously*/
+   878   			if(lbt[0] == '~') {	/*local symbol -- may be duplicate*/
+   879   				lblpt = lmte;
+   880   				mmte();
+   881   			}
+   882   			else {
+   883   				if(lblpt->flags&SYXR) {
+   884   					uerr(29);
+   885   					lblpt = 0;
+1File: MAIN.C                                                              Page      16
+   886   					return;
+   887   				}
+   888   				if((lblpt->flags)&SYDF) {
+   889   					uerr(1);
+   890   					lblpt = 0;
+   891   					return;
+   892   				}
+   893   			}
+   894   		}
+   895   		else {
+   896   			mmte();		/*make label entry in main table*/
+   897   		}
+   898   		lblpt->flags =| SYDF;	/*label is now defined*/
+   899   		lblpt->flags =| (rlflg==DATA)?SYRA:(rlflg==BSS)?SYBS:SYRO;
+   900   		lblpt->vl1 = loctr;		/*label value*/
+   901   	}
+   902   	else
+   903   		lblpt = 0;
+   904   }
+   905    
+   906   /*
+   907    * output it for operands
+   908    *		gets intput from gterm
+   909    *		puts output in stbuf using itwc as an index
+   910    *		itwc should point at the next entry to be made in stbuf
+   911    */
+   912   opito()
+   913   {
+   914   	register lopcomma;
+   915    
+   916   	lopcomma = symcon = chmvq = 0;
+   917   	numops++;				/*count first operand*/
+   918   	while(1) {
+   919   		starmul = symcon;	/*star is multiply op if flag is set*/
+   920   		if(fchr=='\'' || fchr=='"')
+   921   			lopcomma = 0;
+   922   		gterm(FALSE);	/*get a term*/
+   923   		if(itwc==ITOP1 && format==CLRFOR && opcval==CLRVAL)
+   924   			chgclr();
+   925   		opitoo();	/*output it for one operand*/
+   926   		if(itype==ITSP && ival.wd2==',') {
+   927   			if (plevel==1 && !numcon[opdix])	/* [vlh] */
+   928   				numcon[opdix] = 1;
+   929   			if(lopcomma)
+   930   				uerr(30);
+   931   			lopcomma++;
+   932   			igblk();	/*ignore blanks for 68000 C compiler*/
+   933   		}
+   934   		else
+   935   			lopcomma=0;
+   936   		if(ival==EOLC && itype==ITSP)	/*end of operands*/
+   937   			break;
+   938   		if(fchr==EOLC) {
+   939   			fchr=gchr();
+   940   			break;
+   941   		}
+   942   	}
+   943   	if(chmvq)		/*changed move to moveq*/
+   944   		if(numops!=2 || immed[1] || indir[1] || numcon[1] || numsym[1] ||
+1File: MAIN.C                                                              Page      17
+   945   		  numreg[1]>=AREGLO) {
+   946   			stbuf[2].itop.ptrw2 = moveptr;	/*change it back*/
+   947   			opcpt = moveptr;
+   948   		}
+   949    
+   950   	if (stbuf[2].itop.ptrw2==cmpptr) 	/* [vlh] cmp -> cmpm ?? */
+   951   		if (numreg[0] && numreg[1] && indir[0] && indir[1]) {
+   952   			stbuf[2].itop.ptrw2 = cmpmptr;
+   953   			opcpt = cmpmptr;
+   954   		}
+   955    
+   956   	if(lopcomma)
+   957   		uerr(30);
+   958   }
+   959    
+   960   /* change clr.l An to suba.l An,An*/
+   961   chgclr()
+   962   {
+   963   	register char *p;
+   964    
+   965   	if(itype==ITSY) {	/*first op is symbol*/
+   966   		p = lemt(sirt,FALSE);
+   967   		if(p==lmte)
+   968   			return;
+   969   		if(!(p->flags&SYER) || p->vl1<AREGLO)		/*not A reg*/
+   970   			return;
+   971   		opcpt = subaptr;	/*make it a suba instr*/
+   972   		opitb();
+   973   		opitoo();		/*output first operand -- An*/
+   974   		itype = ITSP;
+   975   		ival = ',';
+   976   		opitoo();		/*output a comma*/
+   977   		itype = ITSY;	/*now the A reg again*/
+   978   	}
+   979   }
+   980    
+   981   /*output it for one operand*/
+   982   opitoo()
+   983   {
+   984   	register i;
+   985   	register char *sp;
+   986    
+   987   	symcon = 0;
+   988   	if(itype==ITSP) {				/*special symbol*/
+   989   		if(ival.wd2==',' && !plevel) {		/* another operand */
+   990   			numops++;
+   991   			if(!opdix)
+   992   				opdix++;
+   993   		}
+   994   		if(ival.wd2==' ') {		/*end of operands*/
+   995   			while(fchr!=EOLC)		/*ignore rest of statement*/
+   996   				fchr=gchr();
+   997   			return;
+   998   		}
+   999   		if(ival.wd2==EOLC)
+  1000   			return;
+  1001   	}
+  1002   	else		/*symbol or constant*/
+  1003   		symcon = 1;
+1File: MAIN.C                                                              Page      18
+  1004    
+  1005   	if(itwc >= STMAX) {			/*it overflow*/
+  1006   		rpterr("i.t. overflow\n");
+  1007   		abort();
+  1008   	}
+  1009   	pitw->itty = itype;		/*type of it entry*/
+  1010    
+  1011   /*put symbol in it buffer*/
+  1012   	if(itype==ITSY) {
+  1013   		sp=lemt(sirt,FALSE);		/*look up it main table*/
+  1014   		pitw->itop.ptrw2 = sp;	/*ptr to symbol entry*/
+  1015   		if(sp==lmte)			/*first occurrance*/
+  1016   			mmte();
+  1017   		itwc++;				/*count entries in it buffer*/
+  1018   		pitw++;
+  1019   		if(!(sp->flags&SYER))	/*is it a register?*/
+  1020   			numsym[opdix]++;
+  1021   		else		/*yes, a register*/
+  1022   			numreg[opdix] = sp->vl1;
+  1023   		return;
+  1024   	}
+  1025   	else if(itype == ITCN ) {
+  1026   		if(ival.wd1 && ival.wd1 != -1)
+  1027   			numcon[opdix] = 2;
+  1028   		else if(!numcon[opdix])
+  1029   			numcon[opdix] = 1;
+  1030   		if(numops == 1)
+  1031   			tryquick();
+  1032   	}
+  1033    
+  1034   /* special characters and constants*/
+  1035   	pitw->itop = ival;
+  1036   	pitw->itrl = reloc;
+  1037   	itwc++;
+  1038   	pitw++;
+  1039   }
+  1040    
+  1041   /* change add into addq and sub into subq if possible*/
+  1042   tryquick()
+  1043   {
+  1044   	register char *p;
+  1045   	register long l;
+  1046    
+  1047   	if(fchr!=',' || !immed[0])
+  1048   		return;
+  1049   	l = ival;
+  1050   	if(itwc != ITOP1+1) {
+  1051   		if(itwc!=ITOP1+2 || stbuf[ITOP1+1].itty!=ITSP ||
+  1052   		  stbuf[ITOP1+1].itop.wd2 != '-')
+  1053   			return;
+  1054   		l = -l;
+  1055   	}
+  1056   	p = stbuf[2].itop.ptrw2;
+  1057   	if(p==moveptr) {
+  1058   		if(explmode && modelen != 4)	/*dont change .w or .b*/
+  1059   			return;
+  1060   		if(l>=-128 && l<=127) {
+  1061   			stbuf[2].itop.ptrw2 = moveqptr;
+  1062   			opcpt = moveqptr;
+1File: MAIN.C                                                              Page      19
+  1063   			chmvq++;
+  1064   		}
+  1065   		return;
+  1066   	}
+  1067   	if(l<=0 || l>8) {
+  1068   		return;
+  1069   	}
+  1070   	if(p==addptr || p==addiptr) {
+  1071   		stbuf[2].itop.ptrw2 = opcpt = addqptr;
+  1072   	}
+  1073   	else if(p==subptr || p==subiptr) {
+  1074   		stbuf[2].itop.ptrw2 = opcpt = subqptr;
+  1075   	}
+  1076   }
+  1077    
+  1078   strcpy(str1, str2, len)
+  1079   register char *str1, *str2;
+  1080   register int len;
+  1081   {
+  1082   	while (len--)
+  1083   		*str1++ = *str2++;
+  1084   }
+  1085    
+  1086   /* index - find the index of a character in a string*/
+  1087   /*		This is identical to Software Tools index.*/
+  1088   index(str,chr)				/* returns index of c in str or -1*/
+  1089   char *str;				/* pointer to string to search*/
+  1090   char chr;				/* character to search for*/
+  1091   {
+  1092   	register char *s;
+  1093   	register int i;
+  1094    
+  1095   	for( s = str, i = 0; *s != '\0'; i++ )
+  1096   		if( *s++ == chr )
+  1097   			return(i);
+  1098   	return(-1);
+  1099   }
+  1100    

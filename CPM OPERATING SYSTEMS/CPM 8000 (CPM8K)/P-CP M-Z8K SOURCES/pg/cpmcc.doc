@@ -1,0 +1,132 @@
+
+
+
+
+
+
+
+                   CC COMMAND UNDER CP/M
+
+9/9/82  FZ
+
+The cc command under UNIX makes heavy use of the fork()  and
+exec()  system calls.  In particular, a typical structure of
+a cc execution is:
+
+For each ".c" file do
+        fork/exec preprocessor
+        fork/exec 1st pass
+        fork/exec second pass
+        if -O flag fork/exec optimizer (always for Unidot)
+        fork/exec assembler (not in Unidot)
+od
+
+Thus each of the passes is loaded and  executed  repeatedly,
+while the parent task (cc) waits.
+
+This scheme will not work in a  single-tasking  environment.
+The  alternative  appears  to be use of the CHAIN or PROGRAM
+LOAD functions (BDOS calls 47  and  59  respectively.)   The
+difficulty is that the sequence of chains or loads will have
+to form a loop:   cc  chains/loads  cpp  chains/loads  pass1
+chains/loads  pass2  chains/loads pass3 chains/loads cc (for
+next program file) chains/loads cpp...
+
+Eventually cc will have to detect that all  the  files  have
+been  compiled  and end the loop.  The communication between
+chaining and chained programs  can  be  done  via  the  "DMA
+buffer",  which is large enough to contain a command line of
+128 bytes.  Communication between loading  and  loaded  pro-
+grams  may  be  somewhat  more flexible, since the LOAD call
+appears to give the caller freedom in where the  program  is
+loaded  (e.g., not necessarily at the beginning of the TPA),
+and thus holds out hope of shared memory.   (I  don't  think
+this  will  work,  actually.)   What must be communicated is
+essentially the contents of the command line, together  with
+a  pointer to where in the command line the current loop has
+gotten to.  Although passing the command line  along  sounds
+attractive,  it  introduces  the  inefficiency of repeatedly
+parsing the various compile time flags.   I  don't  see  how
+this  can be avoided at this point.  Changing the flags from
+the format in which they are entered to a  different  format
+which  is  trivial  to  parse  (e.g  a letter for each flag,
+present or not) could perhaps alleviate this inefficiency.
+
+Format of the external command line passed by a user to cc:
+
+cc [-c] [-P] [-E] [-o name] [-Dname[=def]] [-Uname] [-K] files.[cso]...
+
+Format of the DMA buffer, used by a chaining pass of  cc  to
+send  information about the current status of the compile to
+
+
+
+
+
+
+
+
+
+
+
+
+
+the next pass:
+
+|-------------------------------------------------------------------------|
+| N | -[c][P][E][K] [-Dname[=def]] [-Uname]  file.x file.c file.o ... | 0 |
+|-------------------------------------------------------------------------|
+  1                             N bytes                                 1
+ byte                                                                  byte
+
+where the the extension on a file  is  changed  to  ".x"  to
+indicate  that it has already been processed.  Note that the
+following more or less standard flags will not be supported:
+
+    -O      Optimization is always done with the Unidot compiler.
+    -S      Assembler code is not generated.
+    -I      Directories are not implemented.
+    -B      Only one version of compiler.
+    -t      Ditto.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

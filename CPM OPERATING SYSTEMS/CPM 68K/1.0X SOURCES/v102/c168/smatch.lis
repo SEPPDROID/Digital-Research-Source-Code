@@ -1,0 +1,526 @@
+1File: SMATCH.C                                                            Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   /* Code Skeleton expansion and matching */
+     9    
+    10   #include "cgen.h"
+    11   #include "cskel.h"
+    12   #define	SK_TYPE(x)	(x&017)
+    13    
+    14   /* expand - code skeleton expansion*/
+    15   /*		Handles the expansion of code skeleton macros.*/
+    16   expand(tp,cookie,freg,skp)			/* returns register result is in*/
+    17   struct tnode *tp;					/* pointer to expression tree*/
+    18   int cookie;							/* goal of expression tree*/
+    19   int freg;							/* register to leave results in*/
+    20   struct skeleton *skp;				/* pointer to code skeleton*/
+    21   {
+    22   	register int op, nreg, reg;
+    23   	register int c;
+    24   	register int extf, i2f;
+    25   	register struct tnode *ltp, *rtp;
+    26   	register char *p;
+    27   	register int i, inaddreg, sreg, flag, subtrees, scookie;
+    28   	register char *macro;
+    29    
+    30   #ifndef NODEBUG
+    31   	if( eflag )
+    32   		printf("expand op=%d left=%x right=%x skp=%o\n",tp->t_op,
+    33   				skp->sk_left,skp->sk_right,skp);
+    34   #endif
+    35   	if( ((op=tp->t_op) >= MULT && op <= XOR) || tp->t_type == CHAR )
+    36   		freg = dreg(freg);
+    37   	macro = skp->sk_def;
+    38   	extf = 0;
+    39   	i2f = 0;
+    40   	rtp = ltp = tp->t_left;
+    41   	subtrees = 1;
+    42   	if( binop(op) ) {
+    43   		subtrees++;
+    44   		rtp = tp->t_right;
+    45   		if( (longorptr(tp->t_type)) && (op == DIV || op == MOD ||
+    46   				(op != MULT && (isdreg(freg)) &&
+    47   				!(longorptr(ltp->t_type)) && !(longorptr(rtp->t_type)))) )
+    48   			extf++;
+    49   		switch( op ) {
+    50    
+    51   		case RSH:
+    52   		case LSH:
+    53   		case EQLSH:
+    54   		case EQRSH:
+    55   			if( unsign(ltp->t_type) )
+    56   				i2f++;
+    57   			break;
+    58    
+    59   		case MULT:
+1File: SMATCH.C                                                            Page       2
+    60   		case EQMULT:
+    61   		case DIV:
+    62   		case MOD:
+    63   		case EQDIV:
+    64   		case EQMOD:
+    65   			if( unsign(ltp->t_type) || unsign(rtp->t_type) )
+    66   				i2f++;
+    67   			break;
+    68   		}
+    69   	}
+    70   	nreg = freg + 1;
+    71   	while( c = *macro++ ) {
+    72   		c =& 0xff;
+    73   		switch( c ) {
+    74    
+    75   		default:
+    76   			putchar(c);
+    77   			break;
+    78    
+    79   		case POP:
+    80   			stacksize--;
+    81   			printf("(sp)+");
+    82   			break;
+    83    
+    84   		case POP4:
+    85   			stacksize--;
+    86   			popstack(4);
+    87   			break;
+    88    
+    89   		case POP8:
+    90   			stacksize =- 2;
+    91   			popstack(8);
+    92   			break;
+    93    
+    94   		case PSH:
+    95   			if( cookie == FORSP )				/*don't affect sp*/
+    96   				printf("(sp)");
+    97   			else
+    98   				printf("-(sp)");
+    99   			stacksize++;
+   100   			break;
+   101    
+   102   		case MOV:
+   103   		case MOVL:
+   104   		case JSR:
+   105   		case CLR:
+   106   		case CLRL:
+   107   		case EXTW:
+   108   		case EXTL:
+   109   		case LEA:
+   110   		case STK:
+   111   			printf("%s",strtab[c-128]);
+   112   			break;
+   113    
+   114   		case OPCALL:
+   115   			if( isfloat(tp->t_type) || isfloat(ltp->t_type) ) {
+   116   				switch( op ) {
+   117    
+   118   				case ADD:
+1File: SMATCH.C                                                            Page       3
+   119   				case EQADD:
+   120   					printf("_fpadd");
+   121   					break;
+   122    
+   123   				case SUB:
+   124   				case EQSUB:
+   125   					printf("_fpsub");
+   126   					break;
+   127    
+   128   				case MULT:
+   129   				case EQMULT:
+   130   					printf("_fpmult");
+   131   					break;
+   132    
+   133   				case DIV:
+   134   				case EQDIV:
+   135   					printf("_fpdiv");
+   136   					break;
+   137    
+   138   				case UMINUS:
+   139   				case EQNEG:
+   140   					printf("_fpneg");
+   141   					break;
+   142    
+   143   				case FLOAT2L:
+   144   				case FLOAT2I:
+   145   					printf("_fpftol");
+   146   					break;
+   147    
+   148   				case LONG2F:
+   149   				case INT2F:
+   150   					printf("_fpltof");
+   151   					break;
+   152    
+   153   				case EQUALS:
+   154   				case NEQUALS:
+   155   				case GREAT:
+   156   				case GREATEQ:
+   157   				case LESS:
+   158   				case LESSEQ:
+   159   					printf("_fpcmp");
+   160   					break;
+   161    
+   162   				default:
+   163   					error("invalid floating op %d\n",op);
+   164   					break;
+   165   				}
+   166   			}
+   167   			else {
+   168   				switch( op ) {
+   169   	
+   170   				case MULT:
+   171   				case LMULT:
+   172   					printf("lmul");
+   173   					break;
+   174   	
+   175   				case DIV:
+   176   				case LDIV:
+   177   					printf("ldiv");
+1File: SMATCH.C                                                            Page       4
+   178   					break;
+   179   	
+   180   				case MOD:
+   181   				case LMOD:
+   182   					printf("lrem");
+   183   					break;
+   184   	
+   185   				default:
+   186   					error("opcall bad op %d",op);
+   187   					break;
+   188   				}
+   189   			}
+   190   			break;
+   191    
+   192   		case TLEFT:
+   193   			outtype( leafop(op) ? tp->t_type : ltp->t_type );
+   194   			break;
+   195    
+   196   		case TLEFTL:
+   197   			outatype( leafop(op) ? tp->t_type : ltp->t_type );
+   198   			break;
+   199    
+   200   		case TEITHER:
+   201   			if( longorptr(rtp->t_type) || longorptr(ltp->t_type) )
+   202   				outtype(LONG);
+   203   			break;
+   204    
+   205   		case TRIGHT:
+   206   			outtype(rtp->t_type);
+   207   			break;
+   208    
+   209   		case OP:
+   210   		case AOP:
+   211   			if( c == AOP || i2f )
+   212   				i = optab[op][1];
+   213   			else
+   214   				i = optab[op][0];
+   215   			printf(mnemonics[i]);
+   216   			break;
+   217    
+   218   		case LADDR:
+   219   		case RADDR:
+   220   			p = (c==RADDR?rtp:ltp);
+   221   			outaexpr(p,IMMED);
+   222   			break;
+   223    
+   224   		case CR:
+   225   			outcreg(freg);
+   226   			break;
+   227    
+   228   		case NR:
+   229   			outcreg(nreg);
+   230   			break;
+   231    
+   232   		case CAR:
+   233   			outcreg(areg(freg));
+   234   			break;
+   235    
+   236   		case NAR:
+1File: SMATCH.C                                                            Page       5
+   237   			outcreg(areg(nreg));
+   238   			break;
+   239    
+   240   		case EXL:
+   241   			outextend(ltp,LONG,freg);
+   242   			break;
+   243    
+   244   		case EXRL:
+   245   		case EXRLN:
+   246   			outextend(rtp,ltp->t_type,c==EXRL?freg:nreg);
+   247   			break;
+   248    
+   249   		case EXLR:
+   250   		case EXLRN:
+   251   			outextend(ltp,rtp->t_type,c==EXLR?freg:nreg);
+   252   			break;
+   253    
+   254   		case LEFT:
+   255   		case RIGHT:
+   256   			subtrees--;
+   257   		case TREE:
+   258   			p = (c==LEFT?ltp:c==RIGHT?rtp:tp);
+   259   			flag = *macro++;
+   260   			scookie = FORREG;
+   261   			if( flag & S_STACK ) {
+   262   				if( cookie == FORSP )
+   263   					scookie = FORSP;
+   264   				else
+   265   					scookie = FORSTACK;
+   266   			}
+   267   			else if( flag & S_FORCC )
+   268   				scookie = FORCC;
+   269   			if( flag & S_NEXT )
+   270   				reg = nreg;
+   271   			else
+   272   				reg = freg;
+   273   			if( flag & S_INDR ) {
+   274   				if( p->t_op != INDR )
+   275   					error("code skeleton error: %d\n",op);
+   276   				p = p->t_left;		/*skip INDR*/
+   277   				if( coffset(p) ) {
+   278   					p = p->t_left;
+   279   					if( longorptr(p->t_type) == 0 && (flag&S_STACK) != 0 )
+   280   						p = tnalloc(INT2L,LONG,0,0,p);
+   281   				}
+   282   				reg = areg(reg);
+   283   			}
+   284   			sreg = codegen(p,scookie,reg);	/*code for subtree*/
+   285   			if( scookie == FORREG ) {
+   286   				if( flag & S_INDR ) {
+   287   					if( isdreg(sreg) )
+   288   						outmovr(sreg,areg(reg),p);
+   289   				}
+   290   				else if( flag & S_NEXT )
+   291   					nreg = sreg;
+   292   				else if( sreg != reg ) {
+   293   	/*
+   294   	 * result was not in expected register, if remaining sub-tree can be
+   295   	 * compiled using the remaining registers, update current and next
+1File: SMATCH.C                                                            Page       6
+   296   	 * registers, saving us the trouble of moving the register.
+   297   	 */
+   298   					if( c == TREE || ((isdreg(sreg)) && subtrees > 0 &&
+   299   						((c == LEFT &&
+   300   							sucomp(rtp,sreg,0) <= skp->sk_right &&
+   301   							sucomp(rtp,sreg,1) <= SU_ANY) ||
+   302   						( c == RIGHT &&
+   303   							sucomp(ltp,sreg,0) <= skp->sk_left &&
+   304   							sucomp(ltp,sreg,1) <= SU_ANY))) ) {
+   305   						freg = dreg(sreg);
+   306   						nreg = freg + 1;
+   307   					}
+   308   					else
+   309   						outmovr(sreg,dreg(freg),p);
+   310   				}
+   311   			}
+   312   			break;
+   313    
+   314   		case LOFFSET:
+   315   		case ROFFSET:
+   316   			p = (c==LOFFSET) ? ltp->t_left : rtp->t_left;
+   317   			if((p=coffset(p)) != 0 && (p->t_op != CINT || p->t_value != 0))
+   318   				outaexpr(p,NOTIMMED);
+   319   			break;
+   320    
+   321   		case MODSWAP:
+   322   			switch( op ) {
+   323    
+   324   			case MOD:
+   325   			case EQMOD:
+   326   			case LMOD:
+   327   			case LEQMOD:
+   328   				outswap(freg);
+   329   			}
+   330   			break;
+   331    
+   332   		}
+   333   	}
+   334   	if( extf && cookie == FORREG && (isdreg(freg)) ) {
+   335   		if( unsign(ltp->t_type) || unsign(rtp->t_type) )
+   336   			outuext(freg);
+   337   		else
+   338   			outext(freg);
+   339   	}
+   340   #ifndef NODEBUG
+   341   	if( eflag )
+   342   		printf("ending expand skp=%o\n",skp);
+   343   #endif
+   344   	return(freg);
+   345   }
+   346    
+   347   /*
+   348    * match - try to match expression tree with code skeleton
+   349    *		Given the expression tree, tries to match the given tree with
+   350    *		the appropriate code skeleton.  The code skeleton list is
+   351    *		gotten from the root operator and the cookie value.  The code
+   352    *		skeleton list is then searched, checking the Sethy-Ullman numbers
+   353    *		of the sub-trees against the Sethy-Ullman numbers in the code
+   354    *		skeleton list.  If the Sethy-Ullman numbers are OK, then the
+1File: SMATCH.C                                                            Page       7
+   355    *		left and right sub-trees are checked for compatability, e.g.
+   356    *		integer pointers, etc.  If a match is found, the code skeleton
+   357    *		list pointer is returned.
+   358    */
+   359   char *match(tp,cookie,reg)				/* returns ptr to code skeleton*/
+   360   										/* or 0 if no skeleton*/
+   361   struct tnode *tp;						/* pointer to tree*/
+   362   int cookie;								/* goal for code expansion*/
+   363   int reg;								/* register to use*/
+   364   {
+   365   	register struct skeleton *skp;
+   366   	register int op, bop, opndx;
+   367   	int i;
+   368   	register struct tnode *ltp, *rtp;
+   369    
+   370   #ifndef NODEBUG
+   371   	if( mflag )
+   372   		printf("match op=%d cookie=%d reg=%d\n",tp->t_op,cookie,reg);
+   373   #endif
+   374   	if( (op=tp->t_op) >= LCGENOP )
+   375   		return(0);
+   376   	if( leafop(op) )
+   377   		ltp = tp;
+   378   	else
+   379   		ltp = tp->t_left;
+   380   	if( (bop=binop(op)) ) {
+   381   		rtp = tp->t_right;
+   382   		if( convop(ltp->t_op) ) {
+   383   			if( op != LSH && notconvop(rtp->t_op) ) {
+   384   				if( !(unsign(ltp->t_left->t_type)) || op == ASSIGN ) {
+   385   					tp->t_left = ltp->t_left;
+   386   					if( (skp=match(tp,cookie,reg)) != 0 )
+   387   						return(skp);
+   388   					tp->t_left = ltp;
+   389   				}
+   390   			}
+   391   		}
+   392   		else if( convop(rtp->t_op) ) {
+   393   			if( !(unsign(rtp->t_left->t_type)) || op == ASSIGN ) {
+   394   				tp->t_right = rtp->t_left;
+   395   				if( (skp=match(tp,cookie,reg)) != 0 )
+   396   					return(skp);
+   397   				tp->t_right = rtp;
+   398   			}
+   399   		}
+   400   	}
+   401   	switch( cookie ) {
+   402    
+   403   	case FORCC:
+   404   		i = 3;
+   405   		break;
+   406    
+   407   	case FOREFF:
+   408   		i = 2;
+   409   		break;
+   410    
+   411   	case FORSTACK:
+   412   	case FORSP:
+   413   		i = 4;
+1File: SMATCH.C                                                            Page       8
+   414   		break;
+   415    
+   416   	case FORREG:
+   417   		i = 5;
+   418   		break;
+   419   	
+   420   	default:
+   421   		error("match cookie=%d\n",cookie);
+   422   		return(0);
+   423   	}
+   424   #ifndef NODEBUG
+   425   	if( mflag )
+   426   		printf("match op=%d i=%d ",op,i);
+   427   #endif
+   428   	if( !(i=optab[op][i]) )
+   429   		return(0);
+   430   	skp = codeskels[i];
+   431   #ifndef NODEBUG
+   432   	if( mflag )
+   433   		printf("codeskels[%d]=%o\n",i,skp);
+   434   #endif
+   435   #ifndef NODEBUG
+   436   	if(mflag) {
+   437   		printf("match LEFT ");
+   438   		puttsu(ltp);
+   439   		if(bop) {
+   440   			printf(" RIGHT ");
+   441   			puttsu(rtp);
+   442   		}
+   443   		putchar('\n');
+   444   	}
+   445   #endif
+   446   	for( ; skp->sk_left != 0; skp++ ) {
+   447   #ifndef NODEBUG
+   448   		if( mflag > 1 )
+   449   			printf("sk_left=%x sk_right=%x\n",skp->sk_left,skp->sk_right);
+   450   #endif
+   451   		if( !(skelmatch(ltp,skp->sk_left)) )
+   452   			continue;
+   453   		if( bop && !(skelmatch(rtp,skp->sk_right)) )
+   454   			continue;
+   455   #ifndef NODEBUG
+   456   		if( mflag )
+   457   			printf("match found skp=%o left=%x right=%x\n",skp,
+   458   					skp->sk_left,skp->sk_right);
+   459   #endif
+   460   		return(skp);
+   461   	}
+   462   	return(0);
+   463   }
+   464    
+   465   /* skelmatch - sub-tree type matching for match*/
+   466   /*		This checks a subtree for type compatability in match.*/
+   467   skelmatch(tp,skinfo)					/* returns 1 if matched, else 0*/
+   468   struct tnode *tp;						/* pointer to expression tree*/
+   469   int skinfo;
+   470   {
+   471   	register int type, unsignf, const, stype;
+   472    
+1File: SMATCH.C                                                            Page       9
+   473   	if( tp->t_su > skinfo || ((skinfo&T_INDR) && tp->t_op != INDR) )
+   474   		return(0);
+   475   	stype = SK_TYPE(skinfo);
+   476   	type = tp->t_type;
+   477   	if( function(type) )
+   478   		type = btype(type);
+   479   	if( unsignf = unsign(type) )
+   480   		type = basetype(type);
+   481   	const = 0;
+   482   	switch( tp->t_op ) {
+   483    
+   484   	case CFLOAT:		/* [vlh] 3.4 */
+   485   	case CLONG:
+   486   		if( tp->t_su > SU_CONST )
+   487   			break;
+   488   	case CINT:
+   489   		const++;
+   490   		break;
+   491   	}
+   492   	switch( stype ) {
+   493    
+   494   	case T_CHAR:
+   495   		return( type == CHAR );
+   496    
+   497   	case T_ANY:							/*either int or char*/
+   498   		if( type == CHAR )
+   499   			return(1);
+   500   	case T_INT:
+   501   		return( type == INT || const );
+   502    
+   503   	case T_UNSN:
+   504   		return( unsignf );
+   505    
+   506   	case T_LONG:
+   507   		return( longorptr(type) );
+   508    
+   509   	case T_FLOAT:
+   510   		return( isfloat(type) );
+   511    
+   512   	default:
+   513   		error("skelmatch type: %x",stype);
+   514   		return(0);
+   515   	}
+   516   }
+   517    

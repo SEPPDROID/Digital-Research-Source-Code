@@ -1,0 +1,260 @@
+1File: PUTEXPR.C                                                           Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #ifndef	NODEBUG
+    10    
+    11   char invalid[] "INVALID";
+    12    
+    13   char *opname[] {
+    14   	invalid,						/*0*/
+    15   	"+",							/*1*/
+    16   	"-",							/*2*/
+    17   	"*",							/*3*/
+    18   	"/",							/*4*/
+    19   	"%",							/*5*/
+    20   	">>",							/*6*/
+    21   	"<<",							/*7*/
+    22   	"&",							/*8*/
+    23   	"|",							/*9*/
+    24   	"^",							/*10*/
+    25   	"!",							/*11*/
+    26   	"U-",							/*12*/
+    27   	"~",							/*13*/
+    28   	"--p",							/*14*/
+    29   	"++p",							/*15*/
+    30   	"p--",							/*16*/
+    31   	"p++",							/*17*/
+    32   	"=",							/*18*/
+    33   	"+=",							/*19*/
+    34   	"-=",							/*20*/
+    35   	"*=",							/*21*/
+    36   	"/=",							/*22*/
+    37   	"%=",							/*23*/
+    38   	">>=",							/*24*/
+    39   	"<<=",							/*25*/
+    40   	"&=",							/*26*/
+    41   	"|=",							/*27*/
+    42   	"^=",							/*28*/
+    43   	"jsr",							/*29*/
+    44   	"==",							/*30*/
+    45   	"!=",							/*31*/
+    46   	">",							/*32*/
+    47   	">=",							/*33*/
+    48   	"<",							/*34*/
+    49   	"<=",							/*35*/
+    50   	"int->long",					/*36*/
+    51   	"long->int",					/*37*/
+    52   	"btst",							/*38*/
+    53   	"load",							/*39*/
+    54   	"long*",						/*40*/
+    55   	"long/",						/*41*/
+    56   	"long%",						/*42*/
+    57   	"long*=",						/*43*/
+    58   	"long/=",						/*44*/
+    59   	"long%=",						/*45*/
+1File: PUTEXPR.C                                                           Page       2
+    60   	"=addr",						/*46*/
+    61   	"=not",							/*47*/
+    62   	"=neg",							/*48*/
+    63   	"docast",						/*49*/
+    64   	"st=",							/*50*/
+    65   	"long->float",					/*51*/
+    66   	"float->long",					/*52*/
+    67   	"int->float",					/*53*/
+    68   	"float->int",					/*54*/
+    69   	"tochar",						/*55*/
+    70   	invalid,						/*56*/
+    71   	invalid,						/*57*/
+    72   	invalid,						/*58*/
+    73   	invalid,						/*59*/
+    74   	"U&",							/*60*/
+    75   	"U*",							/*61*/
+    76   	"&&",							/*62*/
+    77   	"||",							/*63*/
+    78   	"?",							/*64*/
+    79   	":",							/*65*/
+    80   	",",							/*66*/
+    81   	"cint",							/*67*/
+    82   	"clong",						/*68*/
+    83   	"symbol",						/*69*/
+    84   	"++a",							/*70*/
+    85   	"a--",							/*71*/
+    86   	"call",							/*72*/
+    87   	"call()",						/*73*/
+    88   	"bitfield",						/*74*/
+    89   	"if",							/*75*/
+    90   	"init",							/*76*/
+    91   	"loadR0",						/*77*/
+    92   	"divlong",						/*78*/
+    93   };
+    94    
+    95   char *types[] {
+    96   	invalid,						/*0=TYPELESS*/
+    97   	"char",							/*1=CHAR*/
+    98   	invalid,						/*2=SHORT*/
+    99   	"int",							/*3=INT*/
+   100   	"long",							/*4=LONG*/
+   101   	invalid,						/*5=UCHAR*/
+   102   	invalid,						/*6=USHORT*/
+   103   	"uint",							/*7=UINT*/
+   104   	invalid,						/*8=ULONG*/
+   105   	"float",						/*9=FLOAT*/
+   106   	invalid,						/*10=DOUBLE*/
+   107   	"struct",						/*11=STRUCT*/
+   108   	invalid,						/*12=undefined*/
+   109   	invalid,						/*13=undefined*/
+   110   	invalid,						/*14=undefined*/
+   111   	invalid,						/*15=undefined*/
+   112   };
+   113    
+   114   char *suvals[] {
+   115   	"zero",
+   116   	"one",
+   117   	"quick",
+   118   	"small",
+1File: PUTEXPR.C                                                           Page       3
+   119   	"constant",
+   120   	"Areg",
+   121   	"Dreg",
+   122   	"addressable",
+   123   	"loadable",
+   124   	"easy",
+   125   	"hard",
+   126   	"veryhard",
+   127   };
+   128    
+   129   int level;
+   130    
+   131   putexpr(name,tp)
+   132   char *name;
+   133   struct tnode *tp;
+   134   {
+   135   	printf("%s\n",name);
+   136   	putsexpr(tp);
+   137   }
+   138    
+   139   putsexpr(tp)
+   140   struct tnode *tp;
+   141   {
+   142   	register struct tnode *ltp;
+   143    
+   144   	level++;
+   145   	ltp = tp->t_left;
+   146   	outlevel();
+   147   	printf("%s ",opname[tp->t_op]);
+   148   	if( tp->t_op == BFIELD || tp->t_op == IFGOTO ) {
+   149   		if( tp->t_op == BFIELD )
+   150   			printf("off=%d len=%d\n",(tp->t_su>>8)&0377,tp->t_su&0377);
+   151   		else
+   152   			printf("%s goto L%d\n",tp->t_type?"TRUE":"FALSE",tp->t_su);
+   153   		putsexpr(tp->t_left);
+   154   		level--;
+   155   		return;
+   156   	}
+   157   	puttsu(tp);
+   158   	switch( tp->t_op ) {
+   159    
+   160   	case DCLONG:
+   161   	case CLONG:
+   162   	case CFLOAT:	/*[vlh] 3.4 */
+   163   		printf(" %x.%x\n",tp->t_lvalue.hiword,tp->t_lvalue.loword);
+   164   		break;
+   165    
+   166    
+   167   	case CINT:
+   168   		printf(" %d\n",tp->t_value);
+   169   		break;
+   170    
+   171   	case AUTODEC:
+   172   	case AUTOINC:
+   173   		printf(" R%d\n",tp->t_reg);
+   174   		break;
+   175    
+   176   	case SYMBOL:
+   177   		switch( tp->t_sc ) {
+1File: PUTEXPR.C                                                           Page       4
+   178    
+   179   		case REGISTER:
+   180   			printf(" R%d",tp->t_reg);
+   181   			break;
+   182    
+   183   		case CINDR:
+   184   			printf(" %d\n",tp->t_offset);
+   185   			break;
+   186    
+   187   		case CLINDR:
+   188   		case CFINDR:	/* [vlh] 3.4 */
+   189   			printf(" %x.%x\n",tp->t_offset,tp->t_ssp);
+   190   			break;
+   191    
+   192   		case REGOFF:
+   193   			printf(" %d(R%d)",tp->t_offset,tp->t_reg);
+   194   			break;
+   195    
+   196   		case EXTERNAL:
+   197   		case EXTOFF:
+   198   			printf(" %s+%d",tp->t_symbol,tp->t_offset);
+   199   			if( tp->t_sc == EXTOFF )
+   200   				printf("(R%d)",tp->t_reg);
+   201   			break;
+   202    
+   203   		case STATIC:
+   204   		case STATOFF:
+   205   			printf(" L%d+%d",tp->t_label,tp->t_offset);
+   206   			if( tp->t_sc == STATOFF )
+   207   				printf("(R%d)",tp->t_reg);
+   208   			break;
+   209    
+   210   		case INDEXED:
+   211   			printf(" %d(R%d,R%d)",tp->t_offset,tp->t_reg,tp->t_xreg);
+   212   			break;
+   213   		}
+   214   		putchar('\n');
+   215   		break;
+   216    
+   217   	case IFGOTO:
+   218   		putsexpr(tp->t_left);
+   219   		break;
+   220    
+   221   	default:
+   222   		putchar('\n');
+   223   		putsexpr(tp->t_left);
+   224   		if( binop(tp->t_op) )
+   225   			putsexpr(tp->t_right);
+   226   		break;
+   227   	}
+   228   	level--;
+   229   }
+   230    
+   231   outlevel()
+   232   {
+   233   	register int i;
+   234    
+   235   	for( i = 0; i < level; i++ )
+   236   		putchar('\t');
+1File: PUTEXPR.C                                                           Page       5
+   237   }
+   238    
+   239   puttsu(tp)
+   240   struct tnode *tp;
+   241   {
+   242   	register int i;
+   243    
+   244   	if( suptype(tp->t_type) )
+   245   		putchar('*');
+   246   	printf("%s ",types[btype(tp->t_type)]);
+   247   	if( tp->t_su != 0 || (tp->t_op == CINT && tp->t_value == 0) ) {
+   248   		i = tp->t_su >> 8;
+   249   		if( i > 15 || i < 0 )
+   250   			printf("INVALID");
+   251   		else
+   252   			printf("%s",suvals[tp->t_su>>8]);
+   253   	}
+   254   }
+   255   #endif

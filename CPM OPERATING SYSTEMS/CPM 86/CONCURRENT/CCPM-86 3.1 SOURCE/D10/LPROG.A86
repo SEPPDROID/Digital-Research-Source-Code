@@ -1,0 +1,251 @@
+	title  'Concurrent CP/M Loader Program'
+;*******************************************************
+;
+;	The Loader Program opens the file 'CCPM.SYS'
+;	using the LBDOS and LBIOS and then reads it into
+;	memory.  The DS register is set to the start of
+;	the Concurrent CP/M DATA area, and a JMPF to the first
+;	byte of the Concurrent CP/M code is executed.
+;
+;	The first 128 byte record of the CCPM.SYS file is
+;	a header with the following format:
+;
+;	+----+----+----+----+----+----+----+----+----+
+;	|TYPE|   LEN   |   ABS   |   MIN   |   MAX   |
+;	+----+----+----+----+----+----+----+----+----+
+;
+;	type	rb	1		;seg type 
+;	len	rw	1		;length 
+;	abs	dw	1		;absolute segment address for LOADER
+;	min	rw	1		;minimum mem
+;	max	rw	1		;max mem needed
+;
+;	The code is expected first and then the data
+;	within the CCPM.SYS File.  This header record
+;	is constructed automatically by the system
+;	generation utility GENCCPM.  See the variables
+;	declared at 'SEC1:' where the first sector of
+;	the CCPM.SYS will be read.
+;
+;	The following commands are used to generate CPMLDR.SYS
+;		RASM86 LBIOS
+;		RASM86 LPROG
+;		LINK86 LBIOS3.SYS = LBIOS,LPROG [DATA[ORIGIN[0180]]]
+;		GENLDR [nnnn]
+;
+;	The following commands are used to generate the
+;	boot tracks image BOOTTRKS
+;		SID86
+;		#RDSKBOOT.SYS		;strips header and
+;		#WBOOT,180,37F		;default base page
+;		PIP BOOTTRKS = BOOT[O],CPMLDR.SYS[O]
+;
+;*******************************************************
+
+CR		equ	13
+LF		equ	10
+
+CTYPE		equ	byte ptr 00h
+CLEN		equ	word ptr 01h
+CLDSEG		equ	word ptr 03h
+DTYPE		equ	byte ptr 09h
+DLEN		equ	word ptr 0Ah
+DLDSEG		equ	word ptr 0Ch
+
+CODETYPE	equ	1		;code type CMD header
+DATATYPE	equ	2		;data type CMD header
+
+	; bdos function numbers
+
+DRV_SET		equ	14
+F_OPEN		equ	15
+F_READ		equ	20
+F_DMASET	equ	26
+F_USERNUM	equ	32
+F_MULTISEC	equ	44
+F_DMA		equ	51
+
+
+;*******************************************************
+;
+;	LOADER starts here
+;
+;*******************************************************
+
+	CSEG
+	org	0000h
+
+	public	?start
+	extrn	?conout:near, ?pmsg:near
+
+?start:		; loader entry from BDOS init
+;------
+	mov si,offset signon		;print signon message
+	call ?pmsg
+
+	mov dl,0
+	mov cl,DRV_SET ! int 224	;select boot drive
+
+	mov dl,0
+	mov cl,F_USERNUM ! int 224	;set user number
+
+	mov dx,offset ccpm_fcb
+	mov cl,F_OPEN ! int 224		;open CCPM.SYS file
+	cmp al,255 ! jne perr		;insure no error on open
+	  mov si,offset nofile
+error:
+	  call ?pmsg			;print no SYSTEM file message
+halt:
+	  sti
+	  hlt				;then halt the machine
+	  jmps halt
+perr:
+	mov dx,offset sec1 
+	mov cl,F_DMASET ! int 224	;set DMA offset address
+
+	mov dl,1			;set Multi-sector count to 1
+	mov si,ds			;SI = DMA segment address
+	call read_rec			;read first record
+
+	mov bx,offset sec1
+	cmp CTYPE[bx],CODETYPE		;code type must = 1
+	je chk_data
+badhdr:
+	  mov si,offset hdrerr
+	  jmp error
+chk_data:
+	cmp DTYPE[bx],DATATYPE		;data type must = 2
+	jne badhdr
+	  mov ax,CLDSEG[bx]		;code abs + code length
+	  add ax,CLEN[bx]		;should be = to data abs
+	  cmp ax,DLDSEG[bx] ! jne  badhdr
+	    add ax,DLEN[bx]
+	    cmp ax,CLDSEG[bx]		;check for wrap around
+	    jbe badhdr
+	      mov ccpm_init,0000h	;set O.S. entry offset to 0000h
+	      mov ax,CLDSEG[bx]
+	      mov ccpm_init+2,ax	;set O.S. entry segment
+hdrok:
+	mov si,offset csegmsg		;print out starting code and data
+	call ?pmsg			; on console
+	mov ax,word ptr sec1+CLDSEG
+	call phex			;print base code segment
+	mov si,offset dsegmsg
+	call ?pmsg			;print base data segment
+	mov ax,word ptr sec1+DLDSEG
+	call phex
+
+	mov dx,0
+	mov cl,F_DMASET ! int 224	;set DMA offset to 0
+					;set multi_sector count to 127
+	mov dl,127			;to align reads with physical sectors
+	mov si,word ptr sec1+CLDSEG	;initial DMA segment
+	call read_rec			;read next 127 sectors
+	jz done				;Z flag set -> EOF
+	  add si,8*127			;increment dma segment
+	  mov dl,128			;set multi-sector count to 128
+	  call read_rec			;read next 128 sectors
+	  jz done			;Z flag set -> EOF 
+readit1:
+	    add si,8*128		;increment dma segment
+	    call read_data		;read next 128 sectors
+	    jnz readit1			;Z flag set -> EOF
+done:
+	mov si,offset crlf		;print carriage return, line feed
+	call ?pmsg
+
+	mov ds,word ptr sec1+DLDSEG	;CCP/M data segment
+
+	jmpf cs:dword ptr ccpm_init	;leap to CCP/M initialization
+
+;-------------------------------------------------------
+;	subroutines
+;-------------------------------------------------------
+read_rec:
+;--------
+;	Entry:	DL = multisector count
+;		SI = dma segment
+
+	mov cl,F_MULTISEC ! int 224	;set multi-sector count to 128
+
+read_data:
+;---------
+;	Entry:	SI = dma segment
+;	Exit:	Z flag set if EOF
+;		Z flag reset if no error
+
+	mov dx,si
+	mov cl,F_DMA ! int 224		;set DMA segment for disk IO
+	mov dx,offset ccpm_fcb
+	mov cl,F_READ ! int 224		;next 128 sector read
+	cmp al,1! jnbe read_error
+	  ret
+read_error:
+	mov si,offset rerr		;print READ ERROR message
+	jmp error
+
+phex:					;print 4 hex characters from ax
+;----
+;	Entry:	AX = hex value to print
+
+	mov cx,0404h			;4 in both CH and CL
+lhex:	
+	rol ax,cl			;rotate left 4
+	push cx ! push ax		;save crucial registers
+	call pnib			;print hex nibble
+	pop ax ! pop cx			;restore registers
+	dec ch ! jnz lhex		;and loop four times
+	ret
+pnib:					;print low nibble in AL as hex char
+;----
+;	Entry:	AL = hex character to print
+
+	and al,0fh
+	cmp al,9 ! ja p10		;above 9 ?
+	  add al,'0'			;digit
+	  jmps prn
+p10:
+	add al,'A'-10			;hex digit A-F
+prn:
+	mov dl,al
+
+putchar:
+;-------
+;	Entry:	DL = character to send to console
+
+	mov cl,dl
+	jmp ?conout
+
+;	code segment variable
+
+ccpm_init	rw	2		;double word entry to Concurrent CP/M
+
+;*******************************************************
+;
+;	DATA AREA
+;
+;*******************************************************
+	DSEG
+
+signon		db	'Concurrent CP/M System Loader V1.0 (02/16/84)',0
+nofile		db	CR,LF,'CCPM.SYS Not Found On Boot Disk',0
+rerr		db	CR,LF,'Error Reading CCPM.SYS',0
+hdrerr		db	CR,LF,'Bad Header Record in CCPM.SYS',0
+csegmsg		db	CR,LF,'Code Paragraph Address = ',0
+dsegmsg		db	CR,LF,'Data Paragraph Address = ',0
+crlf		db	CR,LF,0
+
+ccpm_fcb	db	0,'CCPM    ','SYS',0,0,0,0
+		db	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+		db	0
+
+;-------------------------------------------------------
+
+sec1		rb	128		;read first sector of CCPM.SYS
+					;here (header record)
+
+;*******************************************************
+
+	END
+

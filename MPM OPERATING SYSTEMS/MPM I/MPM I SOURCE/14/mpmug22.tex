@@ -1,0 +1,447 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 53
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+2.3  Queue and Process Descriptor Data Structures
+.pp
+This section contains a description of the queue and process
+descriptor data structures used by the MP/M Extended Disk Operating
+System (XDOS).
+.sp
+.ce
+QUEUE DATA STRUCTURES
+.pp
+A queue is a first in first out (FIFO) mechanism which has been
+implemented in MP/M to provide several essential functions in a
+multi-tasking environment.  Queues can be used for the communication
+of messages between processes, to synchronize processes, and to provide
+mutual exclusion.
+.pp
+MP/M has been designed to simplify queue management for both user
+and system processes.  In fact, queues are treated in a manner
+similar to disk files.  Queues can be created, opened, written to,
+read from, and deleted.
+.pp
+A few illustrations should suffice to describe applications
+for queues:
+.pp
+COMMUNICATION:
+.pp
+A queue can be used for communication to provide a FIFO list of
+messages produced by a producer for consumption by a consumer.
+For example, consider a data logging application where
+data is continuously received via a serial communication link and is to
+be written to a disk file.  This would be a difficult application
+for a sequential operating system such as CP/M because arriving
+serial data would be lost while buffers were being written to
+disk.  Under MP/M a queue could be used by the producer to send
+blocks of received serial data (or simply buffer pointers) to a consumer
+which would write the blocks on disk.  MP/M supports concurrency of
+these operations, allowing the producer to quickly write a buffer to
+the queue and then resume monitoring the serial input.
+.pp
+SYNCHRONIZATION:
+.pp
+When a process attempts to read a message at a queue and there are
+no messages posted at the queue, the process is placed in a priority
+ordered list of processes waiting for messages at the queue.  The
+process will remain in that state until a message arrives.  Thus
+synchronization of processes can be achieved, allowing the waiting
+(DQing) process to continue execution when a message is sent to
+the queue.
+.cp 20
+.pp
+MUTUAL EXCLUSION:
+.pp
+A queue can also be used for mutual exclusion.
+Mutual exclusion messages generally have a length of zero.  A good
+example of mutual exclusion is that which is used by MP/M to
+control access to the printer.  A queue is created (MXList)
+and sent one message.  When the printer is to be used by the spooler
+or by entering a control-P (^P) at the console an attempt is
+made to read the message from the list mutual exclusion queue.
+This attempt is made using the MP/M conditional read queue function.
+If the message is available, that is it has not been consumed by
+some other process, it is read and the printer is used.  When finished
+with the printer,
+the message is written back to the list mutual exclusion queue.
+If the message is not available the user who entered the ^P
+receives a message indicating that the printer is busy.
+In the case of the spooler, it waits until the printer is available
+before continuing.
+.sp
+.ce
+QUEUE DATA STRUCTURES
+.SP
+.pp
+The queue data structures include the queue control block and the user
+queue control block.  There are two types of queue control blocks,
+circular or linked.  The type of queue control block used depends upon
+the message size.  Message sizes of 0 to 2 bytes use circular queues
+while message sizes of 3 or more bytes use linked queues.
+.sp
+.ce
+CIRCULAR QUEUES
+.pp
+The following example illustrates how to setup a queue control block
+for a circular queue with 80 messages of a one byte length.
+Each example in this section will be shown both in PL/M and assembly
+language.
+.cp 17
+.LI
+
+   PL/M:
+
+	DECLARE CIRCULAR$QUEUE STRUCTURE (
+	  QL ADDRESS,
+	  NAME(8) BYTE,
+	  MSGLEN ADDRESS,
+	  NMBMSGS ADDRESS,
+	  DQPH ADDRESS,
+	  NQPH ADDRESS,
+	  MSG$IN ADDRESS,
+	  MSG$OUT ADDRESS,
+	  MSG$CNT ADDRESS,
+	  BUFFER (80) BYTE        )
+	  INITIAL (0,'CIRCQUE ',1,80);
+.ad
+.cp 14
+.li
+
+   Assembly Language:
+
+	CRCQUE:
+		DS	2	; QL
+		DB	'CIRCQUE ' ; NAME
+		DW	1	; MSGLEN
+		DW	80	; NMBMSGS
+		DS	2	; DQPH
+		DS	2	; NQPH
+		DS	2	; MSGIN
+		DS	2	; MSGOUT
+		DS	2	; MSGCNT
+	BUFFER:	DS	80	; BUFFER
+
+.AD
+The elements of the circular queue shown above are defined
+as follows:
+.LI
+
+	QL      = 2 byte link, set by system
+	NAME    = 8 ASCII character queue name,
+	            set by user
+	MSGLEN  = 2 bytes, length of message,
+	            set by user
+	NMBMSGS = 2 bytes, number of messages,
+	            set by user
+	DQPH    = 2 bytes, DQ process head,
+	            set by system
+	NQPH    = 2 bytes, NQ process head,
+	            set by system
+	MSG$IN  = 2 bytes, pointer to next
+	            message in, set by system
+	MSG$OUT = 2 bytes, pointer to next
+	            message out, set by system
+	MSG$CNT = 2 bytes, number of messages
+	            in the queue, set by system
+	BUFFER  = n bytes, where n is equal to
+	            the message length times the
+	            number of messages, space
+	            allocated by user, set by system
+
+                    Note: Mutual exclusion queues require
+                    a two byte buffer for the owner process
+                    descriptor address.
+
+Queue Overhead  = 24 bytes
+
+
+.AD
+.sp
+.ce
+LINKED QUEUES
+.pp
+The following example illustrates how to setup a queue control block
+for a linked queue containing 4 messages, each 33 bytes in length:
+.cp 16
+.LI
+
+   PL/M:
+
+	DECLARE LINKED$QUEUE STRUCTURE (
+	  QL ADDRESS,
+	  NAME (8) BYTE,
+	  MSGLEN ADDRESS,
+	  NMBMSGS ADDRESS,
+	  DQPH ADDRESS,
+	  NQPH ADDRESS,
+	  MH ADDRESS,
+	  MT ADDRESS,
+	  BH ADDRESS,
+	  BUFFER (140) BYTE   )
+	  INITIAL (0,'LNKQUE  ',33,4);
+.ad
+.cp 21
+.li
+
+   Assembly Language:
+
+	LNKQUE:
+		DS	2	; QL
+		DB	'LNKQUE  ' ; NAME
+		DW	33	; MSGLEN
+		DW	4	; NMBMSGS
+		DS	2	; DQPH
+		DS	2	; NQPH
+		DS	2	; MH
+		DS	2	; MT
+		DS	2	; BH
+	BUFFER:	DS	2	; MSG #1 LINK
+		DS	33	; MSG #1 DATA
+		DS	2	; MSG #2 LINK
+		DS	33	; MSG #2 DATA
+		DS	2	; MSG #3 LINK
+		DS	33	; MSG #3 DATA
+		DS	2	; MSG #4 LINK
+		DS	33	; MSG #4 DATA
+
+.AD
+The elements of the linked queue shown above are defined
+as follows:
+.LI
+
+	QL      = 2 byte link, set by system
+	NAME    = 8 ASCII character queue name,
+	            set by user
+	MSGLEN  = 2 bytes, length of message,
+	            set by user
+	NMBMSGS = 2 bytes, number of messages,
+	            set by user
+	DQPH    = 2 bytes, DQ process head,
+	            set by system
+	NQPH    = 2 bytes, NQ process head,
+	            set by system
+	MH      = 2 bytes, message head,
+	            set by system
+	MT      = 2 bytes, message tail,
+	            set by system
+	BH      = 2 bytes, buffer head,
+	            set by system
+	BUFFER  = n bytes where n is equal to
+	            the message length plus two,
+	            times the number of messages,
+	            space allocated by the user,
+	            set by the system
+
+.AD
+.sp
+.ce
+USER QUEUE CONTROL BLOCK
+.pp
+The user queue control block data structure is used to provide
+read/write access to queues in much the same manner that a file
+control block provides access to a disk file.  Queues are "opened",
+an operation which fills in the actual queue control block address,
+and then can be read from or written to.
+.pp
+If the actual queue address is known it can be filled in the
+pointer field of the user queue control block, the 8 byte name
+field can be omitted, and an open operation is not required in
+order to access the queue.
+.pp
+The following example illustrates a user queue control block:
+.cp 9
+.LI
+
+   PL/M:
+
+	DECLARE USER$QUEUE$CONTROL$BLOCK STRUCTURE (
+	  POINTER ADDRESS,
+	  MSGADR ADDRESS,
+	  NAME (8) BYTE    )
+          INITIAL (0,.BUFFER,'SPOOL   ');
+
+	DECLARE BUFFER (33) BYTE;
+.ad
+.cp 11
+.li
+
+   Assembly Language:
+
+	UQCB:
+		DS	2	; POINTER
+		DW	BUFFER	; MSGADR
+		DB	'SPOOL   ' ; NAME
+
+	BUFFER:
+		DS	33	; BUFFER
+
+.AD
+.cp 14
+.pp
+The elements of the user queue control block shown above are defined
+as follows:
+.LI
+
+	POINTER = 2 bytes, set by system to address of
+	            actual queue during an open queue
+	            operation, or set by the user if the
+	            actual queue address is known
+	MSGADR  = 2 bytes, address of user buffer,
+	            set by user
+	NAME    = 8 bytes, ASCII queue name,
+	            set by user, may be omitted if the
+	            pointer field is set by the user
+
+.AD
+.sp
+.ce
+QUEUE NAMING CONVENTIONS
+.pp
+The  following conventions should be used in the naming  of
+queues.  Queues which are to be directly written to by the
+Terminal   Message  Process  (TMP)  via  the  Command  Line
+Interpreter (CLI) must have an upper case ASCII name.  Thus
+when an operator enters the queue name followed by a
+command  tail at a console,  the command tail is written to
+the queue.
+.pp
+In  order  to  make a queue inaccessible by  a  user  at  a
+console it must contain at least one lower case character.
+Mutual  exclusion  queues should be named upper  case  'MX'
+followed  by  1 to 6 additional  ASCII  characters.  These
+queues  are treated specially in that they must have a  two
+byte buffer in which MP/M places the address of the process
+descriptor owning the mutual exclusion message.
+.cp 35
+.sp
+.ce
+PROCESS DESCRIPTOR
+.pp
+Each process in the MP/M system has a process descriptor which
+defines all the characteristics of the process.  The following
+example illustrates the process descriptor:
+.cp 28
+.LI
+
+   PL/M:
+
+	DECLARE CNS$HNDLR STRUCTURE (
+	  PL ADDRESS,
+	  STATUS BYTE,
+	  PRIORITY BYTE,
+	  STKPTR ADDRESS,
+	  NAME (8) BYTE,
+	  CONSOLE BYTE,
+	  MEMSEG BYTE,
+	  B ADDRESS,
+	  THREAD ADDRESS,
+	  DISK$SET$DMA ADDRESS,
+	  DISK$SLCT BYTE,
+	  DCNT ADDRESS,
+	  SEARCHL BYTE,
+	  SEARCHA ADDRESS,
+	  DRVACT ADDRESS,
+	  REGISTERS (20) BYTE,
+	  SCRATCH (2) BYTE )
+	  INITIAL (0,0,200,.CNS$STK(19),
+	           'CNS     ',1,0FFH);
+
+	DECLARE CNS$STK (20) ADDRESS INITIAL (
+	  0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,
+	  0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,
+	  0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,0C7C7H,
+	  0C7C7H,STRT$CNS);
+.ad
+.cp 28
+.li
+
+   Assembly Language:
+
+	CNSHND:
+		DW	0	; PL
+		DB	0	; STATUS
+		DB	200	; PRIORITY
+		DW	CNSTK+38 ;STKPTR
+		DB	'CNS     ' ; NAME
+		DB	0	; CONSOLE
+		DB	0FFH	; MEMSEG (FF = resident)
+		DS	2	; B
+		DS	2	; THREAD
+		DS	2	; DISK SET DMA
+		DS	1	; DISK SLCT
+		DS	2	; DCNT
+		DS	1	; SEARCHL
+		DS	2	; SEARCHA
+		DS	2	; DRVACT
+		DS	20	; REGISTERS
+		DS	2	; SCRATCH
+
+	CNSTK:
+		DW	0C7C7H,0C7C7H,0C7C7H,0C7C7H
+		DW	0C7C7H,0C7C7H,0C7C7H,0C7C7H
+		DW	0C7C7H,0C7C7H,0C7C7H,0C7C7H
+		DW	0C7C7H,0C7C7H,0C7C7H,0C7C7H
+		DW	0C7C7H,0C7C7H,0C7C7H
+		DW	CNSPR	; CNSTK+38 = PROCEDURE ADR
+.AD
+.pp
+The elements of the process descriptor shown above are defined
+as follows:
+.LI
+
+	PL            = 2 byte link field, initially set by
+	                  user to address of next process
+	                  descriptor, or zero if no more
+	STATUS        = 1 byte, process status, set by system
+	PRIORITY      = 1 byte, process priority, set by user
+	STKPTR        = 2 bytes, stack pointer, initially set
+	                  by user
+	NAME          = 8 bytes, ASCII process name, set by user
+
+                      The  high  order  bit of each byte of the
+                      process  name  is  reserved for use by the
+                      system.  The high order bit of the first
+                      byte (identified as NAME(0)') "on" indicates
+                      that the process  is  performing direct
+                      console BIOS calls and  that  MP/M is to
+                      ignore all control characters.  It is also
+                      used  to suppress the normal console status
+                      check done when  BDOS  disk functions are
+                      invoked.  This bit may be set by the user.
+
+	CONSOLE       = 1 byte, console to be used by process,
+	                  set by user
+	MEMSEG        = 1 byte, memory segment table index
+	B             = 2 bytes, system scatch area
+	THREAD        = 2 bytes, process list thread, set
+	                  by system
+	DISK$SET$DMA  = 2 bytes, default DMA address, set by user
+	DISK$SLCT     = 1 byte, default disk/user code
+	DCNT          = 2 bytes, system scratch byte
+	SEARCHL       = 1 byte, system scratch byte
+	SEARCHA       = 2 bytes, system scratch bytes
+	DRVACT        = 2 bytes, 16 bit vector of drives being
+	                accessed by the process
+	REGISTERS     =20 bytes, 8080 / Z80 register save area
+	SCRATCH       = 2 bytes, system scratch bytes
+	
+.AD
+.sp
+.ce
+PROCESS NAMING CONVENTIONS
+.pp
+The  following conventions should be used in the naming  of
+processes.  Processes which wait on queues that are to be
+sent command tails from the TMPs are given the console
+resource if their name matches that of the queue which they
+are reading.
+Processes  which  are to be protected from abortion  by  an
+operator  using  the ABORT command must have at  least  one
+lower case character in the process name.
+.br
+

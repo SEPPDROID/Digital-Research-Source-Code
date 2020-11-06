@@ -1,0 +1,39 @@
+        .TITLE  UDIMSGS Error and Warning Messages
+!-----------------------------------------------------------------------
+!
+!               D I S C L A I M E R   N O T I C E
+!               -------------------   -----------
+!
+!  This document and/or portions of the material and data furnished
+!  herewith, was developed under sponsorship of the U. S. Government.
+!  Neither the U.S. nor the U.S.D.O.E., nor the Leland Stanford Junior
+!  University, nor their employees, nor their respective contractors,
+!  subcontractors, or their employees, makes any warranty, express or
+!  implied, or assumes any liability or responsibility for accuracy,
+!  completeness or usefulness of any information, apparatus, product
+!  or process disclosed, or represents that its use will not infringe
+!  privately-owned rights.  Mention of any product, its manufacturer,
+!  or suppliers shall not, nor is it intended to, imply approval, dis-
+!  approval, or fitness for any particular use.  The U. S. and the
+!  University at all times retain the right to use and disseminate same
+!  for any purpose whatsoever.  Such distribution shall be made by the
+!  National Energy Software Center at the Argonne National Laboratory
+!  and only subject to the distributee furnishing satisfactory proof
+!  that he has a valid license from the Intel Corporation in effect.
+!
+!-----------------------------------------------------------------------
+ 
+	.FACILITY UDI,132
+ 
+	OK	<Successful completion>/SUCCESS
+	WARNINGS <Warnings were issued>/WARNING
+	ERRORS	<Errors were detected>/ERROR
+        FATAL   <Fatal errors detected>/FATAL
+	ABORT	<Execution aborted>/SEVERE
+ 
+	.BASE	101
+	BADINDSYN  <Bad syntax for indirect command line file>/SEVERE
+	INDNOTLAS  <Indirect command line file spec must be last>/SEVERE
+	BADINDFIL  <Unable to read indirect command line file>/SEVERE
+	INDTOOBIG  <Indirect command file is too long>/SEVERE
+	.END

@@ -1,0 +1,1008 @@
+	title	'BIOS For iSBC86 w/ cartridge disk'
+
+; BIOS for CP/M-86 using Deblocking
+
+;		Configured for the Intel SBC 86/12 CPU board,
+;			       the Xylogics C410 Cartridge Disk Controller
+;			   	(with a CDC Hawk type Cartridge drive),
+;			   and the Intel SBC204 diskette controller
+
+;	16 Apr '81 already!	; JRP
+
+bdos_int	equ	224	; intel approved interrupt vector
+
+cr		equ	13	; ascii cursor return
+lf		equ	10	; ascii line feed
+
+		dseg	0000h		; abs low memory dummy section
+
+		org	0		; interrupt vectors in low memory
+
+int0_offset	rw	1
+int0_segment	rw	1
+
+		org	bdos_int*4	; system call interrupt
+
+bdos_offset	rw	1		; BDOS interrupt offset &
+bdos_segment	rw	1		;	segment vector
+
+
+		cseg	; system memory segment
+
+		org	0000h	; CCP starts at offset zero
+
+ccp:	; entry on cold boot
+
+		rb	0b00h	; 2.75k reserved for CCP
+
+bdos:	; base of Basic Disk Operating System
+
+		rb	6	; only need to refer to . . .
+
+bdos_entry: ; the BDOS entry point.
+
+		org	2500h	; Start of Custom Basic Input Output System
+
+bios86:		;(Enter here from Boot)
+
+	; the BIOS jump vector . . .
+
+	jmp init	; System Initialization 
+	jmp wboot	; Warm Start - re-initialize
+	jmp con_stat	; console keyboard status
+	jmp con_in	; console keyboard input
+	jmp con_out	; console display output
+	jmp lst_out	; system lister output
+	jmp pun_out	; punch output
+	jmp rdr_in	; reader input
+	jmp home	; home current disk
+	jmp seldisk	; select a drive & return disk parameters
+	jmp settrk	; select a track
+	jmp setsec	; select a sector
+	jmp setdma	; set memory offset for disk I/O
+	jmp read	; read a sector
+	jmp write	; write a sector
+	jmp lst_stat	; printer status
+	jmp sectran	; perform logical to physical sector translation
+	jmp setdmab	; set memory segment for disk I/O
+	jmp getsegt	; return address of memory segment table
+	jmp getiob	; get I/O byte value
+	jmp setiob	; set I/O byte value
+
+; INIT -- first entry upon coldboot.
+
+init:
+	; 1st, setup segment registers by propogating CS
+	mov ax,cs ! mov ds,ax ! mov es,ax ! mov ss,ax
+	mov sp,offset end_stack
+	mov bx, offset signon ! call pmsg	; display signon
+	mov iobyte,0				; initialize IOBYTE to zero
+	mov ax,0
+	mov hostact,al		;host buffer inactive
+	mov unacnt,al		;clear unalloc count
+	push es
+	push ds		;save the DS register
+	mov ds,ax
+	mov es,ax 	;set ES and DS to zero
+	;setup interrupt 0 to address trap routine
+	mov int0_offset,offset int_trap
+	mov int0_segment,CS
+	mov di,4
+	mov si,0	;then propagate
+	mov cx,255*2	;trap vector to
+	rep movs ax,ax	;all 256 interrupts
+
+	; now set BDOS interrupt vector
+	mov bdos_offset, offset bdos_entry ; jam BIOS interrupt vector
+	mov bdos_segment, CS		   ; bdos code segment same as ours
+	pop ds
+	pop es
+	in al,c410_reset	; pound on c410 to get it's attention
+	mov cx,0		; insure drive zero is default
+	jmp ccp
+
+
+; WBOOT -- we don't need to do anything in this system. . .
+
+wboot	equ ccp+6	; direct reference to Console Command Processor
+			; warm entry point. 
+
+int_trap:	; here on unexpected interrupts . . .
+	cli	; insure no reentry...
+	mov ax,cs ! mov ds,ax ! mov es,ax ! mov ss,ax
+	mov sp,offset end_stack
+	mov bx,offset int_trap_message
+	call pmsg
+	hlt		; then hardstop
+
+
+; Customizable Console Input/Output Routines
+
+crt_data equ	0D8h	; iSBC86/12 USART
+crt_stat equ	0DAh
+tty_data equ	40h	; BLC8538 port 0
+tty_stat equ	41h
+
+tbe	equ	00000001b	; transmitter buffer empty when 1
+rda	equ	00000010b	; reciever data available when 1
+dtr	equ	10000000b	; data terminal ready input bit
+
+con_stat:
+	in al,crt_stat ! and al,rda ! jz return
+	or al,255			; all bits on
+	ret
+
+con_in:
+	call con_stat ! jz con_in
+	in al,crt_data ! and al,127	; remove parity
+	ret
+
+con_out:
+	in al,crt_stat ! and al, tbe ! jz con_out
+	mov al,cl ! out crt_data,al
+	ret
+
+lst_stat:
+	in al,tty_stat ! and al, dtr+tbe ! cmp al, tbe ! je z_ret
+	or al,255 ! ret
+z_ret:
+	sub ax,ax ! ret
+pun_out:
+lst_out:
+	call lst_stat ! jz lst_out
+	mov al,cl ! out tty_data,al
+	ret
+
+rdr_in:
+	in al,tty_stat! and al,rda ! jz rdr_in
+	in al,tty_data
+	ret
+
+
+pmsg: ; print message @ [BX] on console until a zero byte
+	mov AL,[BX] ! test AL,AL ! jz return	; have zero, will exit
+	mov CL,AL ! call con_out		; else, display char
+	inc BX ! jmps pmsg			; and loop till is zero
+
+
+
+getsegt:	; returns address of physical memory table
+	mov BX,offset seg_table
+	ret
+
+setiob:	mov iobyte,cl	; we aren't using IOBYTE in this implementation,
+	ret		;	but . . .
+			;
+getiob:	mov al,iobyte	; we will save/return it anyway for
+	ret		;   consistency's sake.
+
+
+
+;*********************************************
+;*                                           *
+;*    Intel iSBC 204 Disk Controller Ports   *
+;*                                           *
+;*********************************************
+
+base204		equ 0a0h	;SBC204 assigned address
+
+fdc_com		equ base204+0	;8271 FDC out command
+fdc_stat	equ base204+0	;8271 in status
+fdc_parm	equ base204+1	;8271 out parameter
+fdc_rslt	equ base204+1	;8271 in result
+fdc_rst		equ base204+2	;8271 out reset
+dmac_adr	equ base204+4	;8257 DMA base address out
+dmac_cont	equ base204+5	;8257 out control
+dmac_scan	equ base204+6	;8257 out scan control
+dmac_sadr	equ base204+7	;8257 out scan address
+dmac_mode	equ base204+8	;8257 out mode
+dmac_stat	equ base204+8	;8257 in status
+fdc_sel		equ base204+9	;FDC select port (not used)
+fdc_segment	equ base204+10	;segment address register 
+reset_204	equ base204+15	;reset entire interface
+
+max_retries	equ 10		; allow 10 retries on floppy
+
+;	Disk Interface Primitives w/ Deblocking
+
+
+;	CP/M to host disk parameters
+
+blksiz	equ	16384		;CP/M allocation size on Hawk
+hostsiz	equ	512		;host disk sector size
+hostspt	equ	12		;host disk sectors/trk
+hostblk	equ	hostsiz/128	;CP/M sects/host buff
+secshf	equ	2		;log2(hostblk)
+cpmspt	equ	hostblk * hostspt	;CP/M sectors/track
+secmsk	equ	hostblk-1	;sector mask
+
+;	BDOS constants on entry to write
+
+wrall	equ	0		;write to allocated
+wrdir	equ	1		;write to directory
+wrual	equ	2		;write to unallocated
+
+
+
+seldisk:
+	;select disk
+	mov ch,0 ! mov ax,cx		; double and put in AX
+	cmp al,4 ! jae bad_disk
+	mov sekdisk,al		; seek disk number
+	mov cl,4 ! shl ax,cl	; times 16
+	add ax,offset dpbase
+	mov bx,ax
+	cmp sekdisk,2 ! jae floppy_select
+return:	ret	; we use this one from all over the place
+		;	(since 8086 don't do conditional returns)
+bad_disk:
+	mov	bx,0
+	ret
+
+floppy_select:
+	mov sel_mask,40h ! je return	; drive C: is floppy zero
+	mov sel_mask,80h ! ret
+
+floppy_home: ; SBC 204 requires a physical home command to keep it calibrated
+	mov bx,offset hom_com
+	call execute
+	jz homed	;home drive and return if OK
+	mov bx,offset bad_hom	;else print 
+	call pmsg	;"Home Error"
+	jmps home	;and retry
+
+home:
+	;home the selected disk
+	cmp sekdisk,2 ! jae floppy_home
+	mov al,hostwrt	; check for pending write
+	test al,al
+	jnz	homed
+	mov hostact,0	; clear host active flag
+homed:
+	mov cx,0	; now, set track zero
+
+
+settrk:
+	;set track given by registers CX
+	mov sektrk,CX		;track to seek
+	mov trk,cl
+	ret
+
+
+setsec:
+	;set sector given by register cl
+	mov seksec,cl		;sector to seek
+	mov sect,cl
+	ret
+
+
+setdma:
+	;set dma address given by CX
+	mov dma_offset,CX
+	ret
+
+
+setdmab:
+	; set segment address given by CX
+	mov dma_segment,CX
+	ret
+
+;	Sector logical to physical translation
+
+; This version of sectran supports both software skewed disks and
+; zero-origin sequentially numbered logical sectors as might be
+; found on a deblocked disk.
+
+	;translate sector number CX with table at [DX]
+sectran:
+	mov BX,CX
+	test DX,DX ! jz no_tran	; if translate table offset is zero, don't
+	add BX,DX ! mov BL,[BX] ; grab translated address
+	mov bh,0		; for consistancies sake, mainly
+no_tran:
+	ret
+
+
+floppy_READ:
+	mov al,12h 	;basic read sector command
+	jmps r_w_common
+
+floppy_WRITE:
+	mov al,0ah 	;basic write sector command
+
+r_w_common:
+	mov bx,offset io_com ;point to command string
+	mov byte ptr 1[BX],al ;put command into string
+;	fall into execute and return
+
+execute:  ;execute command string.
+	;[BX] points to length,
+	;	followed by Command byte,
+	;	followed by length-1 parameter bytes
+
+	mov last_com,BX	;save command address for retries
+outer_retry:
+	;allow some retrying
+	mov rtry_cnt,max_retries
+retry:
+	mov BX,last_com
+	call send_com	;transmit command to i8271
+;	check status poll
+
+	mov BX,last_com
+	mov al,1[bx]	;get command op code
+	mov cx,0800h	;mask if it will be "int req"
+	cmp al,2ch
+	jb exec_poll	;ok if it is an interrupt type 
+	mov cx,8080h	;else we use "not command busy"
+	and al,0fh
+	cmp al,0ch	;unless there isn't
+	mov al,0
+	ja exec_exit	;	any result
+			;poll for bits in CH,
+exec_poll:		;  toggled with bits in CL
+
+	in al,fdc_stat	;read status
+	and al,ch
+	xor al,cl	;  isolate what we want to poll
+	jz exec_poll	;and loop until it is done
+
+			;Operation complete,
+	in al,fdc_rslt	; see if result code indicates error
+	and al,1eh
+	jz exec_exit	;no error, then exit
+			;some type of error occurred . . .
+	cmp al,10h
+	je dr_nrdy	;was it a not ready drive ?
+			;no,
+dr_rdy:	; then we just retry read or write
+	dec rtry_cnt
+	jnz retry	;  up to 10 times
+
+;	retries do not recover from the
+;	hard error
+
+	mov ah,0
+	mov bx,ax	;make error code 16 bits
+	mov bx,errtbl[BX]
+	call pmsg	;print appropriate message
+	call uconecho	;read upper case console character
+	cmp al,'R'
+	je outer_retry	;retry 10 more times
+	cmp al,'I'
+	je z_ret_l	;ignore error
+	or al,255	;set code for permanent error
+exec_exit:
+	ret
+
+z_ret_l:jmp	z_ret	; local vector
+
+dr_nrdy:	;here to wait for drive ready
+	call test_ready
+	jnz retry	;if it's ready now we are done
+	call test_ready
+	jnz retry	;if not ready twice in row,
+	mov bx,offset nrdymsg
+	call pmsg ;"Drive Not Ready"
+nrdy01:
+	call test_ready
+	jz nrdy01 	;now loop until drive ready
+	jmps retry	;then go retry without decrement
+
+wboot_l:		;can't make it w/ a short leap
+	jmp WBOOT
+
+;*********************************************
+;*                                           *
+;*  The i8271 requires a read status command *
+;*  to reset a drive-not-ready after the     *
+;*  drive becomes ready                      *
+;*                                           *
+;*********************************************
+
+test_ready:
+	mov dh, 40h  	;proper mask if dr 1
+	test sel_mask,80h
+	jnz nrdy2
+	mov dh, 04h  	;mask for dr 0 status bit
+nrdy2:
+	mov bx,offset rds_com
+	call send_com
+dr_poll:
+	in al,fdc_stat	;get status word
+	test al,80h
+	jnz dr_poll 	;wait for not command busy
+	in al,fdc_rslt	;get "special result"
+	test al,dh	;look at bit for this drive
+	ret		;return status of ready
+
+;*********************************************
+;*                                           *
+;*  Send_com sends a command and parameters  *
+;*  to the i8271:  BX addresses parameters.  *
+;*  The DMA controller is also initialized   *
+;*  if this is a read or write               *
+;*                                           *
+;*********************************************
+
+send_com:
+	in al,fdc_stat
+	test al,80h	;insure command not busy
+	jnz send_com	;loop until ready
+
+	;see if we have to initialize for a DMA operation
+
+	mov al,1[bx]	;get command byte
+	cmp al,12h
+	jne write_maybe	;if not a read it could be write
+	mov cl,40h
+	jmps init_dma	;is a read command, go set DMA
+write_maybe:
+	cmp al,0ah
+	jne dma_exit	;leave DMA alone if not read or write
+	mov cl,80h  	;we have write, not read
+init_dma:
+;we have a read or write operation, setup DMA controller
+;	(CL contains proper direction bit)
+	mov al,04h
+	out dmac_mode,al    ;enable dmac
+	mov al,00
+	out dmac_cont,al    ;send first byte to control port
+	mov al,cl
+	out dmac_cont,al   ;load direction register
+	mov ax,dma_offset
+	out dmac_adr,al    ;send low byte of DMA
+	mov al,ah
+	out dmac_adr,al	   ;send high byte
+	mov ax,dma_segment
+	out fdc_segment,al ;send low byte of segment address
+	mov al,ah
+	out fdc_segment,al ;then high segment address
+dma_exit:
+	mov cl,[BX]	;get count
+	inc BX
+	mov al,[BX]	;get command
+	or al,sel_mask 	;merge command and drive code
+	out fdc_com,al 	;send command byte
+parm_loop:
+	dec cl
+	jz exec_exit	;no (more) parameters, return
+	inc BX		;point to (next) parameter
+parm_poll:
+	in al,fdc_stat
+	test al,20h	;test "parameter register full" bit
+	jnz parm_poll	;idle until parm reg not full
+	mov al,[BX]
+	out fdc_parm,al	;send next parameter
+	jmps parm_loop	;go see if there are more parameters
+
+f_read:	jmp	floppy_read	; vector
+f_write:jmp	floppy_write
+
+	;read the selected CP/M sector
+read:
+	cmp sekdisk,2 ! jae f_read
+	mov unacnt,0		; clear unallocated counter
+ 	mov readop,1		; read operation
+	mov rsflag,1		; must read data
+	mov wrtype,wrual	; treat as unalloc
+	jmp rwoper		; to perform the read
+
+
+	; write the selected CP/M sector
+write:
+	cmp sekdisk,2 ! jae f_write
+	mov readop,0		; write operation
+	mov wrtype,cl
+	cmp cl,wrual		; write unallocated?
+	jnz chkuna		; check for unalloc
+
+	; write to unallocated, set parameters
+
+	mov unacnt,(blksiz/128)	; next unalloc recs
+	mov al,sekdisk		; disk to seek
+	mov unadisk,al		; unadisk = sekdisk
+	mov ax,sektrk
+	mov unatrk,ax		; unatrk = sektrk
+	mov al,seksec
+	mov unasec,al		; unasec = seksec
+
+chkuna:
+	; check for write to unallocated sector
+
+una 	equ byte ptr [BX]	; define name for byte at BX
+
+	mov bx,offset unacnt		; point "UNA" at UNACNT
+	mov al,una ! test al,al		; any unalloc remain?
+	jz alloc		; skip if not
+
+;	more unallocated records remain
+
+	dec al		; unacnt = unacnt-1
+	mov una,al
+	mov al,sekdisk		; same disk?
+	mov BX,offset unadisk
+	cmp al,una		; sekdisk = unadisk?
+	jnz alloc		; skip if not
+
+;	disks are the same
+
+	mov AX, unatrk
+	cmp AX, sektrk
+	jnz	alloc		; skip if not
+
+;	tracks are the same
+
+	mov al,seksec		; same sector?
+	mov BX,offset unasec	; point una at unasec
+	cmp al,una		; seksec = unasec?
+	jnz alloc		; skip if not
+
+;	match, move to next sector for future ref
+
+	inc una			; unasec = unasec+1
+	mov al,una		; end of track?
+	cmp al,cpmspt		; count CP/M sectors
+	jb noovf		; skip if below
+
+;	overflow to next track
+
+	mov una,0		; unasec = 0
+	inc unatrk		; unatrk=unatrk+1
+
+noovf:
+	; match found, mark as unnecessary read
+	mov rsflag,0		; rsflag = 0
+	jmps rwoper		; to perform the write
+
+alloc:
+	; not an unallocated record, requires pre-read
+	mov unacnt,0		; unacnt = 0
+	mov rsflag,1		; rsflag = 1
+
+      ; jmps rwoper ;
+
+;	Common code for READ and WRITE follows
+
+rwoper:
+	; enter here to perform the read/write
+	mov erflag,0		; no errors (yet)
+	mov al, seksec		; compute host sector
+	mov cl, secshf
+	shr al,cl
+	mov sekhost,al		; host sector to seek
+
+;	active host sector?
+
+	mov al,1 ! xchg al,hostact  ; always becomes 1
+	test al,al		; was it already?
+	jz	filhost		; fill host if not
+
+;	host buffer active, same as seek buffer?
+
+	mov al,sekdisk ! cmp al,hostdisk	; sekdisk = hostdisk?
+	jnz	nomatch
+
+;	same disk, same track?
+
+	mov ax,hosttrk ! cmp ax,sektrk	; host track same as seek track
+	jnz	nomatch
+
+;	same disk, same track, same buffer?
+
+	mov al,sekhost ! cmp al,hostsec	; sekhost = hostsec?
+	jz	match			; skip if match
+
+nomatch:
+	; proper disk, but not correct sector
+
+	mov al,	hostwrt ! test al,al	; "dirty" buffer ?
+	jz filhost			; no, don't need to write
+	call	writehost		; yes, we got to clear host buff
+
+filhost:
+	; may have to fill the host buffer
+
+	mov al,sekdisk ! mov hostdisk,al
+	mov ax,sektrk ! mov hosttrk,ax
+	mov al,sekhost ! mov hostsec,al
+	cmp rsflag,0	; need to read?
+	je filhost1
+
+	call read_host		; yes, if 1 it wasn't the right one...
+
+filhost1:
+	mov hostwrt,0			; no pending write
+
+match:
+	; copy data to or from buffer depending on "readop"
+
+	mov al,seksec		; mask buffer number
+	and ax,secmsk		; least signif bits get masked, msb->zero
+	mov cl,	7 ! shl ax,cl	; shift left 7 (mult. by 128 = 2**7)
+
+;	hl has relative host buffer address
+
+	add ax,offset hostbuf	; make absolute buffer address
+	mov si,ax		; put in source index register
+	mov di,dma_offset	; user buffer is destination if read op.
+
+	push DS ! push ES	; save segment registers ***
+
+	mov ES,DMA_segment	; set dest. segment to the users seg.
+				; (we will swap SI/DI, and DS/ES if write op)
+	mov cx,128/2		; length of move in words
+	mov al,readop ! test al,al	; which way?
+	jnz	rwmove		; skip if read
+
+;	write operation, mark and switch direction
+
+	mov hostwrt,1		; hostwrt = 1 (dirty buffer now)
+	xchg si,di		; source/dest index swap
+	mov ax,DS ! mov ES,ax ! mov DS,DMA_segment  ; setup DS,ES for write
+
+rwmove:
+	cld ! rep movs AX,AX	; move as 16 bit words
+
+	pop ES ! pop DS		; restore segment registers ***
+
+;	data has been moved to/from host buffer
+
+	cmp wrtype,wrdir	; write type to directory?
+	mov al,erflag		; in case of errors
+	jnz return_rw		; no further processing
+
+;	clear host buffer for directory write
+
+	test al,al		; errors?
+	jnz return_rw		; skip if so
+	mov hostwrt,0		; buffer written
+	call writehost
+	mov al,erflag
+return_rw:			; no cond. returns, so local label here
+	ret
+
+; /***********************************************************/
+
+;	Hardware Dependant coding follows for disk controller
+
+retry_count	equ	10	; should be plenty
+
+
+	; Port addresses for Xylogics C410
+
+
+c410		equ	30h	; Xylogics 410 Controller is at 30-35
+
+c410_iopbsl	equ	c410+0	; low segment IOPB
+c410_iopbsh	equ	c410+1	; high segment IOPB
+c410_iopbol	equ	c410+2	; low offset IOPB
+c410_iopboh	equ	c410+3	; high offset IOPB
+c410_stcmd	equ	c410+4	; status/command port (writing 80h starts C410)
+c410_reset	equ	c410+5	; input to perform controller reset
+
+
+; Xylogics C410 Cartridge Disk Interface uses the
+;	following IOPB format:
+;
+	    ; Note that we will always use [BX] as the pointer to the IOPB
+
+c410_cmnd	equ	byte ptr 0[BX]	; command byte
+c410_imode	equ	byte ptr 1[BX]	; interrupt mode
+c410_status	equ	byte ptr 2[BX]	; controller status
+c410_errc	equ	byte ptr 3[BX]	; error code
+c410_throt	equ	byte ptr 4[BX]	; throttle byte
+c410_drive	equ	byte ptr 5[BX]	; drive select (0-3)
+c410_head	equ	byte ptr 6[BX]	; head/platter select (0-3)
+c410_sect	equ	byte ptr 7[BX]	; sector select (0-12)
+c410_cyl	equ	word ptr 8[BX]	; cylinder (0-413)
+c410_scnt	equ	word ptr 10[BX]	; sector count (0-alot)
+c410_DMA_offset	equ	word ptr 12[BX]	; offset address for DMA
+c410_DMA_segment equ	word ptr 14[BX]	; segment address for DMA
+c410_ivec	equ	word ptr 16[BX]	; interrupt vector (if c410 INTA's)
+c410_chain	equ	word ptr 18[BX]	; IOPB chain address
+
+
+	; Commands (byte 0) are:
+	;		x0 - Nop
+	;		x1 - Write Sector(s)
+	;		x2 - Read Sector(s)
+	;		x3 - Write Check
+	;		x4 - Read Check
+	;		x5 - Seek
+	;		x6 - Drive Recalibrate
+	;		x7 - Write Format Sequential
+	;		x8 - Read Header, Data, & CRC
+	;		x9 - Read Drive Status
+	;		xA - Write Header, Data, & CRC
+	;		xB-xF  <not used, illegal>
+	;
+	;   "x" - Bit 7 = 1 enables status reporting
+	;	  Bit 6 = 1 enables Segment addressing
+	;	  Bit 5 = 1 enables command Chaining
+	;	  Bit 4 = 1 disables all interrupts
+
+	; Interrupt Mode (byte 1) should be 00 for no interrupts
+	; Status (byte 2) bit 7 = 1 means busy or not ready
+	; Error Code (byte 3) (see messages below)
+	; Throttle (byte 4) should be 80h for full speed 16 bit transfers
+	; Drive, Head, Sector, Cylinder, Count, DMA segment/offset as
+	;	desired...
+
+;  /***************************************************************/
+
+
+;	WRITEhost performs the actual sector write to
+;	the host disk, and READhost reads it.
+
+
+write_host:
+	mov dl,0D1h	; code for Write, status enabled, no interrupts
+	jmps read_or_write
+
+;
+read_host:
+	mov dl,0D2h	; code for Read,
+
+read_or_write:	; common read and write code
+
+  ;  First, setup the IOPB for the Xylogics C410 Hawk Controller
+
+	mov BX,offset(IOPB)		; point base to IOPB
+
+	xor CX,CX			; convenient zero
+	mov c410_cmnd, DL		; store command byte
+	mov c410_imode,CL		; no interrupts, thank you
+	mov c410_throt,80h		; full steam, word DMA
+	mov c410_drive,cl		; only have one drive so it is 0
+
+	mov AL,host_disk ! and AL,1 	; CP/M disk A: or B: (Top or Bottom)
+	shl AL,1 ! shl al,1 ! mov DH,AL	; * 4 and save platter bit
+	mov AX,host_trk ! and AL,1 ! or AL,DH  ; track mod 2 is side
+	mov c410_head,AL		; head number is from both of them
+
+	mov AL,host_sec ! mov c410_sect,AL  ; host sector number
+	mov AX,host_trk ! shr AX,1	; cylinder is track/2
+	mov c410_cyl,AX
+	mov c410_scnt,1			; always transfer a single sector
+	mov c410_DMA_offset,offset hostbuf  ; always transfer to/from hostbuf
+	mov c410_DMA_segment,DS 	; which is in current data segment
+	mov c410_ivec,CX		; zero interrupt vector
+	mov c410_chain,CX		; no chain address, either
+
+		; now, the IOPB is set up for the operation.
+
+retry_rw:
+	mov cl,retry_count
+rw_retry:
+	in al,c410_reset		; first, blast controller clear.
+rw_ready:
+	in al,c410_stcmd ! and al,81h	; insure ready and not busy
+	cmp al,01h ! jnz rw_ready	; loop until drive 0 is ready
+					; then tell controller where IOPB is.
+	mov ax,CS ! out c410_iopbsl,al	; low byte/
+	mov al,ah ! out c410_iopbsh,al	;	high byte of segment address
+	mov al,BL ! out c410_iopbol,al	; low byte/
+	mov al,BH ! out c410_iopboh,al	;	high byte of offset
+
+	mov al,80h ! out c410_stcmd,al	; start IOPB
+rw_done:
+	in al,c410_stcmd ! test al,80h	; wait for not busy
+	jnz rw_done
+	test al,40h ! jz good_return	; test for errors
+	dec cl ! jnz rw_retry		; do operation several times . . .
+
+; here, got a permanent error, report it...
+
+	push BX				; have to save IOPB address
+	mov al,c410_errc		; get C410's error code
+	cmp al,19h ! jb goterr ! mov al,19h ; max error code is 19h
+goterr:	cbw ! shl ax,1			; make a word, and multiply by 2
+	mov si,ax 			; put in SI so can be index
+	mov BX,offset fatal_msg ! call pmsg
+	mov BX,err_tab[SI]		; get address of error message
+	call pmsg
+	mov bx,offset retry_msg ! call pmsg
+	pop BX	; restore pointer to IOPB
+	call uconecho
+	cmp al,'R' ! je retry_rw
+	cmp al,'I' ! je good_return
+	mov erflag,1
+	ret
+good_return:
+	mov erflag,0
+	ret
+
+uconecho:
+	call conin ! push ax ! mov cl,al ! call conout ! pop ax ; read and echo
+	and al,5Fh		; crude lower to upper case
+	cmp al,03h ! je wbootx	; check for ^C
+	cmp al,'C' ! je wbootx
+	ret
+
+wbootx:	jmp	wboot	; extend the range of short jumps
+
+
+here equ offset $
+
+	DSEG ! org here   ; offset same as CS
+
+
+sign_on		db	cr,lf,cr,lf,'CP/M 86 Version 1.0'
+		db	cr,lf,cr,lf,' Xylogics Hawk Configuration',cr,lf,0
+
+
+; Memory Segment Table used by system to describe memory
+;	(address and length expressed in 16 byte "paragraphs")
+
+seg_table	db	2	; we have 2 segments
+		dw	tpa_seg	;1st seg starts after BIOS
+		dw	tpa_len	;and extends to 08000
+		dw	1000h	; starting at 10000 absolute
+		dw	3000h	; 192k long
+		dw 0,0,0,0,0,0,0,0,0,0,0,0	; room for 8 entries
+
+
+bad_hom		db	cr,lf,'Home Error',cr,lf,0
+int_trap_message db	cr,lf,'Interrupt Trap Halt',cr,lf,0
+
+errtbl  dw er0,er1,er2,er3
+	dw er4,er5,er6,er7
+	dw er8,er9,erA,erB
+	dw erC,erD,erE,erF
+
+er0 	db  cr,lf,'Null Error ??',0
+er1 	equ er0
+er2 	equ er0
+er3 	equ er0
+er4 	db  cr,lf,'Clock Error :',0
+er5 	db  cr,lf,'Late DMA :',0
+er6 	db  cr,lf,'ID CRC Error :',0
+er7 	db  cr,lf,'Data CRC Error :',0
+er8 	db  cr,lf,'Drive Not Ready :',0
+er9 	db  cr,lf,'Write Protect :',0
+erA 	db  cr,lf,'Trk 00 Not Found :',0
+erB 	db  cr,lf,'Write Fault :',0
+erC 	db  cr,lf,'Sector Not Found :',0
+erD 	equ er0
+erE 	equ er0
+erF 	equ er0
+nrdymsg	equ er8
+
+rtry_cnt db 0 	;disk error retry counter
+last_com dw 0 	;address of last command string
+
+sel_mask db 40h ;select mask, 40h or 80h
+
+;	Various command strings for i8271
+
+io_com	db 3	;length
+rd_wr	db 0	;read/write function code
+trk	db 0	;track #
+sect	db 0	;sector #
+
+hom_com	db 2,29h,0	;home drive command
+rds_com	db 1,2ch	;read status command
+
+
+err_tab	dw	err0,err1,err2,err3,err4,err5,err6,err7,err8,err9
+	dw	errA,errB,errC,errD,errE,errF,err10,err12,err13
+	dw	err14,err15,err16,err17,err18,err19
+
+err0	db	'Can''t Happen',0
+err1	db	'Interrupt Pending',0
+err2	db	'Pending',0
+err3	db	'Busy Conflict',0
+err4	db	'Write Seek',0
+err5	db	'Read Seek',0
+err6	db	'CRC',0
+err7	db	'Disk Address',0
+err8	db	'Drive Seek',0
+err9	db	'Format Interlock',0
+errA	db	'Drive Sector Address',0
+errB	db	'Write Data Late',0
+errC	db	'Read Data Late',0
+errD	db	'Write Check',0
+errE	db	'Slave Ack',0
+errF	db	'DMA Timeout',0
+err10	db	'Ack Reset',0
+err11	db	'INTA Bus',0
+err12	db	'Seek ',0
+err13	db	'Drive Ack',0
+err14	db	'Write Protect',0
+err15	db	'Unimplemented Command',0
+err16	db	'Drive Not Ready',0
+err17	db	'Sector Count is Zero',0
+err18	db	'Drive Faulted',0
+err19	db	'Impossible',0
+
+fatal_msg db	cr,lf,'BIOS Fatal ',0
+retry_msg db	' Error, Retry (R) or Cancel (C) ? ',7,0 ; 7=bleep
+
+
+dpbase	dw	0,0,0,0
+	dw	dirbuf,hard_diskdef,csv0,alv0
+	dw	0,0,0,0
+	dw	dirbuf,hard_diskdef,csv1,alv1
+	dw	skew6,0,0,0
+	dw	dirbuf,flop_diskdef,csv2,alv2
+	dw	skew6,0,0,0
+	dw	dirbuf,flop_diskdef,csv3,alv3
+
+hard_diskdef	dw	48
+		db	7,127,7
+		dw	303,511,128,512/4,2
+
+flop_diskdef	dw	26
+		db	3,7,0
+		dw	242,63,192,64/4,2
+
+skew6	db	1,7,13,19
+	db	25,5,11,17
+	db	23,3,9,15
+	db	21,2,8,14
+	db	20,26,6,12
+	db	18,24,4,10
+	db	16,22
+
+;	Uninitialized RAM data areas
+
+dirbuf		rs	128	; CP/M V2 directory buffer
+
+csv0		rs	512/4		; one byte per dir entry
+alv0		rs	(304+7)/8	; one bit per block
+
+csv1		rs	512/4
+alv1		rs	(304+7)/8
+
+csv2		rs	64/4
+alv2		rs	(243+7)/8
+
+csv3		rs	64/4
+alv3		rs	(243+7)/8
+
+
+IOPB		rs	20	; Xylogics C410 IO Parameter Block
+
+iobyte		rb	1
+
+dma_offset	rw	1
+dma_segment	rw	1
+
+sek_disk	rb	1		; seek disk number
+sek_trk		rw	1		; seek track number
+sek_sec		rb	1		; seek sector number
+
+host_disk	rb	1		; host disk number
+host_trk	rw	1		; host track number
+host_sec	rb	1		; host sector number
+
+sek_host	rb	1		; seek shr secshf
+host_act	rb	1		; host active flag
+host_wrt	rb	1		; host written flag
+
+una_cnt		rb	1		; unalloc rec cnt
+una_disk	rb	1		; last unalloc disk
+una_trk		rw	1		; last unalloc track
+una_sec		rb	1		; last unalloc sector
+
+erflag		rb	1		; error reporting
+rsflag		rb	1		; read sector flag
+readop		rb	1		; 1 if read operation
+wrtype		rb	1		; write operation type
+hostbuf		rs	hostsiz		; host buffer
+
+;	sseg overlaps CSEG and DSEG
+
+		rw	32	;  temp stack space for wboot
+end_stack	equ offset $
+
+last_offset	equ offset $
+
+tpa_seg		equ	(last_offset+1024+15)/16
+tpa_len		equ	800h - tpa_seg
+
+	db	0	; fill last address for GENCMD
+
+	end
+

@@ -1,0 +1,12 @@
+$ set noon
+$ vsend CEXPR.C
+$ vsend LEX.C
+$ vsend MACRO.C
+$ vsend MAIN.C
+$ vsend UTIL.C
+$ vsend ICODE.H
+$ vsend PREPROC.H
+$ vsend LINK.SUB
+$ vsend MAKE.SUB
+$ vsend MACHINE.68K
+$ vsend MACHINE.H

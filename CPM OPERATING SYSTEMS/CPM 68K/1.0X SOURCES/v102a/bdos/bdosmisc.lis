@@ -1,0 +1,314 @@
+1File: BDOSMISC.C                                                          Page       1
+     1    
+     2   /****************************************************************
+     3   *								*
+     4   *		CP/M-68K BDOS Miscellaneous Module		*
+     5   *								*
+     6   *	This module contains miscellaneous loose ends for	*
+     7   *	CP/M-68K.  Included are:				*
+     8   *								*
+     9   *		bdosinit()  - BDOS initialization routine 	*
+    10   *			      called from CCP for system init	*
+    11   *		warmboot()  - BDOS warm boot exit routine 	*
+    12   *		error()     - BDOS error printing routine 	*
+    13   *		ro_err()    - BDOS read-only file error routine *
+    14   *		setexc()    - BDOS set exception vector		*
+    15   *		set_tpa()   - BDOS get/set TPA limits		*
+    16   *		serial # and copyright notice, machine readable	*
+    17   *								*
+    18   *								*
+    19   *	Configured for Alcyon C on the VAX			*
+    20   *								*
+    21   ****************************************************************/
+    22    
+    23   #include "bdosinc.h"		/* Standard I/O declarations */
+    24    
+    25   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    26    
+    27   #include "biosdef.h"		/* BIOS definitions, needed for bios wboot */
+    28    
+    29    
+    30   /* serial # and copyright notice */
+    31    
+    32   char *copyrt="CP/M-68K(tm), Version 1.1, Copyright (c) 1983, Digital Research";
+    33   char *serial="XXXX-0000-654321";
+    34    
+    35    
+    36    
+    37   /*  Declare external functions */
+    38   EXTERN		conout();		/* Console Output function	*/
+    39   EXTERN UBYTE	conin();		/* Console Input function	*/
+    40   EXTERN		prt_line();		/* Print String function 	*/
+    41   EXTERN UWORD	_bdos();		/* BDOS main routine		*/
+    42   EXTERN UBYTE	*traphndl();		/* assembly language trap handler */
+    43   EXTERN		initexc();		/* init the exception handler in  */
+    44   					/* exceptn.s			*/
+    45   EXTERN UWORD	dirscan();		/* Directory scanning routine	*/
+    46   EXTERN BOOLEAN  set_attr();		/* Set File attributes function */
+    47   EXTERN UWORD	dir_rd();		/* Read directory sector routine */
+    48    
+    49   /*  Declare external variables */
+    50   EXTERN	UWORD	log_dsk;		/* logged-on disk vector	*/
+    51   EXTERN	UWORD	ro_dsk;			/* read-only disk vector	*/
+    52   EXTERN	UWORD	crit_dsk;		/* vector of critical disks	*/
+    53   EXTERN  BYTE	*tpa_lt;		/* TPA lower limit (temporary)	*/
+    54   EXTERN  BYTE	*tpa_lp;		/* TPA lower limit (permanent)	*/
+    55   EXTERN  BYTE	*tpa_ht;		/* TPA upper limit (temporary)	*/
+    56   EXTERN  BYTE	*tpa_hp;		/* TPA upper limit (permanent)	*/
+    57   EXTERN  BOOLEAN	submit;			/* external variables from CCP	*/
+    58   EXTERN  BOOLEAN morecmds;
+    59    
+1File: BDOSMISC.C                                                          Page       2
+    60    
+    61   #define trap2v 34			/* trap 2 vector number */
+    62   #define ctrlc  3			/* control-c		*/
+    63    
+    64    
+    65   /********************************
+    66   *  bdos initialization routine	*
+    67   ********************************/
+    68    
+    69   bdosinit()
+    70   /* Initialize the File System */
+    71   {
+    72       REG struct
+    73       {
+    74   	WORD	nmbr;
+    75   	BYTE	*low;
+    76   	LONG	length;
+    77       } *segp;
+    78       BSETUP
+    79    
+    80       bsetvec(trap2v, &traphndl); /* set up trap vector */
+    81       GBL.kbchar = 0;		/* initialize the "global" variables */
+    82       GBL.insptr = GBL.remptr = &(GBL.t_buff[0]);
+    83       GBL.delim  = '$';
+    84       GBL.lstecho = FALSE;
+    85       GBL.echodel = TRUE;
+    86       GBL.chainp  = NULL;
+    87       _bdos(13);			/* reset disk system function */
+    88       segp = bgetseg();		/* get pointer to memory segment table */
+    89       tpa_lt = tpa_lp = segp->low;
+    90       tpa_ht = tpa_hp = tpa_lp + segp->length;
+    91       initexc( &(GBL.excvec[0]) );
+    92   }
+    93    
+    94    
+    95   /************************
+    96   *  warmboot entry point	*
+    97   ************************/
+    98    
+    99   warmboot(parm)
+   100   /* Warm Boot the system */
+   101   WORD parm;			/* 1 to reset submit flag */
+   102   {
+   103       BSETUP
+   104    
+   105       log_dsk &= ~ro_dsk;		/* log off any disk marked read-only */
+   106   			/* note that this code is specifically for a single-
+   107   			   thread system.  It won't work in a multi-task sys */
+   108       ro_dsk = 0;
+   109       crit_dsk = 0;
+   110       if (parm)
+   111   	submit = morecmds = FALSE;
+   112       GBL.curdsk = 0xff;			/* set current disk to "unknown" */
+   113       tpa_lt = tpa_lp;
+   114       tpa_ht = tpa_hp;
+   115       initexc( &(GBL.excvec[0]) );
+   116       bwboot();
+   117   }
+   118    
+1File: BDOSMISC.C                                                          Page       3
+   119    
+   120   /*************************/
+   121   /*  disk error handlers  */
+   122   /*************************/
+   123    
+   124   prt_err(p)
+   125   /*  print the error message  */
+   126    
+   127   BYTE  *p;
+   128   {
+   129       BSETUP
+   130    
+   131       prt_line(p);
+   132       prt_line(" error on drive $");
+   133       conout(GBL.curdsk + 'A');
+   134   }
+   135    
+   136    
+   137   abrt_err(p)
+   138   /*  print the error message and always abort */
+   139    
+   140   BYTE  *p;
+   141   {
+   142       prt_err(p);
+   143       warmboot(1);
+   144   }
+   145    
+   146    
+   147   ext_err(cont,p)
+   148   /*  print the error message, and allow for retry, abort, or ignore */
+   149    
+   150   REG BOOLEAN cont;	/* Boolean for whether continuing is allowed */
+   151   BYTE  *p;		/* pointer to error message		*/
+   152   {
+   153       REG UBYTE  ch;
+   154    
+   155       prt_err(p);
+   156       do
+   157       {
+   158   	prt_line("\n\rDo you want to:  Abort (A),  Retry (R)$");
+   159   	if (cont) prt_line(", or Continue with bad data (C)$");
+   160   	prt_line("? $");
+   161   	ch = conin() & 0x5f;
+   162   	prt_line("\r\n$");
+   163    
+   164   	switch ( ch )
+   165   	{
+   166   	    case ctrlc: warmboot(1);
+   167   	    case 'A':   warmboot(1);
+   168   	    case 'C':   if (cont) return(1);
+   169   			break;
+   170   	    case 'R':   return(0);
+   171   	}
+   172       }   while (TRUE);
+   173   }
+   174    
+   175    
+   176   /********************************/
+   177   /* Read-only File Error Routine */
+1File: BDOSMISC.C                                                          Page       4
+   178   /********************************/
+   179    
+   180   ro_err(fcbp,dirindx)
+   181   /*  File R/O error  */
+   182    
+   183   REG struct fcb *fcbp;
+   184   WORD		dirindx;
+   185   {
+   186       REG BYTE *p;
+   187       REG UWORD i;
+   188       REG UBYTE  ch;
+   189    
+   190       p = (BYTE *)fcbp;
+   191       prt_line("CP/M Disk file error: $");
+   192       i = 8;
+   193       do conout(*++p & 0x7f); while (--i);
+   194       conout('.');
+   195       i = 3;
+   196       do conout(*++p & 0x7f); while (--i);
+   197       prt_line(" is read-only.$");
+   198       do
+   199       {
+   200    prt_line("\r\nDo you want to: Change it to read/write (C), or Abort (A)? $");
+   201   	ch = conin() & 0x5f;
+   202   	prt_line("\r\n$");
+   203    
+   204   	switch ( ch )
+   205   	{
+   206   	    case ctrlc: warmboot(1);
+   207   	    case 'A':   warmboot(1);
+   208   	    case 'C':   fcbp->ftype[robit] &= 0x7f;
+   209   			dirscan(set_attr, fcbp, 2);
+   210   			return(dir_rd(dirindx >> 2));
+   211   	}			/* Reset the directory buffer !!!! */
+   212       }   while (TRUE);
+   213   }
+   214    
+   215    
+   216   /************************
+   217   *  error entry point	*
+   218   ************************/
+   219    
+   220   error(errnum)
+   221   /* Print error message, do appropriate response */
+   222    
+   223   UWORD errnum;			/* error number */
+   224   {
+   225       BSETUP
+   226    
+   227       prt_line("\r\nCP/M Disk $");
+   228       switch (errnum)
+   229       {
+   230   	case 0:  return( ext_err(TRUE,"read$") );
+   231   		 /* break; */
+   232    
+   233   	case 1:  return( ext_err(TRUE,"write$") );
+   234   		 /* break; */
+   235    
+   236   	case 2:  abrt_err("select$");
+1File: BDOSMISC.C                                                          Page       5
+   237   		 /* break; */
+   238    
+   239   	case 3:  return( ext_err(FALSE,"select$") );
+   240   		 /* break; */
+   241    
+   242   	case 4:  abrt_err("change$");
+   243   		 /* break; */
+   244    
+   245       }
+   246   }
+   247    
+   248    
+   249   /*****************************
+   250   *  set exception entry point *
+   251   *****************************/
+   252    
+   253   setexc(epbp)
+   254   /* Set Exception Vector */
+   255   REG struct
+   256   {
+   257       WORD vecnum;
+   258       BYTE *newvec;
+   259       BYTE *oldvec;
+   260   } *epbp;
+   261    
+   262   {
+   263       REG WORD i;
+   264       BSETUP
+   265    
+   266       i = epbp->vecnum-2;
+   267       if ( i==32 || i==33) return(-1);
+   268       if ( (30 <= i) && (i <= 37) ) i -= 20;
+   269       else if ( (i < 0) || (i > 9) ) return(255);
+   270       epbp->oldvec = GBL.excvec[i];
+   271       GBL.excvec[i] = epbp->newvec;
+   272       return(0);
+   273   }
+   274    
+   275    
+   276   /*****************************
+   277   *  get/set TPA entry point   *
+   278   *****************************/
+   279    
+   280   set_tpa(p)
+   281   /* Get/Set TPA Limits */
+   282   REG struct
+   283   {
+   284       UWORD parms;
+   285       BYTE *low;
+   286       BYTE *high;
+   287   } *p;
+   288    
+   289   #define set	1
+   290   #define sticky	2
+   291    
+   292   {
+   293       if (p->parms & set)
+   294       {
+   295   	tpa_lt = p->low;
+1File: BDOSMISC.C                                                          Page       6
+   296   	tpa_ht = p->high;
+   297   	if (p->parms & sticky)
+   298   	{
+   299   	    tpa_lp = tpa_lt;
+   300   	    tpa_hp = tpa_ht;
+   301   	}
+   302       }
+   303       else
+   304       {
+   305   	p->low = tpa_lt;
+   306   	p->high = tpa_ht;
+   307       }
+   308   }

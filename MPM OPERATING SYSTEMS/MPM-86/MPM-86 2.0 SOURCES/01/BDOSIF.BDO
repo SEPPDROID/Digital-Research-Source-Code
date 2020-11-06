@@ -1,0 +1,514 @@
+
+;*****************************************************
+;*
+;*	BDOS Interface 
+;*
+;*****************************************************
+
+MPM	equ	true
+CPM	equ	false
+
+	cseg
+	org	0
+
+	jmp init	;BDOS initialization
+	jmp entry	;inter module entry pt.
+
+sysdat	dw	0	;seg address of sysdat
+supervisor	equ	offset $
+	dw	3
+	dw	0	;SUP segment
+
+	db	'COPYRIGHT (C) 1981,'
+	db	' DIGITAL RESEARCH '
+
+serial	db	'654321'
+
+;====
+init:
+;====
+;	initialize bdos/xios modules
+;	assume ds=system data area 
+
+		; save sysdat segment
+	mov sysdat,ds
+	mov bx,offset supmod ! mov si,supervisor
+	mov ax,[bx] ! mov cs:[si],ax
+	mov ax,2[bx] ! mov cs:2[si],ax
+
+		; create disk mx queue
+	mov dx,offset mxdiskqd ! mov cx,f_qmake
+	call mpmif
+
+		; open mx disk queue
+	mov dx,offset mxdiskqpb ! mov cx,f_qopen
+	call mpmif
+
+		; write mx disk queue
+	mov dx,offset mxdiskqpb ! mov cx,f_qwrite
+	call mpmif
+
+	retf
+
+;*****************************************************
+;*
+;* BDOS function table
+;*
+;*****************************************************
+
+	;
+	; format of entry in functab
+	;
+
+btab_addr	equ	word ptr 0
+btab_flag	equ	byte ptr (btab_addr + word)
+btablen		equ	btab_flag + byte
+bf_getmx	equ	0001h		;get mxdisk queue
+BF_CSHELL	EQU	0002H		;CONDITIONAL SHELL FUNCTION
+BF_TANDW	EQU	0004H		;TEST & WRITE FUNCTION
+BF_FCB36	EQU	0008H		;SHELL 36 BYTE FCB FLAG
+
+	;
+	; bdos function table
+	;
+
+functab	dw	func13	! db	1	;  0: disk reset
+	dw	func14	! db	1	;  1: select disk
+	dw	func15	! db	1	;  2: open file
+	dw	func16	! db	1	;  3: close file
+	dw	func17	! db	1	;  4: search first
+	dw	func18	! db	1	;  5: search next
+	dw	func19	! db	1	;  6: delete file
+	dw	func20	! db	3	;  7: read sequential
+	dw	func21	! db	3	;  8: write sequential
+	dw	func22	! db	1	;  9: make file
+	dw	func23	! db	1	; 10: rename file
+	dw	func24	! db	0	; 11: return login vector
+	dw	func25	! db	0	; 12: return current disk
+	dw	func26	! db	0	; 13: set dma address
+	dw	func27	! db	1	; 14: get alloc addr
+	dw	func28	! db	1	; 15: write protect disk
+	dw	func29	! db	0	; 16: get r/o vector
+	dw	func30	! db	1	; 17: set file attributes
+	dw	func31	! db	1	; 18: get disk parm addr
+	dw	func32	! db	0	; 19: set/get user code
+RDRAN_OFF dw	func33	! db   11	; 20: read random
+WRRAN_OFF dw	func34	! db   11	; 21: write random
+	dw	func35	! db	1	; 22: compute file size
+	dw	func36	! db	1	; 23: set random record
+	dw	func37	! db	1	; 24: reset drive
+	dw	func38	! db	1	; 25: access drive
+	dw	func39	! db	1	; 26: free drive
+	dw	func40	! db	3	; 27: write random w/zero fill
+	DW	FUNC41  ! DB   13       ; 28: TEST & WRITE RECORD
+	DW	FUNC42  ! DB	1	; 29: LOCK RECORD
+	DW	FUNC43  ! DB	1	; 30: UNLOCK RECORD
+	DW	FUNC44  ! DB	0	; 31: SET MULTI-SECTOR COUNT
+	DW	FUNC45  ! DB	0	; 32: SET BDOS ERROR MODE
+	DW	FUNC46  ! DB	1	; 33: GET DISK FREE SPACE
+	DW	FUNC47  ! DB	1	; 34: CHAIN TO PROGRAM
+	DW	FUNC48  ! DB	1	; 35: FLUSH BUFFERS
+	dw	func51	! db	0	; 36: set dma base
+	dw	func52	! db	0	; 37: get dma base
+	DW	FUNC100 ! DB    1	; 38: SET DIRECTORY LABEL
+	DW	FUNC101 ! DB    1	; 39: RETURN DIRECTORY LABEL DATA
+	DW	FUNC102 ! DB    1	; 40: READ FILE XFCB
+	DW	FUNC103 ! DB    1	; 41: WRITE OR UPDATE FILE XFCB
+	DW	FUNC104 ! DB    1	; 42: SET CURRENT DATE AND TIME
+	DW	FUNC105 ! DB    1	; 43: GET CURRENT DATE AND TIME
+	DW	FUNC106 ! DB    1	; 44: SET DEFAULT PASSWORD
+	DW	FUNC107 ! DB    0	; 45: RETURN SERIAL NUMBER
+	DW	PR_TERM ! DB	1	; 46: TERMINATE PROCESS
+
+;=====
+entry:
+;=====
+
+	mov ch,0 ! mov ax,btablen
+	push dx ! mul cx ! pop dx
+	mov si,offset functab ! add si,ax
+	TEST cs:btab_flag[si],bf_getmx ! jz nomx
+	    call getdiskmx ! jmps exit
+nomx:	call cs:btab_addr[si]
+exit:	mov ax,bx ! retf
+
+;=========
+getdiskmx:
+;=========
+;	si = address of functab entry
+;	dx = argument
+
+	push si! push dx
+
+	MOV CX,F_CONSTAT
+	CALL MPMIF
+
+	pop dx! pop si
+
+		;do not allow ctrl c while in bdos
+	mov bx,rlr
+	mov ax,p_flag[bx] ! and ax,pf_tempkeep
+	PUSH AX
+	or p_flag[bx],pf_tempkeep
+
+	push si! push dx
+
+	mov cx,f_qread ! mov dx,offset mxdiskqpb
+	call mpmif
+	pop dx ! pop si
+
+	mov bx,rlr! test p_flag[bx],pf_ctlc
+	jz $+5
+	jmp retmonx
+
+		;switch to internal bdos stack
+	pushf ! pop ax  ! cli
+	mov sssave,ss
+	mov spsave,sp
+	mov ss,sysdat
+	mov sp,offset bdosstack
+	push ax ! popf
+
+		;initialize bdos data area for user
+	push si ! push dx
+	mov ax,u_wrkseg
+	mov parametersegment,ax
+	mov ax,u_retseg
+	mov returnseg,ax
+
+	mov bx,rlr ! MOV PDADDR,BX
+
+		;set default user code
+	mov al,p_user[bx] ! mov usrcode,al
+
+		;set default disk
+	mov dl,p_dsk[bx]
+	MOV SELDSK,DL
+
+		;set default dma
+	mov setbf,false
+	mov ax,u_dma_ofst
+	cmp ax,dmaad ! je nodmaoch
+	    mov setbf,true
+nodmaoch:
+	mov ax,u_dma_seg
+	cmp ax,dmabase ! je nodmabch
+	    mov setbf,true
+nodmabch:
+		;copy uda bdos vars to local area
+	push es ! push ds ! pop es ! pop ds
+	mov si,offset u_dma_ofst ! mov di,offset dmaad
+	mov cx,uda_ovl_len ! rep movs al,al
+	push es ! push ds ! pop es ! pop ds
+
+	TEST PDCNT,1! JZ PDCNT_OK	;RESET PDCNT IF LOW ORDER BIT SET
+	MOV AL,PDCNT! CALL INC_PDCNT
+PDCNT_OK:
+
+	pop dx ! push dx
+
+	mov	info,dx		;info=dx
+	mov	linfo,dl	;linfo = low(info) - don't equ
+
+	call entryzero
+
+	;Set DMA buffer if needed
+
+	cmp setbf,true ! jne nsetbf
+	    call setdata
+nsetbf:
+
+	;ready to go to the function
+
+	pop dx ! pop si
+	PUSH ES! PUSH DS! POP ES
+
+	MOV AH,CS:BTABFLAG[SI]
+	TEST AH,BF_TANDW ! JNZ SHELL
+	CMP MULT_CNT,1 ! JE NOSHELL
+	TEST AH,BF_CSHELL ! JNZ SHELL
+NOSHELL:
+
+	CALL CALL_BDOS
+
+RETMON:
+	POP ES
+	mov si,offset dmaad ! mov di,offset u_dma_ofst
+	mov cx,uda_ovl_len
+	rep movs al,al
+		;setup return registers
+	mov dx,returnseg
+	mov u_retseg,dx
+	mov bx,aret
+		;switch back to user's stack
+	pushf ! pop dx ! cli
+	mov ss,sssave
+	mov sp,spsave
+	push dx ! popf
+		;release mxdisk queue
+
+RETMONX:
+	push bx
+	mov cx,f_qwrite ! mov dx,offset mxdiskqpb
+	call mpmif
+		;see if control c occured
+	mov si,rlr
+	pop bx! pop ax! not ax
+	xor ax,pf_tempkeep! and p_flag[si],ax
+	test p_flag[si],pf_ctlc
+	jz mxdiskexit
+	    mov cx,f_terminate ! push bx
+	    sub dx,dx ! call mpmif
+	    pop bx 
+mxdiskexit:
+	ret
+;
+SHELL:
+	MOV SHELL_SI,SI
+	MOV BX,DMAAD! MOV SHELL_DMA,BX
+	MOV BX,OFFSET SHELL_RTN! PUSH BX
+	TEST AH,BF_FCB36! JNZ SHELL01
+	CALL PARSAVE33! JMP SHELL02
+SHELL01:
+	CALL PARSAVE36! CALL SAVE_RR
+SHELL02:
+	MOV SHELL_FLAG,TRUE
+	TEST AH,BF_TANDW! JNZ TST_WRT
+	JMP MULTIO
+;
+CBDOS:
+	MOV SI,SHELL_SI
+CBDOS1:
+	MOV DX,INFO
+	CALL CALL_BDOS! MOV AL,BYTE PTR ARET! RET
+;
+SHELL_ERR:
+	MOV BX,ARET
+	MOV DL,MULT_CNT! POP AX! SUB DL,AL
+	MOV CL,4! SHL DL,CL! OR BH,DL
+	RET
+;
+SHELL_RTN:
+	MOV ARET,BX
+	TEST AH,BF_FCB36! JZ $+5! CALL RESET_RR
+	MOV BX,SHELL_DMA! MOV DMAAD,BX! CALL SET_DATA
+	MOV SHELL_FLAG,FALSE! CALL PARUNSAVE
+	JMP RETMON
+;
+INCR_RR:
+	CALL GET_RRA
+	INC W[BX]! JNZ INCR_RR_RET
+	INC BX! INC BX! INC B[BX]
+INCR_RR_RET:
+	RET
+;
+SAVE_RR:
+	CALL SAVE_RR2! XCHG BX,DX
+SAVE_RR1:
+	MOV CL,3! JMP MOVE
+SAVE_RR2:
+	CALL GET_RRA! MOV DX,OFFSET SHELL_RR! RET
+;
+RESET_RR:
+	CALL SAVE_RR2! JMP SAVE_RR1
+;
+TST_WRT:
+	MOV AL,MULT_CNT! PUSH AX
+	CALL SET_DIR! POP AX
+TST_WRT1:
+	PUSH AX! MOV SI,OFFSET RDRAN_OFF! CALL CBDOS1
+	OR AL,AL! JNZ SHELL_ERR
+	CALL COMPARE_RECS
+	CALL INCR_RR
+	ADD DMAAD,80H
+	POP AX! DEC AL! JNZ TST_WRT1
+	PUSH AX! CALL SET_DATA
+	CALL RESET_RR
+	MOV SHELL_SI,OFFSET WRRAN_OFF
+	POP AX
+;
+MULT_IO:
+	MOV AL,MULT_CNT
+MULT_IO1:
+	PUSH AX! CALL CBDOS
+	OR AL,AL! JZ $+5! JMP SHELL_ERR
+	POP AX! PUSH AX! TEST AH,BF_FCB36! JZ MULT_IO2
+	CALL INCR_RR
+MULT_IO2:
+	ADD DMAAD,80H! CALL SET_DATA
+	POP AX! DEC AL! JNZ MULT_IO1
+	XOR BX,BX
+	RET
+;
+COMPARE_RECS:
+	PUSH ES! MOV ES,DMABASE! MOV DI,DMAAD
+	MOV SI,BUFFA! MOV CL,64
+	REP CMPS AX,AX
+	POP ES
+	JNZ $+3! RET
+	POP BX! MOV BX,7! JMP SHELL_ERR
+;
+CALL_BDOS:
+	MOV SAVESP,SP
+
+	call cs:btab_addr[si]
+
+BDOS_RETURN:
+	MOV AL,SELDSK
+	cmp resel,0
+	JE RETMON5
+	    CMP COMP_FCB_CKS,TRUE! JNE RETMON1
+	    CALL SET_CHKSUM_FCB
+RETMON1:
+	    MOV AL,XFCB_READ_ONLY! OR AL,AL! JZ RETMON2
+	    MOV BX,INFO! OR 7[BX],AL
+RETMON2:
+	    CALL GETEXTA! MOV AL,HIGHEXT! CMP AL,60H! JNE RETMON3
+	    SUB BX,4! MOV AL,80H
+RETMON3:
+	    OR [BX],AL
+	    MOV AL,ACTUAL_RC! OR AL,AL! JZ RETMON4
+	    CALL GETRCNTA! OR [BX],AL
+RETMON4:
+	    MOV AL,SELDSK
+	    mov cl,fcbdsk
+	    mov bx,info ! mov [bx],cl
+	    cmp cl,0 ! je RETMON5
+		mov al,olddsk
+RETMON5:
+	cmp parcopfl,true
+	jne RETMON6
+	    call parunsave
+RETMON6:
+		;copy local vars to uda
+	RET
+;
+XCRLF:	mov cx,F_CONPRINT
+	mov dx,offset crlfstr
+	XOR BX,BX
+	jmp mpmif
+
+;
+XPRINT:	mov dx,cx ! mov cx,F_CONPRINT
+	XOR BX,BX
+	jmp mpmif
+
+;
+parsave: ;copy parameterblock from user segment to bdos segment
+	 ;cl-reg = lenght of parameter block
+;
+	TEST	SHELL_FLAG,TRUE
+	JNZ	PARRET
+	push	ds
+	push	ax
+	mov	parcopfl,true
+	mov	parlg,cl
+	xor	ch,ch
+	mov	si,info
+	mov	infosave,si
+	mov	di,offset loc_par_area
+	mov	info,di
+	mov	ds,parametersegment
+rep	movs	al,al
+	pop	ax
+	pop	ds
+parret:	ret
+;
+parsave33:	;copy 33 byte length parameterblock
+	push	cx
+	mov	cl,33
+	jmps	pscommon
+;
+parsave36:	;copy 36 byte length parameterblock
+	push	cx
+	mov	cl,36
+pscommon:
+	call	parsave
+	pop	cx
+	ret
+;
+parunsave:	;copy local parameter block to user segment
+;
+	TEST	SHELL_FLAG,TRUE
+	JNZ	PARRET
+	push	es
+	push	ax
+	push	cx
+	mov	cl,parlg
+	xor	ch,ch
+	mov	es,parametersegment
+	mov	si,offset loc_par_area
+	mov	di,infosave
+	mov	info,di
+rep	movs	al,al
+	pop	cx
+	pop	ax
+	pop	es
+	ret
+
+	;these functions taken out of the
+	;bdosio.a86 module
+
+setlret1:	mov al,1
+staret:		mov lret,al
+funcret:	ret
+
+	;these functions added for mpm interface
+
+;=====
+mpmif:
+;=====
+;	call mpm function
+
+	MOV	SI,RLR
+	PUSH 	ES
+	MOV	ES,P_UDA[SI]
+
+	callf cs:dword ptr .supervisor
+
+	POP	ES
+	ret
+
+entryzero:
+;---------
+	push cx ! push es
+	mov cx,ds ! mov es,cx
+	mov cx,zerolength ! mov al,0
+	mov di,offset fcbdsk
+	rep stos al
+	pop es ! pop cx
+	ret
+
+;*****************************************************
+;*
+;*       bdos - xios interface
+;*
+;*****************************************************
+
+bootf:
+wbootf:	mov cx,f_terminate ! jmp mpmif
+homef:	mov al,io_home ! jmps xiosif
+seldskf:mov al,io_seldsk ! jmps xiosif
+settrkf:mov al,io_settrk ! jmps xiosif
+setsecf:mov al,io_setsec ! jmps xiosif
+setdmf:	mov al,io_setdma ! jmps xiosif
+setdmbf:mov al,io_setdmab ! jmps xiosif
+readf:	mov al,io_read ! jmps xiosif
+writef:	mov al,io_write ! jmps xiosif
+sectran:mov al,io_sectran ! jmps xiosif
+flush:	mov al,io_flush ! jmps xiosif
+
+;======		========================
+xiosif:		; xios interface routine
+;======		========================
+;	input:	al = function number
+;		cx = argument 1
+;		dx = argument 2
+;	output:	ax = bx = output
+
+	MOV SI,RLR! PUSH ES! MOV ES,P_UDA[SI]
+	
+	callf dword ptr .xiosmod
+	CLD! POP ES
+	ret
+

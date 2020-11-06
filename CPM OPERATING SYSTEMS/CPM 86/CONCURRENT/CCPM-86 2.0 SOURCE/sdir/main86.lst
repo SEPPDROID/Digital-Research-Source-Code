@@ -1,0 +1,1043 @@
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE SDIR
+OBJECT MODULE PLACED IN MAIN86
+COMPILER INVOKED BY:  :F0: MAIN86.PLM DEBUG OBJECT(MAIN86) OPTIMIZE(3) XREF
+
+
+
+              $title ('SDIR 8086 - Main Module')
+   1          sdir:
+              do;
+
+              $include (copyrt.lit)
+          =
+          =   /*
+          =     Copyright (C) 1983
+          =     Digital Research
+          =     P.O. Box 579
+          =     Pacific Grove, CA 93950
+          =   */
+          =
+
+              /*      commands used to generate       */
+              /*
+              asm86 scd.a86
+              plm86 main86.plm debug object(main86) optimize(3) 'p2' 'p3' 'p4'
+              plm86 scan.plm debug object(scan) optimize(3) 'p2' 'p3' 'p4'
+              plm86 search.plm debug object(search) optimize(3) 'p2' 'p3' 'p4'
+              plm86 sort.plm debug object(sort) optimize(3) 'p2' 'p3' 'p4'
+              plm86 disp.plm debug object(disp) optimize(3) 'p2' 'p3' 'p4'
+              plm86 dpb86.plm debug object(dpb86) optimize(3) 'p2' 'p3' 'p4'
+              plm86 util.plm debug object(util) optimize(3) 'p2' 'p3' 'p4'
+              plm86 timest.plm debug object(timest) optimize(3) 'p2' 'p3' 'p4'
+              link86 scd.obj,main86,scan,search,sort,disp,util,dpb86,timest to sdir86.lnk
+              loc86 sdir86.lnk od(sm(code,dats,data,const,stack)) -
+                 ad(sm(code(0),dats(10000h))) ss(stack(+32))
+              h86 sdir86
+
+                 (on a micro)
+                  vax sdir86.h86 $fans
+                  gencmd sdir86 data[b1000 m3c5 x800]
+
+                  * constants are last to force hex generation.
+                  * a minimum data of 3c5h paragraphs is 12K plus the data space
+                  * of SDIR, enough for 512 directory entries
+                  * the max is lowered from 0fffh to 800h
+                      (Aug 12, 1982 for CCP/M-86 IBM PC)
+              */
+
+              $include (main.plm)
+          =    
+          =     /* C P / M - M P / M    D I R E C T O R Y   C O M M O N   (SDIR)  */
+          =
+          =      /* B E G I N N I N G   O F    C O M M O N   M A I N   M O D U L E */
+          =
+          =
+          =          /* This module is included in main80.plm or main86.plm. */
+          =          /* The differences between 8080 and 8086 versions are   */
+          =          /* contained in the modules main80.plm, main86.plm and  */
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   2
+
+
+          =          /* dpb80.plm, dpb86.plm and the submit files showing    */
+          =          /* the different link and location addresses.           */
+          =
+          =   /* REVISION history: 
+          =   /*  Nov 82  Bill Fitler: convert from CP/M Plus to Concurrent CP/M-86 */
+          =   /*      Feb 83 F.Borda: Took out paging and breaking to allow type-ahead. */
+          =
+          =   $include (comlit.lit)
+          =1
+   2   1  =1  declare
+          =1          lit                literally          'literally',
+          =1          dcl                lit                'declare',
+          =1          true               lit                '0ffh',
+          =1          false              lit                '0',
+          =1          boolean            lit                'byte',
+          =1          forever            lit                'while true',
+          =1          cr                 lit                '13',
+          =1          lf                 lit                '10',
+          =1          tab                lit                '9',
+          =1          ctrlc              lit                '3',
+          =1          ff                 lit                '12',
+          =1          page$len$offset    lit                '1ch',
+          =1          nopage$mode$offset lit                '2Ch',
+          =1          sectorlen          lit                '128';
+          =   $include (mon.plm)
+          =1
+          =1                  /* definitions for assembly interface module        */
+   3   1  =1  declare
+          =1      fcb (33) byte external,        /* default file control block    */
+          =1      maxb address external,         /* top of memory                 */
+          =1      buff(128)byte external;        /* default buffer                */
+          =1
+   4   1  =1  mon1: procedure(f,a) external;
+   5   2  =1      declare f byte, a address;
+   6   2  =1      end mon1;
+          =1
+   7   1  =1  mon2: procedure(f,a) byte external;
+   8   2  =1      declare f byte, a address;
+   9   2  =1      end mon2;
+          =1
+  10   1  =1  mon3: procedure(f,a) address external;
+  11   2  =1      declare f byte, a address;
+  12   2  =1      end mon3;
+          =1
+          =
+          =
+          =
+          =   /* Scanner Entry Points in scan.plm */
+          =
+  13   1  =   scan: procedure(pcb$adr) external;
+  14   2  =       declare pcb$adr address;
+  15   2  =   end scan;
+          =
+  16   1  =   scan$init: procedure(pcb$adr) external;
+  17   2  =       declare pcb$adr address;
+  18   2  =   end scan$init;
+          =
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   3
+
+
+          =   /* -------- Routines in other modules -------- */
+          =
+  19   1  =   search$init: procedure external;   /* initialization of search.plm */
+  20   2  =   end search$init;
+          =
+  21   1  =   get$files: procedure external;     /* entry to search.plm */
+  22   2  =   end get$files;
+          =
+  23   1  =   sort: procedure external;          /* entry to sort.plm */
+  24   2  =   end sort;
+          =
+  25   1  =   mult23: procedure (num) address external;    /* in sort.plm */
+  26   2  =   dcl num address;
+  27   2  =   end mult23;
+          =
+  28   1  =   display$files: procedure external;    /* entry to disp.plm */
+  29   2  =   end display$files;
+          =
+          =   /* -------- Routines in util.plm -------- */
+          =
+  30   1  =   printb: procedure external;
+  31   2  =   end printb;
+          =
+  32   1  =   print$char: procedure(c) external;
+  33   2  =   dcl c byte;
+  34   2  =   end print$char;
+          =
+  35   1  =   print: procedure(string$adr) external;
+  36   2  =   dcl string$adr address;
+  37   2  =   end print;
+          =
+  38   1  =   crlf: procedure external;
+  39   2  =   end crlf;
+          =
+  40   1  =   p$decimal: procedure(value,fieldsize,zsup) external;
+  41   2  =       dcl value address,
+          =           fieldsize address,
+          =           zsup boolean;
+  42   2  =   end p$decimal;
+          =
+          =
+          =   /* ------------------------------------- */
+          =
+  43   1  =   dcl debug boolean public initial (false);
+          =
+          =   /* -------- version information -------- */
+          =
+  44   1  =   dcl plmstart label public;
+          =
+  45   1  =   dcl (os,bdos) byte public;
+          =   $include (vers.lit)
+  46   1  =1  declare
+          =1     bdos20 lit '20h',
+          =1     bdos22 lit '22h',
+          =1     bdos30 lit '30h',
+          =1     mpm    lit '01h',
+          =1     cpm86  lit '10h',
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   4
+
+
+          =1     mpm86  lit '11h',
+          =1     ccpm86 lit '14h';
+          =
+          =   $include (fcb.lit)
+          =1
+  47   1  =1  declare
+          =1      f$drvusr          lit '0',        /* drive/user byte               */
+          =1      f$name            lit '1',        /* file name                     */
+          =1      f$namelen         lit '8',        /* file name length              */
+          =1      f$type            lit '9',        /* file type field               */
+          =1      f$typelen         lit '3',        /* type length                   */
+          =1      f$rw              lit '9',        /* high bit is R/W attribute     */
+          =1      f$dirsys          lit '10',       /* high bit is dir/sys attribute */
+          =1      f$arc             lit '11',       /* high bit is archive attribute */
+          =1      f$ex              lit '12',       /* extent                        */
+          =1      f$s1              lit '13',       /* module byte                   */
+          =1      f$rc              lit '15',       /* record count                  */
+          =1      f$diskmap         lit '16',       /* file disk map                 */
+          =1      diskmaplen        lit '16',       /* disk map length               */
+          =1      f$drvusr2         lit '16',       /* fcb2                          */
+          =1      f$name2           lit '17',
+          =1      f$type2           lit '25',
+          =1      f$cr              lit '32',       /* current record                */
+          =1      f$rrec            lit '33',       /* random record                 */
+          =1      f$rreco           lit '35';       /*   "      "    overflow        */
+          =1
+          =
+          =   $include(search.lit)
+          =1
+  48   1  =1  declare                       /* what kind of file user wants to find       */
+          =1      find$structure lit 'structure (
+          =1      dir byte,
+          =1      sys byte,
+          =1      ro  byte,
+          =1      rw  byte,
+          =1      pass byte,
+          =1      xfcb byte,
+          =1      nonxfcb byte,
+          =1      exclude byte)';
+          =1
+  49   1  =1  declare
+          =1      max$search$files literally '10';
+          =1
+  50   1  =1  declare
+          =1      search$structure lit 'structure(
+          =1      drv byte,
+          =1      name(8) byte,
+          =1      type(3) byte,
+          =1      anyfile boolean)';        /* match on any drive if true */
+          =1
+          =
+  51   1  =   dcl find find$structure public initial
+          =       (false,false,false,false,  false,false,false,false);
+          =
+  52   1  =   dcl
+          =       num$search$files byte public initial(0),
+          =       no$page$mode byte public initial(0),
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   5
+
+
+          =       search (max$search$files) search$structure public;
+          =
+  53   1  =   dcl first$f$i$adr address external;
+  54   1  =   dcl get$all$dir$entries boolean public;
+  55   1  =   dcl first$pass boolean public;
+          =
+  56   1  =   dcl usr$vector address public initial(0),   /* bits for user #s to scan */
+          =       active$usr$vector address public,       /* active users on curdrv   */
+          =       drv$vector address initial (0);         /* bits for drives to scan  */
+          =
+          =   $include (format.lit)
+          =1
+  57   1  =1  dcl form$short lit '0',       /* format values for SDIR */
+          =1      form$size lit '1',
+          =1      form$full lit '2';
+          =1
+          =
+  58   1  =   dcl format byte public initial (form$full),
+          =       page$len address public initial (0ffffh),
+          =        /* lines on a page before printing new headers, 0 forces initial hdrs  */
+          =       message boolean public initial(false),/* show titles when no files found*/
+          =       formfeeds boolean public initial(false),/* use form feeds               */
+          =       date$opt boolean public initial(false), /* dates display */
+          =       display$attributes boolean public initial(false); /* attributes display */
+          =
+  59   1  =   dcl file$displayed boolean external;
+          =                            /* true if 1 or more files displayed by dsh.plm    */
+          =
+  60   1  =   dcl sort$op boolean initial (true);             /* default is to do sorting */
+  61   1  =   dcl sorted boolean external;                    /* if successful sort       */
+          =
+          =
+  62   1  =   dcl cur$usr byte public,        /* current user being searched              */
+          =       cur$drv byte public;        /* current drive   "     "                  */
+          =
+          =   /* -------- BDOS calls --------- */
+          =
+  63   1  =   get$version: procedure address; /* returns current version information      */
+  64   2  =       return mon3(12,0);
+  65   2  =   end get$version;
+          =
+  66   1  =   select$drive: procedure(d);
+  67   2  =       declare d byte;
+  68   2  =       call mon1(14,d);
+  69   2  =   end select$drive;
+          =
+  70   1  =   search$first: procedure(d) byte external;
+  71   2  =   dcl d address;
+  72   2  =   end search$first;
+          =
+  73   1  =   search$next: procedure byte external;
+  74   2  =   end search$next;
+          =
+  75   1  =   get$cur$drv: procedure byte;        /* return current drive number          */
+  76   2  =       return mon2(25,0);
+  77   2  =   end get$cur$drv;
+          =
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   6
+
+
+  78   1  =   getlogin: procedure address;        /* get the login vector                 */
+  79   2  =       return mon3(24,0);
+  80   2  =   end getlogin;
+          =
+  81   1  =   getusr: procedure byte;             /* return current user number           */
+  82   2  =       return mon2(32,0ffh);
+  83   2  =   end getusr;
+          =
+          =   /**************************************************** commented out whf
+          =       getscbbyte: procedure (offset) byte;
+          =         declare offset byte;
+          =         declare scbpb structure
+          =           (offset byte,
+          =            set    byte,
+          =            value  address);
+          =         scbpb.offset = offset;
+          =         scbpb.set = 0;
+          =         return mon2(49,.scbpb);
+          =       end getscbbyte;
+          =   ******************************************************/
+          =
+  84   1  =   set$console$mode: procedure;
+          =     /* set console mode to control-c only */
+          =   /*********  call mon1(109,1);  ********whf************/
+  85   2  =     ;
+  86   2  =   end set$console$mode;
+          =
+  87   1  =   terminate: procedure public;
+  88   2  =       call mon1 (0,0);
+  89   2  =   end terminate;
+          =
+          =
+          =   /* -------- Utility routines -------- */
+          =
+  90   1  =   number: procedure (char) boolean;
+  91   2  =       dcl char byte;
+  92   2  =       return(char >= '0' and char <= '9');
+  93   2  =   end number;
+          =
+  94   1  =   make$numeric: procedure(char$adr,len,val$adr) boolean;
+  95   2  =       dcl (char$adr, val$adr, place) address,
+          =           chars based char$adr (1) byte,
+          =           value based val$adr address,
+          =           (i,len) byte;
+          =
+  96   2  =       value = 0;
+  97   2  =       place = 1;
+  98   2  =       do i = 1 to len;
+  99   3  =           if not number(chars(len - i)) then
+ 100   3  =               return(false);
+ 101   3  =           value = value + (chars(len - i) - '0') * place;
+ 102   3  =           place = place * 10;
+ 103   3  =      end;
+ 104   2  =      return(true); 
+ 105   2  =   end make$numeric;
+          =
+ 106   1  =   set$vec: procedure(v$adr,num) public;
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   7
+
+
+ 107   2  =       dcl v$adr address,               /* set bit number given by num */
+          =           vector based v$adr address,  /* 0 <= num <= 15              */
+          =           num byte;
+ 108   2  =       if num = 0 then
+ 109   2  =          vector = vector or 1;
+          =       else
+ 110   2  =          vector = vector or shl(double(1),num);
+ 111   2  =   end set$vec;
+          =
+ 112   1  =   bit$loc: procedure(vector) byte;
+          =                                /* return location of right most on bit vector */
+ 113   2  =       dcl vector address,      /* 0 - 15                                      */
+          =           i byte;
+ 114   2  =       i = 0;
+ 115   2  =       do while i < 16 and (vector and double(1)) = 0;
+ 116   3  =           vector = shr(vector,1);
+ 117   3  =           i = i + 1;
+ 118   3  =       end;
+ 119   2  =       return(i);
+ 120   2  =   end bit$loc;
+          =
+ 121   1  =   get$nxt: procedure(vector$adr) byte;
+ 122   2  =       dcl i byte,
+          =           (vector$adr,mask) address,
+          =           vector based vector$adr address;
+          =       /* if debug then
+          =           do;  call print(.(cr,lf,'getnxt: vector = $'));
+          =           call pdecimal(vector,10000,false);
+          =           end; */   
+          =
+ 123   2  =       if (i := bit$loc(vector)) > 15 then
+ 124   2  =           return(0ffh);
+ 125   2  =       mask = 1;
+ 126   2  =       if i > 0 then
+ 127   2  =           mask = shl(mask,i);
+ 128   2  =       vector = vector xor mask;                /* turn off bit        */
+          =       /* if debug then
+          =           do;  call print(.(cr,lf,'getnxt: vector, i, mask $'));
+          =           call pdecimal(vector,10000,false);
+          =           call printb;
+          =           call pdecimal(i,10000,false); 
+          =           call printb;
+          =           call pdecimal(mask,10000,false);
+          =           end; */
+ 129   2  =       return(i);
+ 130   2  =   end get$nxt;               /* too bad plm rotates only work on byte values */
+          =
+          =   /* help: procedure;       COMMENTED OUT - HELP PROGRAM REPLACE DISPLAY
+          =
+          =   call print(.(cr,lf,
+          =   tab,tab,tab,'DIR EXAMPLES',cr,lf,lf,
+          =   'dir file.one',tab,tab,tab,
+          =   '(find a file on current user and default drive)',cr,lf,
+          =   'dir *.com d:*.pli',tab,tab,'(find matching files on default and d: drive)',
+          =   cr,lf,
+          =   'dir [rw]',tab,tab,tab,'(find files that are read/write)',cr,lf,
+          =   'dir [ro dir sys]',tab,tab,'(same for read/only, directory, system)',cr,lf,
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   8
+
+
+          =   'dir [xfcb]',tab,tab,tab,'(find files with XFCB''s)',cr,lf,
+          =   'dir [nonxfcb]',tab,tab,tab,'(find files without XFCB''s)',cr,lf,
+          =   'dir [exclude] *.com',tab,tab,'(find files that don''t end in ''com'')',cr,lf,
+          =   'dir [nosort]',tab,tab,tab,'(don''t sort the files)',cr,lf,
+          =   'dir [full]',tab,tab,tab,'(show all file information)',cr,lf,
+          =   'dir [size]',tab,tab,tab,'(show name and size in kilobytes)',cr,lf,
+          =   'dir [short]',tab,tab,tab,'(show just the file names)',cr,lf,
+          =   'dir [drive = all]',tab,tab,'(search all logged in drives)',cr,lf,
+          =   'dir [drive = (a,b,p)]',tab,tab,
+          =   '(search specified drives, ''disk'' is synonym)',cr,lf,
+          =   'dir [user = all]',tab,tab,'(find files with any user number)',cr,lf,
+          =   'dir [user = (0,1,15), G12]',tab,'(find files with specified user number)',
+          =   cr,lf,
+          =   'dir [length = n]',tab,tab,'(print headers every n lines)',cr,lf,
+          =   'dir [ff]',tab,tab,tab,'(print form feeds between headers)',cr,lf,
+          =   'dir [message user=all]',tab,tab,'(show user/drive areas with no files)',
+          =   cr,lf,
+          =   'dir [help]',tab,tab,tab,'(show this message)',cr,lf,
+          =   'dir [dir sys rw ro sort xfcb nonxfcb full] d:*.*',tab,'(defaults)$'));
+          =
+          =   call terminate;
+          =   end help; */
+          =
+          =
+          =   /* -------- Scanner Info -------- */
+          =
+          =   $include (scan.lit)
+          =1
+ 131   1  =1  declare
+          =1      pcb$structure literally 'structure (
+          =1              state address,
+          =1              scan$adr address,
+          =1              token$adr address,
+          =1              tok$typ byte,
+          =1              token$len byte,
+          =1              p$level byte,
+          =1              nxt$token byte)';
+          =1
+ 132   1  =1  declare
+          =1      t$null lit '0',
+          =1      t$param  lit '1',
+          =1      t$op lit '2',
+          =1      t$mod lit '4',
+          =1      t$identifier lit '8',
+          =1      t$string lit '16',
+          =1      t$numeric lit '32',
+          =1      t$filespec lit '64',
+          =1      t$error lit '128';
+          =1
+          =
+ 133   1  =   dcl pcb pcb$structure
+          =        initial (0,.buff(0),.fcb,0,0,0,0) ;
+          =
+ 134   1  =   dcl token based pcb.token$adr (12) byte;
+ 135   1  =   dcl got$options boolean;
+          =
+ 136   1  =   get$options: procedure;
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE   9
+
+
+ 137   2  =       dcl temp byte;
+          =
+ 138   2  =       do while pcb.scan$adr <> 0ffffh and ((pcb.tok$typ and t$op) <> 0);
+ 139   3  =         if pcb.nxt$token <> t$mod then
+ 140   3  =         do;  /* options with no modifiers */
+ 141   4  =           if token(1) = 'A' then
+ 142   4  =               display$attributes = true;
+ 143   4  =           else if token(1) = 'D' and token(2) = 'I' then
+ 144   4  =               find.dir = true;
+ 145   4  =           else if token(1) = 'D' and token(2) = 'A' then do;
+ 147   5  =               format = form$full;
+ 148   5  =               date$opt = true;
+ 149   5  =             end;
+          =           /* else if token(1) = 'D' and token(2) = 'E' then
+          =               debug = true; */
+ 150   4  =           else if token(1) = 'E' then
+ 151   4  =               find.exclude = true;
+ 152   4  =           else if token(1) = 'F'then
+ 153   4  =               if token(2) = 'F' then
+ 154   4  =                   formfeeds = true;
+ 155   4  =               else if token(2) = 'U' then
+ 156   4  =                   format = form$full;
+ 157   4  =               else goto op$err;
+ 158   4  =           else if token(1) = 'G' then
+ 159   4  =           do;
+ 160   5  =               if pcb.token$len < 3 then
+ 161   5  =                   temp = token(2) - '0';
+          =               else
+ 162   5  =                   temp = (token(2) - '0') * 10 + (token(3) - '0');
+ 163   5  =               if temp >= 0 and temp <= 15 then
+ 164   5  =                   call set$vec(.usr$vector,temp);
+ 165   5  =               else goto op$err;
+ 166   5  =           end;
+          =           /* else if token(1) = 'H' then
+          =               call help; */
+ 167   4  =           else if token(1) = 'M' then
+ 168   4  =               message = true;
+ 169   4  =           else if token(1) = 'N' then
+ 170   4  =               if token(4) = 'X' then
+ 171   4  =                   find.nonxfcb = true;
+ 172   4  =               else if token(3) = 'P' then
+ 173   4  =                   no$page$mode = 0FFh;
+ 174   4  =               else if token(3) = 'S' then
+ 175   4  =                   sort$op = false;
+ 176   4  =               else goto op$err;
+          =           /* else if token(1) = 'P' then
+          =               find.pass = true; */
+ 177   4  =           else if token(1) = 'R' and token(2) = 'O' then
+ 178   4  =               find.ro = true;
+ 179   4  =           else if token(1) = 'R' and token(2) = 'W' then
+ 180   4  =               find.rw = true;
+ 181   4  =           else if token(1) = 'S' then
+ 182   4  =               if token(2) = 'Y' then
+ 183   4  =                   find.sys = true;
+ 184   4  =               else if token(2) = 'I' then
+ 185   4  =                   format = form$size;
+ 186   4  =               else if token(2) = 'O' then
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  10
+
+
+ 187   4  =                   sort$op = true;
+ 188   4  =               else goto op$err;
+ 189   4  =           else if token(1) = 'X' then
+ 190   4  =               find.xfcb = true;
+ 191   4  =           else goto op$err; 
+ 192   4  =           call scan(.pcb);
+ 193   4  =         end;
+          =         else
+ 194   3  =         do; /* options with modifiers */
+ 195   4  =           if token(1) = 'L' then
+ 196   4  =           do;
+ 197   5  =               call scan(.pcb);
+ 198   5  =               if (pcb.tok$typ and t$numeric) <> 0 then
+ 199   5  =                   if make$numeric(.token(1),pcb.token$len,.page$len) then
+ 200   5  =                        if page$len < 5 then
+ 201   5  =                            goto op$err;
+ 202   5  =                        else call scan(.pcb);
+ 203   5  =                   else goto op$err;
+ 204   5  =               else goto op$err;
+ 205   5  =           end;
+ 206   4  =           else if token(1) = 'U' then
+ 207   4  =           do;
+          =             /* if debug then
+          =                 call print(.(cr,lf,'In User option$')); */
+ 208   5  =             call scan(.pcb); 
+ 209   5  =             if ((pcb.tok$typ and t$mod) = 0) or bdos < bdos20 then
+ 210   5  =                 goto op$err;
+ 211   5  =             do while (pcb.tok$typ and t$mod) <> 0 and
+          =               pcb.scan$adr <> 0ffffh;
+ 212   6  =               if token(1) = 'A' and token(2) = 'L' then
+ 213   6  =                   usr$vector = 0ffffh;
+ 214   6  =               else if (pcb.tok$typ and t$numeric) <> 0 and pcb.token$len < 3 then
+ 215   6  =                   do;
+ 216   7  =                   if pcb.token$len = 1 then
+ 217   7  =                       temp = token(1) - '0';
+          =                   else
+ 218   7  =                       temp = (token(1) - '0') * 10 + (token(2) - '0');
+ 219   7  =                   if temp >= 0 and temp <= 15 then
+ 220   7  =                       call set$vec(.usr$vector,temp);
+ 221   7  =                   else goto op$err;
+ 222   7  =                   end;
+ 223   6  =               else goto op$err;
+ 224   6  =               call scan(.pcb);
+ 225   6  =             end;
+ 226   5  =           end;
+ 227   4  =           else if token(1) = 'D' and (token(2) = 'R' or token(2) = 'I') then
+ 228   4  =           do;                         /* allow DRIVE or DISK */
+ 229   5  =             call scan(.pcb); 
+ 230   5  =             if (pcb.tok$typ and t$mod) = 0  then
+ 231   5  =                 goto op$err;
+ 232   5  =             do while (pcb.tok$typ and t$mod ) <> 0 and
+          =               pcb.scan$adr <> 0ffffh;
+ 233   6  =               if token(1) = 'A' and token(2) = 'L' then
+ 234   6  =               do;
+ 235   7  =                   drv$vector = 0ffffh;
+ 236   7  =                   drv$vector = drv$vector and get$login;
+ 237   7  =               end;
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  11
+
+
+ 238   6  =               else if token(1) >= 'A' and token(1) <= 'P' then
+ 239   6  =                   call set$vec(.drv$vector,token(1) - 'A');
+ 240   6  =               else goto op$err;
+ 241   6  =               call scan(.pcb);
+ 242   6  =             end;
+ 243   5  =           end; /* drive option */
+ 244   4  =         else goto op$err;
+ 245   4  =         end; /* options with modifiers */
+ 246   3  =       end; /* do while */
+          =
+ 247   2  =       got$options = true;
+ 248   2  =       return;
+          =
+ 249   2  =       op$err:
+          =           call print(.('ERROR: Illegal Option or Modifier.',
+          =                        cr,lf,'$'));
+ 250   2  =           call terminate;
+ 251   2  =   end get$options;
+          =
+ 252   1  =   get$file$spec: procedure;
+ 253   2  =       dcl i byte;
+ 254   2  =       if num$search$files < max$search$files then
+ 255   2  =       do;
+ 256   3  =           call move(f$namelen + f$typelen,.token(1),
+          =              .search(num$search$files).name(0));
+          =           
+ 257   3  =           if search(num$search$files).name(f$name - 1) = ' ' and
+          =              search(num$search$files).name(f$type - 1) = ' ' then
+ 258   3  =              search(num$search$files).anyfile = true;   /* match on any file */
+ 259   3  =           else search(num$search$files).anyfile = false;/* speedier compare  */
+          =
+ 260   3  =           if token(0) = 0 then
+ 261   3  =               search(num$search$files).drv = 0ffh;  /* no drive letter with   */
+          =           else                                      /* file spec              */
+ 262   3  =               search(num$search$files).drv = token(0) - 1;
+          =           /* 0ffh in drv field indicates to look on all drives that will be   */
+          =           /* scanned as set by the "drive =" option, see "match:" proc in     */
+          =           /* search.plm module         */
+          =
+ 263   3  =           num$search$files = num$search$files + 1;
+ 264   3  =       end;                              
+          =       else
+ 265   2  =       do; call print(.('File Spec Limit is $'));
+ 267   3  =           call p$decimal(max$search$files,100,true);
+ 268   3  =           call crlf;
+ 269   3  =       end;
+ 270   2  =       call scan(.pcb);                  
+ 271   2  =   end get$file$spec;
+          =
+ 272   1  =   set$defaults: procedure;            
+          =       /* set defaults if not explicitly set by user */ 
+ 273   2  =       if not (find.dir or find.sys) then
+ 274   2  =           find.dir, find.sys = true;
+ 275   2  =       if not(find.ro or find.rw) then
+ 276   2  =           find.rw, find.ro = true;
+          =
+ 277   2  =       if find.xfcb or find.nonxfcb then
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  12
+
+
+ 278   2  =          do; if format = form$short then
+ 280   3  =               format = form$full;
+ 281   3  =          end;
+          =       else            /* both xfcb and nonxfcb are off */
+ 282   2  =          find.nonxfcb, find.xfcb = true;
+          =
+ 283   2  =       if num$search$files = 0 then
+ 284   2  =       do;
+ 285   3  =           search(num$search$files).anyfile = true;
+ 286   3  =           search(num$search$files).drv = 0ffh;
+ 287   3  =           num$search$files = 1;
+ 288   3  =       end;
+          =
+ 289   2  =       if drv$vector = 0 then
+ 290   2  =           do i = 0 to num$search$files - 1;
+ 291   3  =               if search(i).drv = 0ffh then search(i).drv = cur$drv;
+ 293   3  =               call set$vec(.drv$vector,search(i).drv);
+ 294   3  =           end;
+          =       else                            /* a "[drive =" option was found */
+ 295   2  =           do i = 0 to num$search$files - 1;
+ 296   3  =               if search(i).drv <> 0ffh and search(i).drv <> cur$drv then
+ 297   3  =               do; call print(.('ERROR: Illegal Global/Local ',
+          =                                'Drive Spec Mixing.',cr,lf,'$'));
+ 299   4  =                   call terminate;
+ 300   4  =               end;
+ 301   3  =           end;
+ 302   2  =       if usr$vector = 0 then
+ 303   2  =          call set$vec(.usr$vector,get$usr);
+          =
+          =       /* set up default page size for display */
+          =       /**** page$len = 23;                    /* number lines per screen page */
+          =
+ 304   2  =   end set$defaults;
+          =
+          =
+ 305   1  =   dcl (save$uvec,temp) address;
+ 306   1  =   dcl i byte;
+ 307   1  =   declare last$dseg$byte byte
+          =     initial (0);
+          =
+ 308   1  =   plmstart:
+          =     do;
+ 309   2  =       os = high(get$version);
+ 310   2  =       bdos = low(get$version); 
+          =
+ 311   2  =       if bdos < bdos22  /* or os <> ccpm86 */
+          =          then do;
+          =         /*call print(.('Requires Concurrent CP/M-86',cr,lf,'$'));*/
+ 313   3  =         call print(.('Requires BDOS 2.2 or greater.',cr,lf,'$'));
+ 314   3  =         call terminate;   /* check to make sure function call is valid */
+ 315   3  =         end;
+          =       else
+ 316   2  =         call set$console$mode;
+          =       
+          =       /* note - initialized declarations set defaults */
+ 317   2  =       cur$drv = get$cur$drv;
+ 318   2  =       call scan$init(.pcb);
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  13
+
+
+ 319   2  =       call scan(.pcb);
+ 320   2  =       no$page$mode = false; /********  getscbbyte(nopage$mode$offset); ***whf***/
+ 321   2  =       got$options = false;
+ 322   2  =       do while pcb.scan$adr <> 0ffffh;
+ 323   3  =           if (pcb.tok$typ and t$op) <> 0 then
+ 324   3  =               if got$options = false then
+ 325   3  =                   call get$options;
+          =               else
+ 326   3  =               do;
+ 327   4  =                   call print(.('ERROR: Options not grouped together.',
+          =                                cr,lf,'$'));
+ 328   4  =                   call terminate;
+ 329   4  =               end;
+ 330   3  =           else if (pcb.tok$typ and t$filespec) <> 0 then
+ 331   3  =               call get$file$spec;
+          =           else
+ 332   3  =           do;
+ 333   4  =               call print(.('ERROR: Illegal command tail.',cr,lf,'$'));
+ 334   4  =               call terminate;
+ 335   4  =           end;
+ 336   3  =       end;
+          =
+ 337   2  =       call set$defaults;
+          =       
+          =       /* main control loop */
+          =
+ 338   2  =       call search$init;    /* set up memory pointers for subsequent storage */
+          =
+ 339   2  =       do while (cur$drv := get$nxt(.drv$vector)) <> 0ffh;
+ 340   3  =           call select$drive(cur$drv);
+ 341   3  =           save$uvec = usr$vector;      /* user numbers to search on each drive */
+ 342   3  =           active$usr$vector = 0;           /* users active on cur$drv      */
+ 343   3  =           cur$usr = get$nxt(.usr$vector);  /* get first user num and mask  */ 
+ 344   3  =           get$all$dir$entries = false;     /* off it off                   */
+ 345   3  =           if usr$vector <> 0 and format <> form$short then
+          =                                            /* find high water mark if      */
+ 346   3  =           do;                              /* more than one user requested */
+ 347   4  =               fcb(f$drvusr) = '?';
+ 348   4  =               i = search$first(.fcb);      /* get first directory entry    */
+ 349   4  =               temp = 0;
+ 350   4  =               do while i <> 255;
+ 351   5  =                   temp = temp + 1;
+ 352   5  =                   i = search$next;
+ 353   5  =               end;                         /* is there enough space in the */
+          =                                            /* worst case ?                 */
+ 354   4  =               if maxb > mult23(temp) + shl(temp,1) then
+ 355   4  =                   get$all$dir$entries = true;  /* location of last possible   */
+ 356   4  =           end;                                 /* file info record and add    */
+ 357   3  =           first$pass = true;                   /* room for sort indices       */
+ 358   3  =           active$usr$vector = 0ffffh;
+ 359   3  =           do while cur$usr <> 0ffh;
+          =               /* if debug then
+          =                   call print(.(cr,lf,'in user loop $')); */
+ 360   4  =               call set$vec(.temp,cur$usr);
+ 361   4  =               if (temp and active$usr$vector) <> 0 then
+ 362   4  =               do;
+ 363   5  =                   if format <> form$short and
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  14
+
+
+          =                       (first$pass or not get$all$dir$entries)  then
+ 364   5  =                   do;
+ 365   6  =                       call getfiles;      /* collect files in memory and  */
+ 366   6  =                       first$pass = false; /* build the active usr vector  */
+ 367   6  =                       sorted = false;     /* sort module will set sorted  */
+ 368   6  =                       if sort$op then     /* to true, if successful sort  */
+ 369   6  =                           call sort;
+ 370   6  =                   end;
+ 371   5  =                   call display$files;
+ 372   5  =               end;
+ 373   4  =               cur$usr = get$nxt(.usr$vector);
+ 374   4  =           end;
+ 375   3  =           usr$vector = save$uvec;             /* restore user vector for nxt  */
+ 376   3  =       end; /* do while drv$usr                   drive scan                   */
+          =
+          =
+ 377   2  =       if  not file$displayed and not message then
+ 378   2  =           call print(.(cr,lf,cr,lf,'No File',cr,lf,'$'));
+ 379   2  =       call terminate;
+          =
+ 380   2  =     end;
+ 381   1  =   end sdir;
+
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  15
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+      4  0000H     2  A. . . . . . . . .    WORD PARAMETER         5 
+     10  0000H     2  A. . . . . . . . .    WORD PARAMETER        11 
+      7  0000H     2  A. . . . . . . . .    WORD PARAMETER         8 
+     56  000AH     2  ACTIVEUSRVECTOR. .    WORD PUBLIC          342  358  361 
+     52  000CH     1  ANYFILE. . . . . .    BYTE MEMBER(SEARCH)       258  259  285 
+     45  0024H     1  BDOS . . . . . . .    BYTE PUBLIC          209  310  311 
+     46               BDOS20 . . . . . .    LITERALLY       209 
+     46               BDOS22 . . . . . .    LITERALLY       311 
+     46               BDOS30 . . . . . .    LITERALLY
+    112  02ABH    56  BITLOC . . . . . .    PROCEDURE BYTE STACK=0006H          123 
+      2               BOOLEAN. . . . . .    LITERALLY        41   43   52   54   55   58   59   60   61   90   94
+                                             135 
+      3  0000H   128  BUFF . . . . . . .    BYTE ARRAY(128) EXTERNAL(2)         133 
+     32  0000H     1  C. . . . . . . . .    BYTE PARAMETER        33 
+     46               CCPM86 . . . . . .    LITERALLY
+     90  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        91   92 
+     94  0008H     2  CHARADR. . . . . .    WORD PARAMETER AUTOMATIC        95   99  101 
+     95  0000H     1  CHARS. . . . . . .    BYTE BASED(CHARADR) ARRAY(1)         99  101 
+     46               CPM86. . . . . . .    LITERALLY
+      2               CR . . . . . . . .    LITERALLY       249  298  313  327  333  378 
+     38  0000H        CRLF . . . . . . .    PROCEDURE EXTERNAL(16) STACK=0000H       268 
+      2               CTRLC. . . . . . .    LITERALLY
+     62  00B2H     1  CURDRV . . . . . .    BYTE PUBLIC          292  296  317  339  340 
+     62  00B1H     1  CURUSR . . . . . .    BYTE PUBLIC          343  359  360  373 
+     66  0004H     1  D. . . . . . . . .    BYTE PARAMETER AUTOMATIC        67   68 
+     70  0000H     2  D. . . . . . . . .    WORD PARAMETER        71 
+     58  00AEH     1  DATEOPT. . . . . .    BYTE PUBLIC INITIAL       148 
+      2               DCL. . . . . . . .    LITERALLY
+     43  0022H     1  DEBUG. . . . . . .    BYTE PUBLIC INITIAL
+     51  0000H     1  DIR. . . . . . . .    BYTE MEMBER(FIND)         144  273  274 
+     47               DISKMAPLEN . . . .    LITERALLY
+     58  00AFH     1  DISPLAYATTRIBUTES.    BYTE PUBLIC INITIAL       142 
+     28  0000H        DISPLAYFILES . . .    PROCEDURE EXTERNAL(12) STACK=0000H       371 
+                      DOUBLE . . . . . .    BUILTIN         110  115 
+     52  0000H     1  DRV. . . . . . . .    BYTE MEMBER(SEARCH)       261  262  286  291  292  293  296 
+     56  000CH     2  DRVVECTOR. . . . .    WORD INITIAL         235  236  239  289  293  339 
+     51  0007H     1  EXCLUDE. . . . . .    BYTE MEMBER(FIND)         151 
+      4  0000H     1  F. . . . . . . . .    BYTE PARAMETER         5 
+      7  0000H     1  F. . . . . . . . .    BYTE PARAMETER         8 
+     10  0000H     1  F. . . . . . . . .    BYTE PARAMETER        11 
+      2               FALSE. . . . . . .    LITERALLY        43   51   58  100  175  259  320  321  324  344  366
+                                             367 
+     47               FARC . . . . . . .    LITERALLY
+      3  0000H    33  FCB. . . . . . . .    BYTE ARRAY(33) EXTERNAL(0)          133  347  348 
+     47               FCR. . . . . . . .    LITERALLY
+     47               FDIRSYS. . . . . .    LITERALLY
+     47               FDISKMAP . . . . .    LITERALLY
+     47               FDRVUSR. . . . . .    LITERALLY       347 
+     47               FDRVUSR2 . . . . .    LITERALLY
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  16
+
+
+     47               FEX. . . . . . . .    LITERALLY
+      2               FF . . . . . . . .    LITERALLY
+     40  0000H     2  FIELDSIZE. . . . .    WORD PARAMETER        41 
+     59  0000H     1  FILEDISPLAYED. . .    BYTE EXTERNAL(19)         377 
+     51  0000H     8  FIND . . . . . . .    STRUCTURE PUBLIC INITIAL       144  151  171  178  180  183  190  273
+                                             274  275  276  277  282 
+     48               FINDSTRUCTURE. . .    LITERALLY        51 
+     53  0000H     2  FIRSTFIADR . . . .    WORD EXTERNAL(18)
+     55  00AAH     1  FIRSTPASS. . . . .    BYTE PUBLIC          357  363  366 
+     47               FNAME. . . . . . .    LITERALLY       257 
+     47               FNAME2 . . . . . .    LITERALLY
+     47               FNAMELEN . . . . .    LITERALLY       256 
+      2               FOREVER. . . . . .    LITERALLY
+     58  00ABH     1  FORMAT . . . . . .    BYTE PUBLIC INITIAL       147  156  185  279  280  345  363 
+     58  00ADH     1  FORMFEEDS. . . . .    BYTE PUBLIC INITIAL       154 
+     57               FORMFULL . . . . .    LITERALLY        58  147  156  280 
+     57               FORMSHORT. . . . .    LITERALLY       279  345  363 
+     57               FORMSIZE . . . . .    LITERALLY       185 
+     47               FRC. . . . . . . .    LITERALLY
+     47               FRREC. . . . . . .    LITERALLY
+     47               FRRECO . . . . . .    LITERALLY
+     47               FRW. . . . . . . .    LITERALLY
+     47               FS1. . . . . . . .    LITERALLY
+     47               FTYPE. . . . . . .    LITERALLY       257 
+     47               FTYPE2 . . . . . .    LITERALLY
+     47               FTYPELEN . . . . .    LITERALLY       256 
+     54  00A9H     1  GETALLDIRENTRIES .    BYTE PUBLIC          344  355  363 
+     75  01BFH    15  GETCURDRV. . . . .    PROCEDURE BYTE STACK=0008H          317 
+     21  0000H        GETFILES . . . . .    PROCEDURE EXTERNAL(9) STACK=0000H        365 
+    252  067EH   178  GETFILESPEC. . . .    PROCEDURE STACK=000AH          331 
+     78  01CEH    15  GETLOGIN . . . . .    PROCEDURE WORD STACK=0008H          236 
+    121  02E3H    58  GETNXT . . . . . .    PROCEDURE BYTE STACK=000CH          339  343  373 
+    136  031DH   865  GETOPTIONS . . . .    PROCEDURE STACK=0014H          325 
+     81  01DDH    15  GETUSR . . . . . .    PROCEDURE BYTE STACK=0008H          303 
+     63  019DH    15  GETVERSION . . . .    PROCEDURE WORD STACK=0008H          309  310 
+    135  00B6H     1  GOTOPTIONS . . . .    BYTE       247  321  324 
+                      HIGH . . . . . . .    BUILTIN         309 
+    113  00B4H     1  I. . . . . . . . .    BYTE       114  115  117  119 
+    306  00B9H     1  I. . . . . . . . .    BYTE       290  291  292  293  295  296  348  350  352 
+     95  00B3H     1  I. . . . . . . . .    BYTE        98   99  101 
+    253  00B8H     1  I. . . . . . . . .    BYTE
+    122  00B5H     1  I. . . . . . . . .    BYTE       123  126  127  129 
+    307  00BAH     1  LASTDSEGBYTE . . .    BYTE INITIAL
+     94  0006H     1  LEN. . . . . . . .    BYTE PARAMETER AUTOMATIC        95   98   99  101 
+      2               LF . . . . . . . .    LITERALLY       249  298  313  327  333  378 
+      2               LIT. . . . . . . .    LITERALLY         2   46   47   48   50   57  132 
+                      LOW. . . . . . . .    BUILTIN         310 
+     94  021CH   108  MAKENUMERIC. . . .    PROCEDURE BYTE STACK=0010H          199 
+    122  0012H     2  MASK . . . . . . .    WORD       125  127  128 
+      3  0000H     2  MAXB . . . . . . .    WORD EXTERNAL(1)          354 
+     49               MAXSEARCHFILES . .    LITERALLY        52  254  267 
+     58  00ACH     1  MESSAGE. . . . . .    BYTE PUBLIC INITIAL       168  377 
+      4  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(3) STACK=0000H         68   88 
+      7  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(4) STACK=0000H         76   82 
+     10  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(5) STACK=0000H         64   79 
+                      MOVE . . . . . . .    BUILTIN         256 
+     46               MPM. . . . . . . .    LITERALLY
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  17
+
+
+     46               MPM86. . . . . . .    LITERALLY
+     25  0000H        MULT23 . . . . . .    PROCEDURE WORD EXTERNAL(11) STACK=0000H       354 
+     52  0001H     8  NAME . . . . . . .    BYTE ARRAY(8) MEMBER(SEARCH)        256  257 
+     51  0006H     1  NONXFCB. . . . . .    BYTE MEMBER(FIND)         171  277  282 
+     52  0026H     1  NOPAGEMODE . . . .    BYTE PUBLIC INITIAL       173  320 
+      2               NOPAGEMODEOFFSET .    LITERALLY
+    106  0004H     1  NUM. . . . . . . .    BYTE PARAMETER AUTOMATIC       107  108  110 
+     25  0000H     2  NUM. . . . . . . .    WORD PARAMETER        26 
+     90  01FFH    29  NUMBER . . . . . .    PROCEDURE BYTE STACK=0006H           99 
+     52  0025H     1  NUMSEARCHFILES . .    BYTE PUBLIC INITIAL       254  256  257  258  259  261  262  263  283
+                                             285  286  287  290  295 
+    133  0009H     1  NXTTOKEN . . . . .    BYTE MEMBER(PCB)          139 
+    249  0672H        OPERR. . . . . . .    LABEL      157  165  176  188  191  201  203  204  210  221  223  231
+                                             240  244 
+     45  0023H     1  OS . . . . . . . .    BYTE PUBLIC          309 
+     58  000EH     2  PAGELEN. . . . . .    WORD PUBLIC INITIAL       199  200 
+      2               PAGELENOFFSET. . .    LITERALLY
+     51  0004H     1  PASS . . . . . . .    BYTE MEMBER(FIND)
+    133  0014H    10  PCB. . . . . . . .    STRUCTURE INITIAL         134  138  139  141  143  145  150  152  153
+                                             155  158  160  161  162  167  169  170  172  174  177  179  181  182
+                                             184  186  189  192  195  197  198  199  202  206  208  209  211  212
+                                             214  216  217  218  224  227  229  230  232  233  238  239  241  256
+                                             260  262  270  318  319  322  323  330 
+     16  0000H     2  PCBADR . . . . . .    WORD PARAMETER        17 
+     13  0000H     2  PCBADR . . . . . .    WORD PARAMETER        14 
+    131               PCBSTRUCTURE . . .    LITERALLY       133 
+     40  0000H        PDECIMAL . . . . .    PROCEDURE EXTERNAL(17) STACK=0000H       267 
+     95  0010H     2  PLACE. . . . . . .    WORD        97  101  102 
+    133  0008H     1  PLEVEL . . . . . .    BYTE MEMBER(PCB)
+     44  0010H        PLMSTART . . . . .    LABEL PUBLIC         308 
+     35  0000H        PRINT. . . . . . .    PROCEDURE EXTERNAL(15) STACK=0000H       249  266  298  313  327  333
+                                             378 
+     30  0000H        PRINTB . . . . . .    PROCEDURE EXTERNAL(13) STACK=0000H
+     32  0000H        PRINTCHAR. . . . .    PROCEDURE EXTERNAL(14) STACK=0000H
+     51  0002H     1  RO . . . . . . . .    BYTE MEMBER(FIND)         178  275  276 
+     51  0003H     1  RW . . . . . . . .    BYTE MEMBER(FIND)         180  275  276 
+    305  001EH     2  SAVEUVEC . . . . .    WORD       341  375 
+     13  0000H        SCAN . . . . . . .    PROCEDURE EXTERNAL(6) STACK=0000H        192  197  202  208  224  229
+                                             241  270  319 
+    133  0002H     2  SCANADR. . . . . .    WORD MEMBER(PCB)          138  211  232  322 
+     16  0000H        SCANINIT . . . . .    PROCEDURE EXTERNAL(7) STACK=0000H        318 
+      1  0002H   411  SDIR . . . . . . .    PROCEDURE STACK=0016H
+     52  0027H   130  SEARCH . . . . . .    STRUCTURE ARRAY(10) PUBLIC          256  257  258  259  261  262  285
+                                             286  291  292  293  296 
+     70  0000H        SEARCHFIRST. . . .    PROCEDURE BYTE EXTERNAL(21) STACK=0000H       348 
+     19  0000H        SEARCHINIT . . . .    PROCEDURE EXTERNAL(8) STACK=0000H        338 
+     73  0000H        SEARCHNEXT . . . .    PROCEDURE BYTE EXTERNAL(22) STACK=0000H       352 
+     50               SEARCHSTRUCTURE. .    LITERALLY        52 
+      2               SECTORLEN. . . . .    LITERALLY
+     66  01ACH    19  SELECTDRIVE. . . .    PROCEDURE STACK=000AH          340 
+     84  01ECH     5  SETCONSOLEMODE . .    PROCEDURE STACK=0002H          316 
+    272  0730H   269  SETDEFAULTS. . . .    PROCEDURE STACK=000EH          337 
+    106  0288H    35  SETVEC . . . . . .    PROCEDURE PUBLIC STACK=0006H        164  220  239  293  303  360 
+                      SHL. . . . . . . .    BUILTIN         110  127  354 
+                      SHR. . . . . . . .    BUILTIN         116 
+     23  0000H        SORT . . . . . . .    PROCEDURE EXTERNAL(10) STACK=0000H       369 
+     61  0000H     1  SORTED . . . . . .    BYTE EXTERNAL(20)         367 
+PL/M-86 COMPILER    SDIR 8086 - MAIN MODULE                                                                     PAGE  18
+
+
+     60  00B0H     1  SORTOP . . . . . .    BYTE INITIAL         175  187  368 
+    133  0000H     2  STATE. . . . . . .    WORD MEMBER(PCB)
+     35  0000H     2  STRINGADR. . . . .    WORD PARAMETER        36 
+     51  0001H     1  SYS. . . . . . . .    BYTE MEMBER(FIND)         183  273  274 
+      2               TAB. . . . . . . .    LITERALLY
+    305  0020H     2  TEMP . . . . . . .    WORD       349  351  354  360  361 
+    137  00B7H     1  TEMP . . . . . . .    BYTE       161  162  163  164  217  218  219  220 
+     87  01F1H    14  TERMINATE. . . . .    PROCEDURE PUBLIC STACK=0008H        250  299  314  328  334  379 
+    132               TERROR . . . . . .    LITERALLY
+    132               TFILESPEC. . . . .    LITERALLY       330 
+    132               TIDENTIFIER. . . .    LITERALLY
+    132               TMOD . . . . . . .    LITERALLY       139  209  211  230  232 
+    132               TNULL. . . . . . .    LITERALLY
+    132               TNUMERIC . . . . .    LITERALLY       198  214 
+    134  0000H    12  TOKEN. . . . . . .    BYTE BASED(PCB.TOKENADR) ARRAY(12)       141  143  145  150  152  153
+                                             155  158  161  162  167  169  170  172  174  177  179  181  182  184
+                                             186  189  195  199  206  212  217  218  227  233  238  239  256  260
+                                             262 
+    133  0004H     2  TOKENADR . . . . .    WORD MEMBER(PCB)          134  141  143  145  150  152  153  155  158
+                                             161  162  167  169  170  172  174  177  179  181  182  184  186  189
+                                             195  199  206  212  217  218  227  233  238  239  256  260  262 
+    133  0007H     1  TOKENLEN . . . . .    BYTE MEMBER(PCB)          160  199  214  216 
+    133  0006H     1  TOKTYP . . . . . .    BYTE MEMBER(PCB)          138  198  209  211  214  230  232  323  330
+    132               TOP. . . . . . . .    LITERALLY       138  323 
+    132               TPARAM . . . . . .    LITERALLY
+      2               TRUE . . . . . . .    LITERALLY        60  104  142  144  148  151  154  168  171  178  180
+                                             183  187  190  247  258  267  274  276  282  285  355  357 
+    132               TSTRING. . . . . .    LITERALLY
+     52  0009H     3  TYPE . . . . . . .    BYTE ARRAY(3) MEMBER(SEARCH)
+     56  0008H     2  USRVECTOR. . . . .    WORD PUBLIC INITIAL       164  213  220  302  303  341  343  345  373
+                                             375 
+    106  0006H     2  VADR . . . . . . .    WORD PARAMETER AUTOMATIC       107  109  110 
+     94  0004H     2  VALADR . . . . . .    WORD PARAMETER AUTOMATIC        95   96  101 
+     40  0000H     2  VALUE. . . . . . .    WORD PARAMETER        41 
+     95  0000H     2  VALUE. . . . . . .    WORD BASED(VALADR)         96  101 
+    122  0000H     2  VECTOR . . . . . .    WORD BASED(VECTORADR)          123  128 
+    112  0004H     2  VECTOR . . . . . .    WORD PARAMETER AUTOMATIC       113  115  116 
+    107  0000H     2  VECTOR . . . . . .    WORD BASED(VADR)          109  110 
+    121  0004H     2  VECTORADR. . . . .    WORD PARAMETER AUTOMATIC       122  123  128 
+     51  0005H     1  XFCB . . . . . . .    BYTE MEMBER(FIND)         190  277  282 
+     40  0000H     1  ZSUP . . . . . . .    BYTE PARAMETER        41 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 083DH   2109D
+     CONSTANT AREA SIZE = 00DEH    222D
+     VARIABLE AREA SIZE = 00BBH    187D
+     MAXIMUM STACK SIZE = 0016H     22D
+     758 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

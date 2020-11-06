@@ -1,0 +1,758 @@
+
+	/************************************************************
+	* NOTE:  This program contains Digital Research proprietary *
+	* information and must not be reproduced, copied, or        *
+	* transcribed in any form whatsoever.                       *
+	*************************************************************
+
+
+	COPYRIGHT (C) 1981
+	DIGITAL RESEARCH
+	BOX 579
+	PACIFIC GROVE, CA. 93950    */
+
+prod_root:
+	/***********************************************************
+	*                                                          *
+	*  Thió  modulå  ió thå rooô modulå foò  controllinç  thå  *
+	*  productioî  anä  serializatioî oæ  alì  products®   Iô  *
+	*  calló   overlayó  tï  dï  thå  serializatioî  oæ  each  *
+	*  product¬  thuó allowinç foò individuaì optimizatioî oæ  *
+	*  thå  desigî oæ thå serializatioî  process®   Thå  rooô  *
+	*  modulå  containó  globaì variableó anä promptó tï  thå  *
+	*  operatoò foò productioî information.                    *
+	*                                                          *
+	***********************************************************/
+
+	proc options(main);
+	%replace true by '1'b,
+	         false by '0'b;
+
+	/* global variables */
+	dcl
+		(srce_drive char(1),
+		dest_drive char(1),
+		debug_flag bit(1),
+		sec_per_trk fixed bin(15),
+		copy_init_flag bit(1),
+		seri_init_flag bit(1),
+		org_number bit(16),
+		ser_number bit(16)) external;
+
+	/* local variables */
+	dcl
+		ctrl_drive char(1),
+		ctrl_drive_number fixed bin(7),
+		srce_drive_number fixed bin(7),
+		dest_drive_number fixed bin(7),
+		first_time_flag bit(1),
+   	   	prod_number fixed bin(7),
+		media_number fixed bin(7),
+		prod_code char(3),
+		response char(1),
+		number_of_products fixed bin(7),
+		system_flag bit(1),
+		phy_sector_size fixed bin(15),
+		skew_factor fixed bin(15),
+		origin_number fixed dec(8,0),
+		serial_number fixed dec(8,0),
+		one_decimal fixed dec(1,0) static initial(1),
+		initial_serial_number fixed dec(8,0),
+		final_serial_number fixed dec(8,0);
+
+	/* thå  serializatioî prograí calleä ió determineä bù thå 
+	   producô  numbeò  selecteä  bù thå  operatoò  froí  thå 
+	   producô  menu¬  anä  musô  havå  thå  filenamå  'SERI-
+	   <product_code>§ wherå <product_code¾ ió á threå  digiô 
+	   numbeò  whicè correspondó tï thå producô numbeò iî thå 
+	   menu®  Thió filå ió loadeä aó aî overlaù oveò thå rooô 
+	   anä  copù overlay¬  froí thå defaulô drivå beforå  thå
+	   masteò copù disë ió inserteä */
+	dcl
+		serial_program char(10);
+
+	/* direct CP/M call for resetting drives */
+	dcl
+		curdsk entry returns(fixed bin(7)),
+		select entry(fixed bin(7)),
+		reset entry;
+
+	/* determine production control drive */
+	ctrl_drive_number = curdsk();
+	ctrl_drive = ascii(ctrl_drive_number + 65);
+	
+	/* set up error conditions */
+	on error(1)
+		begin;
+		put skip(2) list
+		('Non-Fatal Error in Data Entry.  Restarting.');
+		put skip(2);
+		goto operator_prompt;
+		end;
+
+	/* write banner */
+	put page skip(3) edit
+	('DIGITAL RESEARCH PRODUCTION SERIALIZER',
+	 '******* ******** ********** **********')
+	(2(x(15),a,skip));
+	first_time_flag = true;
+
+	/* initialize production variables */
+	do while(true);
+	operator_prompt:
+		copy_init_flag = false;
+		seri_init_flag = false;
+		put skip(5) list('Debugging Diagnostics On (Y or N)  ? ');
+		get list(response);
+		response = upper(response);
+		if response = 'Y' then
+			debug_flag = true;
+		else
+			debug_flag = false;
+		if debug_flag then
+		put skip edit
+		('Prod control drive -- ',ctrl_drive,':')
+		(a,a(1),a);
+
+		call display_product_menu;
+		put skip(2) list('Product Number  ? ');
+		get list(prod_number);
+		if prod_number = 0 then system_flag = true;
+		else if prod_number =  2 then system_flag = true;
+		else if prod_number =  4 then system_flag = true;
+		else if prod_number =  8 then system_flag = true;
+		else if prod_number =  9 then system_flag = true;
+		else if prod_number = 10 then system_flag = true;
+		else system_flag = false;
+		prod_code = convert(prod_number);
+
+		call media_defaults;
+
+		put skip list('Origin Number  ? ');
+		get list(origin_number);
+		if origin_number > 65535 then
+		signal error(1);
+		put skip list('Starting Serial Number  ? ');
+		get list(initial_serial_number);
+		if initial_serial_number > 65535 then
+		signal error(1);
+		put skip list('Final Serial Number  ? ');
+		get list(final_serial_number);
+		if final_serial_number > 65535  |  
+		   final_serial_number < initial_serial_number then
+		   signal error(1);
+		put skip list('Source Drive  ? ');
+		get list(srce_drive);
+		srce_drive = upper(srce_drive);
+		srce_drive_number = rank(srce_drive) - 65;
+		if srce_drive_number < 0  |  srce_drive_number > 15
+		then signal error(1);
+		put skip list('Destination Drive  ? ');
+		get list(dest_drive);
+		dest_drive = upper(dest_drive);
+		dest_drive_number = rank(dest_drive) - 65;
+		if dest_drive_number < 0  |  dest_drive_number > 15
+		then signal error(1);
+
+	/* cancel ON ERROR(1) condition */
+	revert error(1);
+
+	/* load serialization overlay */
+	serial_program = ctrl_drive || ':' || 'SERI-' || prod_code;
+	call load_overlay(serial_program);
+
+	/* initialize serialization program before
+	   inserting master copy disk in current default drive */
+	/* return with seri_init_flag set to true */
+	call overlay(serial_program);
+
+	/* insert master copy disk */
+	put skip(3) list
+	('Insert Product Master Disk in Drive ' || srce_drive ||
+	 ': and Type RETURN');
+	get skip(2);
+	call reset();
+
+	/* initialize copy segment from dpb of master disk */
+	/* return with copy_init_flag set to true */
+	call copy_routine;
+
+	/* convert origin number */
+	org_number = dec8_to_bit16((origin_number));
+
+	/* copy and serialization loop */
+	do serial_number = initial_serial_number to final_serial_number by one_decimal;
+	ser_number = dec8_to_bit16((serial_number));
+	put skip(3) edit
+	('Preparing to copy and serialize ',origin_number,' - ',serial_number)
+	(a,f(5));
+	put skip(2) list
+	('Insert new diskette in drive ' || dest_drive || ': and type RETURN');
+	get skip;
+	call reset();
+	call copy_routine;
+	call overlay(serial_program);
+	end;
+
+	/* reselect and reinitialize production drive */
+	if ctrl_drive = srce_drive  | ctrl_drive = dest_drive then
+	do;
+	put skip(2) list
+	('Insert Production Control Disk in Drive ' || ctrl_drive ||
+	 ': and type RETURN');
+	get skip;
+	call reset();
+	end;
+	call select(ctrl_drive_number);
+	first_time_flag = false;
+	end; /* while loop */
+
+	/* utilities for root module */
+
+	display_product_menu:
+	/* readó  thå PRODUCT.DAÔ filå anä associateó  witè  eacè 
+	   producô  á  producô  numbeò whicè ió selecteä  bù  thå 
+	   operatoò tï determinå productioî */
+
+		proc;
+		dcl
+			product file,
+			end_of_file bit(1),
+			product_name char(78) varying,
+			i fixed bin(7);
+
+		/* set return condition */
+		on endfile(product)
+			begin;
+			i = i - 1;
+			number_of_products = i;
+			end_of_file = true;
+			end;
+
+		/* open data file */
+		open file(product) stream input
+		title(ctrl_drive||':'||'PRODUCT.DAT');
+
+		/* display product menu */
+		end_of_file = false;
+		put skip(2) edit
+		('PRODUCT LIST','******* ****') (2(x(7),a,skip));
+		put skip;
+		do i = 1 repeat(i + 1) while(^end_of_file);
+		get file(product) list(product_name);
+		if ^end_of_file then
+		put skip list(product_name);
+		end;
+		close file(product);
+		end display_product_menu;
+
+	media_defaults:
+	/* displays the current defaults of the skew table and asks
+	   if the user would like to change any of the values */
+
+		proc;
+
+		phy_sector_size = 1;
+		skew_factor = 2;
+		put skip(2) edit
+		('The current default values for the skew table are:',
+		 'Logical Sectors Per Physical Sector :  ',phy_sector_size,
+		 'Physical Skew Factor                :  ',skew_factor,
+		 'Do you want to change these values (Y or N)  ? ')
+		(a,skip(2),a,f(2),skip,a,f(2),skip(2),a);
+		get list(response);
+		response = upper(response);
+		if response = 'Y' then
+		do;
+		put skip list
+		('New value for Logical Sectors Per Physical Sector  ? ');
+		get list(phy_sector_size);
+		put list('New Value for Physical Skew Factor  ? ');
+		get list(skew_factor);
+		end;
+
+		end media_defaults;
+ 
+	convert:
+	/* converts integer to char string with leading zeros */
+		proc(x) returns(char(3));
+		dcl
+			c char(9),
+			x fixed bin(7),
+			y fixed bin(15);
+		y = x;
+		y = y + 1000;
+		c = char(y);
+		return(substr(c,7,3));
+		end convert;
+
+	load_overlay:
+	/* loads .OVL file with drive and filename in 'name' */
+		proc(name);
+		dcl
+			?ovlay entry(char(10),fixed bin(1)),
+			name char(10);
+		call ?ovlay(name,0);
+		end load_overlay;
+
+	overlay:
+	/* used to call .OVL file which has been loaded */
+		proc(name);
+		dcl
+			?ovlay entry(char(10), fixed bin(1)),
+			dummy entry,
+			name char(10);
+		call ?ovlay(name,0);
+		call dummy;
+		end overlay;
+
+	dec8_to_bit16:
+	/* converts dec(8,0) to bit(16) */
+		proc(dec_number) returns(bit(16));
+		dcl
+			dec_number fixed dec(8,0),
+			signed_binary fixed dec(8,0) static initial(32768),
+			sign_bit bit(1),
+			bit_string bit(16);
+		if dec_number >= signed_binary then
+			do;
+			dec_number = dec_number - signed_binary;
+			sign_bit = '1'b;
+			end;
+		else
+			sign_bit = '0'b;
+		substr(bit_string,2) = binary(dec_number,15);
+		substr(bit_string,1,1) = sign_bit;
+		return(bit_string);
+		end dec8_to_bit16;
+
+	upper:
+	/* converts char(1) to upper case */
+		proc(x) returns(char(1));
+		dcl
+			x char(1);
+		return(translate(x,'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+		                   'abcdefghijklmnopqrstuvwxyz'));
+		end upper;
+
+	copy_routine:
+	proc;
+	/***********************************************************
+	*                                                          *
+	*  Thió tracë tï tracë copù witè verifù routinå ió calleä  *
+	*  bù   thå  rooô  productioî  modulå  witè  thå   globaì  *
+	*  variableó  froí  thå rooô module®   Iô setó itó  locaì  *
+	*  variableó froí thå disë parameteò blocë oæ thå  sourcå  *
+	*  disk¬   anä   ió   thuó  intendeä  tï  bå  aó   easilù  *
+	*  transportablå aó possible®                              *
+	*                             01/07/81  DLD                *
+	*                             07/07/82  DRL                *
+	*                                                          *
+	***********************************************************/
+
+	/*     global variable for the serialize_hex routines
+	       of the serializing programs.		*/
+	dcl
+		sector_offset fixed bin(15) external;
+
+	/* local variables */
+	dcl
+		disk_buffering bit(1),    /* T = copy whole disk into RAM
+		                             F = copy a few tracks at a time */
+		disk_buff_diagnos char(3),
+		k fixed bin(7),
+		default_DMA_ptr ptr,
+		default_DMA char(128) based(default_DMA_ptr),
+		order fixed bin(15),
+		sector fixed bin(15),
+		track_series fixed bin(15),
+		track fixed bin(15),
+		max_track fixed bin(15),
+		initial_track fixed bin(15),
+		final_track fixed bin(15),
+		number_of_tracks fixed bin(15),
+		words_per_buffer fixed bin(15),
+		tpb fixed bin(15),        /* tracks per buffer */
+		log_sectors_per_track fixed bin(15),
+		phy_sectors_per_track fixed bin(15);
+
+	/* copy utilities */
+
+	/* direct cp/m functions */
+	dcl
+		seldsk entry (fixed(7))      returns (ptr),
+		settrk entry (fixed(15)),
+		setsec entry (fixed(15)),
+		bstdma entry (ptr),
+		bflush entry,
+		rdsec  entry                 returns (fixed(7)),
+		wrsec  entry                 returns (fixed(7)),
+		sectrn entry (fixed(15),ptr) returns (fixed(15));
+	dcl
+		memptr entry             returns (ptr),
+		memsiz entry             returns (fixed(15)),
+		memwds entry             returns (fixed(15)),
+		dfcb0  entry             returns (ptr),
+		dfcb1  entry             returns (ptr),
+		dbuff  entry             returns (ptr),
+		reboot entry,
+		rdcon  entry             returns (char(1)),
+		wrcon  entry (char(1)),
+		rdrdr  entry             returns (char(1)),
+		wrpun  entry (char(1)),
+		wrlst  entry (char(1)),
+		coninp entry             returns (char(1)),
+		conout entry (char(1)),
+		rdstat entry             returns (bit(1)),
+		getio  entry             returns (bit(8)),
+		setio  entry (bit(8)),
+		wrstr  entry (ptr),
+		rdbuf  entry (ptr),
+		break  entry             returns (bit(1)),
+		vers   entry             returns (bit(16)),
+		reset  entry,
+		select entry (fixed(7)),
+		open   entry (ptr)       returns (fixed(7)),
+		close  entry (ptr)       returns (fixed(7)),
+		sear   entry (ptr)       returns (fixed(7)),
+		searn  entry             returns (fixed(7)),
+		delete entry (ptr),
+		rdseq  entry (ptr)       returns (fixed(7)),
+		wrseq  entry (ptr)       returns (fixed(7)),
+		make   entry (ptr)       returns (fixed(7)),
+		rename entry (ptr),
+		logvec entry             returns (bit(16)),
+		curdsk entry             returns (fixed(7)),
+		setdma entry (ptr),
+		allvec entry             returns (ptr),
+		wpdisk entry,
+		rovec  entry             returns (bit(16)),
+		filatt entry (ptr),
+		getdpb entry             returns (ptr),
+		getusr entry             returns (fixed(7)),
+		setusr entry (fixed(7)),
+		rdran  entry (ptr)       returns (fixed(7)),
+		wrran  entry (ptr)       returns (fixed(7)),
+		filsiz entry (ptr),
+		setrec entry (ptr),
+		resdrv entry (bit(16)),
+		wrranz entry (ptr)       returns (fixed(7));
+
+	/* dynamic storage management */
+	dcl
+		maxwds entry returns(fixed bin(15)),
+		allwds entry(fixed bin(15)) returns(ptr);
+
+	/* skew table */
+	dcl
+		skew_table_ptr ptr,
+		skew_table(0:0) fixed bin(15) based(skew_table_ptr);
+
+	/* sector translation table */
+	dcl
+		dph ptr,	/* disk parameter header */
+		XLT_ptr ptr based(dph);
+
+	/* buffer management */
+	dcl
+		(buff_ptr, cbuff_ptr) ptr,
+		buffer(0:0) char(128) based(buff_ptr),
+		compare_buffer(0:0) char(128) based(cbuff_ptr);
+
+	/* allocation vector */
+	dcl
+		alloc_ptr ptr,
+		alloc(1:1) bit(8) based(alloc_ptr);
+
+	/* disk parameter table */
+	dcl
+		dpb_ptr ptr,
+		1 dpb based(dpb_ptr),
+		  2 spt  fixed bin(15),
+		  2 bsh  fixed bin(7),
+		  2 blm  fixed bin(7),
+		  2 exm  fixed bin(7),
+		  2 dsm  fixed bin(15),
+		  2 drm  fixed bin(15),
+		  2 fill bit(16),
+		  2 cks  fixed bin(15),
+		  2 off  fixed bin(7);
+
+	/* initialization */
+	if ^copy_init_flag then
+		do;
+		copy_init_flag = true;
+
+		/* free previously allocated storage? */
+		if ^first_time_flag then
+		do;
+			free skew_table_ptr -> skew_table;
+			free buff_ptr -> buffer;
+			free cbuff_ptr -> compare_buffer;
+		end;
+
+		default_DMA_ptr = dbuff();
+		call select(srce_drive_number);
+		dph = seldsk(curdsk());
+		sector_offset = sectrn(0,XLT_ptr);
+		dpb_ptr = getdpb();
+		sec_per_trk = spt;
+		alloc_ptr = allvec();
+		log_sectors_per_track = spt;
+		phy_sectors_per_track = log_sectors_per_track / phy_sector_size;
+
+		/* initialize skew table */
+		order = phy_sectors_per_track / gcd(skew_factor,phy_sectors_per_track);
+		skew_table_ptr = allwds(log_sectors_per_track);
+ 		do sector = 0 to log_sectors_per_track - 1;
+		skew_table(sector) = log_skew(sector) + sector_offset;
+		end;
+
+		number_of_tracks = calculate(srce_drive_number);
+		if system_flag then
+			initial_track = 0;
+		else
+			initial_track = off;
+		final_track = off + number_of_tracks - 1;
+
+		tpb = min(calc_trk_buf(),final_track-initial_track+1);
+		if (tpb < 1) then
+		do;
+			puô skið(4) lisô
+			('Insufficienô Buffeò Space to Perform Track Copying');
+			put skip(3);
+			stop;
+			end;
+
+		/* allocate space for the buffers */
+ 		words_per_buffer = 64 * spt * tpb;
+		buff_ptr = allwds(words_per_buffer);
+		if ^disk_buffering then
+			cbuff_ptr = allwds(words_per_buffer);
+
+		/* message to operator */
+		put skip(2) edit
+		('Final track to copy:       ',final_track)(a,f(6));
+
+		if debug_flag then
+		do;
+		put skip(2) list('Debugging Diagnostics:');
+		if disk_buffering = true then
+			disk_buff_diagnos = 'Yes';
+		else
+			disk_buff_diagnos = ' No';
+		put skip edit
+		('Number of log sec per trk: ',log_sectors_per_track,
+		 'Number of phy sec per trk: ',phy_sectors_per_track,
+		 'Buffering entire disk ?  : ',disk_buff_diagnos,
+		 'First track to copy:       ',initial_track,
+		 'Tracks per buffer:         ',tpb,
+		 'Sector offset:             ',sector_offset,
+		 'Skew factor:               ',skew_factor,
+		 'Skew table:')
+		(2(a,f(6),skip),a,x(3),a,skip,4(a,f(6),skip),a);
+		put skip edit
+		 ((skew_table(sector) 
+		do sector = 0 to log_sectors_per_track - 1))
+		 (15f(5),skip);
+		end;
+		return;
+		end; /* of initialization */
+
+	/* track to track copy */
+	put skip;
+	do track_series = initial_track to final_track by tpb;
+	max_track = min(track_series+tpb-1, final_track);
+	put skip(0) edit
+	('Copying tracks:  ',track_series,' - ',max_track)
+	(a,column(20),f(3),a,f(3));
+
+	/* read the source tracks if necessary */
+	if ^disk_buffering  |  serial_number = initial_serial_number then
+	do;
+	call select(srce_drive_number);
+	do track = track_series to max_track;
+	call settrk(track);
+		/* fill buffer from source */
+		do sector = 0 to log_sectors_per_track - 1;
+		call bstdma(addr(buffer(sub(track,sector))));
+		call setsec(skew_table(sector));
+		if rdsec() ^= 0 then
+			do;
+			put skip list('Fatal Read Error on Source');
+			return;
+			end;
+		end;	/* do sector */
+	end;		/* do track */
+	end;		/* if ^disk_buffering ... */
+	call select(dest_drive_number);
+	do track = track_series to max_track;
+	call settrk(track);
+		/* write buffer to destination */
+		do sector = 0 to log_sectors_per_track - 1;
+		call bstdma(addr(buffer(sub(track,sector))));
+		call setsec(skew_table(sector));
+		if wrsec() ^= 0 then
+			do;
+			put skip list('Fatal Write Error on Destination');
+			return;
+			end;
+		end;
+
+		/* reread and compare destination with source */
+		if disk_buffering then
+		do;
+		/* fill default DMA from destination for verification */
+		call bstdma(default_DMA_ptr);
+		do sector = 0 to log_sectors_per_track - 1;
+		call setsec(skew_table(sector));
+		if rdsec() ^= 0 then
+			do;
+			put skip list('Fatal Read Error on Destination');
+			return;
+			end;
+
+		/* compare and verify buffers */
+		if default_DMA ^= buffer(sub(track,sector)) then
+			do;
+			put skip(2) edit
+			('Verify Error on Track ',track,'   Sector ',sector)
+			(2(a,f(3)));
+			return;
+			end;
+		end;		/* do sector */
+		end;		/* if disk_buffering */
+		else
+		do;
+		/* fill compare buffer for verification from destination */
+		do sector = 0 to log_sectors_per_track - 1;
+		call bstdma(addr(compare_buffer(sub(track,sector))));
+		call setsec(skew_table(sector));
+		if rdsec() ^= 0 then
+			do;
+			put skip list('Fatal Read Error on Destination');
+			return;
+			end;
+		end;		/* fill compare buffer */
+
+		/* compare buffers */
+		do sector = 0 to log_sectors_per_track - 1;
+		if buffer(sub(track,sector)) ^= compare_buffer(sub(track,sector))
+		then
+			do;
+			put skip(2) edit
+			('Verify Error on Track ',track,'   Sector ',sector)
+			(2(a,f(3)));
+			return;
+			end;
+		end;		/* compare buffers */
+		end;		/* else disk_buffering */
+	end;		/* do track */
+	end;		/* do track_series */
+
+	
+	/* force deblocking buffers to be flushed */
+	call bflush();
+	/* reset directory in memory */
+	call reset();
+	put skip;
+
+	log_skew:
+		proc(x) returns(fixed bin(15));
+		dcl
+			(i,j) fixed bin(15),
+			x fixed bin(15);
+		j = mod(x, phy_sector_size);
+		i = (x - j) / phy_sector_size;
+		i = phy_skew(i);
+		return(i * phy_sector_size + j);
+		end log_skew;
+
+	phy_skew:
+		proc(x) returns(fixed bin(15));
+		dcl
+			(i,j) fixed bin(15),
+			x fixed bin(15);
+		i = mod(x,order);
+		j = (x - i) / order;
+		i = mod(i * skew_factor, phy_sectors_per_track);
+		return(i + j);
+		end phy_skew;
+
+	calculate:
+		proc(x) returns(fixed bin(15));
+		dcl
+			(i,j) fixed bin(15),
+			x fixed bin(7),
+			return_value fixed bin(15),
+			current_drive fixed bin(7),
+			old_dpb_ptr ptr,
+			old_alloc_ptr ptr;
+
+		current_drive = curdsk();
+		if current_drive ^= x then
+		do;
+			old_dpb_ptr = dpb_ptr;
+			old_alloc_ptr = alloc_ptr;
+			call select(x);
+			dpb_ptr = getdpb();
+			alloc_ptr = allvec();
+		end;
+		i = ceil(float(dsm+1) / 8.0);
+		do i = i to 1 by -1 while(alloc(i) = '00'b4);
+		end;
+		do j = 8 to 1 by -1 while(substr(alloc(i),j,1)='0'b);
+		end;
+		return_value = ceil(float((((i-1)*8)+j)*(blm+1))/float(spt));
+		if current_drive ^= x then
+		do;
+			dpb_ptr = old_dpb_ptr;
+			alloc_ptr = old_alloc_ptr;
+			call select(current_drive);
+		end;
+		return(return_value);
+		end calculate;
+
+	calc_trk_buf:
+		proc returns(fixed bin(15));
+		dcl
+			tracks_to_copy fixed bin(15),
+			max_tracks fixed bin(15);
+
+		tracks_to_copy = final_track - initial_track + 1;
+		max_tracks = maxwds() / (64*spt);
+		if max_tracks >= tracks_to_copy then
+			disk_buffering = true;
+		else
+			disk_buffering = false;
+		if ^disk_buffering then
+			max_tracks = max_tracks / 2; /* for track pairs */
+		return(max_tracks);
+		end calc_trk_buf;
+
+	sub:
+		/* calculates the subscript to the buffer */
+		proc(track,sector) returns(fixed bin(15));
+		dcl
+			(track,sector) fixed bin(15);
+
+		return((track-track_series)*spt + sector);
+		end sub;
+
+	gcd:
+		proc(m,n) returns(fixed bin(15)) recursive;
+		/* greatest common divisor */
+		dcl
+			(m,n) fixed bin(15);
+		iæ (í ¼ 0© theî í ½ -m;
+		if (n < 0) then n = -n;
+		if (m = 0) then return(n);
+		if (n = 0) then return(m);
+		if (m > n) then
+			return(gcd(mod(m,n),n));
+		return(gcd(m,mod(n,m)));
+		end gcd;
+
+	end copy_routine;
+
+	end prod_root;

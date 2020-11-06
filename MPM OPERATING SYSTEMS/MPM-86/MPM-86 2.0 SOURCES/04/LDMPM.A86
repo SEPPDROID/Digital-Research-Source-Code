@@ -1,0 +1,321 @@
+	title  'MP /M-86 Loader'
+
+;	The MPMLDR consists of this module along with the
+;	LDBDOS and LDBIOS.  The LDBDOS is the same as for
+;	for CP/M-86, and the LDBIOS has only the login message
+;	changed. 
+
+;	MPMLDR resides on the first two tracks of a
+;	MP/M-86 system diskette and is brought into memory
+;	by the ROM bootstrap loader to load initiate MP/M-86
+
+;	It opens the file 'MPM.SYS' using the LDBDOS and LDBIOS
+;	and then reads it into memory.  The DS register is set
+;	to the start of the MPM DATA area, and a JMPF to the
+;	first byte of the MPM code is executed.
+
+;	The first 128 byte record of the MPM.SYS file is a header
+;	with the following format:
+
+;	ty	rb	1		;seg type 
+;	len	rw	1		;length 
+;	abs	dw	1		;absolute segment address for LOADER
+;	min	rw	1		;minimum mem
+;	max	rw	1		;max mem needed
+
+;	The code is expected first and then the data within MPM.SYS
+;	This header record is constructed automatically by the
+;	GENSYS-86 utility. See the variables declared at 'SEC1:'
+;	where the first sector of MPM.SYS will be read     
+
+;	MPMLDR may be read into any segment that does not
+;	overlap the desired system load segment as it makes
+;	all memory references using copies of the CS: register
+;	it is entered with.
+;
+;	For debugging under CP/M and DDT a 'IB' can be used to force a
+;	break to DDT just before 'Far Jumping' to MPM.
+; 
+false		equ	0
+true		equ	not false
+
+cr		equ	0dh
+lf		equ	0ah
+
+ldbdos_offset	equ	406H		;offset of LDBDOS
+mldbios_offset	equ	1200h		;offset of LDBIOS
+bdos_int	equ	224		;lbdos interrupt number
+
+bootdrv		equ	0		; boot drive always zero
+codetype	equ	1		; code type CMD header
+datatype	equ	2		; data type CMD header
+
+	; dummy section for interrupt vectors
+
+		dseg	0
+		org	0
+abs_zero	rw	2*bdosint
+bdos_offset	rw	1
+bdos_segment	rw	1
+
+fcb1		equ	5dh		; look here for 'B' to break
+ddt_int		equ	3		; DDT interrupt
+
+	; bdos function numbers
+
+coutf		equ	2
+pstrf		equ	9
+seldsk		equ	14
+openf		equ	15
+readsf		equ	20	
+dmaf		equ	26		
+dmabf		equ	51		
+
+
+;*******************************
+;*
+;*	MPMLDR starts here
+;*
+;*******************************
+
+	cseg			; JMPF to here from boot ROM
+	org	0
+	jmp	start		; if loaded under DDT this
+				; gets overlayed and IP = 100H
+				; want 100h byte header for 
+				; 'IB' option 
+
+	db	'COPYRIGHT (C) 1981,'	; found by serial program
+	db	' DIGITAL RESEARCH '
+	db	'654321'
+	db	' MP/M-86 Loader V2.0 (9/21/81)'
+
+	org	80H		; read first sector of MPM.SYS
+sec1	rb	128		; here
+
+org	offset sec1		;CMD header fields
+ctype	rb	1		;type
+clen	rw	1		;length
+cldseg	rw	1		;abs
+cmin	rw	1		;minimum
+cmax	rw	1		;maximum
+dtype	rb	1
+dlen	rw	1
+dldseg	rw	1
+dmin	rw	1
+dmax	rw	1	
+
+	org	100H
+start:						; execution begins here if DDT
+	jmp	mldbios				; initialize mldbios
+						; mldbios returns here: 103H
+	xor ax,ax ! mov	ds,ax			; temp DS at absolute zero
+	mov bdos_offset,offset ldbdos_offset	;  to patch in interrupt table
+	mov bdos_segment,cs			;   offset and segment
+	mov ax,cs ! mov ss,ax			; make ss, ds, es = cs
+	mov ds,ax ! mov es,ax
+	mov sp,offset(stack)			; set up local stack
+
+	mov dx,offset signon
+	call msg
+	call initlbdos				; warm up lbdos and lbios
+	call openfnc				; open MPM.SYS
+	cmp al,255 ! jne perr			; insure good file
+	mov dx,offset nofile ! call msg		; no MPM.SYS file
+	jmp stop				; then halt the machine
+perr:
+	mov dx,cs ! call setdmab
+	mov dx,offset sec1 ! call setdma	; read first sector of MPM.SYS
+	call read
+	cmp ctype,codetype			; code should be first
+	jnz badhdr
+	cmp dtype,datatype			; then data
+	jnz badhdr	
+	mov ax,cldseg				; code abs + code length
+	add ax,clen				; should be = to data abs
+	cmp ax,dldseg ! jnz  badhdr
+	add ax,dlen ! cmp ax,cldseg		; check for wrap around
+	ja hdrok
+badhdr:
+	mov dx,offset hdrerr ! call msg
+	jmp stop
+hdrok:
+	mov dx,offset csegment ! call msg	; put memory map on console
+	mov ax,cldseg ! call phex		; print base code segment
+	mov dx,offset dsegment ! call msg	; print base data segment
+	mov ax,dldseg ! call phex
+;
+	mov dx,cldseg
+	mov dmab,dx				; initial DMA segment
+readit1:
+	call setdmab				; set DMA segment for disk IO
+	mov dx,0				; offset of MPM in segment
+readit2:
+	call setdma				; set DMA offset for
+	push dx ! call read			; next sector read
+	cmp al,01H ! je done			; check for EOF 
+	cmp al,0 ! je prerr			; check for good write  
+	mov dx,offset rerr ! call msg		; print READ ERROR message
+	jmp stop				; hard stop on any error
+
+prerr:	pop dx ! add dx,80H
+        cmp dx,0				; more than 64K ?
+	jnz readit2
+	add dmab,1000h				; add 64K to base
+	mov dx,dmab
+	jmp readit1
+done:
+	pop ax 					; number of bytes read
+	mov cl,4
+	shr ax,cl				; number of paragraphs read
+	add ax,dmab				; number of 64K segments read
+	sub ax,cldseg				; (dmab - cldseg)
+	mov cx,clen
+	add cx,dlen	
+	cmp ax,cx
+	jae lenok				; MPM.SYS at least as long
+	mov dx,offset shortmsg			; as header claims ?	
+	call msg ! jmp stop
+lenok:
+	push cx					; clen + dlen in cx
+	mov dx,offset lenmsg ! call msg		; print length message
+	pop ax
+	add ax,cldseg
+	dec ax					; last paragraph
+	call phex
+	call pcrlf				; and a crlf
+
+	mov ax,cldseg
+	mov mpmcseg,ax
+	mov ds,dldseg				; MP/M data segment
+
+	mov al, cs:.fcb1			; must use CS over-ride
+	cmp al,'B'
+	jnz gompm
+	int ddt_int				; break to mpm
+gompm:
+	jmpf mpm				; leap to MPM initialization
+
+;*****************************
+;*
+;*	subroutines
+;*
+;*****************************
+
+;******
+phex:				;print 4 hex characters from ax
+	mov cx,0404h		; 4 in both CH and CL
+lhex:	
+	rol ax,cl		; rotate left 4
+	push cx ! push ax	; save crucial registers
+	call pnib		; print hex nibble
+	pop ax ! pop cx		; restore registers
+	dec ch ! jnz lhex	; and loop four times
+	ret
+pnib:				;print low nibble in AL as hex char
+	and al,0fh ! cmp al,9
+	ja p10			;above 9 ?
+	add al,'0'		;digit
+	jmp prn
+p10:	add al,'A'-10		;char a-e
+prn:	mov dl,al
+
+;******
+putchar:
+	mov cl,coutf
+	jmp sys_vec
+
+;******
+initlbdos:
+	mov cl,seldsk ! mov dx,bootdrv		; select boot disk
+	jmp sys_vec
+
+;******
+openfnc:
+	mov cl,openf ! mov dx,offset fcb	; fcb already initialized
+	mov cl,openf
+	jmp sys_vec
+ 
+;********
+;
+setdma:				;set new dma addr in dx
+	mov cl,dmaf
+	jmp sys_vec
+
+;********
+;
+setdmab:			; set new dma segment base from DX
+	mov cl,dmabf
+	jmp sys_vec
+
+;******
+;
+pcrlf:	mov dx,offset crlf	;print carriage return, line feed
+
+;******
+;
+msg:				;print msg starting at dx until $
+	mov cl,pstrf		;print string function
+	jmp sys_vec
+
+;*****
+;
+read:
+	mov dx,offset fcb ! mov cl,readsf
+;	jmp sys_vec
+
+;******
+;
+sys_vec:
+	int bdos_int
+	ret
+
+;******
+;
+stop:	mov ax,0			; hard stop 8086 for error
+	mov ds,ax
+	mov word ptr .8h,ax
+	mov word ptr .0ah,cs
+stop2:
+	jmp stop2
+
+;********************************
+;*
+;*	DATA AREA
+;*
+;********************************
+
+signon		db	cr,lf,lf,'MP/M-86 V2.0 Loader',cr,lf,'$'
+nofile		db	cr,lf,'The File MPM.SYS Not Found On This Disk$'
+rerr		db	cr,lf,'Error In Reading MPM.SYS$'
+hdrerr		db	cr,lf,'Bad Header Record in MPM.SYS$'
+shortmsg	db	cr,lf,'MPM.SYS Too Short $'
+csegment	db	cr,lf,'Code Paragraph Address = $'
+dsegment	db	cr,lf,'Data Paragraph Address = $'
+lenmsg		db	cr,lf,'Last Paragragh         = $'
+crlf		db	cr,lf,'$'
+
+
+	; vector for jmpf indirect to start MP/M
+
+mpm		dd	abs_zero		; (dummy value)
+	org offset mpm			; overlay preceding with DW's
+mpmstart	dw	0		; first word of MPM code
+mpmcseg		rw	1		; second is segmet of MPM code
+ 
+dmab	rw	1			; current DMA segment
+fcb	db	0,'MPM     ','SYS',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+					; look on m disk first
+
+	org	(offset $+1) and 0FFFEh	; even address for stack
+	rw	32
+stack	equ offset $
+	db	0
+
+				; dummy section for BIOS init label
+
+	org	mldbios_offset
+mldbios:
+
+	end
+

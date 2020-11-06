@@ -1,0 +1,1204 @@
+;
+;	GENERALLY USEFUL DEFINES
+; 
+TRUE	EQU	0FFFFH
+FALSE	EQU	0H
+ESC	EQU	27
+TXMOD	EQU	0FFH
+;
+;	SWITCH TABLE FOR OPTIONAL ENTRY POINTS
+;
+USEGLINE	EQU	FALSE 	
+;	
+;	MSX ROM BIOS ENTRY DEFINITIONS
+;
+BIOSVEC EQU	01H		; Good 'ol CP/M bios jmp vector address	
+MSXBASE EQU	040H-03H	; CP/M bios additive base for MSX hooks
+rdvrm	equ	004AH
+wrtvrm	equ	004DH
+setrd	equ	0050H
+setwrt	equ	0053H
+filvrm	equ	0056H
+initxt  equ     006cH
+inigrp  equ     0072H
+grpprt	equ	008dH
+setatr  equ	011aH
+setc	equ	0120H
+readc	equ	011dH
+mapxyc  equ	0111H
+
+cls     equ     0c3h  
+linlen  equ     0f3b0h
+ctrlg   equ     07h
+;
+;	DATA VARIABLES FOR LIOS
+; 
+	DSEG
+SPLIT   DB    TXMOD
+;
+;	EXTERNAL AND VARIABLE FUNCTION DECLARATIONS
+;
+	EXTRN	bios		; 'C' bios call routine (stk oriented)	
+
+GRPCGP	EQU     0F3CBH		; start of pixel ram in VDP
+GRPCOL  EQU	0F3C9H		; start of color RAM in VDP
+GRPACX	EQU	0FCB7H		; Graphics position for text
+GRPACY	EQU	0FCB9H		;    y 
+BAKCLR	EQU	0F3EAH		; Background color
+VDPDR	EQU	00098H		; VDP read register port
+VDPDW	EQU	00098H		; VDP write register port
+VDPCW	EQU	00099H		; VDP control register port
+
+	CSEG
+;************************************************************************
+;								       	*
+;		SECTION: Utility routines for MSX LIOS        		*
+;									*
+;************************************************************************
+
+FASTMSX:
+	push	d		; save potential parameter
+	xchg			; put desired vector into hl
+	lhld	BIOSVEC		; get address of CP/M BIOS jmp vector
+	dad	d		; calculate entry in jump table
+	pop	d		; restore de
+	pchl			; go for it!
+
+;
+;	This version is slower, but preserves all register (inc. HL)
+;
+FULLMSX:
+	push	h		; save potential parameters
+	push	d		;
+	lxi	h,6		; get MSXBIOS address desired (on stack)
+	dad	sp		;
+	mov	e,m		;
+	inx	h		;
+	mov	d,m		;
+	lhld	BIOSVEC		; get address of CP/M BIOS jmp vector
+	dad	d		; calculate entry in jump table
+	pop	d		; restore de
+	xthl			; restore hl and put target address on stack
+	ret			; jmp (sp) -- with pop thrown in, too!
+
+;************************************************************************
+;								       	*
+;		SECTION: Initialization and State Information  		*
+;									*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; GINIT
+	;
+	; Parameters:	None
+	; Returns:	None.
+	; Description:  Does all hardware and graphics initialization
+	;		(if necessary). This routine is called before
+	;		any other LIOS routine.
+	;---------------------------------------------------------------
+
+	PUBLIC	GINIT
+GINIT:
+	;
+	; GINIT is the first call made to the LIOS. Any initialization
+	; for graphics, cursor addressing, screen management, hardware
+	; initialization, etc. should be performed here.
+	;
+	lxi	h,0		; Enter graphics mode
+	push	h		; (fullscreen)
+	call	GRAFON		;
+	pop	h		; discard parameter
+	ret
+
+	;---------------------------------------------------------------
+	; EXIT
+	;
+	; Parameters:	None
+	; Returns:	None.
+	; Description:  Returns to operating system. Does any necessary 
+	;		cleanup.
+	;---------------------------------------------------------------
+
+	PUBLIC	EXIT
+EXIT:	
+	; Terminates Logo interpreter. Any cleanup work for proper exit 
+	; should be done here (e.g. close files, reset graphics, etc.)
+
+        pop     h	; discard return address
+        lxi     h,0	; substitute address 0 (warm boot)
+        push    h	;
+        jmp     TEXTON	; Usually, just do a CP/M warm boot
+
+	;---------------------------------------------------------------
+	; TEXTON
+	;
+	; Parameters:	None
+	; Returns:	None.
+	; Description:  Sets text only mode. All character output, cursor
+	;		addressing, clear screen, etc. should go to text
+	;		plane only. In systems with only a single logical
+	;		screen., either clear graphics or do buffering.
+	;---------------------------------------------------------------
+
+	PUBLIC	TEXTON
+TEXTON:
+	;
+	; Sets up character I/O to the text plane. Any cursor variables,
+	; mode information, and buffer management should be done here.
+	; Managing the screen (e.g. cursor positioning and clearing screen),
+	; are performed by Logo .
+	;
+	push	b		;
+	mvi	a,TXMOD		;
+	sta	SPLIT		; flag in text mode
+	lxi	h,MSXBASE+initxt; use MSX init text code
+	call	FASTMSX		; access through CP/M MSX BIOS
+	pop	b		;
+	ret
+
+	;---------------------------------------------------------------
+	; GRAFON
+	;
+	; Parameters:	Splitline: integer, range 0..GRAFROWS
+	; Returns:	None.
+	; Description:  If splitline is 0, then if FULLSCREEN graphics 
+	;		mode. Any text commands should be either buffered,
+	;		hidden in text plane (if TWOSCR = 1), or ignored.
+	;
+	;		If splitline <> 0, then the parameter indicates
+	;		the first line of the split screen (SPLITSCREEN).
+	;		Text and graphics should appear on display
+	;		together, each in their respective areas. If
+	;		TWOSCR = 0, then Logo clips graphics output
+	;		at splitline; otherwise all graphics output goes
+	;		to full screen.
+	;---------------------------------------------------------------
+
+	PUBLIC	GRAFON
+GRAFON:
+	; 
+	; Indicates that Logo is in either FULLSCREEN or SPLITSCREEN
+	; mode. This turns off character output to the text plane and
+	; turns on character and line drawing output to the graphics
+	; plane. If splitrow is zero, then the mode is FULLSCREEN, else
+  	; splitrow gives the starting row of where text should be placed
+	; in the graphics buffer.
+	;
+	EXTRN	draw_t
+
+	lxi	h,2		; [bc] [ret] [splitline] stacked
+	dad	sp		;
+	lda	SPLIT		; check old split row
+	inr	a		; Are we coming from text mode?
+	mov	a,m		; save new split first
+	sta	SPLIT		; use the split row for char I/O
+	rnz			; Don't re-initialize if in graphics II
+	push	b		; save bc
+	lxi	h,MSXBASE+inigrp; turn on MSX's graphic II mode 
+	call	FASTMSX		; init to graphics II mode
+	call	draw_t		; **FIX for ENG RELEASE (TWOSCR = 0)
+	pop	b		;
+	ret
+
+
+;************************************************************************
+;								       	*
+;		SECTION: Screen Interface		       		*
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; XCONIN
+	;
+	; Parameters:	None
+	; Returns:	ch from console in L reg. (H is 0)
+	; NOTE:		Waits until ch is typed!
+	;---------------------------------------------------------------
+
+	PUBLIC	XCONIN	
+XCONIN:
+	push	b	; Must save bc register (Linkage convention)
+;
+;	NOTE: 	A bios call mechanism is incorporated into the Logo 
+;		package. The entry point is "BIOS", which takes a
+;		single integer parameter that is the number of the BIOS
+;		call. The return value is properly stored in HL with the
+;	        Z flag set/reset.
+;
+;			e.g.   bios(3) does a CONIN call.	
+;		
+;
+	lxi	h,3	; CONIN vector number
+	push	h	; set up parmeter for call
+	call	bios	; get next character
+	pop	d	; remove parameter
+;
+	pop	b	; Restore bc
+	ret
+
+	;---------------------------------------------------------------
+	; XCONST
+	;
+	; Parameters:	None
+	; Returns:	console status in HL: zero    -> no ch
+	;			    	      nonzero -> ch ready
+	;---------------------------------------------------------------
+
+	PUBLIC	XCONST
+XCONST:
+	push	b	; Must save bc register (Linkage convention)
+	lxi	h,2	; Make CP/M bios console status call
+	push	h	; set up parameter
+	call	bios	; get status 
+	pop	d	; Discard parameter
+	pop	b	; restore bc
+	ret	
+
+	;---------------------------------------------------------------
+	; XCONOU
+	;
+	; Parameters:	ch: char, range 0..255
+	; Returns:	None.
+	; Description:  Outputs character to either graphics or text 
+	;		area based upon current mode (see GRAFON and
+	;		TEXTON). You should output character at current
+	;		x,y coordinate and increment x (no need to check
+	;		for scroll or eol)
+	;---------------------------------------------------------------
+
+	PUBLIC	XCONOU
+	;
+	; Do console output (both text and graphics screen)
+	;
+XCONOU:
+	lxi	h,2		; [ret] [ch] stacked
+	dad	sp		; HL set up to obtain parameter
+	mov	a,m		; A := ch
+BIOS4:
+        lxi     h,0
+        mov     l,a
+ 	lda	SPLIT		; in graphics II mode?
+	inr	a		;
+	jnz	GCONOUT		; if so, do graphics text I/O
+	push	b		; save bc register
+        push    h
+        lxi     h,4
+        push    h
+        call    bios
+        pop     h
+        pop     h
+	pop	b
+        ret           
+
+GCONOUT:
+	push	b		; ch to output in [l]
+	mov	a,l		;
+	lxi	h,MSXBASE+grpprt; do graphics ch output
+	call	FASTMSX		;
+	pop	b		;
+	ret
+	
+	;---------------------------------------------------------------
+	; CLRSCR
+	;
+	; Parameters:	top: integer, range: 1..(SCRROWS or GRAFROWS)
+	;		bot: integer, range: 1..(SCRROWS or GRAFROWS)  
+	; Returns:	None.
+	; Description:  Clears text area from row top to row bot 
+	;
+	; Update Hist:	Modeled code after VT-52 handler in z19lios
+	;		SJS 5-2-84
+	;---------------------------------------------------------------
+
+	PUBLIC  CLRSCR
+CLRSCR:
+	push	b	; save BC
+	lxi	h,4	; [bc] [ret] [top] [bot] stacked
+	dad	sp	; HL set up to obtain parameters
+        mov     b,m     ; get top (REG B)
+        inx     h	;
+        inx     h	;
+        mov     c,m     ; get bottom (REG C)
+	lda	SPLIT	; test mode
+	inr	a	;
+	jnz	GCLR	;
+CLRSC1:
+	mov	a,c	; get bottom line
+	cmp	b	; compare to current line
+	jc	clrsc2	; done if current line > bottom line 
+	mvi	h,0	;
+	mov	l,b	; push current line number
+	push	h	;
+	mvé	l,±	; pusè columî position
+	push	h	;
+	call	SETXY	; go to the selected position
+	pop	h	; remove parameters
+	pop	h
+	mvi	a,ESC	; set clear line sequence ESC K
+	call	bios4	; write character
+	mvi	a,'K'	; get K
+	call	bios4	;
+	inr	b	; bump line number & loop
+	jmp	CLRSC1	;
+	
+clrsc2:
+        pop     b
+        ret
+
+GCLR:
+	dcr	b	; make top zero relative
+	mvi	l,0	;    and multiply by 256
+	mov	h,b	;
+	mov	a,c	; get bot
+	sub	b	; get # lines to clear
+	mov	b,a	;     and multiply by 256 to convert to bytes
+	mvi	c,0	;
+			; HL = start adr, BC = count
+	call	clrvdp	; and clear the area
+	pop	b	;
+	ret
+
+	;---------------------------------------------------------------
+	; SETXY
+	;
+	; Parameters:	x: integer, range: 1..(SCRCOLS or GRAFCOLS)
+	;		y: integer, range: 1..(SCRROWS or GRAFROWS)  
+	; Returns:	None.
+	; Description:  Sets cursor to row x, column y 
+	;---------------------------------------------------------------
+	;
+	; set cursor to column x and row y
+	; x and y are 1 relative -- upper left is SETXY(1,1)
+	;
+
+	PUBLIC	SETXY
+SETXY:
+	push	b	; save bc reg
+	lxi	h,4	; get x and y
+	dad	sp	;
+	mov	b,m	; put X in b and Y in c
+	inx	h	;
+	inx	h	;
+	mov	c,m	;
+	lda	SPLIT	; test if in graphics II mode
+	inr	a	;
+	jnz	GSETXY	;
+	mvi	a,ESC	; Set cursor addressing sequence (ESC Y ypos xpos)
+	call	bios4	;
+	mvi	a,'Y'	;
+	call	bios4	; 
+	mov	a,c	; get y
+	adi	31	; 	and add 31	
+	call	bios4	; 
+	mov	a,b	; get x
+	adi	31	;       and add 31
+	call	bios4	;
+	pop	b	; restore b
+	ret		; and return
+GSETXY:			
+			; convert coordinates are in pixel values	
+	mov	h,b	; get X
+	dcr	h	; make zero relative
+	mov	l,c	; get Y
+	dcr	l	; make zero relative
+	dad	h	; multiply both by 8
+	dad	h	;
+	dad	h	;
+	mov	a,h	; get X (pixel value)
+	sta	GRPACX	; and save
+	mov	a,l	; get Y
+	sta	GRPACY	;
+	;call	GCURS	; turn cursor on at new position
+	pop	b	;
+	ret	 
+	;---------------------------------------------------------------
+	; SCROLL
+	;
+	; Parameters:	top: integer, range: 1..(SCRROWS or GRAFROWS)
+	;		bot: integer, range: 1..(SCRROWS or GRAFROWS)  
+	; Returns:	None.
+	; Description:  Moves lines top-1 to bot up 1 line, line bot is
+	;		cleared.
+	;---------------------------------------------------------------
+
+	PUBLIC	SCROLL
+
+SCROLL:
+	push	b	; save bc (if necessary)
+	lxi	h,4	; [bc] [ret] [top] [bot] stacked
+	dad	sp	; index to top
+	mov	b,m	; HL set up to obtain parameters
+	inx	h	; 
+	inx	h	;
+	mov	c,m	; b = top, c = bot
+	lda	SPLIT	; check mode (TEXT or GRAPHICS)
+	inr	a	;
+	jnz	GSCROLL	; graphics II screen scroll
+	mov	l,b	; get top in HL (zero h)
+	mvi	h,0	;
+	push	h	;
+	mvi	l,1	; get column number
+	push	h
+	call	SETXY	; position at top of window to scroll
+	pop	h	; remove parameter
+	pop	h	;   .
+	mvi	a,ESC	; Delete line at top (ESC M)
+	call	bios4	; 
+	mvi	a,'M'	; 
+	call	bios4	;   
+	mov	l,b	; get bot
+	mvi	h,0	;
+	push	h	;
+	mvi	l,1	; get column number
+	push	h	; 
+	call	SETXY	; set position at bottom line of window to scroll
+	pop	h	; remove parameter 
+	pop	h	;    .
+	mvi	a,ESC	; Insert line at bottom ESC 'L' (force scroll)
+	call	bios4	;
+	mvi	a,'L'	;
+	call	bios4	;
+	pop	b	; restore bc
+	ret		; and return
+	;
+	; Scroll screen from top to bot. Delete line top, move (bot,top-1)
+	; up to (bot-1,top). Clear line bot to spaces.
+	;
+GSCROLL:
+	dcr	b		; make top line zero relative
+	mov	a,c		; get bot line
+	sub	b		; get # of lines+1 to scroll up
+	mov	c,a		; save lines to scroll
+scrlup:
+	dcr	c		; done?
+	jz	clrbot		;
+	call	moveup		; move one line up (b has current line #) 
+	inr	b		; bump to next line
+	jmp	scrlup
+clrbot:
+	call	cline		; clear line at bot
+	pop	b
+	ret
+
+moveup:
+	mvi	a,255		; move 256 chars (1 line)
+	mov	h,b		; get start address
+	mvi	l,0		; 	which is 256*linenumber!
+movloop:
+	push	psw		; save loop count
+	inr	h		;     and point to next line
+	push	h		; save for awhile
+	lxi	h,MSXBASE+rdvrm	; point VDP for buffer for  
+	xthl			;
+	call	FULLMSX		; read char int acc
+	dcr	h		; point back at current line 
+	xthl			; save some more
+	lxi	h,MSXBASE+wrtvrm;
+	xthl			;
+	call	FULLMSX		; write char up one line
+	pop	d		;
+	inx	h		; point to next byte
+	pop	psw		; get loop count
+	dcr	a		;    and decrement
+	cpi	0FFH		; all done ?
+	jnz	movloop		;	
+	ret			; go back
+
+cline:
+	mov	h,b		; get line number
+	mvi	l,0		;     and multiply by 256 
+	lxi	b,256		; number of bytes to fill
+clrvdp:				; bc = # byte 
+	xra	a		; clear to zeros
+	push	h		; and save for awhile
+	lxi	h,MSXBASE+filvrm; fill dat der memory
+	xthl			;
+	call	FULLMSX		; do it
+	pop	d		;
+	ret			;
+
+;***********************************************************************
+;								       *
+;		SECTION: Graphics Interface		       	       *
+;								       *
+;***********************************************************************
+
+	;---------------------------------------------------------------
+	; GPLOT
+	;
+	; Parameters:	x: integer, range: 0..XDOTS-1
+	;		y: integer, range: 0..YDOTS-1
+	;		pen: 2 bytes (integer):
+	;		     LSB: pen color    MSB: pen drawing mode
+	;		     <0..MAX_PENS>    <if 2 XOR mode else draw>	
+	; Returns:	None.
+	; Description:  Colors pixel x,y to color indicated. If pen
+	;		is in XOR mode, color is XOR of pen color and
+	;		current background color of x,y.
+	;---------------------------------------------------------------
+
+	PUBLIC	GPLOT
+GPLOT:
+	;
+	; Color pixel at point x,y to the color indicated in pen
+	; (lsb). If the pen mode (msb) is 2, then the color to
+	; plot is the logical exclusive or of the current color
+	; and the pen color. (e.g. if gpoint(x,y) = 5 and a 
+	; color = 3, the dot plotted is color 3 xor 5 = 6).
+	; NOTE: All points are on the visible graphics screen.
+	;
+	push	b		; save bc
+	lxi	h,4		; [bc] [ret] [x] [y] [pen] stacked
+	dad	sp		; HL set up to obtain parameters
+	mov	c,m		; get the x coordinate
+	inx	h		;    in bc	
+	mov	b,m		;
+	inx	h		;
+	mov	e,m		; get the y coordinate
+	inx	h		;    in de
+	mov	d,m		;
+	lxi	h,8		; NOTE: Adjusting screen to middle
+	dad	b		;     add 8 to every x coord
+	mov	b,h		;
+	mov	c,l		; 
+	lxi	h,MSXBASE+mapxyc; calculate physical VDP address of point
+	call	FASTMSX		; 
+	lxi	h,8		; get penmode ! pencolor
+	dad	sp		;
+	mov	a,m		; get the pen color
+	push	psw		;    and save 
+	inx	h		; point to the pen mode	 
+	mov	a,m		;
+	cpi	2		; is the mode PX?
+	jnz	noxor		;
+	lxi	h,MSXBASE+readc	; read the current color
+	call	FASTMSX		;
+	pop	h		; get the current pen color in h
+	xra	h		;    and xor with new color
+	push	psw		;       and return to stack
+noxor:
+	pop	psw		; restore pen color
+	lxi	h,MSXBASE+setatr; set the color 
+	call	FASTMSX		;
+	lxi	h,MSXBASE+setc	; write the pixel to specified color
+	call	FASTMSX		;
+	pop	b		; restore BC
+	ret
+
+	;---------------------------------------------------------------
+	; GLINE
+	;
+	; Parameters:	x1,x2: integer, range: 0..XDOTS-1
+	;		y1,y2: integer, range: 0..YDOTS-1
+	;		pen: 2 bytes (integer):
+	;		     LSB: pen color    MSB: pen drawing mode
+	;		     <0..MAX_PENS>    <if 2 XOR mode else draw>	
+	; Returns:	None.
+	; Description:  Colors line x1,y2 -- x2,y2 to color indicated. 
+	;		If pen is in XOR mode, color is XOR of pen color 
+	;		and current background color of x,y.
+	;---------------------------------------------------------------
+
+	IF	USEGLINE	; Use 'C' dda.rel 
+	PUBLIC	GLINE
+GLINE:
+	push	b	; save bc
+	lxi	h,4	; [bc] [ret] [x1] [y1] [x2] [y2] [pen] stacked
+	dad	sp	; HL set up to obtain parameters
+	;
+	; Plot line from point (x1,y1) to point (x2,y2) inclusive. 
+	; 	NOTE:   All points are on the visible graphics screen.
+	;
+	;	NOTE: 	File dda.rel contains a gline routine based 
+	;		solely upon gplot. This routine may not be
+	;		optimal, but can serve for a first cut 
+	;		implementation.
+	;
+	pop	b	;
+	ret		;
+	ENDIF
+
+	;---------------------------------------------------------------
+	; BG
+	;
+	; Parameters:	color: integer, range: 0..MAX_PENS
+	; Returns:	None.
+	; Description:  Sets all pixels in current background color to
+	;		new color.
+	;---------------------------------------------------------------
+
+	PUBLIC	BG
+BG: 
+	;
+	; Sets all pixels that are currently the bg color to the new
+	; bg color
+	;
+	push	b		; Save BC register (if necessary)
+	lxi	h,4		; [bc] [ret] [background] stacked
+	dad	sp		; HL set up to obtain parameters
+	mov	a,m		; get the background color to zap VDP
+	sta	BAKCLR		; save background color for MSX
+	mov	d,a		; 	and for bgclr	
+	lxi	b,6144		; blast the whole thing
+	lhld	GRPCOL		; get the address of the color plane
+bgclr:
+	mov	a,l		; set up VDP read
+	di			; disasable ints 
+	out	VDPCW		; send command
+	mov	a,h		; get the high byte of address
+	ani	03FH		; 
+	out	VDPCW		; send command
+	ei			; make interrupts happen again   
+	xthl			; waste some time . . . . 
+	xthl			;
+	in	VDPDR		; read from VDP
+	ani	0F0H		; keep the forground color intact
+	ora	d		; merge in the new bg color
+	mov	e,a		; save the color byte
+	mov	a,l		; set up VDP write
+	di			; disasable ints 
+	out	VDPCW		; send command
+	mov	a,h		; get the high byte of address
+	ani	03FH		; 
+	ori	040H		;
+	out	VDPCW		; send command
+	ei			; make interrupts happen again   
+	xthl			; waste some time . . . .
+	xthl 
+	mov	a,e		; restore color byte
+	out	VDPDW		; write back out
+	inx	h		; bump to next byte
+	dcx	b		;
+	mov	a,b		; test if done
+	ora	c		;
+	jnz	bgclr		;
+
+	pop	b		; restore b
+	ret
+
+	;---------------------------------------------------------------
+	; GWIPE
+	;
+	; Parameters:	color: integer, range: 0..MAX_PENS
+	;		bot:   integer, range: -1..YDOTS-1 
+	; Returns:	None.
+	; Description:  Clears all pixels lines 0..bot to color.
+	;		If bot = -1, do nothing.
+	;---------------------------------------------------------------
+
+	PUBLIC  GWIPE
+GWIPE:
+	;
+	; Clear screen from (0,0) to (xdots-1,bot) to the background
+	; color. Usually bot is ydots-1; but, the value may be < ydots-1
+	; if DUALSCR = 0 and in SPLITMODE.
+	;
+ 	push	b		; Save BC register (if necessary)
+	lxi	h,6		; [bc] [ret] [background] [bot] stacked
+	dad	sp		; HL set up to obtain parameters
+				; NOTE: In this version, ignore bg color 
+	mov	a,m		; get bottom of screen clear
+	inr	a		; test if nothing to clear
+	jz	gwipe1		; 
+	
+	mov	l,a		; bot is in terms of pixels
+	mvi	h,0		; Must mult by 32 to get # byte to clear
+	dad	h		;    multiply by 32
+	dad	h		;
+	dad	h		;
+	dad	h		;
+	dad	h		;
+  	mov	b,h		; we now have # of bytes to clear (max 6144)
+	mov	c,l		; copy to hl
+	xra	a		; clear to zeros
+	lhld	GRPCGP		; base of VDP pixel buffer (use global var)
+	push	h		; save temporarily
+	lxi	h,MSXBASE+filvrm; fill dat der memory
+	xthl			; restore MSX parm in hl 
+	call	FULLMSX		; use MSX call that preserves all regs!
+	pop	h		; 
+gwipe1:
+	pop	b		; restore bc
+	ret
+
+;************************************************************************
+;								       	*
+;		SECTION: Miscellaneous Routines       	       		*
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; BEEP
+	;
+	; Parameters:	None.
+	; Returns:	None.
+	; Description:  Outputs audible beep
+	;---------------------------------------------------------------
+
+	PUBLIC 	BEEP
+BEEP:
+	push	b	; save bc register (if necessary)
+        mvi     a,ctrlg
+        call    bios4
+	;
+	; Sound computer bell (Usually XCONOU(7))
+	; Do not advance cursor
+	;
+	pop	b	; restore
+	ret
+
+
+	;---------------------------------------------------------------
+	; TOPOFM
+	;
+	; Parameters:	None.
+	; Returns:	HL := highest address of TPA
+	; Description:  Defines end of memory space
+	;---------------------------------------------------------------
+
+	PUBLIC	TOPOFM
+TOPOFM:
+	lhld	6	; get address of end of TPA from Base Page 
+	ret		;   BDOS jump (note Z flag may be undefined)
+ 
+;************************************************************************
+;								        *
+;		SECTION: FILL & DOTC Support		       		*
+;		   ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; GPOINT
+	;
+	; Parameters:	x: integer, range: 0..XDOTS-1
+	;		y: integer, range: 0..YDOTS-1
+	; Returns:	HL:= Color of pixel x,y
+	;---------------------------------------------------------------
+
+	PUBLIC 	GPOINT
+GPOINT: 
+	push	b	; Save BC register (if necessary)
+	lxi	h,4	; [bc] [ret] [x] [y] stacked
+	dad	sp	; HL set up to obtain parameters
+	;
+	; Returns color of pixel x,y.
+	; x,y guaranteed on the visible screen.
+	;
+ 	pop	b	; restore BC
+	ret
+
+
+;************************************************************************
+;								        *
+;		SECTION: Printer Interface		       		*
+;		  ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; PRTREA
+	;
+	; Parameters:	None
+	; Returns:	printer status in HL: zero    -> printer busy
+	;			    	      nonzero -> printer ready
+	;---------------------------------------------------------------
+
+	PUBLIC	PRTREA
+PRTREA:
+	push	b	; Must save BC register
+;	lxi	h,15	; Usually bios(15) call
+;	push	h	; set up call parameter
+;	call	bios	; Get printer status (status in HL)  
+;	pop	d	; Discard parameter
+	pop	b	; restore BC
+	ret
+
+	;---------------------------------------------------------------
+	; PRTCHA
+	;
+	; Parameters:	ch: char, range: 0..255
+	; Returns:	None.
+	; Description:  Output character to printer
+	;---------------------------------------------------------------
+
+	IF	FALSE
+	PUBLIC	PRTCHA
+PRTCHA:
+	push	b	; Must save BC register
+	lxi	h,4	; index char in stack [BC] [ret] [ch]
+	dad	sp	; get character in de
+	mov	e,m	; .
+	inx	h	;   .
+	mov	d,m	;     .
+;	push	d	; push character
+;	lxi	h,5	; Usually, a bios(5,ch) call is performed
+;	push	h	; push bios vector number
+;	call	bios	; send character to printer
+;	pop	d	; remove parameters
+;	pop	d	; .
+	pop	b	; restore bc
+	ret
+	ENDIF
+
+;************************************************************************
+;								        *
+;		SECTION: Joystick Interface		       		*
+;		  ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; JOYIN
+	;
+	; Parameters:	joy#: integer, range: 0..MAX_PADDLES
+	; Returns:	integer indicating paddle position
+	;		NOTE: value system dependent (see guide)
+	;---------------------------------------------------------------
+
+	PUBLIC	JOYIN
+JOYIN:
+	push	b	; save BC (if necessary)
+	lxi	h,4	; index char in stack [BC] [ret] [n]
+	dad	sp	; pointer to n (which joystick to access)
+	;
+	; Return in HL the input from joystick n -- Return values are 
+	; defined in customization guide.
+	;
+	pop	b	; restore BC
+	ret
+
+
+	;---------------------------------------------------------------
+	; BUTTON	
+	;
+	; Parameters:	joy#: integer, range: 0..MAX_PADDLES
+	; Returns:	HL: -> 0,       if joystick button not pushed
+	;		    -> nonzero, if joystick button pushed
+	;---------------------------------------------------------------
+
+	PUBLIC	BUTTON
+BUTTON:
+	push	b	; save BC (if necessary)
+	lxi	h,4	; index char in stack [BC] [ret] [n]
+	dad	sp	; pointer to n (which joystick to access)
+	;
+	; Return TRUE if button on joystick n has been pressed, else
+	; return FALSE. (Note: HL := 1 for true and HL := 0 for FALSE)
+	;
+	pop	b	; restore BC
+	ret
+
+;************************************************************************
+;								        *
+;		SECTION: Palette Interface	       			*
+;		  ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; SETPL	
+	;
+	; Parameters:	pal#: integer, range 0..MAX_PENS
+	;		r,g,b: integers, range 0..MAX_COLOR 
+	; Returns:	None.
+	; Description:	Sets palette to red, green, blue levels provided.
+	;---------------------------------------------------------------
+
+	PUBLIC	SETPL
+SETPL:
+	push	b	; Save BC (if necessary)
+	lxi	h,4	; stack [BC] [ret] [n] [r] [g] [b]
+	dad	sp	; pointer to n and rgb values
+	;
+	; Palette number 'n' is set to the RGB value r,g,b.
+	; The number of palettes and the rgb ranges are defined in 
+	; in the customization module. (see implementation guide)
+	;
+	pop	b	; restore bc
+	ret
+
+	;---------------------------------------------------------------
+	; PAL	
+	;
+	; Parameters:	pal#: integer, range 0..MAX_PENS
+	; Returns:	HL := POINTER to array of three integers (r,g,b)
+	; Description:	Return palettes' RGB numbers
+	;---------------------------------------------------------------
+
+	PUBLIC	PAL
+PAL:
+	push	b	; Save BC (if necessary)
+	lxi	h,4	; stack [BC] [ret] [n] 
+	dad	sp	; pointer to n and rgb values
+	;
+	; Return vector of the RGB values for palette 'n'.
+	; HL points to a vector of three integers, r being first and
+	; b being last. Usually, palette 0 is the background color.  
+	; The number of palettes and the rgb ranges are defined in 
+	; in the customization module. (see implementation guide)
+	;
+	pop	b	; restore bc
+	ret
+
+
+;************************************************************************
+;								        *
+;		SECTION: Tones (sound) Interface	       		*
+;		     ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; TONES	
+	;
+	; Parameters:	freq: level  of sound; integer, range 0..MAX_TONE
+	;               duration: how long sound lasts; positive integer 
+	; Returns:	None.
+	;---------------------------------------------------------------
+
+	PUBLIC	TONES
+TONES:
+	push	b	; save BC (if necessary)
+	lxi	h,4	; stack [BC] [ret] [index] [duration]
+	dad	sp	; pointer to index
+	;
+	; Make the sound generator produce a sound of index value 
+	; (note: index is usually the frequency in HZ) of duration
+	; length (duration is always specified in units of 1/60 sec.)
+	; Also note that an index of 0 produces silence (for wait).
+	;
+	pop	b	; restore BC
+	ret
+
+;************************************************************************
+;								        *
+;		SECTION: Picture File Interface	       			*
+;		     ***** <OPTIONAL> *****			        *
+;								       	*
+;************************************************************************
+
+	;---------------------------------------------------------------
+	; GETGRF	
+	;
+	; Parameters:	buffaddr: address of 128 byte buffer; 16-bit addr
+	;               secnum:   current sector # being read; integer 
+	;			  RANGE: 0..MAX_SECTOR		
+	; Returns:	boolean;  0 if done, 1 if data loaded into buffer 
+	;---------------------------------------------------------------
+
+	PUBLIC	GETGRF
+GETGRF:
+	push	b	; save BC (if necessary)
+	lxi	h,4	; stack [BC] [ret] [buffaddr] [secnum]
+	dad	sp	; pointer to buffaddr
+	;
+	; Loads the next "chunk" (128 bytes) of graphics memory to store 
+	; on disk. Buffaddr is the address to store the grahics data.
+	; The first chunk is denoted as secnum 0. GETGRF returns
+	; a non-zero value in HL if something was placed in the buffer.
+	; A zero (FALSE) value is returned when all data for the graphics
+	; memory is transferred. Note that a "header" sector can be put 
+	; into the buffer for additional security. 
+	;
+	pop	b	; restore BC
+	ret
+
+	;---------------------------------------------------------------
+	; PUTGRF	
+	;
+	; Parameters:	buffaddr: address of 128 byte buffer; 16-bit addr
+	;               secnum:   current sector # of file to write to
+	;			          graphics area; integer 
+	;			  RANGE:  0..MAX_SECTOR		
+	; Returns:	boolean;  0 if done or error, 1 operation OK
+	;---------------------------------------------------------------
+
+	PUBLIC	PUTGRF
+PUTGRF:
+	push	b	; save BC (if necessary)
+	lxi	h,4	; stack [BC] [ret] [buffaddr] [secnum]
+	dad	sp	; pointer to buffaddr
+	;
+	; Loads the next "chunk" (128 bytes) of a picture file (pointed at 
+	; by buffaddr) into the graphics screen/memory (1st chunk is # 0). 
+	; A  zero (FALSE) value is returned if enough data has been
+	; received or an error has been detected (e.g. a header is saved
+	; in the picture file).  It is up to the OEM to determine the
+	; contents of the picture file. The number of sectors in the file
+	; is determined by the number saved in the PUTGRF operation.
+	;
+	pop	b	; restore BC
+	ret
+
+;***********************************************************************
+
+	;---------------------------------------------------------------
+	;
+	;	Control Key Table
+	;
+	;	Purpose: Allows customization of the control keys used
+	;		 by Logo for editing, switching screens, and
+	;		 breaking interpreter. Note that the standard
+	;		 Logo definition uses the low 28 control 
+	;		 functions of the ASCII standard. Non-printing
+	;		 characters can be made illegal by including 
+	;		 their values at the end of the table (after
+	;		 the standard definitions). 
+	;	Structure:
+	;		 Each control character position is placed with 
+	;		 the corresponding function. (e.g. the character
+	;		 to end the Logo screen editor must be the 3rd
+	;		 entry in the table. The table is terminated by
+	;		 a zero entry.
+	;		  
+	;----------------------------------------------------------------
+
+	COMMON	/CTLCH/
+
+	db	1 	; -1 beginning of line			
+	db	2  	; -2 back one space (non-destructive)	
+	db	3  	; -3 end Logo screen editor		
+	db	4  	; -4 erase char at cursor		
+	db	5  	; -5 to end of current line		
+	db	6  	; -6 forward one space			
+	db	7  	; -7 immediate throw to top level	
+	db	8	; -8 back one character (destructive)	
+	db	9  	; -9 tab '\t' 				
+	db	10 	; -10 line feed			
+	db	11 	; -11 erase from cursor to end of line	
+	db	12 	; -12 current line to center		
+	db	13 	; -13 carriage return			
+	db	14  	; -14 down one text line
+	db	15  	; -15 open a new text line		
+	db	16    	; -16 up one text line			
+	db	17  	; -17 insert "\" character		
+	db	18  	; -18 top of edit buffer 		
+	db	19  	; -19 split screen mode		
+	db	20  	; -20 text mode			
+	db	21  	; -21 up one text page			
+	db	22  	; -22 down one page of text		
+	db	23  	; -23 wait (until another key pressed)	
+	db	24   	; -24 bottom of edit buffer 		
+	db	25  	; -25 recall last line (kill buffer)	
+	db	26 	; -26 pause function			
+	db	127 	; -27 alternate destructive backspace	
+	db 	0	; >>> end of character table <<<	
+
+	;--------------------------------------------------------------
+	;					         t2		
+	;	DRAW_TURTLE:			         ^		Š	;					        / \		
+	;    	The  Logo "turtle draw" routine	       /   \		
+	;	uses 4 lines defined by the           /  .  \		
+	;	vertices t0..t3. The turtle is	     / ' p ` \ 		
+	;	drawn in XOR mode to permit	   t3         t1	
+	;	simple erasing. Note that the				
+	;	offset table below uses the            TURTLE		
+	;       default (most common) aspect ratio. (p = turtle pos)
+	;
+	;		
+	;--------------------------------------------------------------
+
+	COMMON	/TURTBL/
+
+	; aspect ratio 19/24, xdots = 320  ydots = 200
+	
+	;	t1_x	t1_y	t2_x	t2_y	t3_x	t3_y	degrees
+	;	----	----	----	----	----	----	-------
+	db	   5,	   3,	   0,	  -8,     -5,	   3	;    0
+	db	   5,	   3,	   1,	  -8,     -5,	   3	;    6	
+	db	   4,	   4,	   2,	  -8,     -6,	   2	;   12
+	db	   4,	   4,	   3,	  -8,     -6,	   2	;   18
+	db	   3,	   4,	   4,	  -7,     -6,	   1	;   24
+	db	   2,	   5,	   5,	  -7,     -6,	   1	;   30
+	db	   2,	   5,	   6,	  -6,     -6,	   0	;   36
+	db	   1,	   5,	   7,	  -6,     -6,	   0	;   42
+	db	   1,	   5,	   8,	  -5,     -6,	  -1	;   48
+	db	   0,	   5,	   8,	  -5,     -6,	  -1	;   54
+	db	  -1,	   5,	   9,	  -4,     -6,	  -2	;   60
+	db	  -1,	   5,	   9,	  -3,     -6,	  -2	;   66
+	db	  -2,	   5,	  10,	  -2,     -5,	  -3	;   72
+	db	  -3,	   5,	  10,	  -2,     -4,	  -3	;   78
+	db	  -3,	   4,	  10,	  -1,     -4,	  -4	;   84	
+	db	  -4,	   4,	  10,	   0,     -4,	  -4	;   90
+
+
+	;---------------------------------------------------------------
+	;
+	;	Logo Parameter Definitions
+	;	
+	;	Purpose: Defines implementation dependent values such as
+	;		 screen size, number of pen colors, defaults, 
+	;		 and hardware options.
+	;
+	;	Structure:
+	;
+	;	PARAMS:	 DW	xx	; parameter 1
+	;		 DW	yy	; parameter 2
+	;
+	;	Each parameter is a 16-bit word value 	
+	;
+	;----------------------------------------------------------------
+
+	COMMON	/PARAMS/
+Š	dw	24	; SCRROWS   -- # of text rows			
+	dw	38      ; SCRCOLS   -- # of text columns		
+	dw	24	; GRAFROWS  -- # of graphic text rows 		
+	dw	29	; GRAFCOLS  -- # of graph text columns		
+	dw	21	; SCRSPLT   -- Default SS row: 0<#<=GRAFCOLS	
+	dw	15	; INIT_PEN  -- Default pen color: 0<=#<=MAXPEN	
+	dw	 4	; INIT_BG   -- Default backgound color		
+	dw	 4	; TABSIZE   -- Tab stop number 		
+	dw	15	; MAX_PENS  -- Max # of palette/pen indexes	
+	dw	00	; MAX_COLOR -- highest color index value	
+	dw   10000	; MAX_TONE  -- highest tone index		
+	dw	-1	; MAX_PADDLE-- number of paddles - 1		
+	dw     240	; XDOTS     -- pixels in x coordinate		
+	dw     192	; YDOTS     -- pixels in y coordinate
+	dw	 8      ; FNSIZE    -- # characters in file name	
+	dw     	 2	; MAX_ASPECT-- 1/# <= aspect_ratio <= #	
+	dw	 0	; TWOSCR    -- Separate text/graphic screen	
+			;		1 = yes  0 = no			
+	dw	15	; MAX_BG    -- maximum background color index  
+	dw	24	; MAX_SPLIT -- maximum number of split lines	
+			;	        1 <= # <= GRAFROWS		
+	dw	10	; XRATIO    -- x/y aspect ratio (of a PIXEL)
+	dw	 8	; YRATIO    --     y of above 		 	
+
+	;---------------------------------------------------------------
+	;
+	;	Text Message Table	
+	;	------------------
+	;
+	;	Purpose: Allows customization of Logo messages to fit
+	;		 specific implementations.
+	;
+	;	Structure:
+	;
+	;	LTEXT:	mess1 ; address of string1
+	;		mess2 ; address of string2
+	;		 .
+	;		messn ; address of stringn
+	;	
+	;	string1: 0 or more charactered terminated by a zero byte
+	;	
+	;----------------------------------------------------------------
+
+	COMMON	/LTEXT/	
+
+	dw	mess1
+	dw	mess2
+	dw	mess3
+
+	DSEG
+	; SIGNON  -- Custom signon message: 1 <= length < SCRCOLS	
+mess1:	db	'CP/M MSX Dr. Logo, Version: **BETA**',0
+
+	; EDITMSG -- Edit file message:     1 <= length < SCRCOLS 
+mess2:	db	'Logï Editorº ^C to accept¬ ^G to quit',0Š
+	; BAR_CH  -- Line character
+mess3:	db	'_'
+
+	END
+
+

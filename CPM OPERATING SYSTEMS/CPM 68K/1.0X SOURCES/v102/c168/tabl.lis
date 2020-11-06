@@ -1,0 +1,121 @@
+1File: TABL.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #define	ASGOP	OPRAS|OPASSIGN|OPLVAL|OPBIN
+    10    
+    11   	/*info on operators:*/
+    12   	/*000077-- OPPRI - priority*/
+    13   	/*000100-- OPBIN - binary operator*/
+    14   	/*000200-- OPLVAL - left operand must be lvalue*/
+    15   	/*000400-- OPREL - relational operator*/
+    16   	/*001000-- OPASSIGN - assignment operator*/
+    17   	/*002000-- OPLWORD - int required on left*/
+    18   	/*004000-- OPRWORD - int required on right*/
+    19   	/*010000-- OPCOM commutative*/
+    20   	/*020000-- OPRAS - right associative*/
+    21   	/*040000-- OPTERM - termination node*/
+    22   	/*100000 - OPCONVS - conversion operator*/
+    23   int opinfo[] {
+    24   	TRMPRI,								/*EOF*/
+    25   	ADDPRI|OPCOM|OPBIN,					/*ADD - expr + expr*/
+    26   	ADDPRI|OPBIN,						/*SUB - expr - expr*/
+    27   	MULPRI|OPCOM|OPBIN,					/*MULT - expr * expr*/
+    28   	MULPRI|OPBIN,						/*DIV - expr / expr*/
+    29   	MULPRI|OPBIN,						/*MOD - expr % expr*/
+    30   	SHFPRI|OPLWORD|OPRWORD|OPBIN,		/*RSH - expr >> expr*/
+    31   	SHFPRI|OPLWORD|OPRWORD|OPBIN,		/*LSH - expr << expr*/
+    32   	ANDPRI|OPCOM|OPLWORD|OPRWORD|OPBIN,	/*AND - expr & expr*/
+    33   	ORPRI|OPCOM|OPLWORD|OPRWORD|OPBIN,	/*OR - expr | expr*/
+    34   	ORPRI|OPCOM|OPLWORD|OPRWORD|OPBIN,	/*XOR - expr ^ expr*/
+    35   	UNOPRI|OPRAS|OPLWORD,				/*NOT - ! expr*/
+    36   	UNOPRI|OPRAS,						/*UMINUS - - expr*/
+    37   	UNOPRI|OPRAS|OPLWORD,				/*COMPL - ~ expr*/
+    38   	UNOPRI|OPRAS|OPLVAL|OPBIN,			/*PREDEC - --lvalue*/
+    39   	UNOPRI|OPRAS|OPLVAL|OPBIN,			/*PREINC - ++lvalue*/
+    40   	UNOPRI|OPRAS|OPLVAL|OPBIN,			/*POSTDEC - lvalue--*/
+    41   	UNOPRI|OPRAS|OPLVAL|OPBIN,			/*POSTINC - lvalue++*/
+    42   	ASGPRI|ASGOP,						/*ASSIGN - lvalue = expr*/
+    43   	ASGPRI|ASGOP,						/*EQADD - lvalue += expr*/
+    44   	ASGPRI|ASGOP,						/*EQSUB - lvalue -= expr*/
+    45   	ASGPRI|ASGOP,						/*EQMULT - lvalue *= expr*/
+    46   	ASGPRI|ASGOP,						/*EQDIV - lvalue /= expr*/
+    47   	ASGPRI|ASGOP,						/*EQMOD - lvalue %= expr*/
+    48   	ASGPRI|ASGOP|OPLWORD|OPRWORD,		/*EQRSH - lvalue >>= expr*/
+    49   	ASGPRI|ASGOP|OPLWORD|OPRWORD,		/*EQLSH - lvalue <<= expr*/
+    50   	ASGPRI|ASGOP|OPLWORD|OPRWORD,		/*EQAND - lvalue &= expr*/
+    51   	ASGPRI|ASGOP|OPLWORD|OPRWORD,		/*EQOR - lvalue |= expr*/
+    52   	ASGPRI|ASGOP|OPLWORD|OPRWORD,		/*EQXOR - lvalue ^= expr*/
+    53   	TRMPRI,								/*FJSR - generate function jsr*/
+    54   	EQLPRI|OPREL|OPBIN,					/*EQUALS - expr == expr*/
+    55   	EQLPRI|OPREL|OPBIN,					/*NEQUALS - expr != expr*/
+    56   	RELPRI|OPREL|OPBIN,					/*GREAT - expr > expr*/
+    57   	RELPRI|OPREL|OPBIN,					/*GREATEQ - expr >= expr*/
+    58   	RELPRI|OPREL|OPBIN,					/*LESS - expr < expr*/
+    59   	RELPRI|OPREL|OPBIN,					/*LESSEQ - expr <= expr*/
+1File: TABL.C                                                              Page       2
+    60   	TRMPRI|OPCONVS,						/*INT2L*/
+    61   	TRMPRI|OPCONVS,						/*LONG2I*/
+    62   	TRMPRI|OPBIN,						/*BTST*/
+    63   	TRMPRI,								/*LOAD*/
+    64   	TRMPRI|OPBIN,						/*LMULT*/
+    65   	TRMPRI|OPBIN,						/*LDIV*/
+    66   	TRMPRI|OPBIN,						/*LMOD*/
+    67   	TRMPRI|OPBIN,						/*LEQMULT*/
+    68   	TRMPRI|OPBIN,						/*LEQDIV*/
+    69   	TRMPRI|OPBIN,						/*LEQMOD*/
+    70   	TRMPRI|ASGOP,						/*EQADDR*/
+    71   	TRMPRI,								/*EQNOT*/
+    72   	TRMPRI,								/*EQNEG*/
+    73   	TRMPRI|OPBIN,						/*DOCAST*/
+    74   	ASGPRI|ASGOP,						/*STASSIGN [vlh]*/
+    75   	TRMPRI|OPCONVS,						/*LONG2F [vlh] 3.4*/
+    76   	TRMPRI|OPCONVS,						/*FLOAT2L [vlh] 3.4*/
+    77   	TRMPRI|OPCONVS,						/*INT2F [vlh] 3.4*/
+    78   	TRMPRI|OPCONVS,						/*FLOAT2I [vlh] 3.4*/
+    79   	UNOPRI|OPRAS,						/*TOCHAR [vlh] 4.0*/
+    80   	TRMPRI,								/*unused - 56*/
+    81   	TRMPRI,								/*unused - 57*/
+    82   	TRMPRI,								/*unused - 58*/
+    83   	TRMPRI,								/*unused - 59*/
+    84   	UNOPRI|OPRAS|OPLVAL,				/*ADDR - & expr*/
+    85   	UNOPRI|OPRAS|OPLWORD,				/*INDR - * expr*/
+    86   	LNDPRI|OPBIN,						/*LAND - expr && expr*/
+    87   	LORPRI|OPBIN,						/*LOR - expr || expr*/
+    88   	QMKPRI|OPRAS|OPBIN,					/*QMARK - expr ? expr : expr*/
+    89   	QMKPRI|OPRAS|OPBIN,					/*COLON*/
+    90   	COMPRI|OPBIN,						/*COMMA*/
+    91   	TRMPRI|OPTERM,						/*CINT*/
+    92   	TRMPRI|OPTERM,						/*CLONG*/
+    93   	TRMPRI|OPTERM,						/*SYMBOL*/
+    94   	TRMPRI|OPTERM,						/*AUTOINC*/
+    95   	TRMPRI|OPTERM,						/*AUTODEC*/
+    96   	LPNPRI|OPBIN,						/*CALL - call with arguments*/
+    97   	LPNPRI,								/*NACALL - no argument call*/
+    98   	TRMPRI,								/*BFIELD - field selection*/
+    99   	TRMPRI,								/*CONDBR*/
+   100   	TRMPRI,								/*INIT*/
+   101   	TRMPRI,								/*LOADREG*/
+   102   	TRMPRI|OPTERM,						/*DCLONG - divide const long*/
+   103   	TRMPRI|OPTERM,						/*CFLOAT [vlh] 3.4*/
+   104   	UNOPRI|OPRAS|OPASSIGN|OPBIN,		/*CAST*/
+   105   	TRMPRI,								/*SEMI*/
+   106   	TRMPRI,								/*LCURBR - {*/
+   107   	TRMPRI,								/*RCURBR - }*/
+   108   	LPNPRI,								/*LBRACK - [*/
+   109   	RPNPRI,								/*RBRACK - ]*/
+   110   	LPNPRI,								/*LPAREN - )*/
+   111   	RPNPRI,								/*RPAREN - )*/
+   112   	TRMPRI|OPTERM,						/*STRING*/
+   113   	TRMPRI,								/*RESWORD*/
+   114   	LPNPRI|OPBIN,						/*APTR - expr -> symbol*/
+   115   	LPNPRI|OPBIN,						/*PERIOD - expr . symbol*/
+   116   	UNOPRI|OPRAS,						/*SIZEOF - sizeof expr*/
+   117   	LPNPRI|OPBIN,						/*MPARENS - matching parens ()*/
+   118   };
+1File: TABL.C                                                              Page       3

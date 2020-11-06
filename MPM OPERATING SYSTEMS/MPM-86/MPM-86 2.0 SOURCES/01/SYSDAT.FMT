@@ -1,0 +1,190 @@
+
+;*****************************************************
+;*
+;*	System Data Area
+;*
+;*****************************************************
+
+	DSEG
+	org	0
+
+	;
+	;This data is initialized by GENSYS
+	;
+
+	;Module Table - contains the FAR CALL addresses
+	;	of each module for their initialization
+	;	and entry routines.
+	;
+	;	+---+---+---+---+---+---+---+---+
+	;	|     entry     |   initialize  |
+	;	+---+---+---+---+---+---+---+---+
+	;
+	;	      entry    init
+	;	      -----    ----
+
+module_table	equ	dword ptr (offset $)
+supmod		equ 	(offset $)
+		rw	4
+rtmmod		equ 	(offset $)
+		rw	4
+memmod		equ 	(offset $)
+		rw	4
+ciomod		equ 	(offset $)
+		rw	4
+bdosmod		equ 	(offset $)
+		rw	4
+xiosmod		equ 	(offset $)
+		rw	4
+netmod		equ 	(offset $)
+		rw	4
+dispatcher	equ	(offset $)
+		rw	2
+rtm_pdisp	equ	(offset $)
+		rw	2
+
+	; location in memory of MP/M-86
+
+mpmseg		rw	1	;1st parag. of MP/M
+rspseg		rw	1	;segment of first RSP
+endseg		rw	1	;1st parag. outside of MP/M
+
+module_map	rb	1	;bit map of modules that exist
+				; in this system.  low order bit
+				; corresponds to 1st module in
+				; module table.  If bit is on,then
+				; module exists.
+
+	; some answers to GENSYS questions
+
+ncns		rb	1	;# system console devices
+nlst		rb	1	;# system list devices
+nccb		rb	1	;# character control blocks
+nflags		rb	1	;# flags
+srchdisk	rb	1	;default search disk
+mmp		rw	1	;Max Memory per process
+nslaves		rb	1	;Number of Network requestors
+dayfile		rb	1	;if 0ffh, display command info
+tempdisk	rb	1	;Temporary Disk
+tickspersec	rb	1	;number of ticks per second
+
+	; data lists created by GENSYS
+
+free_root	rw	1	;locked unused list
+ccb		rw	1	;addr. Console Ctrl Blk Table
+flags		rw	1	;addr. Flag Table
+mdul		rw	1	;Mem descr. Unused List
+mfl		rw	1	;Memory Free List
+pul		rw	1	;Proc. descr. Unused List
+qul		rw	1	;QCB Unused List
+qmau		rw	4	;MAU for queue buffer
+
+	;
+	;This data is initialized at Assembly time
+	;
+
+rlr		rw	1	;Ready List Root
+dlr		rw	1	;Delay List Root
+drl		rw	1	;Dispatcher Ready List
+plr		rw	1	;Poll List Root
+slr		rw	1	;Swap List Root
+thrdrt		rw	1	;Process Thread Root
+qlr		rw	1	;Queue List Root
+mal		rw	1	;Memory Alloc List
+version		rw	1	;addr. version str in SUP code segment
+vernum		rw	1	;MPM-86 w/BDOS v3.0
+mpmvernum	rw	1	;MPM-86 Version 1.0
+tod		rb	5	;Time of Day Structure
+ncondev		rb	1	;# XIOS consoles
+nlstdev		rb	1	;# XIOS list devices
+nciodev		rb	1	;# character i/o devices
+				; supported by XIOS.
+;syslrec
+		rw	1	;Total Locked records
+;syslfil
+		rw	1	;Total Open files
+lock_max	rb	1	;Max locked recs/process
+		rb	1
+open_max	rb	1	;Max Open files/process
+		rb	1
+;sysltot
+		rw	1	;Total Locked List records
+		rw	8	;Reserved
+sysent		rb	256*3
+
+	; System MX queues (preinitialized)
+mxloadqd	rb	28
+mxloadqpb	rb	16
+mxcliqd		rb	28
+mxcliqpb	rb	16
+mxmemqd		rb	28
+mxmemqpb	rb	16
+
+	; Data Used by Load Program
+
+load_dma	rb	dskrecl
+load_uda	rw	1
+load_lstk	rw	1
+load_basep	rw	1
+load_8080	rb	1
+load_nrelsegs	rb	1
+load_nldtabents	rw	1
+load_pd		rw	1
+load_fcb	rw	1
+load_maxwanted	rw	1
+load_minwanted	rw	1
+load_indma	rw	1
+ldtab		rb	ldtabsiz
+		
+	;
+	; Data Used by Send Cli Command
+	;
+
+cli_dma		rb	dskrecl		;dma buffer
+
+cli_net		rb	1		;net
+cli_ppd		rw	1		;parent PD
+cli_cmdtail	rb	130		;command sent
+cli_fcb		rb	fcblen+1	;internal FCB
+cli_cuspqpb	rb	16
+cli_acb		rb	12
+cli_pcb		rw	2
+cli_pd		rw	1	;pd of load prog
+cli_err		rw	1	;error return
+cli_bpage	rw	1
+cli_lddsk	rb	1	;load disk
+cli_cns		rb	1	;pd.p_cns save
+cli_user	rb	1	;pd.p_dsk save
+cli_dsk		rb	1	;pd.p_user save
+cli_err_mode	rb	1	;u_error_mode save
+
+	;
+	;System Initialization Variables
+	;
+
+		;User Data Area of Init process
+
+	org	((offset $)+0fh) AND 0fff0h
+inituda		rb	ulen
+	org	((offset $)+0fh) AND 0fff0h
+idleuda		rb	ulen
+	org	((offset $)+0fh) AND 0fff0h
+tickuda		rb	ulen
+initpd		rb	pdlen
+idlepd		rb	pdlen
+tickpd		rb	pdlen
+		rw	21
+idle_tos	rw	3
+		rw	21
+tick_tos	rw	3
+		rw	39
+init_tos	rw	0
+indisp	   	rb	1	;?currently in dispatch?
+intflag		rb	1	;if 0, interrupts not enabled
+		rw	18
+dsptchtos	rw	0
+es_sav		rw	1
+bx_sav		rw	1
+mxmemowner	rw	1
+mxmemcount	rb	1
+

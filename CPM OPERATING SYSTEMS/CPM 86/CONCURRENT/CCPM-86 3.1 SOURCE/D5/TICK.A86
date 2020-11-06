@@ -1,0 +1,108 @@
+
+title	'Tick Module'
+
+	dseg
+
+extrn	dsr_check:byte
+
+	cseg
+
+nolist
+include system.lib
+list
+
+public	tick_int			
+
+extrn	int_latency:near		; public in ctc.a86
+extrn	reset_tick_ctc:near		; public in pic.a86
+extrn	reset_tick_pic:near		; public in ctc.a86
+
+extrn	sysdat:word			; public in headentr.a86
+extrn	supif:near			
+extrn	dispatch:dword			; public in headentr.a86
+
+extrn	dsr_start:near
+
+;========
+tick_int:	; tick interrupt entry
+;========
+; The responsibilities of this handler are:
+;	1] reset the tick hardware - the CTC and the PIC
+;	2] set the tick flag on every tick
+;	3] set the second flag once a second
+;	4] do a dispatch
+;
+;	ENTRY:	from the tick interrupt
+;
+;	EXIT:	system dispatch
+
+	push ds				; setup the system's data segment
+	mov ds, sysdat
+
+	mov tick_ssreg, ss		; establish a stack for the tick
+	mov tick_spreg, sp		; interrupt service routine
+	mov ss, sysdat
+	mov sp, offset tick_tos
+
+	push ax				; save the entire CPU context, 
+	push bx				; for the flag set calls
+	push cx
+	push dx
+	push di
+	push si
+	push bp
+	push es
+
+	call int_latency		; measure how long it took to service
+					; this interrupt 
+	call reset_tick_ctc		; reset the CTC for the next tick
+	call reset_tick_pic		; reset the PIC for the next tick
+
+	mov dx, FLAG_TICK		; the tick flag is used when a 
+	mov cl, F_FLAGSET		; process is on the delay list.
+	call supif
+
+	dec tick_count			; every second we have to set the
+	  jnz sec_done			; second flag
+	mov tick_count, 60
+	mov dx, FLAG_SEC
+	mov cl, F_FLAGSET
+	  call supif
+sec_done:
+	                                ; this is specific to the compupro
+	cmp dsr_check, TRUE ! jne dsr_done
+	                                ; we must need to check the dsr
+	  call dsr_start                ; status of the USARTS on the interfacer 3
+dsr_done:
+	pop es				; restore the CPU environment to
+	pop bp				; what it was before the interrupt
+	pop si
+	pop di
+	pop dx
+	pop cx
+	pop bx
+	pop ax
+
+	mov ss, tick_ssreg		; restore the pre-interrupt stack
+	mov sp, tick_spreg
+
+	pop ds				; restore the pre-interrupt data seg
+
+	jmpf cs:dword ptr dispatch	; iret through the dispatcher.
+
+
+	dseg
+
+tick_bos	rw	20H		; label the bottom of the stack
+					; for debugging
+tick_tos:
+tick_ssreg	dw	0		; pre-interrupt SS stored here
+tick_spreg	dw	0		; pre-interrupt SP stored here
+
+tick_count	db	60		; this tick count is used to 
+					; generate the second flag set call.
+					; It is initialized to the number of 
+					; ticks per second.
+	end
+
+

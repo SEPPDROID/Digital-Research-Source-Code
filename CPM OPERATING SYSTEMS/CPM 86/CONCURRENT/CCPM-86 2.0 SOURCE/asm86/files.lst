@@ -1,0 +1,982 @@
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE FILE
+OBJECT MODULE PLACED IN FILES.OBJ
+COMPILER INVOKED BY:  :F0: FILES.PLM DEBUG OPTIMIZE(2) DATE(10/5/81) PAGEWIDTH(100) XREF
+
+
+
+              $title('FILE AND I/O MODULE')
+   1          file:
+              do;
+
+              /*
+
+                modified  3/26/81  R. Silberstein
+                modified  3/28/81  R. Silberstein
+                modified  3/30/81  R. Silberstein
+                modified  4/7/81   R. Silberstein
+                modified  4/16/81  R. Silberstein
+                modified  6/16/81  R. Silberstein
+                modified  9/14/81  R. Silberstein
+
+               */
+
+              /*
+                      This is the modules to perform BYTE i/o to      
+                      the following 5 logical devices:                        
+
+                              source   - file
+                              include  - file
+                              hex      - file
+                              symbol   - file
+                              print    - file
+
+                      Each of the logical files may be assigned to the
+                      following physical devices :
+
+                              null     (not legal for source and include file)
+                              console
+                              printer  (not legal for source and include file)
+                              disk
+
+                      The module defines the following set
+                      of public subroutines:
+
+                              INSOURCEBYTE         - read 1 byte from source file
+                              ININCLUDEBYTE        - read 1 byte from include file
+                              OUTHEXBYTE (ch)      - write 1 byte to hex file
+                              OUTSYMBOLBYTE (ch)   - write 1 byte to symbol file
+                              OUTPRINTBYTE (ch)    - write 1 byte to print file
+
+                              OPENSOURCE           - open source file
+                              OPENINCLUDE          - open include file
+                              OPENHEX              - open hex file
+                              OPENSYMBOL           - open symbol file
+                              OPENPRINT            - open print file
+                              REWINDSOURCE         - rewind source file
+
+                              CLOSESOURCE          - close source file
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   2
+
+
+                              CLOSEINCLUDE         - close include file
+                              CLOSEHEX             - close hex file
+                              CLOSESYMBOL          - close symbol file
+                              CLOSEPRINT           - close print file
+
+                      In addition, 2 subroutines to set up the correct
+                      file names and routing to correct physical device
+                      are included. These are:
+
+                              FILESETUP
+                              I$FILESETUP
+
+                      The "filesetup" routine sets up the source, hex, symbol
+                      and print files by scanning the user command tail of the
+                      program activating line. The format of the command line
+                      is described in the program format section of the user's
+                      manual. The routine also initiates the global string array
+                      "SOURCENAME" with the source file name, this array to be
+                      used later by the printout module.
+
+                      The "ifilesetup" sets up the format of the include file
+                      given by the INCLUDE command of the assembler.
+
+              */
+
+              $include (:f1:macro.lit)
+          =   $nolist
+              $include (:f1:struc.lit)
+          =   $nolist
+              $include (:f1:dev.lit)
+          =   $nolist
+              $include (:f1:io.ext)
+          =   $nolist
+              $include (:f1:subr1.ext)
+          =   $nolist
+              $include (:f1:subr2.ext)
+          =   $nolist
+              $INCLUDE (:F1:TEXT.EXT)
+          =   $nolist
+              $include (:f1:global.ext)
+          =   $nolist
+
+ 109   1      dcl
+              diskunit                byte,
+
+              nulltype        lit     '0',    /* subroutine "devicetype" */
+              consoletype     lit     '1',
+              printertype     lit     '2',
+              disktype        lit     '3',
+
+              dr              lit     '0',    /* drive code in fcb block */
+              fn              lit     '1',    /* filename in fcb block */
+              ft              lit     '9',    /* filetype in fcb block */
+              ex              lit     '12',   /* file extension number */
+              s2              lit     '14',
+              nr              lit     '32',   /* file record number */
+              dollar          lit     '''$''',
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   3
+
+
+
+              asmdefault(3)   byte data ('A86'),   /* different file types */
+              hexdefault(3)   byte data ('H86'),
+              lstdefault(3)   byte data ('LST'),
+              symdefault(3)   byte data ('SYM'),
+
+              sourcefile      file$i$structure,
+              includefile     file$i$structure,
+              hexfile         file$o$structure,
+              printfile       file$o$structure,
+              symbolfile      file$o$structure;
+
+ 110   1      clearfcb: proc(fcbpt,defaultpt);
+ 111   2        dcl
+                (fcbpt,defaultpt) addr,
+                dest based  fcbpt (1) byte;
+ 112   2        CALL FILL (0, 33, FCBPT);
+ 113   2        CALL FILL (' ', 8, FCBPT+FN);
+ 114   2        call copy(3,defaultpt,.dest(ft));
+ 115   2      end clearfcb;
+
+ 116   1      clearcontrol: procedure(point,defaultptr);
+ 117   2        dcl (point,defaultptr) addr,
+                    x based point file$o$structure;
+ 118   2        call clearfcb(.x.fcbblock,defaultptr);
+ 119   2        x.disk=diskunit;
+ 120   2      end clearcontrol;
+
+ 121   1      devicetype: proc(ch) byte;
+ 122   2        dcl ch byte;
+ 123   2        if ch=null then return nulltype;
+ 125   2        if ch=console then return consoletype;
+ 127   2        if ch=printer then return printertype;
+ 129   2        return disktype;
+ 130   2      end devicetype;
+
+ 131   1      disk$select: procedure(disk);
+ 132   2        dcl disk byte;
+ 133   2        if diskunit <> disk then$do
+ 135   3          diskunit=disk;
+ 136   3          call select$disk(diskunit);
+ 137   3        end$if;
+ 138   2      end disk$select;
+
+ 139   1      inbyte: proc (ptr) byte;
+ 140   2        dcl ptr addr,
+                    x based ptr file$i$structure,
+                    ch byte,
+                    i  addr;
+
+ 141   2        i=x.bufptr;
+ 142   2        if i=length(x.buffer) then$do
+ 144   3          i=0;
+ 145   3          call disk$select(x.disk);
+ 146   3          do while i < length(x.buffer);
+ 147   4            call SET$DMA$ADDRESS (.x.buffer(i));
+ 148   4            IF (CH := READ$RECORD (.X.FCBBLOCK)) <> 0 THEN$DO
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   4
+
+
+ 150   5              IF CH = 1 THEN$DO
+ 152   6                X.BUFFER (I) = END$OF$FILE;
+ 153   6                I = LENGTH (X.BUFFER);
+ 154   6              ELSE$DO
+ 156   6                CALL FILEABORT (.X, .DISKREADERRTEXT);
+ 157   6              END$IF;
+ 158   5            else$do
+ 160   5              i=i+128;
+ 161   5            end$if;
+ 162   4          end$while;
+ 163   3          i=0;
+ 164   3        end$if;
+ 165   2        ch=x.buffer(i);
+ 166   2        x.bufptr=i+1;
+ 167   2        return ch;
+ 168   2      end inbyte;
+
+ 169   1      FLUSHBUFFER: PROCEDURE (PTR);
+ 170   2        DECLARE (PTR, I) ADDRESS, X BASED PTR FILE$O$STRUCTURE;
+
+ 171   2          call disk$select(x.disk);
+ 172   2          i=0;
+ 173   2          do while i < x.bufptr;
+ 174   3            call SET$DMA$ADDRESS (.x.buffer(i));
+ 175   3            IF WRITE$RECORD (.X.FCBBLOCK) > 0 THEN
+ 176   3              CALL FILEABORT (.X, .DISKWRITEERRTXT);
+ 177   3            i=i+128;
+ 178   3          end$while;
+ 179   2      END FLUSHBUFFER;
+
+ 180   1      outbyte: proc(ch,ptr);
+ 181   2        dcl ch byte,
+                    ptr addr,
+                    x based ptr file$o$structure,
+                    i  addr;
+
+ 182   2        do case devicetype(x.disk);
+
+                  /* null */
+ 183   3          do; end;       /* do nothing */
+
+                  /* console */
+ 185   3          call write$console(ch);
+
+                  /* printer */
+ 186   3          call write$list(ch);
+
+                  /* disk file */
+ 187   3          do;
+ 188   4          i=x.bufptr;
+ 189   4          if i=length(x.buffer) then$do
+ 191   5            CALL FLUSHBUFFER (PTR);
+ 192   5            i=0;
+ 193   5          end$if;
+ 194   4          x.buffer(i)=ch;
+ 195   4          x.bufptr=i+1;
+ 196   4          end;
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   5
+
+
+ 197   3        end$case;
+ 198   2      end outbyte;
+
+ 199   1      open$input: proc (ptr);
+ 200   2        dcl ptr addr,
+                    x based ptr file$i$structure;
+
+ 201   2        x.bufptr=length(x.buffer);
+ 202   2        call disk$select(x.disk);
+ 203   2        IF LOW (VERSION) >= 30H THEN$DO
+ 205   3          IF OPEN$RO$FILE (.X.FCBBLOCK) <> 0FFH THEN RETURN;
+                ELSE$DO
+ 209   3          IF OPEN$FILE (.X.FCBBLOCK) <> 0FFH THEN RETURN;
+                END$IF;
+ 212   2        CALL FILEABORT (.X, .OPENERRTEXT);
+ 213   2      end open$input;
+
+ 214   1      open$output: proc(ptr);
+ 215   2        dcl ptr addr,
+                    x based ptr file$o$structure;
+
+ 216   2        if devicetype(x.disk)=disktype then$do
+ 218   3          x.bufptr=0;
+ 219   3          call disk$select(x.disk);
+ 220   3          CALL delete$file(.x.fcbblock);
+ 221   3          if create$file(.x.fcbblock) = 0ffh then
+ 222   3            CALL FILEABORT (.X, .MAKEERRTEXT);
+                end$if;
+ 224   2      end open$output;
+
+ 225   1      outputclose: proc(ptr);
+ 226   2        dcl ptr addr,
+                    x based ptr file$o$structure;
+
+ 227   2        if devicetype(x.disk)=disktype then$do
+ 229   3          call outbyte(end$of$file,.x);
+ 230   3          CALL FLUSHBUFFER (PTR);
+ 231   3          IF CLOSE$FILE (.X.FCBBLOCK) = 0FFH THEN
+ 232   3            CALL FILEABORT (.X, .CLOSEERRTEXT);
+                end$if;
+ 234   2      end outputclose;
+
+ 235   1      INPUT$CLOSE: PROCEDURE (PTR);
+ 236   2        DECLARE PTR ADDRESS, X BASED PTR FILE$I$STRUCTURE;
+ 237   2        CALL DISK$SELECT (X.DISK);
+ 238   2        CALL SET$DMA$ADDRESS (.X.BUFFER);
+ 239   2        IF CLOSE$FILE (.X.FCBBLOCK) THEN;
+ 241   2      END INPUT$CLOSE;
+
+ 242   1      outhexbyte: proc(ch) public;
+ 243   2        dcl ch byte;
+ 244   2        call outbyte(ch,.hex$file);
+ 245   2      end outhexbyte;
+
+ 246   1      outprintbyte: proc(ch) public;
+ 247   2        dcl ch byte;
+ 248   2        if printfile.disk=console then$do
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   6
+
+
+ 250   3          call write$console(ch);
+ 251   3        else$do
+ 253   3          if error$printed then call write$console(ch);
+ 255   3          call outbyte(ch,.printfile);
+ 256   3        end$if;
+ 257   2      end outprintbyte;
+
+ 258   1      outsymbolbyte: proc(ch) public;
+ 259   2        dcl ch byte;
+ 260   2        call outbyte(ch,.symbolfile);
+ 261   2      end outsymbolbyte;
+
+ 262   1      insourcebyte: proc byte public;
+ 263   2        return inbyte(.sourcefile);
+ 264   2      end insourcebyte;
+
+ 265   1      inincludebyte: proc byte public;
+ 266   2        return inbyte(.includefile);
+ 267   2      end inincludebyte;
+
+ 268   1      opensource: proc public;
+ 269   2        CALL open$input(.sourcefile);
+ 270   2      end opensource;
+
+ 271   1      openinclude: proc public;
+ 272   2        CALL open$input(.includefile);
+ 273   2      end openinclude;
+
+ 274   1      openhex: proc public;
+ 275   2        CALL open$output(.hexfile);
+ 276   2      end openhex;
+
+ 277   1      openprint: proc public;
+ 278   2        CALL open$output(.printfile);
+ 279   2      end openprint;
+
+ 280   1      opensymbol: proc public;
+ 281   2        CALL open$output(.symbolfile);
+ 282   2      end opensymbol;
+
+ 283   1      close$source: proc public;
+ 284   2        call input$close (.source$file);
+ 285   2      end close$source;
+
+ 286   1      rewindsource: proc public;
+ 287   2        sourcefile.fcbblock(nr)=0;
+ 288   2        sourcefile.bufptr=length(sourcefile.buffer);
+ 289   2        if sourcefile.fcbblock(ex) <> 0 then$do
+ 291   3          sourcefile.fcbblock(ex)=0;
+ 292   3          sourcefile.fcbblock(s2)=0;
+ 293   3          CALL opensource;
+ 294   3        end$if;
+ 295   2      end rewindsource;
+
+ 296   1      close$include: proc public;
+ 297   2        call input$close (.include$file);
+ 298   2      end close$include;
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   7
+
+
+
+ 299   1      closehex: proc public;
+ 300   2        call outputclose(.hexfile);
+ 301   2      end closehex;
+
+ 302   1      closeprint: proc public;
+ 303   2        call outputclose(.printfile);
+ 304   2      end closeprint;
+
+ 305   1      closesymbol: proc public;
+ 306   2        call outputclose(.symbolfile);
+ 307   2      end closesymbol;
+
+ 308   1      i$file$setup: proc(dev,filnam,filtyp) public;
+ 309   2        dcl dev byte,(filnam,filtyp) addr;
+ 310   2        call clearcontrol(.includefile,filtyp);
+ 311   2        includefile.disk=dev;
+ 312   2        call copy(8,filnam,.includefile.fcbblock(fn));
+ 313   2      end i$file$setup;
+
+ 314   1      filesetup:      proc    byte public;
+ 315   2        dcl
+
+                ch            byte,           /* pick up character */
+                i             byte,           /* counter */
+                noleft        byte,           /* no of characters left in tbuff */
+                bpt           byte,           /* index of tbuff */
+                exitvalue     byte,           /* exitvalue of subroutine */
+                flag          byte;           /* program logic flag */
+
+ 316   2        nextch: proc byte;
+ 317   3          if noleft > 0 then$do
+ 319   4            ch=tbuff(bpt);
+ 320   4            noleft=noleft-1;
+ 321   4            bpt=bpt+1;
+ 322   4          else$do
+ 324   4            ch=cr;
+ 325   4          end$if;
+ 326   3          return ch;
+ 327   3        end nextch;
+
+ 328   2        getdsk: procedure (p);
+ 329   3          declare p address, dsk based p byte;
+ 330   3            ch=upper(nextch);  /* test selected disk drive */
+ 331   3            if letter(ch) then$do
+ 333   4              dsk=ch-'A';
+ 334   4              if dsk > validdisk then
+ 335   4                  if dsk < console then
+ 336   4                      exitvalue = false;  /* invalid drive */
+                    else$do
+ 339   4               exitvalue=false;
+ 340   4               noleft=0;
+ 341   4            end$if;
+ 342   3        end getdsk;
+
+ 343   2        exitvalue=true;
+
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   8
+
+
+                                              /* save current disk */
+ 344   2        default$drive,diskunit=interrogate$disk;
+                                                   /* enter user selected disk */
+ 345   2        if fcb(dr) <> 0 then$do
+ 347   3          call selectdisk(diskunit:=fcb(dr)-1);
+ 348   3        end$if;
+
+                                             /* clear control blocks */
+ 349   2        call clearcontrol(.sourcefile,.asmdefault);
+ 350   2        call clearcontrol(.hexfile,.hexdefault);
+ 351   2        call clearcontrol(.printfile,.lstdefault);
+ 352   2        call clearcontrol(.symbolfile,.symdefault);
+ 353   2        call copy(8,.fcb(fn),.sourcefile.fcbblock(fn));
+ 354   2        call copy(8,.fcb(fn),.hexfile.fcbblock(fn));
+ 355   2        call copy(8,.fcb(fn),.printfile.fcbblock(fn));
+ 356   2        call copy(8,.fcb(fn),.symbolfile.fcbblock(fn));
+
+ 357   2        if FCB (FT) <> SPACE then$do       /* pick up specified source file type */
+ 359   3          call copy(3,.fcb(ft),.sourcefile.fcbblock(ft));
+ 360   3        end$if;
+
+              /* Move source file name to SOURCENAME */
+
+ 361   2        CALL FILL (SPACE, LENGTH (SOURCENAME), .SOURCENAME);
+ 362   2        i=0;
+ 363   2        do while i<8 and (sourcename(i):=sourcefile.fcbblock(fn+i)) <> space;
+ 364   3          i=i+1;
+ 365   3        end$while;
+ 366   2        sourcename(i)='.';
+ 367   2        i=i+1;
+ 368   2        call copy(3,.sourcefile.fcbblock(ft),.sourcename(i));
+
+                /* Test if file parameters */
+
+ 369   2        noleft=tbuff(0);
+ 370   2        bpt=1;
+ 371   2        FLAG = FALSE;
+ 372   2        IF FCB16 (1) <> SPACE THEN$DO
+ 374   3          IF FCB16 (1) <> DOLLAR THEN$DO
+ 376   4            EXITVALUE = FALSE;
+ 377   4          ELSE$DO
+ 379   4            DO WHILE (NOLEFT > 0) AND (NEXTCH <> DOLLAR);
+ 380   5            END$WHILE;
+ 381   4            FLAG = TRUE;
+ 382   4          END$IF;
+ 383   3        END$IF;
+
+ 384   2        if flag then$do
+
+                  /* file parameters present - pick them up */
+
+ 386   3          do while noleft > 0;
+ 387   4            if (ch:=upper(nextch)) <> space then$do
+
+                        /* A-parameter */
+ 389   5                IF CH = 'A' THEN call getdsk(.sourcefile.disk);
+
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE   9
+
+
+                        /* H-parameter */
+ 391   5                ELSE IF CH = 'H' THEN call getdsk(.hexfile.disk);
+
+                        /* P-parameter */
+ 393   5                ELSE IF CH = 'P' THEN call getdsk(.printfile.disk);
+
+                        /* S-parameter */
+ 395   5                ELSE IF CH = 'S' THEN call getdsk(.symbolfile.disk);
+
+                        /* F-parameter */
+ 397   5                ELSE IF CH = 'F' THEN$DO
+ 399   6                  if (ch:=upper(nextch)) = 'I' then$do
+ 401   7                    intel$hex$on=true;
+ 402   7                  else$do
+ 404   7                    if ch= 'D' then$do
+ 406   8                      intel$hex$on=false;
+ 407   8                    else$do
+ 409   8                      exitvalue=false;
+ 410   8                      noleft=0;
+ 411   8                    endif;
+ 412   7                  endif;
+ 413   6                END$IF;
+
+                        /* error,no legal parameter */
+                        ELSE
+ 414   5                  DO;
+ 415   6                    exitvalue=false;
+ 416   6                    noleft=0;
+ 417   6                  END$DO;
+
+ 418   5            end$if;
+                  end$while;
+ 420   3        end$if;
+
+ 421   2        printdevice=printfile.disk;  /* set global printdevice flag */
+ 422   2        SYMBOLDEVICE = SYMBOLFILE.DISK;
+ 423   2        INCLUDE$DEFAULT = SOURCEFILE.DISK;
+
+                   /* input must be from a disk file */
+
+ 424   2        if devicetype(sourcefile.disk) <> disktype then$do
+ 426   3          exitvalue=false;
+ 427   3        end$if;
+
+ 428   2        return exitvalue;
+
+ 429   2      end filesetup;
+
+ 430   1      end file;
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  10
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    106  0000H     4  ABSADDR. . . . . .    BYTE ARRAY(4) EXTERNAL(87)
+    106  0000H     1  ACCLEN . . . . . .    BYTE EXTERNAL(91)
+    106  0000H     1  ACCLENSAVE . . . .    BYTE EXTERNAL(94)
+    106  0000H    80  ACCUM. . . . . . .    BYTE ARRAY(80) EXTERNAL(92)
+    106  0000H    80  ACCUMSAVE. . . . .    BYTE ARRAY(80) EXTERNAL(93)
+      2               ADDR . . . . . . .    LITERALLY        61   64   67   70   76   94   97
+                                             100  103  106  109  111  117  140  170  181  200
+                                             215  226  236  309 
+     84  0000H        ALPHANUMERIC . . .    PROCEDURE BYTE EXTERNAL(31) STACK=0000H
+     87  0000H        ASCIICHAR. . . . .    PROCEDURE BYTE EXTERNAL(32) STACK=0000H
+    105  0000H     1  ASM86TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(44)
+    109  0000H     3  ASMDEFAULT . . . .    BYTE ARRAY(3) DATA        349 
+    106  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(CURRENTSYMBOL)
+    106  0008H     1  BASEINDEX. . . . .    BYTE MEMBER(OPERANDS)
+      3               BASEREGBIT . . . .    LITERALLY
+      3               BASEREGCOUNT . . .    LITERALLY
+    315  0EBFH     1  BPT. . . . . . . .    BYTE       319  321  370 
+      3               BREGBIT. . . . . .    LITERALLY
+      3               BREGCOUNT. . . . .    LITERALLY
+    170  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)      174 
+    236  0024H  1024  BUFFER . . . . . .    BYTE ARRAY(1024) MEMBER(X)          238 
+    109  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(SYMBOLFILE)
+    226  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)
+    140  0024H  1024  BUFFER . . . . . .    BYTE ARRAY(1024) MEMBER(X)          142  146  147
+                                             152  153  165 
+    109  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(PRINTFILE)
+    200  0024H  1024  BUFFER . . . . . .    BYTE ARRAY(1024) MEMBER(X)          201 
+    215  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)
+    109  0024H  1024  BUFFER . . . . . .    BYTE ARRAY(1024) MEMBER(INCLUDEFILE)
+    117  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)
+    109  0024H  1024  BUFFER . . . . . .    BYTE ARRAY(1024) MEMBER(SOURCEFILE)      288 
+    109  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(HEXFILE)
+    181  0024H   512  BUFFER . . . . . .    BYTE ARRAY(512) MEMBER(X)      189  194 
+    109  0022H     2  BUFPTR . . . . . .    WORD MEMBER(INCLUDEFILE)
+    109  0022H     2  BUFPTR . . . . . .    WORD MEMBER(PRINTFILE)
+    226  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)
+    140  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)       141  166 
+    170  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)       173 
+    109  0022H     2  BUFPTR . . . . . .    WORD MEMBER(HEXFILE)
+    215  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)       218 
+    109  0022H     2  BUFPTR . . . . . .    WORD MEMBER(SYMBOLFILE)
+    117  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)
+    181  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)       188  195 
+    109  0022H     2  BUFPTR . . . . . .    WORD MEMBER(SOURCEFILE)        288 
+    236  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)
+    200  0022H     2  BUFPTR . . . . . .    WORD MEMBER(X)       201 
+     81  0000H     1  CH . . . . . . . .    BYTE PARAMETER        82 
+    315  0EBCH     1  CH . . . . . . . .    BYTE       319  324  326  330  331  333  387  389
+                                             391  393  395  397  399  404 
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  11
+
+
+     75  0000H     1  CH . . . . . . . .    BYTE PARAMETER        76 
+    246  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       247  250  254  255
+    180  0006H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       181  185  186  194
+     90  0000H     1  CH . . . . . . . .    BYTE PARAMETER        91 
+     78  0000H     1  CH . . . . . . . .    BYTE PARAMETER        79 
+    242  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       243  244 
+    140  0EBBH     1  CH . . . . . . . .    BYTE       148  150  165  167 
+     84  0000H     1  CH . . . . . . . .    BYTE PARAMETER        85 
+    121  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       122  123  125  127
+    258  0004H     1  CH . . . . . . . .    BYTE PARAMETER AUTOMATIC       259  260 
+     87  0000H     1  CH . . . . . . . .    BYTE PARAMETER        88 
+     19  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        20 
+     22  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        23 
+    106  0000H     2  CIP. . . . . . . .    WORD EXTERNAL(56)
+    116  0031H    28  CLEARCONTROL . . .    PROCEDURE STACK=0016H          310  349  350  351
+                                             352 
+    110  0000H    49  CLEARFCB . . . . .    PROCEDURE STACK=000EH          118 
+    105  0000H     1  CLOSEERRTEXT . . .    BYTE ARRAY(1) EXTERNAL(50)          232 
+     38  0000H        CLOSEFILE. . . . .    PROCEDURE BYTE EXTERNAL(15) STACK=0000H       231
+                                             239 
+    299  0399H    12  CLOSEHEX . . . . .    PROCEDURE PUBLIC STACK=0020H
+    296  038DH    12  CLOSEINCLUDE . . .    PROCEDURE PUBLIC STACK=0012H
+    302  03A5H    12  CLOSEPRINT . . . .    PROCEDURE PUBLIC STACK=0020H
+    283  0361H    12  CLOSESOURCE. . . .    PROCEDURE PUBLIC STACK=0012H
+    305  03B1H    12  CLOSESYMBOL. . . .    PROCEDURE PUBLIC STACK=0020H
+    106  0000H     1  CODEMACROFLAG. . .    BYTE EXTERNAL(113)
+      3               CODEMACROHEAD. . .    LITERALLY
+    106  0000H     2  CODEMACROPTR . . .    WORD EXTERNAL(108)
+      4               CONSOLE. . . . . .    LITERALLY       125  248  335 
+    109               CONSOLETYPE. . . .    LITERALLY       126 
+     25  0000H        CONSTAT. . . . . .    PROCEDURE BYTE EXTERNAL(10) STACK=0000H
+     66  0000H        COPY . . . . . . .    PROCEDURE EXTERNAL(25) STACK=0000H       114  312
+                                             353  354  355  356  359  368 
+      2               CR . . . . . . . .    LITERALLY       324 
+     50  0000H        CREATEFILE . . . .    PROCEDURE BYTE EXTERNAL(19) STACK=0000H       221
+     58  0000H        CRLF . . . . . . .    PROCEDURE EXTERNAL(22) STACK=0000H
+    106  0000H     2  CSCIP. . . . . . .    WORD EXTERNAL(61)
+    106  0000H     1  CSEGSPEC . . . . .    BYTE EXTERNAL(59)
+    106  0000H     1  CSEGTYPE . . . . .    BYTE EXTERNAL(57)
+    106  0000H     2  CSEGVALUE. . . . .    WORD EXTERNAL(58)
+    106  0000H     1  CSPEC. . . . . . .    BYTE EXTERNAL(68)
+    106  0000H     2  CURCSEG. . . . . .    WORD EXTERNAL(64)
+    106  0000H     2  CURDSEG. . . . . .    WORD EXTERNAL(65)
+    106  0000H     2  CURESEG. . . . . .    WORD EXTERNAL(67)
+    106  0000H     9  CURRENTSYMBOL. . .    STRUCTURE EXTERNAL(104)
+    106  0000H     2  CURSSEG. . . . . .    WORD EXTERNAL(66)
+     96  0000H     2  D. . . . . . . . .    WORD PARAMETER        97 
+     93  0000H     2  D. . . . . . . . .    WORD PARAMETER        94 
+    102  0000H     2  D. . . . . . . . .    WORD PARAMETER       103 
+     66  0000H     2  D. . . . . . . . .    WORD PARAMETER        67 
+     99  0000H     2  D. . . . . . . . .    WORD PARAMETER       100 
+      2               DCL. . . . . . . .    LITERALLY
+    102  0000H        DECOUT . . . . . .    PROCEDURE EXTERNAL(37) STACK=0000H
+    106  0000H     1  DEFAULTDRIVE . . .    BYTE EXTERNAL(111)        344 
+    110  0004H     2  DEFAULTPT. . . . .    WORD PARAMETER AUTOMATIC       111  114 
+    116  0004H     2  DEFAULTPTR . . . .    WORD PARAMETER AUTOMATIC       117  118 
+     41  0000H        DELETEFILE . . . .    PROCEDURE EXTERNAL(16) STACK=0000H       220 
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  12
+
+
+    106  0001H     1  DESCR. . . . . . .    BYTE MEMBER(TOKEN)
+    111  0000H     1  DEST . . . . . . .    BYTE BASED(FCBPT) ARRAY(1)          114 
+    308  0008H     1  DEV. . . . . . . .    BYTE PARAMETER AUTOMATIC       309  311 
+    121  004DH    39  DEVICETYPE . . . .    PROCEDURE BYTE STACK=0004H          182  216  227
+                                             424 
+     78  0000H        DIGIT. . . . . . .    PROCEDURE BYTE EXTERNAL(29) STACK=0000H
+    109  0000H     1  DISK . . . . . . .    BYTE MEMBER(PRINTFILE)         248  394  421 
+    140  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       145 
+    215  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       216  219 
+    109  0000H     1  DISK . . . . . . .    BYTE MEMBER(HEXFILE)      392 
+    109  0000H     1  DISK . . . . . . .    BYTE MEMBER(SOURCEFILE)        390  423  424 
+    236  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       237 
+    200  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       202 
+    109  0000H     1  DISK . . . . . . .    BYTE MEMBER(INCLUDEFILE)       311 
+    181  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       182 
+    170  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       171 
+    117  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       119 
+    226  0000H     1  DISK . . . . . . .    BYTE MEMBER(X)       227 
+    109  0000H     1  DISK . . . . . . .    BYTE MEMBER(SYMBOLFILE)        396  422 
+    131  0004H     1  DISK . . . . . . .    BYTE PARAMETER AUTOMATIC       132  133  135 
+     29  0000H     1  DISKNUMBER . . . .    BYTE PARAMETER        30 
+    105  0000H     1  DISKREADERRTEXT. .    BYTE ARRAY(1) EXTERNAL(47)          156 
+    131  0074H    23  DISKSELECT . . . .    PROCEDURE STACK=0008H          145  171  202  219
+                                             237 
+    109               DISKTYPE . . . . .    LITERALLY       129  216  227  424 
+    109  0EBAH     1  DISKUNIT . . . . .    BYTE       119  133  135  136  344  347 
+    105  0000H     1  DISKWRITEERRTXT. .    BYTE ARRAY(1) EXTERNAL(48)          176 
+     55  0000H     2  DMAADDRESS . . . .    WORD PARAMETER        56 
+    109               DOLLAR . . . . . .    LITERALLY       374  379 
+    109               DR . . . . . . . .    LITERALLY       345  347 
+    106  0000H     2  DSCIP. . . . . . .    WORD EXTERNAL(63)
+    329  0000H     1  DSK. . . . . . . .    BYTE BASED(P)        333  334  335 
+    106  0000H     1  DSPEC. . . . . . .    BYTE EXTERNAL(69)
+      2               ELSEDO . . . . . .    LITERALLY       206  336 
+     14  0000H     2  ENDBUF . . . . . .    WORD EXTERNAL(5)
+      2               ENDCASE. . . . . .    LITERALLY
+      2               ENDDO. . . . . . .    LITERALLY
+      2               ENDFOREVER . . . .    LITERALLY
+      2               ENDIF. . . . . . .    LITERALLY       210  222  232 
+      2               ENDMODULE. . . . .    LITERALLY
+      2               ENDOFFILE. . . . .    LITERALLY       152  229 
+      2               ENDPROC. . . . . .    LITERALLY
+    105  0000H     1  ENDTEXT. . . . . .    BYTE ARRAY(1) EXTERNAL(42)
+      2               ENDWHILE . . . . .    LITERALLY       418 
+    106  0000H     1  EOFSET . . . . . .    BYTE EXTERNAL(95)
+     93  0000H        EQUAL. . . . . . .    PROCEDURE BYTE EXTERNAL(34) STACK=0000H
+    106  0000H     1  ERRORPRINTED . . .    BYTE EXTERNAL(98)         253 
+    106  0000H     2  ERRORS . . . . . .    WORD EXTERNAL(88)
+    106  0000H     2  ESCIP. . . . . . .    WORD EXTERNAL(60)
+    106  0000H     1  ESPEC. . . . . . .    BYTE EXTERNAL(71)
+    109               EX . . . . . . . .    LITERALLY       289  291 
+    315  0EC0H     1  EXITVALUE. . . . .    BYTE       336  339  343  376  409  415  426  428
+      2               FALSE. . . . . . .    LITERALLY       336  339  371  376  406  409  415
+                                             426 
+     11  0000H     1  FCB. . . . . . . .    BYTE ARRAY(1) EXTERNAL(2)      345  347  353  354
+                                             355  356  357  359 
+     12  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(3)      372  374 
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  13
+
+
+     38  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        39 
+     50  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        51 
+     47  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        48 
+     44  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        45 
+     41  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        42 
+     35  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        36 
+     32  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        33 
+     72  0000H     2  FCBADR . . . . . .    WORD PARAMETER        73 
+    236  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       239 
+    215  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       220  221 
+    200  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       205  209 
+    181  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)
+    170  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       175 
+    140  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       148 
+    117  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       118 
+    109  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(SYMBOLFILE)        356 
+    109  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(PRINTFILE)         355 
+    109  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(HEXFILE)      354 
+    109  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(INCLUDEFILE)       312 
+    109  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(SOURCEFILE)        287  289
+                                             291  292  353  359  363  368 
+    226  0001H    33  FCBBLOCK . . . . .    BYTE ARRAY(33) MEMBER(X)       231 
+    110  0006H     2  FCBPT. . . . . . .    WORD PARAMETER AUTOMATIC       111  112  113  114
+      1  0000H        FILE . . . . . . .    PROCEDURE STACK=0000H
+     72  0000H        FILEABORT. . . . .    PROCEDURE EXTERNAL(27) STACK=0000H       156  176
+                                             212  222  232 
+      3               FILEISTRUCTURE . .    LITERALLY       109  140  200  236 
+      3               FILEOSTRUCTURE . .    LITERALLY       109  117  170  181  215  226 
+    314  03E1H   512  FILESETUP. . . . .    PROCEDURE BYTE PUBLIC STACK=001AH
+     75  0000H        FILL . . . . . . .    PROCEDURE EXTERNAL(28) STACK=0000H       112  113
+                                             361 
+    308  0006H     2  FILNAM . . . . . .    WORD PARAMETER AUTOMATIC       309  312 
+    308  0004H     2  FILTYP . . . . . .    WORD PARAMETER AUTOMATIC       309  310 
+    106  0000H     2  FIRSTMACROPTR. . .    WORD EXTERNAL(99)
+    315  0EC1H     1  FLAG . . . . . . .    BYTE       371  381  384 
+    169  011DH    76  FLUSHBUFFER. . . .    PROCEDURE STACK=000EH          191  230 
+    109               FN . . . . . . . .    LITERALLY       113  312  353  354  355  356  363
+      2               FOREVER. . . . . .    LITERALLY
+      2               FORMFEED . . . . .    LITERALLY
+    109               FT . . . . . . . .    LITERALLY       114  357  359  368 
+    106  0000H     1  FULLSYMBTAB. . . .    BYTE EXTERNAL(101)
+      8  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         9 
+      5  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         6 
+    328  060CH    68  GETDSK . . . . . .    PROCEDURE STACK=0008H          390  392  394  396
+    107  0000H        GLOBALINIT . . . .    PROCEDURE EXTERNAL(114) STACK=0000H
+    106  0000H     5  HELP . . . . . . .    BYTE ARRAY(5) EXTERNAL(109)
+     96  0000H        HEX1OUT. . . . . .    PROCEDURE EXTERNAL(35) STACK=0000H
+     99  0000H        HEX2OUT. . . . . .    PROCEDURE EXTERNAL(36) STACK=0000H
+    109  0003H     3  HEXDEFAULT . . . .    BYTE ARRAY(3) DATA        350 
+    109  0848H   548  HEXFILE. . . . . .    STRUCTURE       244  275  300  350  354  392 
+    315  0EBDH     1  I. . . . . . . . .    BYTE       362  363  364  366  367  368 
+    181  0EB8H     2  I. . . . . . . . .    WORD       188  189  192  194  195 
+    170  0EB6H     2  I. . . . . . . . .    WORD       172  173  174  177 
+    140  0EB4H     2  I. . . . . . . . .    WORD       141  142  144  146  147  152  153  160
+                                             163  165  166 
+    106  0000H     1  I. . . . . . . . .    BYTE EXTERNAL(110)
+    308  03BDH    36  IFILESETUP . . . .    PROCEDURE PUBLIC STACK=0020H
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  14
+
+
+    106  0000H     1  IFLEVEL. . . . . .    BYTE EXTERNAL(103)
+    106  0000H     1  IFLIST . . . . . .    BYTE EXTERNAL(74)
+    139  008BH   146  INBYTE . . . . . .    PROCEDURE BYTE STACK=000EH          263  266 
+    106  0000H     1  INCLUDEDEFAULT . .    BYTE EXTERNAL(112)        423 
+    109  0424H  1060  INCLUDEFILE. . . .    STRUCTURE       266  272  297  310  311  312 
+    106  0000H     1  INCLUDEON. . . . .    BYTE EXTERNAL(102)
+      3               INDEXREGBIT. . . .    LITERALLY
+      3               INDEXREGCOUNT. . .    LITERALLY
+      8  0000H     2  INFO . . . . . . .    WORD PARAMETER         9 
+      5  0000H     2  INFO . . . . . . .    WORD PARAMETER         6 
+    265  0319H    12  ININCLUDEBYTE. . .    PROCEDURE BYTE PUBLIC STACK=0012H
+      2               INIT . . . . . . .    LITERALLY
+    105  0000H     1  INITIALS . . . . .    BYTE ARRAY(1) EXTERNAL(40)
+    235  029BH    35  INPUTCLOSE . . . .    PROCEDURE STACK=000EH          284  297 
+    262  030DH    12  INSOURCEBYTE . . .    PROCEDURE BYTE PUBLIC STACK=0012H
+    106  0000H     1  INTELHEXON . . . .    BYTE EXTERNAL(96)         401  406 
+     53  0000H        INTERROGATEDISK. .    PROCEDURE BYTE EXTERNAL(20) STACK=0000H       344
+      3               IREGBIT. . . . . .    LITERALLY
+      3               IREGCOUNT. . . . .    LITERALLY
+                      LENGTH . . . . . .    BUILTIN         142  146  153  189  201  288  361
+    106  0000H     2  LENGTH . . . . . .    WORD MEMBER(OPERANDS)
+    106  0000H     2  LENGTH . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+     81  0000H        LETTER . . . . . .    PROCEDURE BYTE EXTERNAL(30) STACK=0000H       331
+      2               LF . . . . . . . .    LITERALLY
+      2               LIT. . . . . . . .    LITERALLY         2    3    4  109 
+                      LOW. . . . . . . .    BUILTIN         203 
+    109  0006H     3  LSTDEFAULT . . . .    BYTE ARRAY(3) DATA        351 
+    106  0000H     2  MACROPTR . . . . .    WORD EXTERNAL(100)
+    105  0000H     1  MAKEERRTEXT. . . .    BYTE ARRAY(1) EXTERNAL(49)          222 
+    106  0000H     1  MAXCOL . . . . . .    BYTE EXTERNAL(75)
+      5  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H
+      8  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H
+     96  0000H     1  N. . . . . . . . .    BYTE PARAMETER        97 
+    102  0000H     2  N. . . . . . . . .    WORD PARAMETER       103 
+     99  0000H     2  N. . . . . . . . .    WORD PARAMETER       100 
+     93  0000H     1  N. . . . . . . . .    BYTE PARAMETER        94 
+     75  0000H     1  N. . . . . . . . .    BYTE PARAMETER        76 
+     66  0000H     1  N. . . . . . . . .    BYTE PARAMETER        67 
+     63  0000H     2  N. . . . . . . . .    WORD PARAMETER        64 
+    106  0000H     1  NEXTCH . . . . . .    BYTE EXTERNAL(90)
+    316  05E1H    43  NEXTCH . . . . . .    PROCEDURE BYTE STACK=0002H          330  379  387
+                                             399 
+    105  0000H     1  NO . . . . . . . .    BYTE EXTERNAL(39)
+    106  0000H     1  NOERROR. . . . . .    BYTE EXTERNAL(97)
+    315  0EBEH     1  NOLEFT . . . . . .    BYTE       317  320  340  369  379  386  410  416
+    106  0000H     1  NOOPER . . . . . .    BYTE EXTERNAL(106)
+      3               NOOVERCOUNT. . . .    LITERALLY
+      3               NOOVERRIDEBIT. . .    LITERALLY
+    109               NR . . . . . . . .    LITERALLY       287 
+      4               NULL . . . . . . .    LITERALLY       123 
+    109               NULLTYPE . . . . .    LITERALLY       124 
+    106  0006H     2  OFFSET . . . . . .    WORD MEMBER(OPERANDS)
+    106  0006H     2  OFFSET . . . . . .    WORD MEMBER(CURRENTSYMBOL)
+    105  0000H     1  OPENERRTEXT. . . .    BYTE ARRAY(1) EXTERNAL(46)          212 
+     32  0000H        OPENFILE . . . . .    PROCEDURE BYTE EXTERNAL(13) STACK=0000H       209
+    274  033DH    12  OPENHEX. . . . . .    PROCEDURE PUBLIC STACK=0012H
+    271  0331H    12  OPENINCLUDE. . . .    PROCEDURE PUBLIC STACK=0012H
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  15
+
+
+    199  01CCH    71  OPENINPUT. . . . .    PROCEDURE STACK=000EH          269  272 
+    214  0213H    72  OPENOUTPUT . . . .    PROCEDURE STACK=000EH          275  278  281 
+    277  0349H    12  OPENPRINT. . . . .    PROCEDURE PUBLIC STACK=0012H
+     35  0000H        OPENROFILE . . . .    PROCEDURE BYTE EXTERNAL(14) STACK=0000H       205
+    268  0325H    12  OPENSOURCE . . . .    PROCEDURE PUBLIC STACK=0012H        293 
+    280  0355H    12  OPENSYMBOL . . . .    PROCEDURE PUBLIC STACK=0012H
+    106  0000H    36  OPERANDS . . . . .    STRUCTURE ARRAY(4) EXTERNAL(107)
+      3               OPERANDSTRUC . . .    LITERALLY       106 
+    180  0169H    99  OUTBYTE. . . . . .    PROCEDURE STACK=0016H          229  244  255  260
+    242  02BEH    17  OUTHEXBYTE . . . .    PROCEDURE PUBLIC STACK=001CH
+    246  02CFH    45  OUTPRINTBYTE . . .    PROCEDURE PUBLIC STACK=001CH
+    225  025BH    64  OUTPUTCLOSE. . . .    PROCEDURE STACK=001CH          300  303  306 
+    258  02FCH    17  OUTSYMBOLBYTE. . .    PROCEDURE PUBLIC STACK=001CH
+     69  0000H        OUTTEXT. . . . . .    PROCEDURE EXTERNAL(26) STACK=0000H
+    328  0004H     2  P. . . . . . . . .    WORD PARAMETER AUTOMATIC       329  333  334  335
+    106  0000H     1  PAGESIZE . . . . .    BYTE EXTERNAL(81)
+    105  0000H     1  PAGETEXT . . . . .    BYTE ARRAY(1) EXTERNAL(41)
+    105  0000H     1  PARERRTEXT . . . .    BYTE ARRAY(1) EXTERNAL(45)
+    106  0000H     1  PASS . . . . . . .    BYTE EXTERNAL(55)
+    105  0000H     1  PASS0TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(53)
+    105  0000H     1  PASS1TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(54)
+    116  0006H     2  POINT. . . . . . .    WORD PARAMETER AUTOMATIC       117  118  119 
+    106  0000H   240  PREFIX . . . . . .    BYTE ARRAY(240) EXTERNAL(85)
+    106  0000H     1  PREFIXPTR. . . . .    BYTE EXTERNAL(86)
+    106  0000H     1  PRINTDEVICE. . . .    BYTE EXTERNAL(78)         421 
+      4               PRINTER. . . . . .    LITERALLY       127 
+    109               PRINTERTYPE. . . .    LITERALLY       128 
+    109  0A6CH   548  PRINTFILE. . . . .    STRUCTURE       248  255  278  303  351  355  394
+                                             421 
+    106  0000H     1  PRINTON. . . . . .    BYTE EXTERNAL(72)
+    106  0000H     1  PRINTSWITCHOFF . .    BYTE EXTERNAL(73)
+      2               PROC . . . . . . .    LITERALLY        60   63   84   87   96   99  102
+                                             110  121  139  180  199  214  225  242  246  258
+                                             262  265  268  271  274  277  280  283  286  296
+                                             299  302  305  308  314  316 
+     75  0000H     2  PT . . . . . . . .    WORD PARAMETER        76 
+    235  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       236  237  238  239
+    225  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       226  227  229  230
+                                             231  232 
+    214  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       215  216  218  219
+                                             220  221  222 
+    199  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       200  201  202  205
+                                             209  212 
+    180  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       181  182  188  191
+                                             194  195 
+    169  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       170  171  173  174
+                                             175  176 
+    139  0004H     2  PTR. . . . . . . .    WORD PARAMETER AUTOMATIC       140  141  145  147
+                                             148  152  156  165  166 
+     17  0000H        READCONSOLE. . . .    PROCEDURE BYTE EXTERNAL(7) STACK=0000H
+     44  0000H        READRECORD . . . .    PROCEDURE BYTE EXTERNAL(17) STACK=0000H       148
+      2               REENT. . . . . . .    LITERALLY
+    286  036DH    32  REWINDSOURCE . . .    PROCEDURE PUBLIC STACK=0016H
+     93  0000H     2  S. . . . . . . . .    WORD PARAMETER        94 
+     66  0000H     2  S. . . . . . . . .    WORD PARAMETER        67 
+    109               S2 . . . . . . . .    LITERALLY       292 
+    106  0000H    12  SAVESOURCE . . . .    BYTE ARRAY(12) EXTERNAL(77)
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  16
+
+
+      3               SEGMBIT. . . . . .    LITERALLY
+      3               SEGMCOUNT. . . . .    LITERALLY
+    106  0004H     2  SEGMENT. . . . . .    WORD MEMBER(OPERANDS)
+    106  0004H     2  SEGMENT. . . . . .    WORD MEMBER(CURRENTSYMBOL)
+      3               SEGTYPEBIT . . . .    LITERALLY
+      3               SEGTYPECOUNT . . .    LITERALLY
+     29  0000H        SELECTDISK . . . .    PROCEDURE EXTERNAL(12) STACK=0000H       136  347
+     55  0000H        SETDMAADDRESS. . .    PROCEDURE EXTERNAL(21) STACK=0000H       147  174
+                                             238 
+    106  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(OPERANDS)
+    106  0003H     1  SFLAG. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+    106  0000H     1  SIMFORM. . . . . .    BYTE EXTERNAL(82)
+    106  0000H    80  SOURCEBUF. . . . .    BYTE ARRAY(80) EXTERNAL(83)
+    109  0000H  1060  SOURCEFILE . . . .    STRUCTURE       263  269  284  287  288  289  291
+                                             292  349  353  359  363  368  390  423  424 
+    106  0000H    12  SOURCENAME . . . .    BYTE ARRAY(12) EXTERNAL(76)         361  363  366
+                                             368 
+    106  0000H     1  SOURCEPTR. . . . .    BYTE EXTERNAL(84)
+      2               SPACE. . . . . . .    LITERALLY       357  361  363  372  387 
+    106  0000H     2  SSCIP. . . . . . .    WORD EXTERNAL(62)
+    106  0000H     1  SSPEC. . . . . . .    BYTE EXTERNAL(70)
+      2               STRUC. . . . . . .    LITERALLY       106  109  117  140  170  181  200
+                                             215  226  236 
+    106  0002H     1  STYPE. . . . . . .    BYTE MEMBER(OPERANDS)
+    106  0002H     1  STYPE. . . . . . .    BYTE MEMBER(CURRENTSYMBOL)
+    105  0000H     1  SYMBFULLERRTEXT. .    BYTE ARRAY(1) EXTERNAL(51)
+    106  0000H     1  SYMBOLDEVICE . . .    BYTE EXTERNAL(79)         422 
+    109  0C90H   548  SYMBOLFILE . . . .    STRUCTURE       260  281  306  352  356  396  422
+      3               SYMBOLHEAD . . . .    LITERALLY
+      3               SYMBOLSTRUC. . . .    LITERALLY       106 
+    106  0000H     2  SYMBTABADR . . . .    WORD EXTERNAL(105)
+    109  0009H     3  SYMDEFAULT . . . .    BYTE ARRAY(3) DATA        352 
+     15  0000H        SYSTEMRESET. . . .    PROCEDURE EXTERNAL(6) STACK=0000H
+     69  0000H     2  T. . . . . . . . .    WORD PARAMETER        70 
+      2               TAB. . . . . . . .    LITERALLY
+     13  0000H     1  TBUFF. . . . . . .    BYTE ARRAY(1) EXTERNAL(4)      319  369 
+     72  0000H     2  TEXTADR. . . . . .    WORD PARAMETER        73 
+      2               THENDO . . . . . .    LITERALLY       133  142  148  150  189  203  216
+                                             227  248  289  317  331  345  357  372  374  384
+                                             387  397  399  404  424 
+    106  0000H    30  TITLE. . . . . . .    BYTE ARRAY(30) EXTERNAL(80)
+    106  0000H     4  TOKEN. . . . . . .    STRUCTURE EXTERNAL(89)
+      2               TRUE . . . . . . .    LITERALLY       343  381  401 
+    106  0000H     1  TYPE . . . . . . .    BYTE MEMBER(TOKEN)
+      3               TYPEBIT. . . . . .    LITERALLY
+     60  0000H        TYPECALC . . . . .    PROCEDURE BYTE EXTERNAL(23) STACK=0000H
+      3               TYPECOUNT. . . . .    LITERALLY
+     90  0000H        UPPER. . . . . . .    PROCEDURE BYTE EXTERNAL(33) STACK=0000H       330
+                                             387  399 
+    105  0000H     1  USBREAKTEXT. . . .    BYTE ARRAY(1) EXTERNAL(52)
+    105  0000H     1  USEFACTOR. . . . .    BYTE ARRAY(1) EXTERNAL(43)
+     60  0000H     2  VAL. . . . . . . .    WORD PARAMETER        61 
+      4               VALIDDISK. . . . .    LITERALLY       334 
+    106  0002H     2  VALUE. . . . . . .    WORD MEMBER(TOKEN)
+     27  0000H        VERSION. . . . . .    PROCEDURE WORD EXTERNAL(11) STACK=0000H       203
+     63  0000H        WRDTEST. . . . . .    PROCEDURE BYTE EXTERNAL(24) STACK=0000H
+     19  0000H        WRITECONSOLE . . .    PROCEDURE EXTERNAL(8) STACK=0000H        185  250
+PL/M-86 COMPILER    FILE AND I/O MODULE                                          10/5/81    PAGE  17
+
+
+                                             254 
+     22  0000H        WRITELIST. . . . .    PROCEDURE EXTERNAL(9) STACK=0000H        186 
+     47  0000H        WRITERECORD. . . .    PROCEDURE BYTE EXTERNAL(18) STACK=0000H       175
+    236  0000H  1060  X. . . . . . . . .    STRUCTURE BASED(PTR)      237  238  239 
+    226  0000H   548  X. . . . . . . . .    STRUCTURE BASED(PTR)      227  229  231  232 
+    215  0000H   548  X. . . . . . . . .    STRUCTURE BASED(PTR)      216  218  219  220  221
+                                             222 
+    200  0000H  1060  X. . . . . . . . .    STRUCTURE BASED(PTR)      201  202  205  209  212
+    181  0000H   548  X. . . . . . . . .    STRUCTURE BASED(PTR)      182  188  189  194  195
+    170  0000H   548  X. . . . . . . . .    STRUCTURE BASED(PTR)      171  173  174  175  176
+    140  0000H  1060  X. . . . . . . . .    STRUCTURE BASED(PTR)      141  142  145  146  147
+                                             148  152  153  156  165  166 
+    117  0000H   548  X. . . . . . . . .    STRUCTURE BASED(POINT)         118  119 
+    105  0000H     1  YES. . . . . . . .    BYTE EXTERNAL(38)
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 0650H   1616D
+     CONSTANT AREA SIZE = 000CH     12D
+     VARIABLE AREA SIZE = 0EC2H   3778D
+     MAXIMUM STACK SIZE = 0020H     32D
+     947 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

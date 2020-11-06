@@ -1,0 +1,635 @@
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE ERASEQ
+OBJECT MODULE PLACED IN ERAQ.OBJ
+COMPILER INVOKED BY:  :F0: ERAQ.PLM XREF OPTIMIZE(3) DEBUG
+
+
+
+              $title ('ERAQ: Erase File with Query')
+   1          eraseq:
+              do;
+
+              /*
+                Revised:
+                  19 Jan  80  by Thomas Rolander
+                  20 July 81  by Doug Huskey
+                   6 Aug  81  by Danny Horovitz
+                  31 Jan  83  by Bill Fitler
+              */
+
+              $include (:f2:copyrt.lit)
+          =
+          =   /*
+          =     Copyright (C) 1983
+          =     Digital Research
+          =     P.O. Box 579
+          =     Pacific Grove, CA 93950
+          =   */
+          =
+
+              $include (:f2:vaxcmd.lit)
+          =
+          =   /**** VAX commands for generation - read the name of this program 
+          =           for PROGNAME below.
+          =
+          =       $ util := PROGNAME
+          =       $ ccpmsetup             ! set up environment
+          =       $ assign 'f$directory()' f1:        ! use local dir for temp files
+          =       $ plm86 'util'.plm xref 'p1' optimize(3) debug
+          =       $ link86 f2:scd.obj, 'util'.obj  to 'util'.lnk
+          =       $ loc86 'util'.lnk od(sm(code,dats,data,stack,const)) -
+          =             ad(sm(code(0),dats(10000h))) ss(stack(+32)) to 'util'.
+          =       $ h86 'util'
+          =
+          =   ***** Then, on a micro:
+          =       A>vax progname.h86 $fans
+          =       A>gencmd progname data[b1000]
+          =
+          =   ***** Notes: Stack is increased for interrupts.  Const(ants) are last
+          =           to force hex generation.
+          =   ****/
+
+              $include (:f2:vermpm.lit)
+          =
+          =   /*   This utility requires MP/M or Concurrent function calls */
+          =
+          =   /****** commented out for CCP/M-86 :
+          =   declare Ver$OS literally '11h',
+          =       Ver$Needs$OS literally '''Requires MP/M-86''';
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   2
+
+
+          =    ******/
+          =
+   2   1  =   declare Ver$OS literally '14h',
+          =       Ver$Needs$OS literally '''Requires Concurrent CP/M-86''';
+          =
+          =
+   3   1  =   declare Ver$Mask literally '0fdh';  /* mask out Is_network bit */
+          =
+   4   1  =   declare Ver$BDOS literally '30h';   /* minimal BDOS version rqd */
+          =
+
+   5   1      declare
+                  true    literally '1',
+                  false   literally '0',
+                  forever literally 'while true',
+                  lit     literally 'literally',
+                  proc    literally 'procedure',
+                  dcl     literally 'declare',
+                  addr    literally 'address',
+                  cr      literally '13',
+                  lf      literally '10',
+                  ctrlc   literally '3',
+                  ctrlx   literally '18h',
+                  bksp    literally '8';
+
+
+                /**************************************
+                 *                                    *
+                 *       B D O S   INTERFACE          *
+                 *                                    *
+                 **************************************/
+
+
+   6   1        mon1:
+                  procedure (func,info) external;
+   7   2            declare func byte;
+   8   2            declare info address;
+   9   2          end mon1;
+
+  10   1        mon2:
+                  procedure (func,info) byte external;
+  11   2            declare func byte;
+  12   2            declare info address;
+  13   2          end mon2;
+
+  14   1        mon3:
+                  procedure (func,info) address external;
+  15   2            declare func byte;
+  16   2            declare info address;
+  17   2          end mon3;
+
+
+
+  18   1        declare cmdrv     byte    external;   /* command drive      */
+  19   1        declare fcb (1)   byte    external;   /* 1st default fcb    */
+  20   1        declare fcb16 (1) byte    external;   /* 2nd default fcb    */
+  21   1        declare pass0     address external;   /* 1st password ptr   */
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   3
+
+
+  22   1        declare len0      byte    external;   /* 1st passwd length  */
+  23   1        declare pass1     address external;   /* 2nd password ptr   */
+  24   1        declare len1      byte    external;   /* 2nd passwd length  */
+  25   1        declare tbuff (1) byte    external;   /* default dma buffer */
+
+
+                /**************************************
+                 *                                    *
+                 *       B D O S   Externals          *
+                 *                                    *
+                 **************************************/
+
+  26   1        read$console:
+                  procedure byte;
+  27   2            return mon2 (1,0);
+  28   2          end read$console;
+
+
+  29   1        printchar: 
+                  procedure(char);
+  30   2          declare char byte;
+  31   2          call mon1(2,char);
+  32   2          end printchar;
+
+  33   1        conin: 
+                  procedure byte;
+  34   2          return mon2(6,0fdh);
+  35   2          end conin;
+
+  36   1        print$buf:
+                  procedure (buffer$address);
+  37   2            declare buffer$address address;
+  38   2            call mon1 (9,buffer$address);
+  39   2          end print$buf;
+
+  40   1        check$con$stat:
+                  procedure byte;
+  41   2            return mon2(11,0);
+  42   2          end check$con$stat;
+
+  43   1        version: procedure address;
+                  /* returns current cp/m version # */
+  44   2          return mon3(12,0);
+  45   2          end version;
+
+  46   1        setdma: procedure(dma);
+  47   2          declare dma address;
+  48   2          call mon1(26,dma);
+  49   2          end setdma;
+
+  50   1        search$first:
+                  procedure (fcb$address) byte;
+  51   2            declare fcb$address address;
+  52   2            return mon2 (17,fcb$address);
+  53   2          end search$first;
+
+  54   1        search$next:
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   4
+
+
+                  procedure byte;
+  55   2            return mon2 (18,0);
+  56   2          end search$next;
+
+  57   1        delete$file:
+                  procedure (fcb$address) address;
+  58   2            declare fcb$address address;
+  59   2            return mon3 (19,fcb$address);
+  60   2          end delete$file;
+
+  61   1        get$user$code:
+                  procedure byte;
+  62   2            return mon2 (32,0ffh);
+  63   2          end get$user$code;
+
+                /* 0ff => return BDOS errors */
+  64   1        return$errors:
+                  procedure;
+  65   2            call mon1 (45,0ffh);  
+  66   2          end return$errors;
+
+
+  67   1        terminate:
+                  procedure;
+  68   2            call mon1 (143,0);
+  69   2          end terminate;
+
+  70   1        declare
+                  parse$fn structure (
+                    buff$adr  address,
+                    fcb$adr   address);
+  71   1        declare (saveax,savecx) word external;  /* reg return vals, set in mon1 */
+
+  72   1        parse: procedure;
+  73   2          declare (retcode,errcode) word;
+
+  74   2          call mon1(152,.parse$fn);
+  75   2          retcode = saveax;
+  76   2          errcode = savecx;
+  77   2          if retcode = 0ffffh then       /* parse returned an error */
+  78   2             do;
+  79   3               call print$buf(.('Invalid Filespec$'));
+  80   3               if errcode = 23 then call print$buf(.(' (drive)$'));
+  82   3               else if errcode = 24 then call print$buf(.(' (filename)$'));
+  84   3               else if errcode = 25 then call print$buf(.(' (filetype)$'));
+  86   3               else if errcode = 38 then call print$buf(.(' (password)$'));
+                       call print$buf(.('.',13,10,'$')); call terminate;
+  90   3             end;
+  91   2          end parse;
+
+
+
+                /**************************************
+                 *                                    *
+                 *         GLOBAL VARIABLES           *
+                 *                                    *
+                 **************************************/
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   5
+
+
+
+  92   1        declare xfcb     byte initial(0);
+  93   1        declare successful lit '0FFh';
+
+  94   1        declare dir$entries (128) structure (
+                   file (12) byte );
+
+  95   1        declare dir$entry$adr address;
+  96   1        declare dir$entry based dir$entry$adr (1) byte;
+
+                /**************************************
+                 *                                    *
+                 *       S U B R O U T I N E S        *
+                 *                                    *
+                 **************************************/
+
+
+                                /* upper case character from console */
+  97   1      crlf:   proc;
+  98   2          call printchar(cr);
+  99   2          call printchar(lf);
+ 100   2          end crlf;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* fill string @ s for c bytes with f */
+ 101   1      fill:   proc(s,f,c);
+ 102   2          dcl s addr,
+                      (f,c) byte,
+                      a based s byte;
+
+ 103   2              do while (c:=c-1)<>255;
+ 104   3              a = f;
+ 105   3              s = s+1;
+ 106   3              end;
+ 107   2          end fill;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* error message routine */
+ 108   1      error:   proc(code);
+ 109   2         declare
+                    code byte;
+
+ 110   2          call printchar(' ');
+ 111   2          if code=1 then 
+ 112   2              call print$buf(.(cr,lf,'Disk I/O Error.$'));
+ 113   2          if code=2 then 
+ 114   2              call print$buf(.(cr,lf,'Drive $'));
+ 115   2          if code = 3 or code = 2 then
+ 116   2              call print$buf(.('Read Only$'));
+ 117   2          if code = 4 then
+ 118   2              call print$buf(.(cr,lf,'Invalid Filespec (drive).$'));
+ 119   2          if code = 5 then      
+ 120   2              call print$buf(.('Currently Opened$'));
+ 121   2          if code = 7 then
+ 122   2              call print$buf(.('Password Error$'));
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   6
+
+
+ 123   2          if code < 3 or code = 4 then 
+ 124   2              call terminate;
+ 125   2          end error;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                /* try to delete fcb at fcb$address
+                          return error code if unsuccessful */
+ 126   1        delete:
+                  procedure(fcb$address) byte;
+ 127   2          declare
+                     fcb$address address,
+                     fcbv based  fcb$address (32) byte,
+                     error$code  address,
+                     code        byte;
+                     
+ 128   2          if xfcb then 
+ 129   2              fcbv(5) = fcbv(5) or 80h;
+ 130   2          call setdma(.fcb16);                   /* password */
+ 131   2          fcbv(0) = fcb(0);                      /* drive */
+ 132   2          error$code = delete$file(fcb$address);
+ 133   2          fcbv(5) = fcbv(5) and 7fh;             /* reset xfcb bit */
+ 134   2          if low(error$code) = 0FFh then do;
+ 136   3              code = high(error$code);
+ 137   3              if (code=1) or (code=2) then 
+ 138   3                  call error(code);
+ 139   3              return code;
+ 140   3              end;
+ 141   2          return successful;      
+ 142   2          end delete;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* upper case character from console */
+ 143   1      ucase:   proc byte;
+ 144   2          dcl c byte;
+
+ 145   2          if (c:=conin) >= 'a' then
+ 146   2             if c < '{' then
+ 147   2                return(c-20h);
+ 148   2          return c;
+ 149   2          end ucase;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* get password and place at fcb + 16 */
+ 150   1      getpasswd:   proc;
+ 151   2          dcl (i,c) byte;
+
+ 152   2          call print$buf(.('Password ? ','$'));
+ 153   2      retry:
+                  call fill(.fcb16,' ',8);
+ 154   2              do i = 0 to 7;
+ 155   3      nxtchr:
+                      if (c:=ucase) >= ' ' then 
+ 156   3                  fcb16(i)=c;
+ 157   3              if c = cr then
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   7
+
+
+ 158   3                  goto exit;
+ 159   3              if c = ctrlx then
+ 160   3                  goto retry;
+ 161   3              if c = bksp then do;
+ 163   4                  if i<1 then
+ 164   4                      goto retry;
+ 165   4                  else do;
+ 166   5                      fcb16(i:=i-1)=' ';
+ 167   5                      goto nxtchr;
+ 168   5                      end;
+ 169   4                  end;
+ 170   3              if c = 3 then
+ 171   3                  call terminate;
+ 172   3              end;
+ 173   2      exit:
+                  c = check$con$stat;
+ 174   2          end getpasswd;
+              /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+
+                                /* error on deleting a file */
+ 175   1          file$err: procedure(code);
+ 176   2              declare code byte;
+
+ 177   2              call crlf;
+ 178   2              call print$buf(.('Not erased, $'));
+ 179   2              call error(code);
+ 180   2              call crlf;
+ 181   2              end file$err;
+
+
+
+                /**************************************
+                 *                                    *
+                 *       M A I N  P R O G R A M       *
+                 *                                    *
+                 **************************************/
+
+
+ 182   1      declare (i,j,k,code,response,user,dcnt) byte;
+ 183   1      declare ver address;
+
+ 184   1      declare last$dseg$byte byte
+                initial (0);
+
+ 185   1      plm$start: procedure public;
+ 186   2          ver = version;
+ 187   2          if low(ver) < Ver$BDOS  or  (high(ver) and Ver$Mask) = 0 then do;
+ 189   3            call print$buf (.(cr,lf,Ver$Needs$OS,'$'));
+ 190   3            call mon1(0,0);
+ 191   3            end;
+
+ 192   2          if fcb(17) <> ' ' then 
+ 193   2              if fcb(17) = 'X' then 
+ 194   2                  xfcb = true;
+ 195   2              else do;
+ 196   3                  call print$buf (.(
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   8
+
+
+                            'Invalid Command Option.$'));
+ 197   3                  call terminate;
+ 198   3                  end;
+
+ 199   2          parse$fn.buff$adr = .tbuff(1);
+ 200   2          parse$fn.fcb$adr = .fcb;
+ 201   2          call parse;
+
+ 202   2          if fcb(0) = 0 then
+ 203   2            fcb(0) = low (mon2 (25,0)) + 1;
+ 204   2          i = -1;
+ 205   2          user = get$user$code;
+ 206   2          call return$errors;
+ 207   2          dcnt = search$first (.fcb);
+ 208   2          do while dcnt <> 0ffh;
+ 209   3            dir$entry$adr = .tbuff(ror(dcnt,3) and 110$0000b);
+ 210   3            if dir$entry(0) = user then
+ 211   3            do;
+ 212   4              if (i:=i+1) = 128 then
+ 213   4              do;
+ 214   5                call print$buf (.(
+                          'Too many directory entries for query.','$'));
+ 215   5                call terminate;
+ 216   5              end;
+ 217   4              call move (12,.dir$entry(1),.dir$entries(i));
+ 218   4            end;
+ 219   3            dcnt = search$next;
+ 220   3          end;
+ 221   2          if i = -1 then
+ 222   2          do;
+ 223   3            call print$buf (.(
+                      'File Not Found.','$'));
+ 224   3          end;
+                  else
+ 225   2          do j = 0 to i;
+ 226   3            call printchar ('A'+fcb(0)-1);
+ 227   3            call printchar (':');
+ 228   3            call printchar (' ');
+ 229   3            do k = 0 to 10;
+ 230   4              if k = 8
+                        then call printchar ('.');
+ 232   4              call printchar (dir$entries(j).file(k) and 07FH);
+ 233   4            end;
+ 234   3            call printchar (' ');
+ 235   3            call printchar ('?');
+ 236   3            response = read$console;
+ 237   3            call printchar (0dh);
+ 238   3            call printchar (0ah);
+ 239   3            if (response = 'y') or
+                       (response = 'Y') then
+ 240   3            do;
+ 241   4              call move (12,.dir$entries(j),.fcb(1));
+ 242   4              if (code:=delete(.fcb)) <> successful then do;
+ 244   5                  if code < 3 or code = 4 then 
+ 245   5                      call error(code);            /* fatal errors */
+ 246   5                  else if code = 7 then do;
+ 248   6                      call file$err(code);
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE   9
+
+
+ 249   6                      call getpasswd;
+ 250   6                      code = delete(.fcb);
+ 251   6                      end;
+                          if code <> successful then 
+ 253   5                      call file$err(code);
+ 254   5                  call crlf;
+ 255   5                  end;
+ 256   4            end;
+ 257   3          end;
+ 258   2          call terminate;
+ 259   2        end plm$start;
+
+ 260   1      end eraseq;
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE  10
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+    102  0000H     1  A. . . . . . . . .    BYTE BASED(S)        104 
+      5               ADDR . . . . . . .    LITERALLY       102 
+      5               BKSP . . . . . . .    LITERALLY       161 
+     70  0000H     2  BUFFADR. . . . . .    WORD MEMBER(PARSEFN)      199 
+     36  0004H     2  BUFFERADDRESS. . .    WORD PARAMETER AUTOMATIC        37   38 
+    151  0612H     1  C. . . . . . . . .    BYTE       155  156  157  159  161  170  173 
+    101  0004H     1  C. . . . . . . . .    BYTE PARAMETER AUTOMATIC       102  103 
+    144  0610H     1  C. . . . . . . . .    BYTE       145  146  147  148 
+     29  0004H     1  CHAR . . . . . . .    BYTE PARAMETER AUTOMATIC        30   31 
+     40  0041H    15  CHECKCONSTAT . . .    PROCEDURE BYTE STACK=0008H          173 
+     18  0000H     1  CMDRV. . . . . . .    BYTE EXTERNAL(3)
+    175  0004H     1  CODE . . . . . . .    BYTE PARAMETER AUTOMATIC       176  179 
+    108  0004H     1  CODE . . . . . . .    BYTE PARAMETER AUTOMATIC       109  111  113  115  117  119  121  123
+                                            
+    127  060FH     1  CODE . . . . . . .    BYTE       136  137  138  139 
+    182  0616H     1  CODE . . . . . . .    BYTE       242  244  245  246  248  250  252  253 
+     33  0022H    15  CONIN. . . . . . .    PROCEDURE BYTE STACK=0008H          145 
+      5               CR . . . . . . . .    LITERALLY        98  112  114  118  157  189 
+     97  0130H    17  CRLF . . . . . . .    PROCEDURE STACK=000EH          177  180  254 
+      5               CTRLC. . . . . . .    LITERALLY
+      5               CTRLX. . . . . . .    LITERALLY       159 
+      5               DCL. . . . . . . .    LITERALLY
+    182  0619H     1  DCNT . . . . . . .    BYTE       207  208  209  219 
+    126  01D1H    87  DELETE . . . . . .    PROCEDURE BYTE STACK=0016H          242  250 
+     57  008EH    16  DELETEFILE . . . .    PROCEDURE WORD STACK=000AH          132 
+     94  0008H  1536  DIRENTRIES . . . .    STRUCTURE ARRAY(128)      217  232  241 
+     96  0000H     1  DIRENTRY . . . . .    BYTE BASED(DIRENTRYADR) ARRAY(1)         210  217 
+     95  0608H     2  DIRENTRYADR. . . .    WORD        96  209  210  217 
+     46  0004H     2  DMA. . . . . . . .    WORD PARAMETER AUTOMATIC        47   48 
+      1  0000H        ERASEQ . . . . . .    PROCEDURE STACK=0000H
+     73  0006H     2  ERRCODE. . . . . .    WORD        76   80   82   84   86 
+    108  0161H   112  ERROR. . . . . . .    PROCEDURE STACK=0010H          138  179  245 
+    127  060AH     2  ERRORCODE. . . . .    WORD       132  134  136 
+    173  02C1H        EXIT . . . . . . .    LABEL      158 
+    101  0006H     1  F. . . . . . . . .    BYTE PARAMETER AUTOMATIC       102  104 
+      5               FALSE. . . . . . .    LITERALLY
+     19  0000H     1  FCB. . . . . . . .    BYTE ARRAY(1) EXTERNAL(4)      131  192  193  200  202  203  207  226
+                                             241  242  250 
+     20  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(5)      130  153  156  166 
+     50  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        51   52 
+    126  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC       127  129  131  132  133 
+     57  0004H     2  FCBADDRESS . . . .    WORD PARAMETER AUTOMATIC        58   59 
+     70  0002H     2  FCBADR . . . . . .    WORD MEMBER(PARSEFN)      200 
+    127  0000H    32  FCBV . . . . . . .    BYTE BASED(FCBADDRESS) ARRAY(32)         129  131  133 
+     94  0000H    12  FILE . . . . . . .    BYTE ARRAY(12) MEMBER(DIRENTRIES)        232 
+    175  02C9H    26  FILEERR. . . . . .    PROCEDURE STACK=0016H          248  253 
+    101  0141H    32  FILL . . . . . . .    PROCEDURE STACK=0008H          153 
+      5               FOREVER. . . . . .    LITERALLY
+      6  0000H     1  FUNC . . . . . . .    BYTE PARAMETER         7 
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE  11
+
+
+     14  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        15 
+     10  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        11 
+    150  0248H   129  GETPASSWD. . . . .    PROCEDURE STACK=0010H          249 
+     61  009EH    15  GETUSERCODE. . . .    PROCEDURE BYTE STACK=0008H          205 
+                      HIGH . . . . . . .    BUILTIN         136  187 
+    182  0613H     1  I. . . . . . . . .    BYTE       204  212  217  221  225 
+    151  0611H     1  I. . . . . . . . .    BYTE       154  156  163  166 
+     14  0000H     2  INFO . . . . . . .    WORD PARAMETER        16 
+     10  0000H     2  INFO . . . . . . .    WORD PARAMETER        12 
+      6  0000H     2  INFO . . . . . . .    WORD PARAMETER         8 
+    182  0614H     1  J. . . . . . . . .    BYTE       225  232  241 
+    182  0615H     1  K. . . . . . . . .    BYTE       229  230  232 
+    184  061AH     1  LASTDSEGBYTE . . .    BYTE INITIAL
+     22  0000H     1  LEN0 . . . . . . .    BYTE EXTERNAL(7)
+     24  0000H     1  LEN1 . . . . . . .    BYTE EXTERNAL(9)
+      5               LF . . . . . . . .    LITERALLY        99  112  114  118  189 
+      5               LIT. . . . . . . .    LITERALLY        93 
+                      LOW. . . . . . . .    BUILTIN         134  187  203 
+      6  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H         31   38   48   65   68   74
+                                             190 
+     10  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(1) STACK=0000H         27   34   41   52   55
+                                              62  203 
+     14  0000H        MON3 . . . . . . .    PROCEDURE WORD EXTERNAL(2) STACK=0000H         44   59 
+                      MOVE . . . . . . .    BUILTIN         217  241 
+    155  026BH        NXTCHR . . . . . .    LABEL      167 
+     72  00CBH   101  PARSE. . . . . . .    PROCEDURE STACK=000EH          201 
+     70  0000H     4  PARSEFN. . . . . .    STRUCTURE        74  199  200 
+     21  0000H     2  PASS0. . . . . . .    WORD EXTERNAL(6)
+     23  0000H     2  PASS1. . . . . . .    WORD EXTERNAL(8)
+    185  02E3H   500  PLMSTART . . . . .    PROCEDURE PUBLIC STACK=001AH
+     36  0031H    16  PRINTBUF . . . . .    PROCEDURE STACK=000AH           79   81   83   85   87   88  112  114
+                                             116  118  120  122  152  178  189  196  214  223 
+     29  000FH    19  PRINTCHAR. . . . .    PROCEDURE STACK=000AH           98   99  110  226  227  228  231  232
+                                             234  235  237  238 
+      5               PROC . . . . . . .    LITERALLY        97  101  108  143  150 
+     26  0000H    15  READCONSOLE. . . .    PROCEDURE BYTE STACK=0008H          236 
+    182  0617H     1  RESPONSE . . . . .    BYTE       236  239 
+     73  0004H     2  RETCODE. . . . . .    WORD        75   77 
+    153  0252H        RETRY. . . . . . .    LABEL      160  164 
+     64  00ADH    15  RETURNERRORS . . .    PROCEDURE STACK=0008H          206 
+                      ROR. . . . . . . .    BUILTIN         209 
+    101  0008H     2  S. . . . . . . . .    WORD PARAMETER AUTOMATIC       102  104  105 
+     71  0000H     2  SAVEAX . . . . . .    WORD EXTERNAL(11)          75 
+     71  0000H     2  SAVECX . . . . . .    WORD EXTERNAL(12)          76 
+     50  006FH    16  SEARCHFIRST. . . .    PROCEDURE BYTE STACK=000AH          207 
+     54  007FH    15  SEARCHNEXT . . . .    PROCEDURE BYTE STACK=0008H          219 
+     46  005FH    16  SETDMA . . . . . .    PROCEDURE STACK=000AH          130 
+     93               SUCCESSFUL . . . .    LITERALLY       141  242  252 
+     25  0000H     1  TBUFF. . . . . . .    BYTE ARRAY(1) EXTERNAL(10)          199  209 
+     67  00BCH    15  TERMINATE. . . . .    PROCEDURE STACK=0008H           89  124  171  197  215  258 
+      5               TRUE . . . . . . .    LITERALLY       194 
+    143  0228H    32  UCASE. . . . . . .    PROCEDURE BYTE STACK=000CH          155 
+    182  0618H     1  USER . . . . . . .    BYTE       205  210 
+    183  060CH     2  VER. . . . . . . .    WORD       186  187 
+      4               VERBDOS. . . . . .    LITERALLY       187 
+      3               VERMASK. . . . . .    LITERALLY       187 
+      2               VERNEEDSOS . . . .    LITERALLY       189 
+PL/M-86 COMPILER    ERAQ: ERASE FILE WITH QUERY                                                                 PAGE  12
+
+
+      2               VEROS. . . . . . .    LITERALLY
+     43  0050H    15  VERSION. . . . . .    PROCEDURE WORD STACK=0008H          186 
+     92  060EH     1  XFCB . . . . . . .    BYTE INITIAL         128  194 
+
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 04D7H   1239D
+     CONSTANT AREA SIZE = 0128H    296D
+     VARIABLE AREA SIZE = 061BH   1563D
+     MAXIMUM STACK SIZE = 001AH     26D
+     463 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

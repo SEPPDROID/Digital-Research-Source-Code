@@ -1,0 +1,80 @@
+;*****************************************************
+;*
+;*	SYSTEM ENTRY FUNCTIONS
+;*
+;*****************************************************
+
+;==========		=========================
+poll_entry:		; Poll device - DL=device
+;==========		=========================
+
+	mov bx,rlr
+	mov p_stat[bx],ps_poll
+	mov u_dparam,dx
+	mov bx,0 ! mov cx,bx
+	jmp dsptch
+
+;===========		===================
+delay_entry:		;Delay - DX = ticks
+;===========		===================
+
+	mov bx,rlr
+	mov p_stat[bx],ps_delay
+	mov u_dparam,dx
+	mov bx,0 ! mov cx,bx
+	jmp dsptch
+
+;===============	==============
+dispatch_entry:		;Call dispatch
+;===============	==============
+
+	mov bx,0 ! mov cx,bx
+	jmp pdisp
+
+;===============	===========================
+set_prior_entry:	;Set Priority - DX=priority
+;===============	===========================
+
+	mov bx,rlr
+	mov p_prior[bx],dl
+	mov bx,0 ! mov cx,bx
+	jmp pdisp
+
+;========		==================
+pd_entry:		;Return addr of PD
+;========		==================
+
+	mov u_retseg,ds
+	mov bx,rlr
+	mov cx,0 ! ret
+
+;================	============================
+creat_proc_entry:	;Create Process - DX->new PD
+;================	============================
+
+	call proc_creat ! jmp pdisp
+
+;===========		==============================
+sleep_entry:		;Put Calling PD on System List
+;===========		==============================
+
+	mov bx,rlr
+	mov u_dparam,dx
+	mov al,p_stat[bx] ! mov p_scratch[bx],al
+	mov p_stat[bx],ps_sleep
+	jmp dsptch
+
+;============		==============================
+wakeup_entry:		;wakeup top PD in System List
+;============		==============================
+
+	pushf ! cli
+	mov bx,dx ! mov si,[bx]
+	cmp si,0 ! je wke_out
+	    mov ax,p_link[si] ! mov [bx],ax
+	    mov ax,drl ! mov p_link[si],ax
+	    mov drl,si
+	    mov p_stat[si],ps_run
+	    call pdisp
+wke_out:popf ! ret
+

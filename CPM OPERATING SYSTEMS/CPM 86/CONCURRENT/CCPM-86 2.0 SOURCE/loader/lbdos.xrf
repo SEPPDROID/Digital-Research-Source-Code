@@ -1,0 +1,2049 @@
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   1
+
+     1  
+     2                                  title   'CCP/M-86 Bdos Loader'
+     3                          ;*****************************************************************
+     4                          ;*****************************************************************
+     5                          ;**                                                             **
+     6                          ;**   B a s i c    D i s k   O p e r a t i n g   S y s t e m    **
+     7                          ;**              I n t e r f a c e   M o d u l e                **
+     8                          ;**                                                             **
+     9                          ;*****************************************************************
+    10                          ;*****************************************************************
+    11                          ;
+    12                          ;       Copyright (c) 1983
+    13                          ;       Digital Research
+    14                          ;       Box 579, Pacific Grove
+    15                          ;       California
+    16                          ;
+    17                          ;       January 1983
+    18                          ;
+    19                          ;*****************************************************
+    20                          ;
+    21     0000                 bdosoffset      equ     0000h   ; offset of BDOS-86
+    22     0906                 ldroffset       equ     0906h   ; offset of CLDCCPM
+    23     0900                 biosoffset      equ     0900h   ; offset of BIOS-86
+    24                          ;
+    25                          ;******************* BDOS symbols: *******************
+    26                          ;
+    27                          ;
+    28     FFFF                 true    equ     0ffffh
+    29     0000                 false   equ     not true
+    30                          ;
+    31                          ;       Special 8086 symbols:
+    32                          ;
+    33     0000                 b       equ     byte ptr 0
+    34     0000                 w       equ     word ptr 0
+    35                          ;
+    36                          ;*****************************************************
+    37                          ;
+    38                          ;       BIOS Function numbers
+    39                          ;
+    40                          ;io_const       equ     0       ;console status function
+    41                          ;io_conin       equ     1       ;console input function
+    42                          ;io_conout      equ     2       ;console output function
+    43                          ;io_listst      equ     3       ;list status function
+    44                          ;io_list        equ     4       ;list output function
+    45                          ;io_auxin       equ     5       ;aux input function
+    46                          ;io_auxout      equ     6       ;aux output function
+    47                          ;io_            equ     7
+    48                          ;io_            equ     8
+    49     0009                 io_seldsk       equ     9       ;select disk function
+    50     000A                 io_read         equ     10      ;read disk function
+    51                          ;io_write       equ     11      ;write disk function
+    52                          ;io_flush       equ     12      ;flush buffers function
+    53                          ;io_            equ     13
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   2
+
+    54  
+    55  
+    56                          ;
+    57                          ;       literal constants
+    58                          ;
+    59     FFFF                 enddir  EQU     0ffffh          ;end of directory
+    60                          ;
+    61                          ;       file control block (fcb) constants
+    62                          ;
+    63     0020                 fcblen  EQU     32              ;fcb length
+    64                          ;empty  EQU     0e5h            ;empty directory entry
+    65     0080                 recsiz  EQU     128             ;record size
+    66     0004                 dirrec  EQU     recsiz/fcblen   ;directory elts / record
+    67     0002                 dskshf  EQU     2               ;log2(dirrec)
+    68     0003                 dskmsk  EQU     dirrec-1
+    69     0005                 fcbshf  EQU     5               ;log2(fcblen)
+    70     001F                 maxext  EQU     31              ;largest extent number
+    71     003F                 maxmod  EQU     63              ;largest module number
+    72     000F                 namlen  EQU     15              ;name length
+    73                          ;lstfcb EQU     fcblen-1
+    74  
+    75                          ;drv    EQU     0               ;drive field
+    76                          ;f1     EQU     1               ;file name byte 1 to 8
+    77                          ;f2     EQU     2
+    78                          ;f3     EQU     3
+    79                          ;f4     EQU     4
+    80                          ;f5     EQU     5
+    81                          ;f6     EQU     6
+    82     0007                 f7      EQU     7
+    83                          ;f8     EQU     8
+    84                          ;
+    85                          ;       reserved file indicators
+    86                          ;
+    87                          ;rofile EQU     9               ;t1' -> read/only file
+    88                          ;sysfil EQU     10              ;t2' -> system file
+    89                          ;ARCHIV EQU     11              ;t3' -> FILE HAS BEEN ARCHIVED
+    90     000C                 extnum  EQU     12              ;extent number field
+    91     000D                 chksum  EQU     13              ;unfilled bytes field
+    92     000E                 modnum  EQU     14              ;data module number
+    93     000F                 reccnt  EQU     15              ;record count field
+    94     0010                 dskmap  EQU     16              ;disk map field
+    95     0020                 nxtrec  EQU     fcblen
+    96                          ;ranrec EQU     nxtrec+1        ;random record field (3 bytes)
+    97                          ;
+    98                          ;
+    99                          ;       interrupt control indicators
+   100                          ;
+   101     0200                 interruptbit    equ     200h    ; bit 9 of flag word
+   102                          ;
+   103                          ;
+   104                          ;**************** end of BDOS symbols ****************
+   105  
+   106                          ;***************** BDOS entry module *****************
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   3
+
+   107  
+   108                          ;
+   109                          ;       Perform branching, error handling and special
+   110                          ;       8086 handling.
+   111                          ;
+   112                          ;
+   113                                  cseg
+   114                                  org     ldroffset
+   115                          ldr_entry:
+   116                          ;
+   117                                  org     bdosoffset
+   118                          os_init:
+   119   0000 E90500       0008         jmp user_init
+   120                          os_entry:
+   121   0003 E92E00       0034         jmp user_entry
+   122  
+   123   0006 0000                      sysdat  dw      0               ;system data segment
+   124  
+   125                          ;=========
+   126                          user_init:
+   127                          ;=========
+   128   0008 8CC8                      mov ax,cs
+   129   000A 8ED8                      mov ds,ax
+   130   000C 8EC0                      mov es,ax
+   131   000E 8ED0                      mov ss,ax
+   132   0010 BC8408                    mov sp,offset bdosstack
+   133   0013 8C0EAC07                  mov bioscs,cs
+   134   0017 FF1EAA07                  callf dword ptr iosentry
+   135   001B C706AA070309              mov biosco,bios_offset+3        ;set io call to entry
+   136   0021 33C0                      xor ax,ax
+   137   0023 1E8ED8                    push ds! mov ds,ax
+   138   0026 C70680030300              mov word ptr .0380h,offset os_entry
+   139   002C 8C0E8203                  mov .0382h,cs
+   140   0030 1F                        pop ds
+   141   0031 E9D208       0906         jmp ldr_entry
+   142  
+   143                          ;
+   144                          ;-----------------------------------------------------
+   145                          ;==========
+   146                          user_entry:
+   147                          ;==========
+   148                          ;       User Entry Point - enter here from a INT 224
+   149                          ;
+   150                          ;               REGISTER USAGE
+   151                          ;       ENTRY                   EXIT
+   152                          ;       -----                   ----
+   153                          ;  CL - Function Code     AX - Copy of BX
+   154                          ;  DX - Param             BX - Return
+   155                          ;  DS - Seg Addr          CX - Error Code       
+   156                          ;                         ES - Segment Return
+   157                          ;
+   158                          ;               DS,SI,DI,BP preserved through call
+   159                          ;
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   4
+
+   160  
+   161                          ;       contents of users stack
+   162                          ;               Flags
+   163                          ;               CS
+   164                          ;               IP              <- u_stack_ss,_sp
+   165                          ;       DS =  Sysdat Segment
+   166                          ;       u_wrkseg = user's DS
+   167                          ;       u_retseg = user's ES
+   168  
+   169   0034 FC8CD8                    cld ! mov ax,ds                 ;AX = user's DS
+   170   0037 0E1F                      push cs ! pop ds
+   171   0039 8C06F707                  mov u_retseg,es                 ;save user's ES
+   172                                  
+   173   003D A3C308                    mov u_wrkseg,ax                 ;wipe out earlier work seg
+   174  
+   175   0040 8BDC                      mov bx,sp                       ;enable interrupt if it was on
+   176   0042 36F747040002              test ss:word ptr 4[bx],interruptbit
+   177   0048 7401         004B         jz bdose1
+   178   004A FB                          sti
+   179                          bdose1:
+   180   004B 1E07                      push ds! pop es
+   181   004D 565755                    push si! push di! push bp
+   182  
+   183   0050 E80E00       0061         call func                       ;chk netwrk, returns BX, ES, CX
+   184  
+   185   0053 5D5F5E                    pop bp! pop di! pop si          ;setup user's environment and return
+   186   0056 8E06F707                  mov es,u_retseg                 ;restore user's ES
+   187   005A 8E1EC308                  mov ds,u_wrkseg                 ;DS = user's entry DS
+   188   005E 8BC3                      mov ax,bx                       ;parameter return BX = AX
+   189   0060 CF                        iret                            ;back to user ...
+   190  
+   191  
+   192                          func:
+   193                          ;----
+   194   0061 80F90E7506   006C         cmp cl,14! jne fn1
+   195   0066 BEC700                      mov si,offset bdofunc+0
+   196   0069 E96400       00D0           jmp bdo_entry
+   197   006C 80F90F7506   0077 fn1:    cmp cl,15! jne fn2
+   198   0071 BECA00                      mov si,offset bdofunc+3
+   199   0074 E95900       00D0           jmp bdo_entry
+   200   0077 80F9147506   0082 fn2:    cmp cl,20! jne fn3
+   201   007C BECD00                      mov si,offset bdofunc+6
+   202   007F E94E00       00D0           jmp bdo_entry
+   203   0082 80F91A7413   009A fn3:    cmp cl,26! je func26
+   204   0087 80F9207413   009F         cmp cl,32! je func32
+   205   008C 80F92C741F   00B0         cmp cl,44! je func44
+   206   0091 80F933742C   00C2         cmp cl,51! je func51
+   207                          badfunc:
+   208   0096 BBFFFF                      mov bx,0ffffh                 ;return ffff for illegal function
+   209   0099 C3                          ret
+   210                          ;
+   211                          func26:         ;set the subsequent dma address to info
+   212                          ;======
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   5
+
+   213  
+   214   009A 8916C508                  mov dmaad,dx                    ;dmaad = info
+   215   009E C3                        ret
+   216  
+   217                          func32:         ;set user code
+   218                          ;======
+   219  
+   220   009F 8AC2                      mov al,dl
+   221   00A1 3CFF                      cmp al,0ffh
+   222   00A3 7505         00AA         jnz setusrcode
+   223   00A5 8A1EC007                    mov bl,p_user                 ;interrogate user code instead
+   224   00A9 C3                          ret
+   225                          setusrcode:
+   226   00AA 240F                      and al,0fh
+   227   00AC A2C007                    mov p_user,al
+   228   00AF C3                        ret                             ;jmp goback
+   229  
+   230                          func44:         ;set multi-sector count
+   231                          ;======
+   232   00B0 8AC2                      mov al,dl
+   233   00B2 33DB                      xor bx,bx
+   234   00B4 0AC0                      or al,al
+   235   00B6 7408         00C0         jz return_not_ok
+   236   00B8 3C81                      cmp al,129
+   237   00BA 7304         00C0         jnb return_not_ok
+   238   00BC A2C307                      mov u_mult_cnt,al
+   239   00BF C3                          ret
+   240                          return_not_ok:
+   241   00C0 4B                        dec bx                  ;BX = 0ffffh
+   242   00C1 C3                        ret
+   243  
+   244                          func51:         ;set segment base for disk I/O
+   245                          ;======
+   246   00C2 8916C708                  mov     dmabase,dx
+   247   00C6 C3                        ret
+   248  
+   249                          ;
+   250                          ;*************** end BDOS entry module ***************
+   251  
+   252                          ;**************** BDOS Disk Functions ****************
+   253  
+   254                          ;*****************************************************
+   255                          ;*
+   256                          ;* bdos function table
+   257                          ;*
+   258                          ;*****************************************************
+   259  
+   260                                  ; structure of entry in functab
+   261  
+   262     0000                 btab_addr       equ     word ptr 0
+   263     0002                 btab_flag       equ     byte ptr (btab_addr + word)
+   264     0001                 bf_getmx        equ     001h            ;get mxdisk queue
+   265     0002                 bf_cshell       equ     002h            ;conditional shell function
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   6
+
+   266  
+   267  
+   268                                  ; bdos function table
+   269  
+   270     00C7                 bdofunc equ     offset $
+   271   00C7 A00601                    dw func14   ! db 0001b  ; fxi14  equ 01h  ;select disk
+   272   00CA AA0601                    dw func15   ! db 0001b  ; fxi15  equ 02h  ;open file
+   273   00CD D40603                    dw func20   ! db 0011b  ; fxi20  equ 07h  ;read sequential
+   274  
+   275                          ;========
+   276                          bdoentry:               ; bdos module entry point
+   277                          ;========
+   278                          ;       entry:  SI = offset of bdos functab entry
+   279                          ;               DX = argument
+   280                          ;               DS = ES = system data area
+   281                          ;       exit:   BX = return code
+   282  
+   283   00D0 A1BF07                    mov ax,word ptr p_dsk
+   284   00D3 A3C908                    mov word ptr seldsk,ax          ;set default disk and user code
+   285  
+   286   00D6 B9070033C0                mov cx,zerolength ! xor ax,ax   ;zero local variables
+   287   00DB BFAE07                    mov di,offset fcbdsk
+   288   00DE F3AA                      rep stosb
+   289  
+   290   00E0 8916C108                  mov info,dx                     ;info=dx
+   291  
+   292   00E4 803EC3070174 00F3         cmp mult_cnt,1 ! je noshell     ;if mult_cnt <> 1 and
+   293        08           00F3
+   294   00EB 2EF684020002              test cs:btabflag[si],bf_cshell  ; func uses mult_cnt then
+   295   00F1 7508         00FB         jnz shell                       ; use bdos multi sector shell
+   296                          noshell:
+   297   00F3 E86100       0157         call call_bdos
+   298                          retmon:
+   299   00F6 8B1EB007                  mov bx,aret
+   300   00FA C3                        ret
+   301                          ;
+   302                          shell:
+   303                          ;-----
+   304                          ;       entry:  SI = offset of functab entry
+   305  
+   306   00FB 8936F207                  mov shell_si,si
+   307   00FF A1C508A3F407              mov ax,dmaad! mov shell_dma,ax
+   308   0105 2E8AA40200                mov ah,cs:btabflag[si]
+   309   010A E86E00       017B         call parsave33
+   310   010D C606F607FF                mov shell_flag,true
+   311  
+   312   0112 A0C307                    mov al,mult_cnt
+   313                          mult_io1:
+   314   0115 A2B407                    MOV MULT_NUM,AL
+   315   0118 50                        push ax
+   316   0119 8B36F207                  mov si,shell_si
+   317   011D 8B16C108                  mov dx,info
+   318   0121 E83300       0157         call call_bdos
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   7
+
+   319  
+   320   0124 8A1EB007                  mov bl,byte ptr aret
+   321   0128 0ADB                      or bl,bl
+   322   012A 7409         0135         jz no_shell_err
+   323   012C 8A3EC307                    mov bh,mult_cnt
+   324   0130 58                          pop ax
+   325   0131 2AF8                        sub bh,al                     ;BH = # of successfull records 
+   326   0133 EB0D         0142           jmps shell03
+   327                          no_shell_err:
+   328   0135 8106C5088000              add dmaad,80h
+   329   013B 58FEC8                    pop ax! dec al
+   330   013E 75D5         0115         jnz mult_io1
+   331   0140 33DB                      xor bx,bx
+   332  
+   333                          shell03:
+   334   0142 891EB007                  mov aret,bx
+   335   0146 A1F407A3C508              mov ax,shell_dma! mov dmaad,ax
+   336   014C C606F60700                mov shell_flag,false
+   337   0151 E84B00       019F         call parunsave
+   338   0154 E99FFF       00F6         jmp retmon
+   339                          ;
+   340                          call_bdos:
+   341                          ;---------
+   342                          ;       entry:  DX = argument
+   343                          ;               SI = offset of bdos functab entry
+   344  
+   345   0157 E8EE01       0348         call setdata                    ;ready to go to the function
+   346   015A 89268408                  mov savesp,sp
+   347   015E 2EFF940000                call cs:btab_addr[si]
+   348                          bdos_return:
+   349   0163 803EB20700                cmp resel,0
+   350   0168 7406         0170         je retmon5
+   351   016A A0AE07                      mov al,fcbdsk
+   352   016D A28608                      mov info_fcb,al
+   353                          retmon5:
+   354   0170 803EAF07FF                cmp parcopfl,true
+   355   0175 7503         017A         jne retmon6
+   356   0177 E82500       019F           call parunsave                ;copy local vars to uda
+   357                          retmon6:
+   358   017A C3                        ret
+   359                          ;
+   360                          parsave33:      ;copy 33 byte length FCB
+   361                          ;---------
+   362   017B B121                      mov cl,33
+   363                                  ;jmps parsave
+   364                          ;
+   365                          parsave:        ;copy FCB from user segment to bdos segment
+   366                          ;-------
+   367                          ;       entry:  CL = length of FCB to save
+   368  
+   369   017D F606F607FF                test shell_flag,true
+   370   0182 751A         019E         jnz parret
+   371   0184 C606AF07FF                  mov parcopfl,true
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   8
+
+   372  
+   373   0189 880EF907                    mov parlg,cl
+   374   018D 32ED                        xor ch,ch
+   375   018F 8B36C108                    mov si,info
+   376   0193 BF8608                      mov di,offset info_fcb
+   377   0196 1E                          push ds
+   378   0197 8E1EC308                    mov ds,parametersegment
+   379   019B F3A4                        rep movsb
+   380   019D 1F                          pop ds
+   381                          parret:
+   382   019E C3                        ret
+   383                          ;
+   384                          parunsave:      ;copy local FCB to user segment
+   385                          ;---------
+   386   019F F606F607FF                test shell_flag,true
+   387   01A4 75F8         019E         jnz parret
+   388   01A6 8A0EF907                    mov cl,parlg
+   389   01AA 32ED                        xor ch,ch
+   390   01AC BE8608                      mov si,offset info_fcb
+   391   01AF 8B3EC108                    mov di,info
+   392   01B3 06                          push es
+   393   01B4 8E06C308                    mov es,parametersegment
+   394   01B8 F3A4                        rep movsb
+   395   01BA 07                          pop es
+   396   01BB C3                        ret
+   397  
+   398                          setlret1:
+   399   01BC B001                      mov al,1
+   400                          staret:
+   401   01BE A2B007                    mov lret,al
+   402   01C1 C3                        ret
+   403  
+   404                                  ;these functions added for mpm interface
+   405  
+   406                          ;*****************************************************
+   407                          ;*
+   408                          ;*       bdos - xios interface
+   409                          ;*
+   410                          ;*****************************************************
+   411  
+   412                          ;======         ========================
+   413                          xiosif:         ; xios interface routine
+   414                          ;======         ========================
+   415                          ;       entry:  AL = function number
+   416                          ;               CX = argument 1
+   417                          ;               DX = argument 2
+   418                          ;       exit:   AX = BX = output
+   419  
+   420   01C2 06                        push es
+   421   01C3 FF1EAA07                  callf dword ptr iosentry
+   422   01C7 FC07                      cld! pop es
+   423   01C9 C3                        ret
+   424  
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE   9
+
+   425  
+   426                          ;========       ================================
+   427                          rwxiosif:       ; disk read/write xios interface
+   428                          ;========       ================================
+   429                          ;       entry:  AL = function number
+   430                          ;       exit:   AX = BX = output
+   431  
+   432   01CA 8B16EA07                  mov dx,arecord
+   433   01CE 8A2EEC07                  mov ch,byte ptr arecord+2
+   434   01D2 8A1EC407                  mov bl,curdsk
+   435   01D6 B701                      mov bh,1
+   436   01D8 863EB507                  xchg bh,mult_sec        ;BH = multi sector count
+   437                                                          ; stack on entry to the xios
+   438   01DC 53                        push bx                 ;   +C | DRV  | MCNT |
+   439   01DD FF36BB07                  push track              ;   +C |    TRACK    |
+   440   01E1 FF36BD07                  push sector             ;   +8 |   SECTOR    |
+   441   01E5 FF36ED07                  push curdmabase         ;   +6 |   DMA_SEG   |
+   442   01E9 FF36EF07                  push curdma             ;   +4 |   DMA_OFF   |
+   443                                                          ;   +2 |   RET_SEG   |
+   444                                                          ; SP+0 |   RET_OFF   |
+   445   01ED FF1EAA07                  callf dword ptr iosentry
+   446   01F1 83C40A                    add sp,10               ;remove parameters from stack
+   447   01F4 FC1E07                    cld! push ds! pop es
+   448   01F7 C3                        ret
+   449  
+   450                          ;*****************************************************************
+   451                          ;*****************************************************************
+   452                          ;**                                                             **
+   453                          ;**   b a s i c    d i s k   o p e r a t i n g   s y s t e m    **
+   454                          ;**                                                             **
+   455                          ;*****************************************************************
+   456                          ;*****************************************************************
+   457  
+   458                          ;***************** bdos file system ******************
+   459  
+   460                          ;       error message handlers
+   461  
+   462                          pererror:       ;report permanent error
+   463                          ;--------
+   464   01F8 B501                      mov ch,1
+   465   01FA EB07         0203         jmps goerr
+   466  
+   467                          selerror:       ;report select error
+   468                          ;--------
+   469   01FC C606C407FF                mov curdsk,0ffh
+   470   0201 B504                      mov ch,4
+   471                          goerr:
+   472   0203 B1FF                      mov cl,0ffh
+   473   0205 890EB007                  mov aret,cx                     ;set aret
+   474                          goback:
+   475   0209 8B268408                  mov sp,save_sp
+   476   020D E953FF       0163         jmp bdos_return
+   477  
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  10
+
+   478  
+   479  
+   480                          ;       local subroutines for bios interface
+   481                          ;-----------------------------------------------------
+   482  
+   483                          move:           ;block move data
+   484                          ;----
+   485                          ;       entry:  CL = length of data to move
+   486                          ;               DX = source offset
+   487                          ;               BX = destination offset
+   488  
+   489   0210 32ED                      xor ch,ch
+   490   0212 8BF2                      mov si,dx
+   491   0214 8BFB                      mov di,bx
+   492   0216 F3A4                      rep movsb
+   493   0218 C3                        ret
+   494  
+   495                          selectdisk:
+   496                          ;----------
+   497                          ;       select the disk drive given in AL, and fill
+   498                          ;       the base addresses curtrka - alloca, then fill
+   499                          ;       the values of the disk parameter block
+   500                          ;       entry:  AL = disk to select
+   501                          ;       exit:   C flag set if no error
+   502  
+   503   0219 8AC8                      mov cl,al                       ;current disk# to cl
+   504                                                                  ;lsb of dl = 0 if not yet
+   505   021B B009                      mov al,io_seldsk                ;logged in
+   506   021D E8A2FF       01C2         call xiosif                     ;bx filled by call
+   507                                                                  ;bx = 0000 if error,
+   508   0220 0BDB                      or bx,bx                        ;otherwise disk headers
+   509   0222 7430         0254         jz ret4                         ;rz - carry flag reset
+   510   0224 83C308                    add bx,8
+   511   0227 8BF3                      mov si,bx
+   512   0229 BFC807                    MOV di,OFFSET DPBADDR           ;dx= source for move, bx=dest
+   513   022C B90A00                    mov cx,addlist                  ;addlist filled
+   514   022F F3A4                      rep movsb                       ;now fill the disk
+   515   0231 8B36C807                  mov si,dpbaddr                  ;parameter block
+   516   0235 BFD207                    mov di,offset sectpt            ;bx is destination
+   517   0238 B91100                    mov cx,dpblist
+   518   023B F3A4                      rep movsb                       ;data filled
+   519   023D 8A0EE107                  mov cl,physhf                   ;convert # sectors per track
+   520   0241 D326D207                  shl sectpt,cl                   ; from physical to logical
+   521                                                                  ;set single/double map mode
+   522   0245 A0D807                    mov al,byte ptr maxall+1        ;largest allocation number
+   523   0248 0AC0                      or al,al
+   524   024A 7402         024E         jz retselect
+   525                                                                  ;if high order of maxall not
+   526   024C B001                        mov al,1                      ;zero then use double disk map
+   527                          retselect:
+   528   024E FEC8                      dec al
+   529   0250 A2E507                    mov single,al                   ;true if single disk map mode
+   530   0253 F9                        stc                             ;select disk function ok
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  11
+
+   531  
+   532                          ret4:
+   533   0254 C3                        ret
+   534  
+   535                          rdbuff:         ;read buffer and check if ok
+   536                          ;------
+   537   0255 B00A                      mov al,io_read
+   538   0257 E870FF       01CA         call rwxiosif                   ;current drive, track,....
+   539  
+   540                          diocomp:        ;check for disk errors
+   541                          ;-------
+   542                          ;       entry:  AL = xios return code
+   543  
+   544   025A 0AC074F6     0254         or al,al! jz ret4               ;rz
+   545   025E E997FF       01F8           jmp pererror                  ; no
+   546  
+   547                          seek:           ;seek the track given by arecord (actual record)
+   548                          ;----
+   549   0261 A1EA07                    mov ax,arecord                  ;compute track/sector
+   550   0264 33D2                      xor dx,dx
+   551   0266 8A16EC07                  mov dl,byte ptr arecord+2
+   552   026A F736D207                  div sectpt                      ;dx=sector, ax=track
+   553   026E 0306DF07                  add ax,offsetv
+   554   0272 A3BB07                    MOV TRACK,ax                    ;save bios/xios track
+   555   0275 8A0EE107                  MOV CL,PHYSHF
+   556   0279 D3EA                      SHR dx,CL                       ;PHY SECTOR = SHR(LOG SECTOR,PHYSHF)
+   557   027B 8916BD07                  MOV SECTOR,dx                   ;save bios/xios sector
+   558   027F C3                        ret
+   559  
+   560                          ;       utility functions for file access
+   561  
+   562                          dmposition:     ;compute disk map position for vrecord
+   563                          ;----------
+   564                          ;       exit:   AL = disk map position of vrecord
+   565  
+   566   0280 8A0ED407                  mov cl,blkshf                   ;shift count to CL
+   567   0284 8A2EE807                  mov ch,vrecord                  ;current virtual record to a
+   568   0288 D2ED                      shr ch,cl                       ;CH = shr(vrecord,blkshf)
+   569                                                                  ;   = vrecord/2**(sect/block)
+   570   028A F6D9                      neg cl
+   571   028C 80C107                    add cl,7                        ;CL = 7 - blkshf
+   572   028F A0E707                    mov al,extval                   ;extent value and extmsk
+   573                                                                  ;blkshf = 3,4,5,6,7
+   574                                                                  ;CL = 4,3,2,1,0
+   575                                                                  ;shift is 4,3,2,1,0
+   576   0292 D2E0                      shl al,cl                       ;AL = shl(ext and extmsk,7-blkshf)
+   577   0294 02C5                      add al,ch                       ;add the previous
+   578                                                                  ;shr(vrecord,blkshf) value
+   579                                                                  ;AL is one of the following
+   580                                                                  ;values, depending upon alloc
+   581                                                                  ;bks blkshf
+   582                                                                  ;1k   3     v/8 + extval * 16
+   583                                                                  ;2k   4     v/16+ extval * 8
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  12
+
+   584  
+   585                                                                  ;4k   5     v/32+ extval * 4
+   586                                                                  ;8k   6     v/64+ extval * 2
+   587                                                                  ;16k  7     v/128+extval * 1
+   588   0296 C3                        ret                             ;with dm$position in a
+   589  
+   590                          getdm:          ;return disk map value from position given by cx
+   591                          ;-----
+   592                          ;       entry:  CX = index into disk map
+   593                          ;       exit:   BX = disk map value at position CX
+   594  
+   595   0297 BB9608                    mov bx,offset info_fcb+dskmap
+   596   029A 03D9                      add bx,cx                       ;index by asingle byte value
+   597   029C 803EE50700                cmp single,0                    ;single byte/map entry?
+   598   02A1 7405         02A8         jz getdmd                       ;get disk map single byte
+   599   02A3 8A1F                        mov bl,[bx]
+   600   02A5 32FF                        xor bh,bh
+   601   02A7 C3                          ret                           ;with bx=00bb
+   602                          getdmd:
+   603   02A8 03D9                      add bx,cx                       ;bx=.fcb(dm+1*2)
+   604   02AA 8B1F                      mov bx,[bx]                     ;return double precision value
+   605   02AC C3                        ret
+   606  
+   607                          index:          ;compute disk block number from current fcb
+   608                          ;-----
+   609                          ;       exit:   BX = disk map value for vrecord in current fcb
+   610                          ;               Z flag set according to value in BX
+   611  
+   612   02AD E8D0FF       0280         call dmposition                 ;0...15 in register al
+   613   02B0 A2E407                    MOV DMINX,AL
+   614   02B3 8AC8                      mov cl,al
+   615   02B5 32ED                      xor ch,ch
+   616   02B7 E8DDFF       0297         call getdm                      ;value to bx
+   617   02BA 891EEA07                  mov arecord,bx
+   618   02BE 0BDB                      or bx,bx
+   619   02C0 C3                        ret
+   620  
+   621                          atran:          ;compute actual record address, assuming index called
+   622                          ;-----
+   623   02C1 8A0ED407                  mov cl,blkshf                   ;shift count to reg al
+   624   02C5 A1EA07                    mov ax,arecord
+   625   02C8 32FF                      xor bh,bh
+   626   02CA 8ADC                      mov bl,ah
+   627   02CC D3E0                      shl ax,cl
+   628   02CE D3E3                      shl bx,cl
+   629   02D0 93                        xchg ax,bx
+   630   02D1 A0E807                    mov al,vrecord
+   631   02D4 2206D507                  and al,blkmsk                   ;masked value in al
+   632   02D8 A2B607                    mov blkoff,al
+   633   02DB 0AD8                      or bl,al
+   634   02DD 891EEA07                  mov arecord,bx                  ;arecord=bx or
+   635                                                                  ;(vrecord and blkmsk)
+   636   02E1 8826EC07                  mov byte ptr arecord+2,ah
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  13
+
+   637  
+   638   02E5 C3                        ret
+   639  
+   640                          getfcb:         ;set local variables from currently addressed fcb
+   641                          ;------
+   642   02E6 A0A608                    mov al,info_fcb+nxtrec
+   643   02E9 A2E807                    mov vrecord,al                  ;vrecord=fcb(nxtrec)
+   644   02EC 803E950800                cmp info_fcb+reccnt,0
+   645   02F1 7508         02FB         jne getfcb0
+   646   02F3 E8A300       0399           call get_dir_ext
+   647   02F6 8AC8                        mov cl,al
+   648   02F8 E8A101       049C           call set_rc
+   649                          getfcb0:
+   650   02FB A09508                    mov al,info_fcb+reccnt
+   651   02FE 3C817202     0304         cmp al,81h! jb getfcb1
+   652   0302 B080                        mov al,80h
+   653                          getfcb1:
+   654   0304 A2E607                    mov rcount,al                   ;rcount=fcb(reccnt)
+   655   0307 A0D607                    mov al,extmsk                   ;extent mask to a
+   656   030A 22069208                  and al,info_fcb+extnum          ;fcb(extnum) and extmsk
+   657   030E A2E707                    mov extval,al
+   658   0311 C3                        ret
+   659  
+   660                          setfcb:         ;place local values back into current fcb
+   661                          ;------
+   662   0312 B001                      mov al,1
+   663   0314 0206E807                  add al,vrecord
+   664   0318 A2A608                    mov info_fcb+nxtrec,al          ;fcb(nxtrec)=vrecord+seqio
+   665   031B 803E950880                cmp info_fcb+reccnt,80h
+   666   0320 7306         0328         jnb ret41                       ;dont reset if fcb(rc) > 7fh
+   667   0322 A0E607                    mov al,rcount
+   668   0325 A29508                    mov info_fcb+reccnt,al          ;fcb(reccnt)=rcount
+   669   0328 C3                ret41:  ret
+   670  
+   671                          getdptra:
+   672                          ;--------
+   673                          ; compute the address of a directory element at
+   674                          ;  positon dptr in the buffer
+   675                          ;       exit:   BX = buffa + dptr
+   676  
+   677   0329 8A1EF107                  mov bl,dptr
+   678   032D 32FF                      xor bh,bh
+   679   032F 031EC607                  add bx,buffa            ;bx = buffa + dptr
+   680   0333 C3                        ret
+   681  
+   682  
+   683                          rddir:          ;read the current directory record
+   684                          ;-----
+   685   0334 A1CB08                    MOV ax,DCNT                     ;seek the record containing
+   686   0337 B102D3E8                  MOV CL,DSKSHF! SHR ax,CL        ; the current dir entry
+   687   033B A3EA07                    MOV ARECORD,ax                  ;ARECORD = SHR(DCNT,DSKSHF)
+   688   033E C606EC0700                MOV BYTE PTR ARECORD+2,0
+   689   0343 B403                      MOV AH,3                        ;LOCATE COMMAND
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  14
+
+   690  
+   691   0345 E8A503       06ED         CALL DEBLOCK_DIR
+   692                                  ;JMPS SETDATA
+   693  
+   694                          setdata:        ;set data dma address
+   695                          ;-------
+   696   0348 A1C708                    MOV ax,DMABASE
+   697   034B A3ED07                    MOV CUR_DMABASE,ax
+   698   034E A1C508                    MOV ax,DMAAD
+   699   0351 A3EF07                    MOV CURDMA,ax
+   700   0354 C3                        RET
+   701  
+   702                          endofdir:       ;check if end of directory (dcnt = 0ffffh)
+   703                          ;--------
+   704                          ;       exit:   Z flag set if at end of directory
+   705  
+   706   0355 BBCB08                    mov bx,offset dcnt
+   707  
+   708                          test_ffff:
+   709                          ;---------
+   710   0358 833FFF                    cmp w[bx],0ffffh
+   711   035B C3                        ret
+   712  
+   713                          setenddir:      ;set dcnt to the end of directory (dcnt = 0ffffh)
+   714                          ;---------
+   715   035C C706CB08FFFF              mov dcnt,enddir
+   716   0362 C3                        ret
+   717  
+   718                          read_dir:       ;read next directory entry
+   719                          ;--------
+   720  
+   721   0363 8B16D907                  mov dx,dirmax                   ;in preparation for subtract
+   722   0367 8B1ECB08                  mov bx,dcnt
+   723   036B 43                        inc bx
+   724   036C 891ECB08                  mov dcnt,bx                     ;dcnt=dcnt+1
+   725                                                                  ;continue while dirmax >= dcnt
+   726                                                                  ;(dirmax-dcnt no cy)
+   727   0370 2BD3                      sub dx,bx
+   728   0372 72E8         035C         jb setenddir                    ;yes, set dcnt to end
+   729                                                                  ;of directory
+   730                          ;       not at end of directory, seek next element
+   731                                                                  ;cl=initialization flag
+   732   0374 A0CB08                    mov al,ldcnt
+   733   0377 2403                      and al,dskmsk                   ;low(dcnt) and dskmsk
+   734   0379 B105                      mov cl,fcbshf                   ;to multiply by fcb size
+   735   037B D2E0                      shl al,cl
+   736                                                                  ;a = (low(dcnt) and dskmsk)
+   737                                                                  ;shl fcbshf
+   738   037D A2F107                    mov dptr,al                     ;ready for next dir operation
+   739   0380 0AC0                      or al,al
+   740   0382 7503         0387         jnz ret71                       ;return if not a new record
+   741   0384 E8ADFF       0334         call rddir                      ;read the directory record
+   742                          ret71:
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  15
+
+   743  
+   744   0387 C3                        ret
+   745  
+   746                          compext:        ;compare extent# in al with that in cl
+   747                          ;-------
+   748                          ;       entry:  AL,CL = extent numbers to compare
+   749                          ;       exit:   Z flag set if extent numbers match
+   750                          ;               BX,CX,DX = preserved
+   751  
+   752   0388 51                        push cx                         ;save cx's original value
+   753   0389 8A2ED607                  mov ch,extmsk
+   754   038D F6D5                      not ch                          ;ch has negated form of
+   755                                                                  ;extent mask
+   756   038F 22CD                      and cl,ch                       ;low bits removed from cl
+   757   0391 22C5                      and al,ch                       ;low bits removed from al
+   758   0393 2AC1                      sub al,cl
+   759   0395 241F                      and al,maxext                   ;set flags
+   760   0397 59                        pop cx                          ;restore cx
+   761   0398 C3                        ret
+   762  
+   763                          get_dir_ext:
+   764                          ;-----------
+   765                          ;       compute directory extent from fcb
+   766                          ;       scan fcb disk map backwards
+   767                          ;       upon return dminx = 0 if no blocks are in fcb
+   768                          ;       exit:   AL = directory extent number
+   769                          ;               BX = .fcb(extnum)
+   770  
+   771   0399 BBA608                    mov bx,offset info_fcb+nxtrec   ;BX = .fcb(vrecord)
+   772   039C BA0110                    mov dx,1001h                    ;DH = disk map position (rel to 1)
+   773                                                                  ;DL = no blocks switch
+   774                          get_de1:
+   775   039F FECE                      dec dh
+   776   03A1 4B                        dec bx                          ;decrement disk map ptr
+   777   03A2 803F00                    cmp b[bx],0                     ;is disk map byte non-zero ?
+   778   03A5 7506         03AD         jne get_de2                     ; yes
+   779   03A7 0AF6                        or dh,dh                      ; no - continue scan
+   780   03A9 75F4         039F           jnz get_de1
+   781   03AB FECA                        dec dl                        ;DL = 0 if no blocks found
+   782                          get_de2:
+   783   03AD 8816E407                  mov dminx,dl                    ;dminx = 0 if no blocks in fcb
+   784   03B1 803EE507FF                cmp single,true                 ;are disk block indexes single byte ?
+   785   03B6 8AC6                      mov al,dh                       ;al = block offset in disk map
+   786   03B8 7402         03BC         jz get_de3                      ;yes
+   787   03BA D0E8                        shr al,1                      ;divide block offset by 2
+   788  
+   789                          ;       al = last non-zero block index in fcb (rel to 0)
+   790                          ;       compute ext offset from last non-zero block index by
+   791                          ;       shifting block index right 7-blkshf
+   792  
+   793                          get_de3:
+   794   03BC B107                      mov cl,7
+   795   03BE 2A0ED407                  sub cl,blkshf
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  16
+
+   796  
+   797   03C2 D2E8                      shr al,cl                       ;al = ext offset
+   798  
+   799   03C4 8A26D607                  mov ah,extmsk                   ;if ext offset > extmsk then
+   800   03C8 3AE0                      cmp ah,al                       ;  continue scan
+   801   03CA 72D3         039F         jb get_de1
+   802  
+   803                          ;       dir ext = (fcb ext & (~extmsk) & maxext) | ext offset
+   804  
+   805   03CC BB9208                    mov bx,offset info_fcb+extnum   ;bx = .fcb(ext)
+   806   03CF 8A0F                      mov cl,[bx]                     ;cl = fcb extent value
+   807   03D1 F6D4                      not ah                          ;ah = ~extmsk
+   808   03D3 80E41F                    and ah,maxext                   ;ah = ah & maxext
+   809   03D6 22E1                      and ah,cl                       ;ah = ah & fcb extent
+   810   03D8 0AC4                      or al,ah                        ;al = dir ext
+   811   03DA C3                        ret
+   812  
+   813                          searchi:        ;search initialization
+   814                          ;-------
+   815   03DB BB8608                    mov bx,offset info_fcb
+   816   03DE 891EC107                  mov srcha,bx                    ;searcha = .info_fcb
+   817   03E2 880ECD08                  mov srchl,cl                    ;searchl = cl
+   818   03E6 C3                        ret
+   819  
+   820                          search_name:    ;search matching name
+   821                          ;-----------
+   822   03E7 B10F                      mov cl,namlen
+   823                                  ;jmps search
+   824  
+   825                          search:         ;search for directory element at .info_fcb
+   826                          ;------
+   827                          ;       entry:  CL = search length
+   828  
+   829   03E9 E8EFFF       03DB         call searchi
+   830   03EC E86DFF       035C         call setenddir                  ;dcnt = enddir
+   831                                                                  ;to start at the beginning
+   832                                                                  ;(drop through to searchn)
+   833                          ;
+   834                          searchn:
+   835                          ;-------
+   836                          ;       search for the next directory element, assuming
+   837                          ;       a previous call on search which sets searcha and searchhl
+   838                          ;       exit:   Z flag = 0 for successful searches
+   839  
+   840   03EF E871FF       0363         call read_dir                   ;read next dir element
+   841   03F2 E860FF       0355         call endofdir
+   842   03F5 7417         040E         jz srchfin
+   843                                                                  ;skip to end if so
+   844                                                                  ;not end of directory,
+   845                                                                  ;scan for match
+   846   03F7 8B16C107                    mov dx,srcha                  ;dx=beginning of user fcb
+   847   03FB E82BFF       0329           call getdptra                 ;bx = buffa+dptr
+   848   03FE 8A0ECD08                    mov cl,srchl                  ;length of search to cl
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  17
+
+   849  
+   850   0402 32ED                        xor ch,ch                     ;ch counts up, cl counts down
+   851  
+   852   0404 8A07                        mov al,[bx]                   ;is fcb an xfcb ?
+   853   0406 24EF                        and al,11101111b
+   854   0408 3A07                        cmp al,[bx]
+   855   040A 740B         0417           je srch_loop                  ;no
+   856   040C EBE1         03EF           jmps search_n
+   857                          srchfin:                                ;end of directory, or empty name
+   858                          lret_eq_ff:
+   859   040E B0FF                      mov al,255
+   860   0410 8AE8                      mov ch,al
+   861   0412 FEC5                      inc ch                          ;zero flag set on unsuccessful
+   862   0414 E9A7FD       01BE         jmp staret                      ;searches
+   863  
+   864                          srchloop:
+   865   0417 0AC9                      or cl,cl
+   866   0419 7432         044D         jz endsearch
+   867   041B 8BF2                      mov si,dx
+   868   041D AC                        lods al                         ;fcb character
+   869   041E 247F                      and al,07fh
+   870                                                                  ;scan next character if not
+   871                                                                  ;chksum byte
+   872   0420 80FD0D                    cmp ch,chksum
+   873   0423 741D         0442         jz srchok
+   874                                                                  ;not the ubytes field,
+   875                                                                  ;extent field
+   876   0425 80FD0C                    cmp ch,extnum                   ;may be extent field
+   877   0428 740F         0439         jz srchext                      ;skip to search extent
+   878  
+   879   042A 80FD0E                      cmp ch,modnum                 ;is field module # ?
+   880   042D 7502         0431           jnz $+4                       ;no
+   881   042F 243F                          and al,3fh                  ;yes - mask off high order bits
+   882  
+   883   0431 2A07                        sub al,[bx]
+   884   0433 247F                        and al,7fh                    ;mask-out flags/extent modulus
+   885   0435 7513         044A           jnz searchn_jmp
+   886   0437 EB09         0442           jmps srchok                   ;matched character
+   887  
+   888                          srchext:                                ;AL = fcb character
+   889                                                                  ;attempt an extent # match
+   890   0439 51                        push cx                         ;save counters
+   891   043A 8A0F                      mov cl,[bx]                     ;directory character to c
+   892   043C E849FF       0388         call compext                    ;compare user/dir char
+   893   043F 59                        pop cx                          ;recall counters
+   894   0440 7508         044A         jnz searchn_jmp                 ;skip if no match
+   895  
+   896                          srchok:                                 ;current character matches
+   897   0442 4243                      inc dx! inc bx
+   898   0444 FEC5FEC9                  inc ch! dec cl
+   899   0448 EBCD         0417         jmps srchloop
+   900  
+   901                          searchn_jmp:
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  18
+
+   902  
+   903   044A E9A2FF       03EF         jmp searchn
+   904  
+   905                          endsearch:              ;entire name matches, return dir position
+   906   044D 32C0                      xor al,al
+   907   044F A2B007                    mov lret,al
+   908   0452 8AE8                      mov ch,al
+   909   0454 FEC5                      inc ch                          ;zero flag reset on successful
+   910   0456 C3                        ret                             ;searches
+   911  
+   912                          check_wild:     ;check for ? in file name or type
+   913                          ;----------
+   914   0457 BB8608                    mov bx,offset info_fcb
+   915   045A E80700       0464         call chk_wild
+   916   045D 7517         0476         jnz ret10
+   917   045F B009                      mov al,9                        ;extended error 9
+   918   0461 E97602       06DA         jmp set_aret
+   919  
+   920                          chk_wild:       ;check fcb for ? marks
+   921                          ;--------
+   922                          ;       entry:  BX = .fcb(0)
+   923                          ;       exit:   Z flag = 1 if ? mark found
+   924  
+   925   0464 B90B3F                    mov cx,3f0bh                    ;ch = 3f, cl = 11
+   926                          chk_wild1:
+   927   0467 43                        inc bx                          ;advance fcb ptr
+   928   0468 8AC5                      mov al,ch
+   929   046A 2A07                      sub al,[bx]
+   930   046C 22C5                      and al,ch
+   931   046E 7406         0476         jz ret10                        ;rtn with z flag set if ? fnd
+   932   0470 FEC9                      dec cl
+   933   0472 75F3         0467         jnz chk_wild1
+   934   0474 0AC0                      or al,al                        ;rtn with z flag reset - no ?s
+   935   0476 C3                ret10:  ret
+   936  
+   937                          open:           ;search for the directory entry, copy to fcb
+   938                          ;----
+   939   0477 E86DFF       03E7         call search_name
+   940   047A 74FA         0476         jz ret10                        ;return with lret=255 if end
+   941                                                                  ;not end of directory,copy fcb
+   942                          opencopy:
+   943                                                                  ;(referenced below to copy fcb
+   944   047C 53                        push bx                         ;bx = .fcb(modnum)
+   945   047D 4B4B                      dec bx! dec bx
+   946   047F 8A27                      mov ah,[bx]                     ;ah = extnum
+   947   0481 50                        push ax                         ;save extnum & modnum
+   948   0482 E8A4FE       0329         call getdptra
+   949   0485 8BD3                      mov dx,bx                       ;dx = .buff(dptr)
+   950   0487 BB8608                    mov bx,offset info_fcb          ;bx=.fcb(0)
+   951   048A B120                      mov cl,nxtrec                   ;length of move operation
+   952   048C E881FD       0210         call move                       ;from .buff(dptr) to .fcb(0)
+   953                                                                  ;note that entire fcb is
+   954                                                                  ;copied, including indicators
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  19
+
+   955  
+   956   048F E807FF       0399         call get_dir_ext
+   957   0492 8AC8                      mov cl,al                       ;cl = dir_ext
+   958   0494 585B                      pop ax! pop bx
+   959   0496 8807                      mov [bx],al                     ;restore modnum
+   960   0498 4B4B                      dec bx! dec bx
+   961   049A 8827                      mov [bx],ah                     ;restore extnum number
+   962  
+   963                          ;       bx = .user extent#, cl = dir extent#
+   964                          ;       if user ext < dir ext then user := 128 records
+   965                          ;       if user ext = dir ext then user := dir records
+   966                          ;       if user ext > dir ext then user := 0 records
+   967  
+   968                          set_rc:
+   969                          ;------
+   970                          ;       entry:  BX = .user extent #
+   971                          ;               CL = dir extent #
+   972  
+   973   049C 32ED                      xor  ch,ch
+   974   049E BE9508                    mov si,offset info_fcb+reccnt
+   975   04A1 8A07                      mov al,[bx]                     ;al = current extent
+   976   04A3 2AC1                      sub al,cl                       ;compare fcb ext to dir ext
+   977   04A5 740B         04B2         jz set_rc2                      ;fcb ext = dir ext
+   978                                                                  ;  actual_rc = 0, fcb(rc) = fcb(rc)
+   979   04A7 8AC5                        mov al,ch
+   980   04A9 7304         04AF           jae set_rc1                   ;fcb ext > dir ext
+   981                                                                  ;  actual_rc = 0, fcb(rc) = 0
+   982  
+   983   04AB B080                          mov al,128                  ;fcb ext < dir ext
+   984   04AD 0A04                          or al,[si]                  ;  fcb(rc) = 128 | fcb(rc)
+   985                          set_rc1:
+   986   04AF 8804                        mov [si],al
+   987   04B1 C3                ret11:    ret
+   988  
+   989                          set_rc2:
+   990   04B2 3804                      cmp b[si],al                    ;is fcb(rc) = 0?
+   991   04B4 75FB         04B1         jnz ret11                       ;no
+   992   04B6 32C0                      xor al,al                       ;AL = 0
+   993   04B8 8804                      mov b[si],al                    ;required by func 99
+   994   04BA 3806E407                  cmp dminx,al                    ;do blocks exist in fcb?
+   995   04BE 74F1         04B1         jz ret11                        ;no
+   996   04C0 C60480                    mov b[si],80h                   ;fcb(rc) = 80h
+   997   04C3 C3                        ret
+   998  
+   999                          restore_rc:
+  1000                          ;----------
+  1001                          ;       if actual_rc ~= 0 then fcb(rc) = actual_rc
+  1002                          ;       entry:  BX = .fcb(extnum)
+  1003  
+  1004   04C4 A09508                    mov al,info_fcb+reccnt
+  1005   04C7 3C81                      cmp al,81h
+  1006   04C9 7205         04D0         jb restore_rc1
+  1007   04CB 247F                        and al,7fh
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  20
+
+  1008  
+  1009   04CD A29508                      mov info_fcb+reccnt,al
+  1010                          restore_rc1:
+  1011   04D0 C3                        ret
+  1012  
+  1013                          openreel:
+  1014                          ;--------
+  1015                          ;       close the current extent, and open the next one
+  1016                          ;       if possible.  rmf is true if in read mode.
+  1017                          ;       lret is set to 0 if successful
+  1018  
+  1019   04D1 A09408                    mov al,info_fcb+modnum
+  1020   04D4 A2E307                    mov save_mod,al                 ;save current module #
+  1021   04D7 BB9208                    mov bx,offset info_fcb+extnum
+  1022   04DA 8A07                      mov al,[bx]
+  1023   04DC 8AC8                      mov cl,al
+  1024   04DE FEC1                      inc cl                          ;increment ext #
+  1025   04E0 E8A5FE       0388         call comp_ext                   ;did we cross a dir fcb boundary ?
+  1026   04E3 7503         04E8         jnz $+5
+  1027   04E5 E93A00       0522           jmp openr3                    ;no
+  1028   04E8 B01F                      mov al,maxext
+  1029   04EA 22C1                      and al,cl
+  1030   04EC 8807                      mov [bx],al                     ;update fcb extent field
+  1031   04EE 750B         04FB         jnz openr0                      ;branch if in same module
+  1032  
+  1033                          ;               extent number overflow, go to next module
+  1034  
+  1035   04F0 83C302                      add bx,(modnum-extnum)        ;bx=.fcb(modnum)
+  1036   04F3 FE07                        inc b[bx]                     ;fcb(modnum)=++1
+  1037                                                                  ;module number incremented,
+  1038                                                                  ;check for overflow
+  1039   04F5 8A07                        mov al,[bx]
+  1040   04F7 243F                        and al,maxmod                 ;mask high order bits
+  1041   04F9 7413         050E           jz openerr                    ;cannot overflow to 0
+  1042                                                                  ;otherwise, ok to continue
+  1043                                                                  ;with new module
+  1044                          openr0:
+  1045   04FB E8E9FE       03E7         call search_name                ;next extent found?
+  1046   04FE 740E         050E         jz openerr                      ;end of file encountered
+  1047   0500 E879FF       047C         call opencopy
+  1048                          openr2:
+  1049   0503 E8E0FD       02E6         call getfcb                     ;set parameters
+  1050   0506 32C0                      xor al,al
+  1051   0508 A2E807                    mov vrecord,al
+  1052   050B E9B0FC       01BE         jmp staret                      ;lret = 0
+  1053                                  ;ret
+  1054  
+  1055                          openerr:
+  1056                          ;-------
+  1057   050E BB9208                    mov bx,offset info_fcb+extnum
+  1058   0511 A0E307                    mov al,save_mod
+  1059   0514 884702                    mov 2[bx],al
+  1060   0517 8A07                      mov al,[bx]
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  21
+
+  1061  
+  1062   0519 FEC8                      dec al
+  1063   051B 241F                      and al,1fh
+  1064   051D 8807                      mov [bx],al
+  1065                                                                  ;cannot move to next extent
+  1066                                                                  ;of this file
+  1067   051F E99AFC       01BC         jmp setlret1                    ;lret = 1
+  1068                                  ;ret
+  1069                          openr3:
+  1070   0522 880F                      mov [bx],cl                     ;increment extent field
+  1071   0524 E872FE       0399         call get_dir_ext
+  1072   0527 8AC8                      mov cl,al
+  1073   0529 3A07                      cmp al,[bx]                     ;is dir ext < fcb(ext)?
+  1074   052B 7305         0532         jae openr4                      ;no
+  1075   052D FE0F                        dec b[bx]                     ;decrement extent
+  1076   052F E98AFC       01BC           jmp set_lret1                 ;yes - reading unwritten data
+  1077                          openr4:
+  1078   0532 E88FFF       04C4         call restore_rc
+  1079   0535 E864FF       049C         call set_rc
+  1080   0538 EBC9         0503         jmps openr2
+  1081  
+  1082                          diskread:                               ;(may enter from seqdiskread)
+  1083                          ;--------
+  1084                                                                  ;read the next record from
+  1085                                                                  ;the current fcb
+  1086   053A E8A9FD       02E6         call getfcb                     ;sets parameters for the read
+  1087   053D A0E807                    mov al,vrecord
+  1088   0540 3A06E607                  cmp al,rcount                   ;vrecord-rcount
+  1089                                                                  ;skip if rcount > vrecord
+  1090   0544 720E         0554         jb recordok
+  1091                                                                  ;not enough records in extent
+  1092                                                                  ;record count must be 128
+  1093                                                                  ;to continue
+  1094   0546 3C80                        cmp al,128                    ;vrecord = 128?
+  1095   0548 7528         0572           jnz diskeof                   ;skip if vrecord<>128
+  1096   054A E884FF       04D1           call openreel                 ;go to next extent if so
+  1097                                                                  ;now check for open ok
+  1098   054D 803EB00700                  cmp lret,0                    ;stop at eof
+  1099   0552 751E         0572           jnz diskeof
+  1100                          recordok:                               ;fcb addresses a record to read
+  1101   0554 E856FD       02AD         call index                      ;error 2 if reading
+  1102                                                                  ;unwritten data
+  1103                                                                  ;(returns 1 to be compatible
+  1104                                                                  ;with 1.4)
+  1105                                                                  ;arecord=0000?
+  1106   0557 7419         0572         jz diskeof
+  1107   0559 E865FD       02C1         call atran                      ;arecord now a disk address
+  1108   055C E81600       0575         CALL CHECK_NPRS
+  1109   055F 720E         056F         JC RECORDOK2
+  1110   0561 7503         0566           JNZ $+5
+  1111   0563 E97F01       06E5             JMP READ_DEBLOCK
+  1112   0566 E8DFFD       0348           CALL SETDATA
+  1113   0569 E8F5FC       0261           call seek                     ;to proper track,sector
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  22
+
+  1114  
+  1115   056C E8E6FC       0255           call rdbuff                   ;to dma address
+  1116                          RECORDOK2:
+  1117   056F E9A0FD       0312         jmp setfcb                      ;replace parameter
+  1118  
+  1119                          diskeof:
+  1120   0572 E947FC       01BC         jmp setlret1                    ;lret = 1
+  1121                                  ;ret
+  1122  
+  1123                          CHECK_NPRS:
+  1124                          ;----------
+  1125                          ;       DIR_CNT CONTAINS THE NUMBER OF 128 BYTE RECORDS
+  1126                          ;       TO TRANSFER DIRECTLY.  THIS ROUTINE SET DIR_CNT
+  1127                          ;       WHEN INITIATING A SEQUENCE OF DIRECT PHYSICAL I/O
+  1128                          ;       OPERATIONS.  DIR_CNT IS DECREMENTED EACH TIME CHECK_NPRS
+  1129                          ;       IS CALLED DURING SUCH A SEQUENCE.
+  1130                          ;       exit:   ~C FLG & ~Z FLG - DIRECT PHYSICAL I/O OPERATION
+  1131                          ;               ~C FLG &  Z FLG - INDIRECT(DEBLOCK) I/O OPERATION
+  1132                          ;                C FLG          - NO PHYSICAL I/O OPERATION
+  1133  
+  1134   0575 8A2EB607                  MOV CH,blk_off                  ;CH = VRECORD & BLKMSK
+  1135   0579 A0B307                    MOV AL,DIR_CNT
+  1136   057C 3C02                      CMP AL,2                        ;IS DIR_CNT > 1?
+  1137   057E 7207         0587         JC CHECK_NPR1                   ;NO
+  1138   0580 FEC8                        DEC AL                        ;DIR_CNT = DIR_CNT - 1
+  1139   0582 A2B307                      MOV DIR_CNT,AL                ;we are in mid-multi sector i/o
+  1140   0585 F9                          STC
+  1141   0586 C3                          ret                           ;RETURN WITH C FLAG SET
+  1142                          CHECK_NPR1:
+  1143   0587 A0E207                    MOV AL,PHYMSK                   ;CL = PHYMSK
+  1144   058A 8AC8                      MOV CL,AL
+  1145   058C 22C5                      AND AL,CH                       ;AL = VRECORD & PHYMSK
+  1146                                                                  ;ARE WE IN MID-PHYSICAL RECORD?
+  1147   058E 740A         059A         JZ CHECK_NPR11                  ;NO
+  1148                          CHECK_NPR1X:
+  1149   0590 0AC9                        OR CL,CL                      ;IS PHYMSK = 0?
+  1150   0592 7403         0597           JZ CHECK_NPR1Y                ;YES
+  1151   0594 32C0                          XOR AL,AL                   ;RETURN WITH Z FLAG SET & C FLAG RESET
+  1152   0596 C3                            RET
+  1153                          CHECK_NPR1Y:
+  1154   0597 0C01                        OR AL,1                       ;RESET C & Z FLAGS
+  1155   0599 C3                          RET
+  1156                          CHECK_NPR11:
+  1157   059A 8AF1                      MOV DH,CL
+  1158   059C F6D6                      not DH                          ;DH = ~ PHYMSK
+  1159   059E A0B407                    MOV AL,MULTNUM
+  1160   05A1 3C02                      CMP AL,2                        ;IS MULT_NUM < 2?
+  1161   05A3 72EB         0590         JC CHECK_NPR1X                  ;YES
+  1162   05A5 BBE807                    MOV BX,OFFSET VRECORD
+  1163   05A8 8A27                      MOV AH,[BX]                     ;AH = VRECORD
+  1164   05AA 02C4                      ADD AL,ah
+  1165   05AC 3C80                      CMP AL,80H
+  1166   05AE 7202         05B2         JC CHECK_NPR2
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  23
+
+  1167  
+  1168   05B0 B080                        MOV AL,80H
+  1169                          CHECK_NPR2:                             ;AL = MIN(VRECORD + MULT_NUM,80H) = X
+  1170   05B2 51                        PUSH CX                         ;SAVE VRECORD & BLKMSK, PHYMSK
+  1171   05B3 C6077F                    MOV B[BX],7FH                   ;VRECORD = 7F
+  1172   05B6 5350                      PUSH BX! PUSH AX
+  1173   05B8 8AD8                      MOV BL,AL                       ;BL = X
+  1174   05BA A0D507                    MOV AL,BLKMSK
+  1175   05BD 8AD0                      MOV DL,AL
+  1176   05BF FEC2                      INC DL                          ;DL = BLKMSK + 1
+  1177   05C1 F6D0                      not AL
+  1178   05C3 22E0                      AND AH,AL                       ;AH = VRECORD & ~BLKMSK
+  1179   05C5 A0E607                    MOV AL,RCOUNT
+  1180   05C8 22C6                      AND AL,DH                       ;AL = RCOUNT & ~PHYMSK
+  1181   05CA 3AC3                      CMP AL,BL                       ;IS AL < X?
+  1182   05CC 7202         05D0         JC CHECK_NPR23                  ;YES
+  1183   05CE 8AC3                      MOV AL,BL                       ;AL = MIN(VRECORD + MULT_NUM,80H) = X
+  1184                          CHECK_NPR23:
+  1185   05D0 2AC4                      SUB AL,AH                       ;AL = AL - VRECORD & ~BLKMSK
+  1186   05D2 3AC2                      CMP AL,DL                       ;IS AL < BLKMSK + 1?
+  1187   05D4 7243         0619         JC CHECK_NPR9                   ;YES
+  1188   05D6 50                          PUSH AX                       ;AL = MAX # OF RECORDS
+  1189   05D7 E8A6FC       0280           CALL DMPOSITION               ;COMPUTE MAXIMUM DISK POSITION
+  1190   05DA 8AE8                        MOV CH,AL                     ;CH = MAX DISK POS
+  1191   05DC A0E407                      MOV AL,DMINX                  ;AL = CURRENT DISK POS
+  1192   05DF 3AC5                        CMP AL,CH                     ;IS CURR POS = MAX POS?
+  1193   05E1 8AD0                        MOV DL,AL
+  1194   05E3 741E         0603           JZ CHECK_NPR5                 ;YES
+  1195   05E5 8AC8                          MOV CL,AL
+  1196   05E7 51                            PUSH CX                     ;CL = CURR POS, CH = MAX POS
+  1197   05E8 B500                          MOV CH,0
+  1198   05EA E8AAFC       0297             CALL GET_DM                 ;BX = BLOCK NUMBER (CURR POS)
+  1199                          CHECK_NPR4:
+  1200   05ED 53                            PUSH BX
+  1201   05EE 41                            INC CX                      ;CURR POS = CURR POS + 1
+  1202   05EF E8A5FC       0297             CALL GET_DM                 ;GET NEXT BLOCK(CURR POS)
+  1203   05F2 5A                            POP DX
+  1204   05F3 42                            INC DX
+  1205   05F4 3BDA                          CMP BX,DX                   ;DOES CURR BLK = LAST BLK + 1?
+  1206   05F6 74F5         05ED             JZ CHECK_NPR4               ;YES
+  1207  
+  1208   05F8 FEC9                          DEC CL                      ;CL = INDEX OF LAST SEQ BLK
+  1209   05FA 5A                            POP DX
+  1210   05FB 8AC6                          MOV AL,DH                   ;AL = MAX POS
+  1211   05FD 3AC1                          CMP AL,CL                   ;IS AL < LAST SEQ BLK POS
+  1212   05FF 7202         0603             JC CHECK_NPR5               ;YES
+  1213   0601 8AC1                            MOV AL,CL
+  1214                          CHECK_NPR5:                             ;AL = LAST BLK POS
+  1215   0603 2AC2                        SUB AL,DL                     ;AL = AL - STARTING POS
+  1216   0605 8AE8                        MOV CH,AL
+  1217   0607 FEC5                        INC CH                        ;CH = # OF CONSECUTIVE BLOCKS
+  1218   0609 A0D507                      MOV AL,BLKMSK
+  1219   060C FEC0                        INC AL                        ;AL = BLKMSK + 1
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  24
+
+  1220  
+  1221   060E F6E5                        MUL CH                        ;AL = # OF CONSECUTIVE LOGICAL RECS
+  1222   0610 59                          POP CX                        ;CL = MAXIMUM # OF RECORDS
+  1223   0611 86C1                        XCHG AL,CL
+  1224   0613 3AC1                        CMP AL,CL                     ;IS MAX < # OF CONS. RECS?
+  1225   0615 7202         0619           JC CHECK_NPR9                 ;YES
+  1226   0617 8AC1                        MOV AL,CL
+  1227                          CHECK_NPR9:                             ;AL = # OF CONSECUTIVE RECS
+  1228   0619 59                        POP CX
+  1229   061A 5B                        POP BX
+  1230   061B 882F                      MOV [BX],CH                     ;RESTORE VRECORD
+  1231   061D 59                        POP CX
+  1232   061E 8A36B407                  MOV DH,MULT_NUM
+  1233   0622 2AC5                      SUB AL,CH                       ;AL = AL - VRECORD & blkmsk
+  1234   0624 3AC6                      CMP AL,DH                       ;IS AL < MULT_NUM
+  1235   0626 7202         062A         JC CHECK_NPR10                  ;YES
+  1236   0628 8AC6                        MOV AL,DH
+  1237                          CHECK_NPR10:                            ;AL = # OF CONSECUTIVE RECS
+  1238   062A F6D1                      not CL
+  1239   062C 22C1                      AND AL,CL                       ;IF DIR_CNT = 0 THEN
+  1240   062E 740E         063E         JZ RET13B                       ;RETURN WITH Z FLAG SET, C FLAG RESET
+  1241   0630 A2B307                    MOV DIR_CNT,AL                  ;DIR_CNT = AL & ~PHYMSK
+  1242   0633 8A0EE107                  MOV CL,PHYSHF
+  1243   0637 D2E8                      SHR AL,CL                       ;AL = # OF CONSECUTIVE PHYSICAL RECS
+  1244   0639 A2B507                    mov mult_sec,al                 ;save multisector count for r/w
+  1245   063C 0C01                      OR AL,1                         ;RETURN WITH C AND Z FLAGS RESET
+  1246   063E C3                RET13B: RET
+  1247  
+  1248                          tmp_select:
+  1249                          ;----------
+  1250                          ;       entry:  DL = drive to select (0-f)
+  1251  
+  1252   063F 8816C908                  mov seldsk,dl
+  1253  
+  1254                          curselect:
+  1255                          ;---------
+  1256   0643 A0C908                    mov al,seldsk
+  1257   0646 3A06C407                  cmp al,curdsk
+  1258   064A 7505         0651         jne select                      ;don't select if seldsk = curdsk
+  1259   064C FEC07405     0655           inc al! jz select0
+  1260   0650 C3                        ret
+  1261  
+  1262                          SELECT:         ;select disk in info_fcb for subsequent input or output ops
+  1263                          ;------
+  1264   0651 3C107203     0658         cmp al,16 ! jb disk_select
+  1265                          select0:
+  1266   0655 E9A4FB       01FC             jmp selerror
+  1267                          disk_select:
+  1268                          ;-----------
+  1269                          ;       entry:  AL = disk to select
+  1270  
+  1271   0658 A2E907                    mov adrive,al
+  1272   065B A2C407                    mov curdsk,al
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  25
+
+  1273  
+  1274   065E 33D2                      xor dx,dx                       ;dl = 1 if drive logged in
+  1275   0660 E8B6FB       0219         call selectdisk
+  1276   0663 73F0         0655         jnc select0                     ;carry set if select ok
+  1277   0665 C3                        ret
+  1278  
+  1279                          parsave33r:
+  1280                          ;----------
+  1281   0666 E812FB       017B         call parsave33
+  1282                                  ;jmps reselect
+  1283  
+  1284                          reselect:
+  1285                          ;--------
+  1286   0669 B17F                      mov cl,07fh
+  1287   066B BB8D08                    mov bx,offset info_fcb+f7
+  1288   066E 200F                      and [bx],cl                     ;fcb(7) = fcb(7) & 7fh
+  1289   0670 204F01                    and 1[bx],cl
+  1290   0673 8067051F                  and byte ptr extnum-f7[bx],1fh  ;fcb(ext) = fcb(ext) & 1fh
+  1291                                          ;check current fcb to see if reselection necessary
+  1292   0677 C606B207FF                mov resel,true                  ;mark possible reselect
+  1293   067C A08608                    mov al,info_fcb                 ;drive select code
+  1294   067F A2AE07                    mov fcbdsk,al                   ;save drive
+  1295   0682 241F                      and al,00011111b                ;non zero is auto drive select
+  1296   0684 FEC8                      dec al                          ;drive code normalized to
+  1297                                                                  ;0...30, or 255
+  1298   0686 3CFF                      cmp al,0ffh
+  1299   0688 7403         068D         jz noselect                     ;auto select function,
+  1300   068A A2C908                      mov seldsk,al                 ;save seldsk
+  1301                          noselect:
+  1302   068D E8B3FF       0643         call curselect
+  1303                                                                  ;set user code
+  1304   0690 A0CA08                    mov al,usrcode                  ;0...31
+  1305   0693 A28608                    mov info_fcb,al
+  1306   0696 C3                        ret
+  1307  
+  1308                          compare:        ;compare strings
+  1309                          ;-------
+  1310                          ;       entry:  CL = length of strings
+  1311                          ;               BX,DX = offset of strings
+  1312                          ;       exit:   Z flag set if strings match
+  1313  
+  1314   0697 B500                      mov ch,0
+  1315   0699 8BF3                      mov si,bx
+  1316   069B 8BFA                      mov di,dx
+  1317   069D F3A6                      repe cmps al,al
+  1318   069F C3                        ret
+  1319  
+  1320  
+  1321                          ;       individual function handlers
+  1322                          ;-----------------------------------------------------
+  1323  
+  1324                          func14:         ;select disk info
+  1325                          ;======
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  26
+
+  1326  
+  1327   06A0 E89CFF       063F         call tmp_select
+  1328   06A3 A0C908                    mov al,seldsk
+  1329   06A6 A2BF07                    mov p_dsk,al
+  1330   06A9 C3                        ret
+  1331  
+  1332                          func15:        ;open file
+  1333                          ;======
+  1334   06AA E8B9FF       0666         call parsave33r                 ;copy fcb from user seg.
+  1335   06AD C606940800                mov info_fcb+modnum,0           ;fcb(modnum)=0
+  1336   06B2 E8A2FD       0457         call check_wild                 ;check for ?s in fcb
+  1337   06B5 E8BFFD       0477         call open                       ;attempt to open fcb
+  1338   06B8 E80300       06BE         call openx                      ;returns if unsuccessful
+  1339   06BB 32C0                      xor al,al
+  1340   06BD C3                ret30:  ret                             ;no - open failed
+  1341  
+  1342                          openx:
+  1343                          ;-----
+  1344   06BE E894FC       0355         call end_of_dir                 ;was open successful
+  1345   06C1 74FA         06BD         jz ret30                        ;no
+  1346   06C3 BBA608                    mov bx,offset info_fcb+nxtrec
+  1347   06C6 803FFF                    cmp b[bx],0ffh
+  1348   06C9 7505         06D0         jne openxa
+  1349   06CB A09308                    mov al,info_fcb+chksum
+  1350   06CE 8807                      mov [bx],al
+  1351                          openxa:
+  1352   06D0 5B                        pop bx                          ;discard return address
+  1353   06D1 B140                      MOV CL,40H
+  1354   06D3 C3                        ret
+  1355  
+  1356                          func20:         ;read a file
+  1357                          ;======
+  1358   06D4 E88FFF       0666         call parsave33r
+  1359   06D7 E960FE       053A         jmp disk_read
+  1360                                  ;jmp goback
+  1361  
+  1362                          set_aret:
+  1363                          ;--------
+  1364   06DA 8AC8                      mov cl,al                       ;save error index
+  1365   06DC A2B107                    mov byte ptr aret+1,al          ;aret+1 = extended errors
+  1366   06DF E82CFD       040E         call lret_eq_ff
+  1367  
+  1368   06E2 E924FB       0209         jmp goback                      ;return physical & extended errors
+  1369  
+  1370                          ;       BLOCKING/DEBLOCKING BUFFER CONTROL BLOCK (BCB) FORMAT
+  1371  
+  1372                          ;           +-------+-------+-------+-------+-------+-------+
+  1373                          ;       00h |  DRV  |        RECORD         | PEND  |  SEQ  |
+  1374                          ;           +-------+-------+-------+-------+-------+-------+
+  1375                          ;       06h |     TRACK     |    SECTOR     |  BUFFER_ADDR  |
+  1376                          ;           +-------+-------+-------+-------+-------+-------+
+  1377                          ;       0Ch |     LINK      |  PROCESS_OFF  |
+  1378                          ;           +-------+-------+-------+-------+
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  27
+
+  1379  
+  1380  
+  1381                          READ_DEBLOCK:
+  1382                          ;------------
+  1383   06E5 B401                      mov ah,1                        ;AH = 1
+  1384   06E7 E80D00       06F7         CALL DEBLOCK_DTA
+  1385   06EA E925FC       0312         JMP SET_FCB
+  1386  
+  1387                          DEBLOCK_DIR:
+  1388                          ;-----------
+  1389   06ED 8C1EED07                  MOV CUR_DMABASE,DS              ;BUFFERS IN SYSTEM DATA AREA
+  1390   06F1 8B1ECE07                  MOV BX,DIRBCBA
+  1391   06F5 EB0A         0701         jmps DEBLOCK                    ;PREVIOUS LOCATE CALL
+  1392  
+  1393                          DEBLOCK_DTA:
+  1394                          ;-----------
+  1395   06F7 8B1ED007                  MOV BX,DTABCBA
+  1396   06FB C706ED070000              MOV CUR_DMABASE,0               ;get segment from BCB
+  1397  
+  1398                          DEBLOCK:        ;BDOS BLOCKING/DEBLOCKING ROUTINE
+  1399                          ;-------
+  1400                          ;       entry:  Z flag reset -> get new BCB address
+  1401                          ;               AH = 1 -> READ COMMAND
+  1402                          ;                  = 2 -> WRITE COMMAND
+  1403                          ;                  = 3 -> LOCATE COMMAND
+  1404                          ;                  = 4 -> FLUSH COMMAND
+  1405                          ;                  = 5 -> DIRECTORY UPDATE
+  1406  
+  1407   0701 8826B707                  MOV DEBLOCK_FX,AH               ;SAVE DEBLOCK FX
+  1408   0705 8A0EE207                  mov cl,phymsk                   ;CL = PHYMSK
+  1409   0709 A0EA07                    MOV AL,BYTE PTR ARECORD
+  1410   070C 22C1                      AND AL,cl
+  1411   070E A2B807                    MOV PHY_OFF,AL                  ;PHY_OFF = LOW(ARECORD) & PHYMSK
+  1412   0711 F6D1                      not cl                          ;CL = ~PHYMSK
+  1413   0713 200EEA07                  and BYTE PTR ARECORD,cl         ;LOW(ARECORD) = LOW(ARECORD) & ~PHYMSK
+  1414   0717 8B1F                      mov bx,[bx]                     ;GET BCB ADDRESS
+  1415   0719 891EB907                  MOV CURBCBA,BX                  ;BX = 1st curbcb
+  1416   071D 8B470A                    MOV ax,10[BX]                   ;dma address field - offset/segment
+  1417   0720 833EED0700                cmp cur_dmabase,0               ;if cur_dmabase <> 0, deblocking is
+  1418   0725 7505         072C         jne deblock0                    ; for dir buf and addr is offset
+  1419   0727 A3ED07                      mov cur_dmabase,ax            ;else deblocking data buffer and
+  1420   072A 33C0                        xor ax,ax                     ; addr is segment, offset = 0
+  1421                          deblock0:
+  1422   072C A3EF07                    MOV CURDMA,ax                   ;save current buffer address
+  1423   072F E85200       0784         CALL DEBLOCK9                   ;BX=CURBCBA, DX=.ADRIVE, CL=4
+  1424   0732 803FFF7405   073C         cmp b[bx],0ffh! je deblock2
+  1425   0737 E85DFF       0697           CALL COMPARE                  ;DOES BCB(0-3) = ADRIVE || ARECORD?
+  1426   073A 7415         0751           JZ DEBLOCK45                  ;YES
+  1427                          DEBLOCK2:
+  1428   073C 8B1EB907                  mov bx,curbcba
+  1429   0740 C607FF                    mov b[bx],0ffh                  ;discard in case of error
+  1430   0743 B002                      MOV AL,2
+  1431   0745 E84600       078E         CALL DEBLOCK_IO                 ;READ PHYSICAL RECORD
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  28
+
+  1432  
+  1433   0748 E83900       0784         CALL DEBLOCK9                   ;BX=CURBCBA, DX=.ADRIVE, CL=4
+  1434   074B E8C2FA       0210         CALL MOVE
+  1435   074E C60500                    MOV B[DI],0                     ;CURBCBA->BCB(4) = 0
+  1436                          DEBLOCK45:
+  1437   0751 32C0                      xor al,al
+  1438   0753 8A26B807                  MOV ah,PHY_OFF
+  1439   0757 D1E8                      shr ax,1                        ;AX = phy_off * 080h
+  1440   0759 8B36EF07                  MOV SI,CURDMA
+  1441   075D 03F0                      ADD SI,AX                       ;SI = CURDMA + PHY_OFF*80H
+  1442   075F A0B707                    MOV al,DEBLOCK_FX
+  1443   0762 3C03                      CMP al,3                        ;IS DEBLOCK_FX = LOCATE?
+  1444   0764 7505         076B         JNZ DEBLOCK6                    ;NO
+  1445   0766 8936C607                    MOV BUFFA,SI                  ;YES
+  1446   076A C3                          RET
+  1447                          DEBLOCK6:
+  1448   076B B94000                    MOV CX,40H                      ;transfer 40h words
+  1449   076E 8B3EC508                  MOV DI,DMAAD
+  1450   0772 A1C708                    mov ax,dmabase
+  1451   0775 8B16ED07                  mov dx,cur_dmabase
+  1452   0779 1E06                      push ds! push es
+  1453   077B 8EDA                      mov ds,dx                       ;setup source segment
+  1454   077D 8EC0                      mov es,ax                       ;setup destination segment
+  1455   077F F3A5                      rep movsw                       ;transfer data
+  1456   0781 071F                      pop es! pop ds
+  1457   0783 C3                        RET
+  1458  
+  1459                          DEBLOCK9:                               ;SETUP FOR MOVE OR COMPARE
+  1460   0784 8B1EB907                  MOV BX,CURBCBA
+  1461   0788 BAE907                    MOV DX,OFFSET ADRIVE
+  1462   078B B104                      MOV CL,4
+  1463   078D C3                        RET
+  1464  
+  1465                          DEBLOCK_IO:
+  1466                          ;----------
+  1467                          ;       entry:  AL = 0 -> SEEK ONLY
+  1468                          ;                  = 1 -> WRITE
+  1469                          ;                  = 2 -> READ
+  1470  
+  1471   078E 50                        PUSH AX
+  1472   078F E8CFFA       0261         CALL SEEK
+  1473   0792 58                        POP AX
+  1474   0793 FEC8                      DEC AL
+  1475   0795 7803         079A         JS deblk_io2
+  1476                          ;         JNZ deblk_io1
+  1477                          ;           mov cl,1
+  1478                          ;           JMP WRBUFF
+  1479                          ;deblk_io1:
+  1480   0797 E8BBFA       0255           CALL RDBUFF
+  1481                          deblk_io2:
+  1482   079A BEBB07                    mov si,offset track
+  1483   079D 8B3EB907                  mov di,curbcba
+  1484   07A1 83C706                    add di,6                        ;MOVE TRACK & SECTOR
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  29
+
+  1485  
+  1486   07A4 B90200                    mov cx,2                        ;TO BCB
+  1487   07A7 F3A5                      rep movsw
+  1488   07A9 C3                        ret
+  1489  
+  1490  
+  1491     07AA                 endcode equ     offset $
+  1492  
+  1493                          ;*************** end bdos file system ****************
+  1494  
+  1495                          ;****************** BDOS data area *******************
+  1496                          ;
+  1497                          ;
+  1498                                  dseg
+  1499                          ;       Variables in data segment:
+  1500                                  org     endcode
+  1501  
+  1502   07AA                   iosentry        rw      0
+  1503   07AA 0009              biosco          dw      biosoffset      ;offset and
+  1504   07AC 0000              bioscs          dw      0               ;segment for callf to BIOS
+  1505  
+  1506                          ;
+  1507                          ;*****************************************************
+  1508                          ;
+  1509                          ;*****************************************************
+  1510                          ;*
+  1511                          ;*      bdos file system data area
+  1512                          ;*
+  1513                          ;*****************************************************
+  1514  
+  1515                          ;       variables in data segment:
+  1516                          ;
+  1517  
+  1518                          ;the following variables are set to zero upon entry to file system
+  1519  
+  1520   07AE 00                fcbdsk          db      0               ;disk named in fcb
+  1521   07AF 00                parcopfl        db      0               ;true if parameter block copied
+  1522   07B0 0000              aret            dw      0               ;adr value to return
+  1523     07B0                 lret            equ     byte ptr aret   ;low(aret)
+  1524   07B2 00                resel           db      0               ;reselection flag
+  1525   07B3 00                DIR_CNT         DB      0               ;DIRECT I/O COUNT
+  1526   07B4 00                MULT_NUM        DB      0               ;MULTI-SECTOR COUNT used in bdos
+  1527     0007                 zerolength      equ     (offset $)-(offset fcbdsk)
+  1528   07B5 01                mult_sec        db      1               ;multi sector count passed to xios
+  1529  
+  1530   07B6 00                BLK_OFF         DB      0               ;RECORD OFFSET WITHIN BLOCK
+  1531                          ;
+  1532  
+  1533   07B7 00                DEBLOCK_FX      DB      0               ;DEBLOCK FUNCTION #
+  1534   07B8 00                PHY_OFF         DB      0               ;RECORD OFFSET WITHIN PHYSICAL RECORD
+  1535   07B9 0000              CURBCBA         DW      0               ;CURRENT BCB OFFSET
+  1536  
+  1537   07BB 0000              TRACK           DW      0       ;BCB RECORD'S TRACK
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  30
+
+  1538  
+  1539   07BD 0000              SECTOR          DW      0       ;BCB RECORD'S SECTOR
+  1540  
+  1541                          ;       seldsk,usrcode are initialized as a pair
+  1542   07BF 00                p_dsk           db      0       ;selected disk num
+  1543   07C0 00                p_user          db      0       ;curr user num
+  1544  
+  1545                          ;info           dw      0       ;info adr
+  1546   07C1 0000              srcha           dw      0       ;search adr
+  1547  
+  1548                          ;the following variable order is critical
+  1549  
+  1550                          ;variables copied from uda for mp/m                     x
+  1551  
+  1552                          ;variables included in fcb checksum for mp/m and cp/m     x
+  1553  
+  1554                          ;variables used to access system lock list for mp/m         x
+  1555  
+  1556                          ;dmaad          dw      0       ;dma offset             1
+  1557                          ;dmabase                dw      0       ;dma base               2
+  1558                          ;srchl          db      0       ;search len             4
+  1559  
+  1560                          ;dcnt           dw      0       ;directory counter      7
+  1561                          ;dblk           dw      0       ;directory block        8 ?? - not used - ??
+  1562   07C3                   u_mult_cnt      rb      0
+  1563   07C3 01                mult_cnt        db      1       ;bdos multi-sector cnt 10
+  1564                          ;df_password    rb      8       ;process default pw    11
+  1565  
+  1566                          ;high_ext       db      0       ;fcb high extent bits     2
+  1567                          ;xfcb_read_only db      0       ;xfcb read only flag      3
+  1568   07C4 FF                curdsk          db      0ffh    ;current disk             4 1
+  1569  
+  1570                                  org ((offset $) + 1) and 0fffeh
+  1571  
+  1572                          ;       curtrka - alloca are set upon disk select
+  1573                          ;       (data must be adjacent)
+  1574  
+  1575                          ;cdrmaxa                dw      0       ;ptr to cur dir max val
+  1576                          ;drvlbla                dw      0       ;drive label data byte addr
+  1577   07C6 0000              buffa           dw      0       ;ptr to dir dma addr
+  1578   07C8 0000              dpbaddr         dw      0       ;curr disk param block addr
+  1579   07CA 0000              checka          dw      0       ;curr checksum vector addr
+  1580   07CC 0000              alloca          dw      0       ;curr alloc vector addr
+  1581   07CE 0000              DIRBCBA         DW      0       ;DIRECTORY BUFFER CONTROL BLOCK ADDR
+  1582   07D0 0000              DTABCBA         dw      0       ;DATA BUFFER CONTROL BLOCK ADDR
+  1583     000A                 addlist         equ     10      ;"$-buffa" = addr list size
+  1584  
+  1585                          ;       sectpt - offset obtained from disk parm block at dpbaddr
+  1586                          ;       (data must be adjacent)
+  1587  
+  1588   07D2 0000              sectpt          dw      0       ;sectors per track
+  1589   07D4 00                blkshf          db      0       ;block shift factor
+  1590   07D5 00                blkmsk          db      0       ;block mask
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  31
+
+  1591  
+  1592   07D6 00                extmsk          db      0       ;extent mask
+  1593   07D7 0000              maxall          dw      0       ;max alloc num
+  1594   07D9 0000              dirmax          dw      0       ;max dir num
+  1595   07DB 0000              dirblk          dw      0       ;reserved alloc bits for dir
+  1596   07DD 0000              chksiz          dw      0       ;size of checksum vector
+  1597   07DF 0000              offsetv         dw      0       ;offset tracks at beginning
+  1598   07E1 00                PHYSHF          DB      0       ;PHYSICAL RECORD SHIFT FACTOR
+  1599   07E2 00                PHYMSK          DB      0       ;PHYSICAL RECORD MASK
+  1600   07E3                   endlist         rs      0       ;end of list
+  1601     0011                 dpblist         equ     (offset endlist)-(offset sectpt)
+  1602                                                          ;size
+  1603  
+  1604                          ;       local variables
+  1605  
+  1606   07E3 00                save_mod        db      0       ;open_reel module save field
+  1607  
+  1608   07E4 00                dminx           db      0       ;local for diskwrite
+  1609   07E5 00                single          db      0       ;set true if single byte
+  1610                                                          ;alloc map
+  1611   07E6 00                rcount          db      0       ;record count in curr fcb
+  1612   07E7 00                extval          db      0       ;extent num and extmsk
+  1613   07E8 00                vrecord         db      0       ;curr virtual record
+  1614   07E9 00                ADRIVE          DB      0       ;CURRENT DISK - must preceed arecord
+  1615   07EA 0000              arecord         dw      0       ;curr actual record
+  1616   07EC 00                                db      0       ;curr actual record high byte
+  1617   07ED 0000              CUR_DMABASE     DW      0
+  1618   07EF 0000              CUR_DMA         DW      0
+  1619  
+  1620                          ;       local variables for directory access
+  1621  
+  1622   07F1 00                dptr            db      0       ;directory pointer 0,1,2,3
+  1623  
+  1624                          ;       shell variables
+  1625  
+  1626   07F2 0000              shell_si        dw      0       ;bdos command offset
+  1627   07F4 0000              shell_dma       dw      0       ;dmaad save area
+  1628   07F6 00                shell_flag      db      0       ;parsave shell flag
+  1629  
+  1630                          ;       special 8086 variables:
+  1631  
+  1632   07F7 0000              u_retseg        dw      0       ;user return segment
+  1633  
+  1634   07F9 00                parlg           db      0       ;len of parameter block
+  1635  
+  1636  
+  1637                          ;       bdos stack switch variables and stack
+  1638                          ;       used for all bdos disk functions
+  1639  
+  1640                                  org     ((offset $) + 1) and 0fffeh
+  1641  
+  1642                                          ; 69 word bdos stack
+  1643  
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  32
+
+  1644  
+  1645   07FA CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1646   0800 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1647   0806 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1648   080C CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1649   0812 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1650   0818 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1651   081E CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1652   0824 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1653   082A CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1654   0830 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1655   0836 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1656   083C CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1657   0842 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1658   0848 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1659   084E CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1660   0854 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1661   085A CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1662   0860 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1663   0866 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1664   086C CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1665   0872 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1666   0878 CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1667   087E CCCCCCCCCCCC                      dw      0cccch,0cccch,0cccch
+  1668   0884                   bdosstack       rw      0
+  1669  
+  1670   0884                   save_sp         rw      1
+  1671  
+  1672                          ;       local buffer area:
+  1673  
+  1674   0886                   info_fcb        rb      0;40    ;local user FCB
+  1675  
+  1676   0886 434F50595249              db      'COPYRIGHT(C)1983,'
+  1677        474854284329
+  1678        313938332C
+  1679   0897 444947495441              db      'DIGITAL RESEARCH(01/26/83)'
+  1680        4C2052455345
+  1681        415243482830
+  1682        312F32362F38
+  1683        3329
+  1684   08B1 585858582D30              db      'XXXX-0000-654321'
+  1685        3030302D3635
+  1686        34333231
+  1687  
+  1688                          ;
+  1689   08C1 0000              info            dw      0               ;information address
+  1690                          ;
+  1691   08C3                   u_wrkseg        rw      0
+  1692   08C3 0000              parametersegment dw     0       ;user parameter segment
+  1693                          ;
+  1694                          ;
+  1695   08C5 0000              dmaad   dw      0               ;user DMA address
+  1696   08C7 0000              dmabase dw      0               ;user DMA base
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE  33
+
+  1697  
+  1698   08C9 00                seldsk  db      0               ;current user disk
+  1699   08CA 00                usrcode db      0               ;current user number
+  1700   08CB 0000              dcnt    dw      0               ;directory index
+  1701     08CB                 ldcnt   equ     byte ptr dcnt   ;low(dcnt)
+  1702   08CD 00                srchl   db      0               ;search length
+  1703                          ;
+  1704                          ;
+  1705  
+  1706   08CE 00                        db      0               ;end of this data area
+  1707  
+  1708                          ;***************** end BDOS data area ****************
+  1709  
+  1710                          ;******************** end of BDOS ********************
+  1711                          end
+  1712  
+  1713  
+  1714  END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR: 16%
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE 034
+
+ADDLIST          000A N   513  1583#
+ADRIVE           07E9 V  1271  1461  1614#
+ALLOCA           07CC V  1580#
+ARECORD          07EA V   432   433   549   551   617   624   634   636   687   688 
+                         1409  1413  1615#
+ARET             07B0 V   299   320   334   473  1365  1522# 1523 
+ATRAN            02C1 L   621# 1107 
+B                0000 N    33#  777   990   993   996  1036  1075  1171  1347  1424 
+                         1429  1435 
+BADFUNC          0096 L   207#
+BDOENTRY         00D0 L   196   199   202   276#
+BDOFUNC          00C7 N   195   198   201   270#
+BDOSE1           004B L   177   179#
+BDOSOFFSET       0000 N    21#  117 
+BDOSRETURN       0163 L   348#  476 
+BDOSSTACK        0884 V   132  1668#
+BFCSHELL         0002 N   265#  294 
+BFGETMX          0001 N   264#
+BIOSCO           07AA V   135  1503#
+BIOSCS           07AC V   133  1504#
+BIOSOFFSET       0900 N    23#  135  1503 
+BLKMSK           07D5 V   631  1174  1218  1590#
+BLKOFF           07B6 V   632  1134  1530#
+BLKSHF           07D4 V   566   623   795  1589#
+BTABADDR         0000 N   262#  263   347 
+BTABFLAG         0002 N   263#  294   308 
+BUFFA            07C6 V   679  1445  1577#
+CALLBDOS         0157 L   297   318   340#
+CHECKA           07CA V  1579#
+CHECKNPR1        0587 L  1137  1142#
+CHECKNPR10       062A L  1235  1237#
+CHECKNPR11       059A L  1147  1156#
+CHECKNPR1X       0590 L  1148# 1161 
+CHECKNPR1Y       0597 L  1150  1153#
+CHECKNPR2        05B2 L  1166  1169#
+CHECKNPR23       05D0 L  1182  1184#
+CHECKNPR4        05ED L  1199# 1206 
+CHECKNPR5        0603 L  1194  1212  1214#
+CHECKNPR9        0619 L  1187  1225  1227#
+CHECKNPRS        0575 L  1108  1123#
+CHECKWILD        0457 L   912# 1336 
+CHKSIZ           07DD V  1596#
+CHKSUM           000D N    91#  872  1349 
+CHKWILD          0464 L   915   920#
+CHKWILD1         0467 L   926#  933 
+COMPARE          0697 L  1308# 1425 
+COMPEXT          0388 L   746#  892  1025 
+CS               SREG V   128   133   139   170   294   308   347 
+CURBCBA          07B9 V  1415  1428  1460  1483  1535#
+CURDMA           07EF V   442   699  1422  1440  1618#
+CURDMABASE       07ED V   441   697  1389  1396  1417  1419  1451  1617#
+CURDSK           07C4 V   434   469  1257  1272  1568#
+CURSELECT        0643 L  1254# 1302 
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE 035
+
+DCNT             08CB V   685   706   715   722   724  1700# 1701 
+DEBLKIO2         079A L  1475  1481#
+DEBLOCK          0701 L  1391  1398#
+DEBLOCK0         072C L  1418  1421#
+DEBLOCK2         073C L  1424  1427#
+DEBLOCK45        0751 L  1426  1436#
+DEBLOCK6         076B L  1444  1447#
+DEBLOCK9         0784 L  1423  1433  1459#
+DEBLOCKDIR       06ED L   691  1387#
+DEBLOCKDTA       06F7 L  1384  1393#
+DEBLOCKFX        07B7 V  1407  1442  1533#
+DEBLOCKIO        078E L  1431  1465#
+DIOCOMP          025A L   540#
+DIRBCBA          07CE V  1390  1581#
+DIRBLK           07DB V  1595#
+DIRCNT           07B3 V  1135  1139  1241  1525#
+DIRMAX           07D9 V   721  1594#
+DIRREC           0004 N    66#   68 
+DISKEOF          0572 L  1095  1099  1106  1119#
+DISKREAD         053A L  1082# 1359 
+DISKSELECT       0658 L  1264  1267#
+DMAAD            08C5 V   214   307   328   335   698  1449  1695#
+DMABASE          08C7 V   246   696  1450  1696#
+DMINX            07E4 V   613   783   994  1191  1608#
+DMPOSITION       0280 L   562#  612  1189 
+DPBADDR          07C8 V   512   515  1578#
+DPBLIST          0011 N   517  1601#
+DPTR             07F1 V   677   738  1622#
+DS               SREG V   129   137   137   140   169   170   180   187   377   378 
+                          380   447  1389  1452  1453  1456 
+DSKMAP           0010 N    94#  595 
+DSKMSK           0003 N    68#  733 
+DSKSHF           0002 N    67#  686 
+DTABCBA          07D0 V  1395  1582#
+ENDCODE          07AA N  1491# 1500 
+ENDDIR           FFFF N    59#  715 
+ENDLIST          07E3 V  1600# 1601 
+ENDOFDIR         0355 L   702#  841  1344 
+ENDSEARCH        044D L   866   905#
+ES               SREG V   130   171   180   186   392   393   395   420   422   447 
+                         1452  1454  1456 
+EXTMSK           07D6 V   655   753   799  1592#
+EXTNUM           000C N    90#  656   805   876  1021  1035  1057  1290 
+EXTVAL           07E7 V   572   657  1612#
+F7               0007 N    82# 1287  1290 
+FALSE            0000 N    29#  336 
+FCBDSK           07AE V   287   351  1294  1520# 1527 
+FCBLEN           0020 N    63#   66    95 
+FCBSHF           0005 N    69#  734 
+FN1              006C L   194   197#
+FN2              0077 L   197   200#
+FN3              0082 L   200   203#
+FUNC             0061 L   183   192#
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE 036
+
+FUNC14           06A0 L   271  1324#
+FUNC15           06AA L   272  1332#
+FUNC20           06D4 L   273  1356#
+FUNC26           009A L   203   211#
+FUNC32           009F L   204   217#
+FUNC44           00B0 L   205   230#
+FUNC51           00C2 L   206   244#
+GETDE1           039F L   774#  780   801 
+GETDE2           03AD L   778   782#
+GETDE3           03BC L   786   793#
+GETDIREXT        0399 L   646   763#  956  1071 
+GETDM            0297 L   590#  616  1198  1202 
+GETDMD           02A8 L   598   602#
+GETDPTRA         0329 L   671#  847   948 
+GETFCB           02E6 L   640# 1049  1086 
+GETFCB0          02FB L   645   649#
+GETFCB1          0304 L   651   653#
+GOBACK           0209 L   474# 1368 
+GOERR            0203 L   465   471#
+INDEX            02AD L   607# 1101 
+INFO             08C1 V   290   317   375   391  1689#
+INFOFCB          0886 V   352   376   390   595   642   644   650   656   664   665 
+                          668   771   805   815   914   950   974  1004  1009  1019 
+                         1021  1057  1287  1293  1305  1335  1346  1349  1674#
+INTERRUPTBIT     0200 N   101#  176 
+IOREAD           000A N    50#  537 
+IOSELDSK         0009 N    49#  505 
+IOSENTRY         07AA V   134   421   445  1502#
+LDCNT            08CB V   732  1701#
+LDRENTRY         0906 L   115#  141 
+LDROFFSET        0906 N    22#  114 
+LRET             07B0 V   401   907  1098  1523#
+LRETEQFF         040E L   858# 1366 
+MAXALL           07D7 V   522  1593#
+MAXEXT           001F N    70#  759   808  1028 
+MAXMOD           003F N    71# 1040 
+MODNUM           000E N    92#  879  1019  1035  1335 
+MOVE             0210 L   483#  952  1434 
+MULTCNT          07C3 V   292   312   323  1563#
+MULTIO1          0115 L   313#  330 
+MULTNUM          07B4 V   314  1159  1232  1526#
+MULTSEC          07B5 V   436  1244  1528#
+NAMLEN           000F N    72#  822 
+NOSELECT         068D L  1299  1301#
+NOSHELL          00F3 L   292   296#
+NOSHELLERR       0135 L   322   327#
+NXTREC           0020 N    95#  642   664   771   951  1346 
+OFFSETV          07DF V   553  1597#
+OPEN             0477 L   937# 1337 
+OPENCOPY         047C L   942# 1047 
+OPENERR          050E L  1041  1046  1055#
+OPENR0           04FB L  1031  1044#
+OPENR2           0503 L  1048# 1080 
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE 037
+
+OPENR3           0522 L  1027  1069#
+OPENR4           0532 L  1074  1077#
+OPENREEL         04D1 L  1013# 1096 
+OPENX            06BE L  1338  1342#
+OPENXA           06D0 L  1348  1351#
+OSENTRY          0003 L   120#  138 
+OSINIT           0000 L   118#
+PARAMETERSEGMENT 08C3 V   378   393  1692#
+PARCOPFL         07AF V   354   371  1521#
+PARLG            07F9 V   373   388  1634#
+PARRET           019E L   370   381#  387 
+PARSAVE          017D L   365#
+PARSAVE33        017B L   309   360# 1281 
+PARSAVE33R       0666 L  1279# 1334  1358 
+PARUNSAVE        019F L   337   356   384#
+PDSK             07BF V   283  1329  1542#
+PERERROR         01F8 L   462#  545 
+PHYMSK           07E2 V  1143  1408  1599#
+PHYOFF           07B8 V  1411  1438  1534#
+PHYSHF           07E1 V   519   555  1242  1598#
+PUSER            07C0 V   223   227  1543#
+RCOUNT           07E6 V   654   667  1088  1179  1611#
+RDBUFF           0255 L   535# 1115  1480 
+RDDIR            0334 L   683#  741 
+READDEBLOCK      06E5 L  1111  1381#
+READDIR          0363 L   718#  840 
+RECCNT           000F N    93#  644   650   665   668   974  1004  1009 
+RECORDOK         0554 L  1090  1100#
+RECORDOK2        056F L  1109  1116#
+RECSIZ           0080 N    65#   66 
+RESEL            07B2 V   349  1292  1524#
+RESELECT         0669 L  1284#
+RESTORERC        04C4 L   999# 1078 
+RESTORERC1       04D0 L  1006  1010#
+RET10            0476 L   916   931   935#  940 
+RET11            04B1 L   987#  991   995 
+RET13B           063E L  1240  1246#
+RET30            06BD L  1340# 1345 
+RET4             0254 L   509   532#  544 
+RET41            0328 L   666   669#
+RET71            0387 L   740   742#
+RETMON           00F6 L   298#  338 
+RETMON5          0170 L   350   353#
+RETMON6          017A L   355   357#
+RETSELECT        024E L   524   527#
+RETURNNOTOK      00C0 L   235   237   240#
+RWXIOSIF         01CA L   427#  538 
+SAVEMOD          07E3 V  1020  1058  1606#
+SAVESP           0884 V   346   475  1670#
+SEARCH           03E9 L   825#
+SEARCHI          03DB L   813#  829 
+SEARCHN          03EF L   834#  856   903 
+SEARCHNAME       03E7 L   820#  939  1045 
+CP/M ASM86 1.1  SOURCE: LBDOS.A86     CCP/M-86 Bdos Loader                                                   PAGE 038
+
+SEARCHNJMP       044A L   885   894   901#
+SECTOR           07BD V   440   557  1539#
+SECTPT           07D2 V   516   520   552  1588# 1601 
+SEEK             0261 L   547# 1113  1472 
+SELDSK           08C9 V   284  1252  1256  1300  1328  1698#
+SELECT           0651 L  1258  1262#
+SELECT0          0655 L  1259  1265# 1276 
+SELECTDISK       0219 L   495# 1275 
+SELERROR         01FC L   467# 1266 
+SETARET          06DA L   918  1362#
+SETDATA          0348 L   345   694# 1112 
+SETENDDIR        035C L   713#  728   830 
+SETFCB           0312 L   660# 1117  1385 
+SETLRET1         01BC L   398# 1067  1076  1120 
+SETRC            049C L   648   968# 1079 
+SETRC1           04AF L   980   985#
+SETRC2           04B2 L   977   989#
+SETUSRCODE       00AA L   222   225#
+SHELL            00FB L   295   302#
+SHELL03          0142 L   326   333#
+SHELLDMA         07F4 V   307   335  1627#
+SHELLFLAG        07F6 V   310   336   369   386  1628#
+SHELLSI          07F2 V   306   316  1626#
+SINGLE           07E5 V   529   597   784  1609#
+SRCHA            07C1 V   816   846  1546#
+SRCHEXT          0439 L   877   888#
+SRCHFIN          040E L   842   857#
+SRCHL            08CD V   817   848  1702#
+SRCHLOOP         0417 L   855   864#  899 
+SRCHOK           0442 L   873   886   896#
+SS               SREG V   131   176 
+STARET           01BE L   400#  862  1052 
+SYSDAT           0006 V   123#
+TESTFFFF         0358 L   708#
+TMPSELECT        063F L  1248# 1327 
+TRACK            07BB V   439   554  1482  1537#
+TRUE             FFFF N    28#   29   310   354   369   371   386   784  1292 
+UMULTCNT         07C3 V   238  1562#
+URETSEG          07F7 V   171   186  1632#
+USERENTRY        0034 L   121   146#
+USERINIT         0008 L   119   126#
+USRCODE          08CA V  1304  1699#
+UWRKSEG          08C3 V   173   187  1691#
+VRECORD          07E8 V   567   630   643   663  1051  1087  1162  1613#
+W                0000 N    34#  710 
+XIOSIF           01C2 L   413#  506 
+ZEROLENGTH       0007 N   286  1527#

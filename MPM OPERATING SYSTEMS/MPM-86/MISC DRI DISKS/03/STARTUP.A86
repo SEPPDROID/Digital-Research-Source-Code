@@ -1,0 +1,197 @@
+;***************************************************************;
+;								;
+;	DIGITAL RESEARCH C COMPILER STARTUP MODULE		;
+;								;
+;	SELECT ONE OF THE FOLLOWING MEMORY MODELS AND THEN	;
+;	ASSEMBLE WITH RASM-86					;
+;								;
+;	LOGIC IS AS FOLLOWS:					;
+;								;
+;	Compiler generates call to _start (in lower case)	;
+;	Which calls _START (in upper case)			;
+;	Which init's SP, etc. then calls _GO (in upper case)	;
+;	Which calls _main (in lower case) which calls 		;
+;	the user's main (in lower case) which then returns to	;
+;	_main which then returns then _GO calls exit in l. case ;
+;								;
+;***************************************************************;
+
+SMALL_MODEL 	EQU	1
+MEDIUM_MODEL 	EQU 	0
+COMPACT_MODEL 	EQU 	0
+BIG_MODEL 	EQU 	0
+
+
+	IF	SMALL_MODEL
+
+CODE    CSEG
+CGROUP  GROUP   CODE
+DGROUP	GROUP	_BREAK
+
+        EXTRN   _GO:NEAR
+	PUBLIC	_START
+ 
+_START: MOV     AX,DS
+        MOV     SS,AX
+        MOV     BX,6
+        MOV     SP,[BX]         ;set up ss:sp
+
+        MOV     AX,WORD PTR ?MEMRY
+        MOV     __break,AX      ;set up __break for brk()
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+        CALL    _GO
+
+DATA	DSEG	BYTE
+	PUBLIC	?MEMRY
+?MEMRY	RW	1
+
+_BREAK	DSEG	BYTE COMMON
+__break	RW	1
+
+	ENDIF	;SMALL_MODEL
+
+
+
+
+	IF	MEDIUM_MODEL
+
+GO_CODE	CSEG
+	EXTRN	_GO:FAR
+
+CODE    CSEG
+
+DGROUP  GROUP   DATA,_BREAK
+
+
+
+	PUBLIC	_START
+
+_START: MOV     AX,DS
+	MOV	BX,6
+        MOV     SS,AX
+        MOV     SP,[BX]         ;set up ss:sp
+
+        MOV     AX,WORD PTR ?MEMRY
+        MOV     __BREAK,AX      ;set up __BREAK for brk()
+
+;
+;	NOW ZERO UN-INIT DATA
+;
+	MOV	CX,SP
+	SUB	CX,100H		;LEAVE SOME SLOP
+	MOV	BX,WORD PTR ?MEMRY ;GET STARTING LOCATION
+	SUB	CX,BX		;CALC LENGTH INTO CX
+	INC	CX
+	SHR	CX,1		;MAKE IT A WORD COUNT
+
+	MOV	AX,0		;FILL VALUE
+	MOV	DX,DS
+	MOV	ES,DX		;SET UP DEST SEG
+	MOV	DI,BX		;SET UP DEST OFFSET
+
+	REP STOSW		;AND DOIT
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+	CALLF	_GO
+
+DATA    DSEG    BYTE
+
+	PUBLIC	?MEMRY
+?MEMRY	RW	2
+
+_BREAK	DSEG	BYTE COMMON
+__BREAK RW      1
+
+	ENDIF	;MEDIUM_MODEL
+
+
+
+
+	IF	COMPACT_MODEL
+
+CODE    CSEG
+CGROUP  GROUP   CODE
+DGROUP  GROUP   _BREAK
+
+	EXTRN	_GO:NEAR
+	PUBLIC  _START
+_START:
+        MOV     BX,0
+	MOV	SS,15H[BX]
+        MOV     SP,12H[BX]         ;set up ss:sp
+	INC	SP
+
+	MOV	AX,0FH[BX]
+	MOV	__BREAK+2,AX
+	SUB	AX,AX
+        MOV     __BREAK,AX      ;set up __break for brk()
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+	PUSH	DS
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+        CALL    _GO
+
+
+_BREAK	DSEG	BYTE COMMON
+__BREAK RW      2
+
+	ENDIF	;COMPACT_MODEL
+
+
+
+
+
+	IF	BIG_MODEL
+
+DGROUP  GROUP   _BREAK
+
+GO_CODE CSEG
+	EXTRN	_GO:FAR
+
+START_CODE    CSEG
+
+	PUBLIC  _START
+_START:
+        MOV     BX,0
+	MOV	SS,15H[BX]
+        MOV     SP,12H[BX]         ;set up ss:sp
+	INC	SP
+
+	MOV	AX,0FH[BX]
+	MOV	__BREAK+2,AX
+	SUB	AX,AX
+        MOV     __BREAK,AX      ;set up __break for brk()
+
+        MOV     BX,80H          ;offset of command line
+        MOV     AL,BYTE PTR [BX];get length
+        XOR     AH,AH
+        PUSH    AX
+	PUSH	DS
+        MOV     AX,81H          ;offset of command line data
+        PUSH    AX
+        CALLF   _GO
+
+_BREAK	DSEG	BYTE COMMON
+__BREAK	RW	2
+	ENDIF	;BIG_MODEL
+
+
+        END
+
+
+

@@ -1,0 +1,685 @@
+lisp:
+	proc options(main,stack(4096));
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+	%replace
+		true   by '1'b,
+		false  by '0'b;
+	%replace
+		expr   by  0,
+		fexpr  by  1,
+		subr   by  2,
+		fsubr  by  3,
+		apval  by  4,
+		atomic by  5,
+		cell   by  6;
+
+	dcl
+		m_exp entry returns (ptr);
+
+	dcl
+		define_ptr  ptr external,
+		label_ptr   ptr external,
+		lambda_ptr  ptr external,
+		cond_ptr    ptr external,
+		quote_ptr   ptr external,
+		nil_ptr     ptr external,
+		true_ptr    ptr external;
+
+	dcl
+		totwds entry returns (fixed(15)),
+		maxwds entry returns (fixed(15)),
+		allwds entry (fixed(15)) returns (ptr),
+		scan entry;
+
+	dcl
+		sysprint file,
+		f_stack(8) file variable external,
+		f_top fixed external,
+		new_file bit(1),
+		new_name char(16) var;
+
+	dcl
+		(lib1, lib2, lib3, lib4, lib5, lib6, lib7, lib8) file;
+
+	dcl
+		accum char(128) var external,
+		hash_table (0:127) ptr external
+			init((128)null),
+		hash_code fixed(7) external;
+
+	dcl
+		1 node based,
+		  2 type fixed(7),
+		  2 carf  ptr,
+		  2 cdrf  ptr;
+	%replace
+		extra_bytes by 6;
+
+	dcl
+		1 atomic_sym based,
+		  2 form fixed(7),
+		  2 coll ptr,
+		  2 p_list ptr,
+		  2 symbol char(128) var;
+
+	dcl
+		trace fixed static external initial(0);
+
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+	allbytes:
+		proc (n) returns (ptr);
+		dcl
+			n fixed;
+		return (allwds(divide(n+1,2,15)));
+		end allbytes;
+
+	compute_hash:
+		proc external;
+		dcl
+			c char(1),
+			i fixed;
+		hash_code = 0;
+			do i = 1 to length(accum);
+			c = substr(accum,i,1);
+			hash_code = hash_code + rank(c);
+			end;
+		if hash_code < 0 then
+			hash_code = abs(hash_code);
+		end compute_hash;
+
+	chars:
+		proc (p) returns (char(128) var);
+		dcl
+			p ptr,
+			c char(1),
+			i fixed;
+			do i = 1 to length(p->symbol);
+			c = substr(p->symbol,i,1);
+			if rank (c) < rank (' ') |
+			   rank (c) > rank ('_') then
+				return ('?-symbol');
+			end;
+		return (p->symbol);
+		end chars;
+
+	lookup:
+		proc returns(ptr) external;
+		dcl
+			p ptr;
+			do p = hash_table(hash_code)
+				repeat(p->coll) while(p~=null);
+			if accum = chars(p) then
+				return (p);
+			end;
+		return (null);
+		end lookup;
+
+	enter:
+		proc returns(ptr) external;
+		dcl
+			i fixed,
+			p ptr;
+		p = allbytes(length(accum)+extra_bytes);
+		p->form = atomic;
+		p->coll = hash_table(hash_code);
+		p->p_list = nil_ptr;
+		p->symbol = accum;
+		hash_table(hash_code) = p;
+		return (p);
+		end enter;
+
+	/*****************************************************
+	*                                                    *
+	*               Elementary Functions                 *
+	*                                                    *
+	*****************************************************/
+	cons:
+		proc (p,q) returns(ptr) external;
+		dcl
+			(p,q,r) ptr;
+		allocate node set (r);
+		r->type = cell;
+		r->carf = p;
+		r->cdrf = q;
+		return (r);
+		end cons;
+
+	car:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->carf);
+		end car;
+
+	cdr:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->cdrf);
+		end cdr;
+
+	eq:
+		proc (p,q) returns (bit(1));
+		dcl
+			(p,q) ptr;
+		return (p = q);
+		end eq;
+
+	atom:
+		proc(p) returns(bit(1));
+		dcl
+			p ptr;
+		return (p->type <= atomic);
+		end atom;
+
+	equal:
+		proc(x,y) returns (bit(1)) recursive;
+		dcl
+			(x,y) ptr;
+		if atom(x) then
+			do;
+			if atom(y) then
+				return(eq(x,y));
+			return (false);
+			end;
+		if equal(car(x),car(y)) then
+			return (equal(cdr(x),cdr(y)));
+		return (false);
+		end equal;
+
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+	cadr:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->cdrf->carf);
+		end cadr;
+
+	caddr:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->cdrf->cdrf->carf);
+		end caddr;
+
+	caar:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->carf->carf);
+		end caar;
+
+	cadar:
+		proc (p) returns (ptr);
+		dcl
+			p ptr;
+		return (p->carf->cdrf->carf);
+		end cadar;
+
+	replaca:
+		proc (p,q);
+		dcl
+			(p,q) ptr;
+		p->carf = q;
+		end replaca;
+
+	replacd:
+		proc (p,q) external;
+		dcl
+			(p,q) ptr;
+		p->cdrf = q;
+		end replacd;
+
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+
+	deflist:
+		proc(p) returns(ptr) recursive;
+		dcl
+			(p,q,r) ptr;
+		q = car(p);
+		if atom(q) then
+			do;
+			r = cons(label_ptr,cons(q,cdr(p)));
+			call replacd(q,r);
+			q->type = expr;
+			end;
+		else
+			call error('Not Atomic Name',q);
+		return (q);
+		end deflist;
+
+	define:
+		proc(p) returns(ptr) recursive;
+		dcl
+			p ptr;
+		if p = nil_ptr then
+			return (nil_ptr);
+		return (cons(deflist(car(p)),define(cdr(p))));
+		end define;
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+	dcl
+		i fixed,
+		name char(128) var;
+
+	error:
+		proc(c,x);
+		dcl
+			c char(15) var,
+			x ptr;
+		put skip list('Error:',c);
+		call display(x);
+		go to error_exit;
+		end error;
+
+	evalquote:
+		proc (fn,x) returns(ptr);
+		dcl
+			(fn,x) ptr;
+		return(apply(fn,x,nil_ptr));
+		end evalquote;
+
+	apply:
+		proc ((fn),(x),(a)) returns(ptr) recursive;
+		dcl
+			(fn,x,a) ptr;
+		if atom(fn) then
+			if fn->type = expr then
+				fn = cdr(fn);
+		if trace > 0 then
+			do;
+			put skip list('Apply:');
+			call display(fn);
+			call display(x);
+			call display(a);
+			end;
+		if atom(fn) then
+			do;
+			name = chars(fn);
+			/* check for c....r */
+			if length(name) >= 3 then
+			if substr(name,1,1) = 'C' then
+			if substr(name,length(name),1) = 'R' then
+			if verify(substr(name,2,length(name)-2),
+				'AD') = 0 then
+				do;
+				if x = nil_ptr then
+					return(nil_ptr);
+				x = car(x);
+					do i = length(name)-1 to 2
+						by -1 while(x~=nil_ptr);
+					if substr(name,i,1) = 'A' then
+						x = car(x);
+					else
+						x = cdr(x);
+					end;
+				return (x);
+				end;
+			if name = 'CONS' then
+				return (cons(car(x),cadr(x)));
+			if name = 'EQ' then
+			if eq(car(x),cadr(x)) then
+				return(true_ptr);
+			else
+				return(nil_ptr);
+			if name = 'ATOM' then
+			if atom(car(x)) then
+				return(true_ptr);
+			else
+				return(nil_ptr);
+			if name = 'DEFINE' then
+				return (define(car(x)));
+			if name = 'LIB' then
+				do;
+				new_file = true;
+				new_name = chars(car(x));
+				return(nil_ptr);
+				end;
+			if name = 'TRACE' then
+				do;
+				trace = chars(car(x));
+				return (nil_ptr);
+				end;
+			else
+				return(apply(eval(fn,a),x,a));
+			end;
+		if atom(car(fn)) then
+			do;
+			name = chars(car(fn));
+			if name = 'LAMBDA' then
+				return(eval(caddr(fn),
+					pairlis(cadr(fn),x,a)));
+			if name = 'LABEL' then
+				return(apply(caddr(fn),x,
+					cons(cons(cadr(fn),caddr(fn)),a)));
+			end;
+		call error('Undefined',fn);
+		end apply;
+
+	eval:
+		proc(e,a) returns (ptr) recursive;
+		dcl
+			(e,a) ptr;
+		if trace > 0 then
+			do;
+			put skip list('Eval:');
+			call display(e);
+			call display(a);
+			end;
+		if atom(e) then
+			do;
+			if e = true_ptr then
+				return (true_ptr);
+			if e = nil_ptr then
+				return (nil_ptr);
+			return (cdr(assoc(e,a)));
+			end;
+		if atom(car(e)) then
+			do;
+			name = chars(car(e));
+			if name = 'quote' then
+				return (cadr(e));
+			if name = 'cond' then
+				return (evcon(cdr(e),a));
+			return (apply(car(e),evlis(cdr(e),a),a));
+			end;
+		return (apply(car(e),evlis(cdr(e),a),a));
+		end eval;
+
+	evcon:
+		proc(c,a) returns (ptr) recursive;
+		dcl
+			(c,a) ptr;
+		if eval(caar(c),a) = true_ptr then
+			return (eval(cadar(c),a));
+		return (evcon(cdr(c),a));
+		end evcon;
+
+	evlis:
+		proc (m,a) returns (ptr) recursive;
+		dcl
+			(m,a) ptr;
+		if m = nil_ptr then
+			return (nil_ptr);
+		return (cons(eval(car(m),a),evlis(cdr(m),a)));
+		end evlis;
+
+	pairlis:
+		proc(x,y,a) returns (ptr) recursive;
+		dcl
+			(x,y,a) ptr;
+		if x = nil_ptr then
+			return (a);
+		if y = nil_ptr then
+			call error('Argument Count',x);
+		return (cons(cons(car(x),car(y)),
+				pairlis(cdr(x),cdr(y),a)));
+		end pairlis;
+
+	assoc:
+		proc(x,a) returns (ptr) recursive;
+		dcl
+			(x,a) ptr;
+		if a = nil_ptr then
+			call error('No Value',x);
+		if trace >= 2 then
+			do;
+			put skip list('assoc:');
+			call display(a);
+			call display(x);
+			end;
+		if equal(caar(a),x) then
+			return (car(a));
+		return (assoc(x,cdr(a)));
+		end assoc;
+	/*****************************************************
+	*                                                    *
+	*              List Construction Routines            *
+	*                                                    *
+	*****************************************************/
+	item:
+		proc returns (ptr);
+		dcl
+			p ptr;
+		if accum = 'NIL' then
+			p = nil_ptr;
+		else
+			do;
+			call compute_hash();
+			p = lookup();
+			if p = null then
+				p = enter();
+			end;
+		call scan();
+		return (p);
+		end item;
+
+	tail:
+		proc returns(ptr) recursive;
+		dcl
+			p ptr;
+		if accum = ')' then
+			do;
+			call scan();
+			return (nil_ptr);
+			end;
+		p = cons(list(),nil_ptr);
+		if accum = '.' then
+			do;
+			call scan();
+			call replacd(p,list());
+			if accum = ')' then
+				call scan();
+			else
+				put skip list('Balance Error');
+			end;
+		else
+			call replacd(p,tail());
+		return (p);
+		end tail;
+
+	list:
+		proc returns(ptr) recursive external;
+		if accum = '(' then
+			do;
+			call scan();
+			return (tail());
+			end;
+		return (item());
+		end list;
+
+	/*****************************************************
+	*                                                    *
+	*              List Display Routines                 *
+	*                                                    *
+	*****************************************************/
+	d_tail:
+		proc (p) recursive;
+		dcl
+			p ptr;
+		if p = nil_ptr then
+			return;
+		if atom(p) then
+			do;
+			put list('.');
+			put list(chars(p));
+			end;
+		else
+			do;
+			call d_list(car(p));
+			call d_tail(cdr(p));
+			end;
+		end d_tail;
+
+	d_list:
+		proc (p) recursive;
+		dcl
+			p ptr;
+		if atom(p) then
+			put list(chars(p));
+		else
+			do;
+			put list('(');
+			call d_tail(p);
+			put list(')');
+			end;
+		end d_list;
+
+	display:
+		proc (p);
+		dcl
+			p ptr;
+		put skip;
+			call d_list(p);
+		end display;
+
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+
+	release:
+		proc (p) recursive;
+		dcl
+			p ptr;
+		if p = nil_ptr then
+			return;
+		if atom(p) then
+			return;
+		call release(car(p));
+		call release(cdr(p));
+		free p->node;
+		end release;
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+	init:
+		proc;
+		accum = 'DEFINE';
+		call compute_hash();
+		define_ptr = enter();
+		accum = 'LABEL';
+		call compute_hash();
+		label_ptr = enter();
+		accum = 'LAMBDA';
+		call compute_hash();
+		lambda_ptr = enter();
+		accum = 'COND';
+		call compute_hash();
+		cond_ptr = enter();
+		accum = 'QUOTE';
+		call compute_hash();
+		quote_ptr = enter();
+		accum = 'T';
+		call compute_hash();
+		true_ptr = enter();
+		accum = 'LABEL';
+		call compute_hash();
+		label_ptr = enter();
+		accum = 'NIL';
+		call compute_hash();
+		nil_ptr = enter();
+		end init;
+
+	/*****************************************************
+	*                                                    *
+	*                                                    *
+	*****************************************************/
+
+	dcl
+		(fn, x, e) ptr,
+		prompt char(1) var;
+	call init();
+	fn = nil_ptr;
+	x  = nil_ptr;
+	f_stack(1) = lib1;
+	f_stack(2) = lib2;
+	f_stack(3) = lib3;
+	f_stack(4) = lib4;
+	f_stack(5) = lib5;
+	f_stack(6) = lib6;
+	f_stack(7) = lib7;
+	f_stack(8) = lib8;
+	f_top = 1;
+	open file(sysprint) stream output linesize(79)
+		print pagesize(0) title('$con');
+	open file(lib1) stream title('$con');
+	on endfile(lib1)
+		stop;
+	error_exit:
+		do while(true);
+		/*
+		call release(fn);
+		call release(x);
+		*/
+		prompt = '';
+		if f_top = 1 then
+			prompt = '>';
+		put edit (totwds(),'/',maxwds(),' words',prompt)
+			(skip,2(f(5),a),skip,a);
+		call scan();
+		/*
+		fn = list();
+			do while (accum = ')');
+			call scan();
+			end;
+		x  = list();
+			do while (accum ~= ';');
+			call scan();
+			end;
+		*/
+		fn = m_exp();
+		if fn ^= nil_ptr then
+			do;
+			x  = cdr(fn);
+			fn = car(fn);
+			put list('Evalquote:');
+			call display(fn);
+			call display(x);
+			e = evalquote(fn,x);
+			put skip list('Value is:');
+			call display(e);
+			end;
+		if new_file then
+			do;
+			new_file = false;
+			f_top = f_top + 1;
+			if f_top > hbound(f_stack,1) then
+				do;
+				put skip list('Readfile Stack Overflow');
+				f_top = 1;
+				go to error_exit;
+				end;
+			on undefinedfile(f_stack(f_top))
+				begin;
+				put skip list('No File:',new_name);
+				f_top = 1;
+				go to error_exit;
+				end;
+			open file(f_stack(f_top)) stream title(new_name);
+			revert undefinedfile(f_stack(f_top));
+			on endfile(f_stack(f_top))
+				begin;
+				close file(f_stack(f_top));
+				f_top = f_top - 1;
+				go to error_exit;
+				end;
+			end;
+		end;
+	end lisp;
+

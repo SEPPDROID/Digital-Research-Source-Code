@@ -1,0 +1,814 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 1
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp 2
+1.  MP/M FEATURES AND FACILITIES
+.sp
+.pp
+1.1  Introduction
+.pp
+The purpose of the MP/M multi-programming monitor control program is to
+provide a microcomputer operating system which
+supports multi-terminal access with multi-programming at each terminal.
+.sp
+.CE
+OVERVIEW
+.PP
+The MP/M operating system is an upward compatible
+version of CP/M 2.0 with a number of added facilities.  These added
+facilities are contained in new logical sections of MP/M called the
+extended I/O system and the extended
+disk operating system.
+In this manual the name XIOS will refer to the combined basic
+and extended I/O system.  BDOS will refer to the standard CP/M 2.0
+basic disk operating system functions and XDOS will refer to the
+extended disk operating system.
+As an upward compatible version, users can
+easily make the transition from CP/M to the MP/M
+operating system.
+In fact, existing CP/M *.COM files can be run under MP/M,
+providing that the program has been correctly written.  That is,
+BDOS calls are made for I/O,
+and the only direct BIOS calls made are for console and printer I/O.
+There must also be at least 4 bytes of extra stack in the CP/M
+*.COM program.
+.SP
+The following basic facilities are provided:
+.LI
+
+      o Multi-terminal support
+      o Multi-Programming at each terminal
+      o Support for bank switched memory and
+          memory protection
+      o Concurrency of I/O and CPU operations
+      o Inter-process communication, mutual
+          exclusion and synchronization
+      o Ability to operate in sequential, polled
+          or interrupt driven environments
+      o System timing functions
+      o Logical interrupt system utilizing flags
+      o Selection of system options at system
+          generation time
+      o Dynamic system configuration at load time
+
+The following optional facilities are provided:
+
+      o Spooling list files to the printer
+      o Scheduling programs to be run by date and time
+      o Displaying complete system run-time status
+      o Setting and reading of the date and time
+.AD
+.SP
+.CE
+HARDWARE ENVIRONMENT
+.PP
+The hardware environment for MP/M must include an 8080 or Z80 CPU,
+a minimum of 32K bytes of memory, 1 to 16 consoles, 1 to 16
+logical (or physical) disk drives
+each containing up to eight megabytes, and a clock/timer interrupt.
+.PP
+The distributed form of the MP/M operating system is configured for
+a polled I/O environment on the Intel MDS-800 with two consoles
+and a real-time clock.  Multi-programming at two terminals is supported with this
+configuration.  To improve the system performance and
+capability the following incremental hardware additions can be utilized
+by the operating system:
+.SP
+.IN +3
+   a. Full Interrupt System
+.BR
+   b. Banked Memory
+.BR
+   c. Additional Consoles
+.QI
+.AD
+.SP
+.CE
+MEMORY SIZE
+.PP
+The MP/M operating system requires less than
+15K bytes of memory when configured for
+two consoles and eight memory segments on the Intel MDS-800.
+Each additional console
+requires 256 bytes.
+.PP
+Optional resident system processes can be specified at system
+generation which require varying amounts of memory.
+.SP
+.CE
+PERFORMANCE
+.PP
+When MP/M is configured for a single console and is executing
+a single process, its speed approximates that of CP/M.
+In environments where either multiple processes and/or users are
+running, the speed of each individual process is degraded in
+proportion to the amount of I/O and compute resources required.
+A process
+which performs a large amount of I/O in proportion to computing
+exhibits only minor speed degradation.  This also applies to a process
+that performs a large amount of computing, but is running concurrently
+with other processes that are largely I/O bound.  On the other hand,
+significant speed degradation occurs in environments in which
+more than one compute bound process is running.
+.bp
+.sp
+.pp
+1.2  Functional Description of MP/M
+.pp
+The MP/M Operating System is based on a real-time multi-tasking
+nucleus.  This nucleus provides process dispatching, queue management,
+flag management, memory management and system timing functions.
+.pp
+MP/M is a priority driven system.  This means that the highest priority
+ready process is given the CPU resource.  The operation of determining
+the highest priority ready process and then giving it the CPU is called
+dispatching.  Each process in the system has a process descriptor.  The
+purpose of the process descriptor is to provide a data structure which
+contains all the information the system needs to know about a process.
+This information is used during dispatching to save
+the state of the currently running process, to determine which process is
+to be run, and then to restore that processes state.
+Process dispatching is performed at each system call, at each
+interrupt, and at each tick of the system clock.
+Processes with the same priority are "round-robin" scheduled. That is,
+they are given equal slices of CPU time.
+.pp
+Queues perform several critical functions in a real-time multi-tasking
+environment.  They can be used for the communication of messages
+between processes, to synchronize processes, and for mutual exclusion.
+As the name "queue" implies, they provide a first in first out list of
+messages, and as implemented in MP/M, a list of processes waiting for
+messages.
+.pp
+The flag management provided by MP/M is used to synchronize processes
+by signaling a significant event.  Flags provide
+a logical interrupt system for MP/M which is independent of the
+physical interrupt system.  Flags are used to signal interrupts,
+mapping an arbitrary physical interrupt environment into a regular
+structure.
+.pp
+MP/M manages memory in pre-defined memory segments.
+Up to eight memory segments of 48K can be managed by MP/M.
+This management
+of memory is consistent with hardware environments where memory
+is banked and/or protected in fixed segments.
+.pp
+System timing functions provide time of day, the capability to
+schedule programs to be loaded from disk and executed, and the
+ability to delay the execution of a process for a specified period
+of time.
+.bp
+.sp
+.pp
+1.3  Console Commands
+.PP
+The purpose of this section is to describe the console commands
+which make up the operator interface to the MP/M operating
+system.  It is important to note from the outset that there are
+no system defined or built-in commands.  That is, the system has no
+reserved or special commands.  All commands in the system are
+provided by resident system processes specified during system
+generation and programs residing on disk in either the CP/M
+*.COM file format or in the MP/M *.PRL (page relocatable) file format.
+.pp
+When MP/M is loaded from disk a configuration table and memory segment map
+are displayed on console #0.
+When the loading is complete each of the 1 to 16
+configured consoles is a system or master console.
+Additional slave consoles (maximum total of slave and master consoles
+is 16) can be accessed using XDOS system calls.
+.pp
+After loading, the following message is displayed on each console:
+.sp
+.ti +3
+MP/M
+.ti +3
+xA>
+.pp
+The 'x' shown in the prompt is the user code.  At cold start an
+association is made between the user code and console number.  The
+initial user code is equal to the console number.  For
+example, console #0 is initialized to user #0 and the following
+prompt is displayed on console #0:
+.sp
+.ti +3
+0A>
+.pp
+The default user code can then be changed to any desired user code
+with the USER command (see USER in section 1.4).
+All users have access to files with a user code of 0.  Thus, system
+files and programs should have a user code of 0.
+Caution must be used when operating under a user
+code of 0 since all its files can be accessed while
+operating under any other user code.
+In general, user code 0 should be reserved for
+files which are accessed by all users.  In the event that a
+file  with  the same name is present under user code 0  and
+another  user code,  the first file found in the  directory
+will be accessed.
+.pp
+The 'A' in the prompt is the default (currently logged) disk for the
+console.  This can be changed individually at any console by typing
+in a disk drive name (A,B,C,...,or P) followed by a colon (:) when
+the prompt has been received.
+Since  there  are no built-in commands,  the  default  disk
+specified  must contain the desired command files (such  as
+DIR,  REN,  ERA etc.), or each command must be preceeded by
+an "A:".
+.SP
+.CE
+RUNNING A PROGRAM
+.PP
+A program is run by typing in the program name followed by a carriage return, <cr>.  Some programs obtain parameters on the same line
+following the program name.  Characters on the line following the
+program name constitute what is called the command tail.  The command
+tail is copied into location 0080H (relative to the base of the memory
+segment in which the program resides) and converted to upper case by the Command Line Interpreter
+(CLI).  The CLI also parses the command tail producing two file control
+blocks at 005CH and 006CH respectively.
+.PP
+The programs which are provided with MP/M are described in sections
+1.4 and 1.5.
+.SP
+.CE
+ABORTING A PROGRAM
+.PP
+A program may be aborted by typing a control C (^C) at the console.
+The affect of the ^C is to terminate the program which currently
+owns the console.  Thus, a detached program cannot be aborted with
+a ^C.  A detached program must first be attached and then aborted.
+A running program may also be aborted using the ABORT command (see
+ABORT in section 1.5).
+.SP
+.CE
+RUNNING A RESIDENT SYSTEM PROCESS
+.PP
+At the operator interface there is no difference between running
+a program from disk and running a resident system process.  The actual
+difference is that resident system processes do not need to be
+loaded from disk because they are loaded by the MP/M loader when
+a system cold start is performed and remain resident.
+.SP
+.CE
+DETACHING FROM A PROGRAM
+.PP
+There are two methods for detaching from a running program.  The first
+is to type a control D (^D) at the console.  The second method is for
+a program to make an XDOS detach call.
+.PP
+The restriction on the former method, typing ^D, is that the running
+program must be performing a check console status to observe the
+detach request.
+A check console status is automatically performed each time
+a user program makes a BDOS disk function call.
+.SP
+.CE
+ATTACHING TO A DETACHED PROGRAM
+.PP
+A program which is detached from a console, that is it does not own a
+console, may be attached to a console by typing 'ATTACH' followed by
+the program name.  A program may only be attached to the console from
+which it was detached.
+If the terminal message process (TMP)
+has ownership of the console and the user enters a ^D, the
+next highest priority ready process which is waiting for the console
+begins running.
+.SP
+.CE
+LINE EDITING AND OUTPUT CONTROL
+.PP
+The Terminal Message Process (TMP) allows certain line editing
+functions while typing in command lines:
+.LI
+
+	rubout	Delete the last character typed at the console,
+	        removes and echoes the last character
+
+	ctl-C	MP/M abort program. Terminate running process.
+
+	ctl-D   MP/M detach console.
+
+	ctl-E   Physical end of line.
+
+	ctl-H   Delete the last character typed at the console,
+	        backspaces one character position.
+
+	ctl-J   (line feed) terminate current input.
+
+	ctl-M   (carriage return) terminates input.
+
+	ctl-R	Retype current command line: types a "clean line"
+		following character deletion with rubouts.
+
+	ctl-U   Remove current line after new line.
+
+	ctl-X	Delete the entire line typed at the console,
+	        backspaces to the beginning of the current line
+
+	ctl-Z	End input from the console.
+
+   The control functions ctl-P, ctl-Q and ctl-S affect console
+   output as shown below.
+
+	ctl-P	Copy all subsequent console output to the list
+		device.  Output is sent to both the list device
+		and the console device until the next ctl-P
+		is typed.  If the list device is not available
+		a 'Printer busy' message is displayed on the
+		console.
+
+	ctl-Q	Obtain ownership of the printer mutual exclusion
+		message.  Obtaining the printer using this command
+		will ensure that the MP/M spooler, PIP, and other
+		ctl-P or ctl-Q commands entered from other
+		consoles will not be allowed access to the
+		printer.  The printer is "owned" by the TMP until
+		another ctl-P or ctl-Q is entered, releasing the
+		printer.  The ctl-P should be used when a program
+		(such as a CP/M *.COM file) is executed that does
+		not obtain the printer mutual exclusion message
+		prior to accessing the printer.  If the list
+		device is not available a 'Printer busy' message
+		is displayed on the console.
+
+	ctl-S	Stop the console output temporarily.  Program
+		execution and output continue when the next
+		character is typed at the console (e.g., another
+		ctl-S).  This feature is used to stop output on
+		high speed consoles, such as CRT's, in order to
+		view a segment of output before continuing.
+
+.AD
+.bp
+.sp
+.pp
+1.4  Commonly Used System Programs
+.PP
+The commonly used system programs (CUSPs) or transient commands, as
+they are called in CP/M, are loaded from the currently logged
+disk and executed in a relocatable memory segment if their type is
+PRL or in an absolute TPA if their type is COM.
+.PP
+This section contains a brief description of the CUSPs.  Operation of
+many of the CUSPs is identical to that under CP/M.  In these cases
+the commands are marked with an asterisk '*' and
+the reader is referred to the Digital Research document titled "An
+Introduction to CP/M Features and Facilities" for a complete
+description of the CUSP.
+.SP
+.CE
+GET/SET USER CODE
+.PP
+The USER command is used to display the current user code as well as
+to set the user code value.
+Entering the command USER followed by a <cr> will display the
+current user code.
+Note that the user code is already displayed in the prompt.
+.sp
+.ti +3
+1A>user
+.ti +3
+user = 1
+.pp
+Entering the command USER followed by a space, a user code and then
+a <cr> will set the user code to the specified user code.  Legal user
+codes are in the range 0 to 15.
+.sp
+.ti +3
+1A>user 3
+.ti +3
+user = 3
+.ti +3
+3A>
+.sp
+.CE
+CONSOLE
+.pp
+The CONSOLE command is used to determine the console number at
+which the command is entered.  The console number is sometimes of
+interest when examining the system status to determine the processes
+which are detached from consoles.
+.sp
+.ti +3
+1A>console
+.ti +3
+Console = 0
+.sp
+.ce
+DISK RESET
+.pp
+The  DSKRESET  (disk reset) command is used to  enable  the
+operator to change disks.   If no parameter is entered  all
+the  drives are reset.   Specific drives to be reset may be
+included as parameters.
+.sp
+.ti +3
+1A>DSKRESET
+.sp
+.ti +3
+1A>DSKRESET  B:,E:
+.pp
+If  there are any open files on the drive(s) to  be  reset,
+the  disk  reset is denied and the cause of the disk  reset
+failure is shown:
+.sp
+.ti +3
+1A>DSKRESET B:
+.sp
+.ti +3
+Disk reset denied, Drive B: Console 0 Program Ed
+.pp
+The reason that disk reset is treated so carefully is  that
+files left open (e.g. in the process of being written) will
+lose their updated information if they are not closed prior
+to a disk reset.
+.sp
+.ce
+ERASE FILE *
+.PP
+The ERA (erase) command removes specified files having the current
+user code.
+If no files can be found on the selected diskette which satisfy the
+erase request, then the message "No file" is displayed at the console.
+.sp
+An attempt to erase all files,
+.sp
+.ti +3
+2B>ERA *.*
+.sp
+will produce the following response from ERA:
+.sp
+.ti +3
+Confirm delete all user files (Y/N)?
+.pp
+A  second  form  of the erase command  (ERAQ)  enables  the
+operator  to  selectively  delete  files  that  match   the
+specified filename reference.  For example:
+.sp
+.ti +3
+0A>ERAQ *.LST
+.sp
+.ti +3
+A:XIOS    LST? y
+.ti +3
+A:MYFILE  LST? n
+.SP
+.CE
+TYPE A FILE *
+.PP
+The TYPE command displays the contents of the specified ASCII source
+file on the console device.  The TYPE command expands tabs (ctl-I
+characters), assuming tab positions are set at every eighth column.
+.pp
+The  TYPE  command has a pause mode which is  specified  by
+entering  a  'P' followed by two decimal digits  after  the
+filename. For example:
+.sp
+.ti +3
+0A>TYPE DUMP.ASM P23
+.sp
+The  specified number of lines will be displayed  and  then
+TYPE will pause until a <cr> is entered.
+.pp
+The  TYPE  program is small and relatively slow because  it
+buffers only one sector at a time.   The larger PIP program
+can be used for faster displays in the following manner:
+.sp
+.ti +3
+0A>PIP CON:=MYFILE.TEX
+.SP
+.CE
+FILE DIRECTORY *
+.PP
+The DIR (directory) command causes the names of files on the specified or logged-in
+disk to be listed on the console device.  If no files can be found
+on the selected diskette which satisfy the directory request, then
+the message "Not found" is typed at the console.
+.pp
+The  DIR  command can include files which have  the  system
+attribute set.   This is done by using the 'S' option.  For
+example:
+.sp
+.ti +3
+0A>DIR *.COM S
+.SP
+.CE
+RENAME FILE *
+.PP
+The REN (rename) command allows the user to change the name of files
+on disk.
+If  the  destination filename exists the operator is  given
+the option of deleting the current destination file  before
+renaming the source file.
+.SP
+.CE
+TEXT EDITOR *
+.PP
+The ED (editor) command allows the user to edit ASCII text files.
+.SP
+.CE
+PERIPHERAL INTERCHANGE PROGRAM *
+.PP
+The PIP (peripheral interchange program) command allows the user to
+perform disk file and peripheral transfer operations.
+See the Digital Research document titled "CP/M 2.0 User's Guide for
+CP/M 1.4 Owners" for a detailed description of new PIP operations.
+.SP
+.CE
+ASSEMBLER *
+.PP
+The ASM (assembler) command allows the user to assemble the specified
+program on disk.
+.SP
+.CE
+SUBMIT *
+.PP
+The SUBMIT command allows the user to submit a file of commands for
+batch processing.
+.SP
+.CE
+STATUS *
+.PP
+The STAT (status) command provides general statistical information
+about the file storage.
+See the Digital Research document titled "CP/M 2.0 User's Guide for
+CP/M 1.4 Owners" for a detailed description of new STAT operations.
+.SP
+.CE
+DUMP *
+.PP
+The DUMP command types the contents of the specified disk file on the
+console in hexadecimal form.
+.SP
+.CE
+LOAD *
+.PP
+The LOAD command reads the specified disk file of type HEX and
+produces a memory image file of type COM which can subsequently
+be executed.
+.SP
+.CE
+GENMOD
+.PP
+The GENMOD command accepts a file which contains two concatenated
+files of type HEX which are offset from each other by 0100H bytes,
+and produces a file of type PRL (page relocatable).
+The form of the GENMOD command is as follows:
+.sp
+.ti +3
+1A>genmod b:file.hex b:file.prl $1000
+.sp
+The first parameter is the file which contains two concatenated files
+of type HEX.  The second parameter is the name of the destination file
+of type PRL.  The optional third parameter is a specification of additional memory required by the program beyond the explicit code
+space.  The form of the third parameter is a '$' followed by four
+hex ASCII digits.
+For example, if the program has been written to use all of 'available'
+memory for buffers, specification of the third parameter will ensure
+a minimum buffer allocation.
+.SP
+.CE
+GENHEX
+.PP
+The  GENHEX  command is used to produce a file of type  HEX
+from  a  file of type COM.   This is useful to be  able  to
+generate  HEX files for GENMOD input.   The GENHEX  command
+has two parameters,  the first is the COM file name and the
+second is the offset for the HEX file.  For example:
+.sp
+.ti +3
+0A>GENHEX PROG.COM 100
+.SP
+.CE
+PRLCOM
+.PP
+The  PRLCOM command accepts a file of PRL type and produces
+a file of COM type.  If the destination COM file exists, a
+query is made to determine if the file should be deleted
+before continuing.
+.sp
+.ti +3
+0A>prlcom b:program.prl a:program.com
+.SP
+.CE
+DYNAMIC DEBUGGING TOOL *
+.PP
+The DDT (dynamic debugging tool) command loads and executes the
+MP/M debugger.
+In systems with banked memory multiple DDT programs can be running
+concurrently in absolute TPAs.  A PRL (relocatable)
+version of DDT is also provided
+which enables mutiple DDTs to run in a non-banked system.  The
+name of the relocatable DDT is RDT.
+.pp
+MP/M DDT enhancements are described in Appendix J.
+.BP
+.sp
+.pp
+1.5  Standard Resident System Processes
+.PP
+The standard resident system processes (RSPs) are new programs
+specifically
+designed to facilitate use of the MP/M operating system.  The RSPs
+may either be present on disk as files of the PRL type, or they
+may be resident system processes.  Resident system processes are
+selected at the time of system generation.
+.SP
+.CE
+SYSTEM STATUS
+.PP
+The MPMSTAT command allows the user to display the run-time status
+of the MP/M operating system.  MPMSTAT is invoked by typing 'MPMSTAT'
+followed by a <cr>.  A sample MPMSTAT output is shown below:
+.LI
+
+	****** MP/M Status Display ******
+	
+	Top of memory = FFFFH
+	Number of consoles = 02
+	Debugger breakpoint restart # = 06
+	Stack is swapped on BDOS calls
+	Z80 complementary registers managed by dispatcher
+	Ready Process(es):
+	  MPMSTAT  Idle
+	Process(es) DQing:
+	 [Sched   ] Sched
+	 [ATTACH  ] ATTACH
+	 [CliQ    ] cli 
+	Process(es) NQing:
+	Delayed Process(es):
+	Polling Process(es):
+	  PIP
+	Process(es) Flag Waiting:
+	  01 -  Tick
+	  02 -  Clock
+	Flag(s) Set:
+	  03
+	Queue(s):
+          MPMSTAT   Sched     CliQ      ATTACH    MXParse
+          MXList   [Tmp0    ] MXDisk
+	Process(es) Attached to Consoles:
+	  [0] - MPMSTAT
+	  [1] - PIP
+	Process(es) Waiting for Consoles:
+	  [0] - TMP0     DIR
+	  [1] - TMP1
+	Memory Allocation:
+	  Base = 0000H  Size = 4000H  Allocated to PIP      [1]
+	  Base = 4000H  Size = 2000H  * Free *
+	  Base = 6000H  Size = 1100H  Allocated to DIR      [0]
+.AD
+.bp
+.pp
+.cp 4
+The MP/M status display is intepreted as follows:
+.in +6
+.pp
+Ready Process(es):  The ready processes are those processes which
+are ready to run and are waiting for the CPU.  The list of ready
+processes is ordered by the priority of the processes and includes
+the console number at which the process was initiated.  The highest
+priority ready process is the running process.
+.pp
+Process(es) DQing:  The processes DQing are those processes which are
+waiting for messages to be written to the specified queue.  The queue
+name is in brackets followed by the names of processes, in priority
+order, which have executed read queue operations on the queue.
+.pp
+Process(es) NQing:  The processes NQing are those processes which are
+waiting for an available buffer to write a message to the specified
+queue.  The queue name is in brackets followed by the names of the
+processes, in priority order, which are waiting for buffers.
+.pp
+Delayed Process(es):  The delayed processes are those which are
+delaying for a specified number of ticks of the system time unit.
+.pp
+Polling Process(es):  The polling processes are those which
+are polling a specified I/O device for a device ready status.
+.pp
+Process(es) Flag Waiting:  The processes flag waiting are listed by
+flag number and process name.
+.pp
+Flag(s) Set:  The flags which are set are displayed.
+.pp
+Queue(s):  All the queues in the system are listed by queue name.
+Queue names which are all in capital letters are accessible by
+command line interpreter
+input.  For example, the SPOOL queue can be sent a message to spool
+a file by entering 'SPOOL' followed by a file name.
+Processes DQing from queues which have a name that matches the
+process name are given the console resource when they receive a
+message.
+Queue names that begin with 'MX' are called mutual exclusion queues.
+The display of a mutual exclusion queue includes the name of the process,
+if any, which has the mutual exclusion message.
+.pp
+Process(es) Attached to Consoles:  The process attached to each console
+is listed by console number and process name.
+.pp
+Process(es) Waiting for Consoles:  The processes waiting for each
+console are listed by console number and process name in priority
+order.  They are processes
+which have detached from the console and are then waiting for the
+console before they can continue execution.
+.pp
+Memory Allocation:  The memory allocation map shows the base, size, bank,
+and allocation of each memory segment.  Segments which are not
+allocated are shown as '* Free *', while allocated segments are
+identified by process name and the console in brackets associated with
+the process.
+Memory segments which are set as pre-allocated during system generation
+by specifying an attribute of 0FFH are shown as '* Reserved *'.
+.qi
+.sp
+.CE
+SPOOLER
+.PP
+The SPOOL command allows the user to spool ASCII text files to the
+list device.  Multiple file names may be specified in the command
+tail.  The spooler expands tabs (ctl-I characters), assuming tab
+positions are set at every eighth column.
+.PP
+The spooler queue can be purged at any time by using the STOPSPLR
+command.
+.PP
+An example of the SPOOL command is shown below:
+.sp
+.ti +3
+1A>SPOOL LOAD.LST,LETTER.PRN
+.pp
+The non-resident version of the spooler (SPOOL.PRL) differs
+in its operation from the SPOOL.RSP as follows: it uses all
+of  the memory available in the memory segment in which  it
+is  running  for  buffer  space;   it  displays  a  message
+indicating  its status and then detaches from the  console;
+it  may be aborted from a console other than the  initiator
+only by specifying the console number of the initiator as a
+parameter of the STOPSPLR command.
+.sp
+.ti +3
+3B>STOPSPLR 2
+.SP
+.CE
+DATE AND TIME
+.PP
+The TOD (time of day) command allows the user to read and set the
+date and time.  Entering 'TOD' followed by a <cr> will cause the
+current date and time to be displayed on the console. Entering
+'TOD' followed by a date and time will set the date and time
+when a <cr> is entered following the prompt to strike a key.
+Each of these TOD commands is illustrated below:
+.sp
+.li
+   1A>TOD <cr>
+
+   Wed 02/06/80 09:15:37
+
+   -or-
+
+   1A>TOD 2/9/80 10:30:00
+   Strike key to set time
+   Sat 02/09/80 10:30:00
+.AD
+.pp
+Entering 'TOD P' will cause the current time and date to be
+continuously displayed until a key is struck at the console.
+.SP
+.CE
+SCHEDULER
+.PP
+The SCHED (scheduler) command allows the user to schedule a program
+for execution.  Entering 'SCHED' followed by a date, time and command
+line will cause the command line to be executed when the specified
+date and time is reached.
+.PP
+In the example shown below, the program 'SAMPLE' will be loaded from
+disk and executed on February 8, 1980 at 10:30 PM.
+Note that only hours and minutes are specified, not seconds.  Programs
+are scheduled to the nearest minute.
+.sp
+.ti +3
+1A>SCHED 2/8/79 22:30 SAMPLE
+.SP
+.CE
+ABORT
+.PP
+The  ABORT  command  allows the user  to  abort  a  running
+program.   The  program  to  be  aborted is  entered  as  a
+parameter in the ABORT command.
+.sp
+.ti +3
+1A>ABORT RDT
+.pp
+A  program  initiated  from another  console  may  only  be
+aborted by including its console number as
+a parameter of the ABORT command.
+.sp
+.ti +3
+3B>ABORT RDT 1
+.sp
+.br
+

@@ -1,0 +1,390 @@
+;********** wboot.s -- Olivetti bootstrap writer*****
+;*
+;* 821013 S. Savitzky (Zilog) -- adapt for nonseg.
+;* 820930 S. Savitzky (Zilog) -- created
+;*
+;****************************************************
+
+__text:	.sect
+
+;****************************************************
+;*
+;* NOTE -- THIS CODE IS HIGHLY SYSTEM-DEPENDENT
+;*
+;*	This module contains both the bootstrap
+;*	writer, and the code that receives control
+;*	after being booted.
+;*
+;*	The main function of the latter is to make
+;*	sure that the system, whose entry point is
+;*	called "bios", is passed a valid stack 
+;*	and PSA pointer.
+;*
+;*	Although this code runs segmented, it must
+;*	be linked with non-segmented code, so it
+;*	looks rather odd.
+;*
+;****************************************************
+
+
+;****************************************************
+;*
+;* Bootstrap Writer for P-CP/M on the Olivetti M20.
+;*
+;*	This program puts out a bootstrap file in the
+;*	Olivetti's peculiar format, which has a lot of
+;*	Olivetti's file system in it.
+;*
+;*	Track 0 is unused except for sector 0, since 
+;*	it is single density and thus has smaller 
+;*	sectors.
+;*
+;*	A total of 10 tracks are reserved from CP/M,
+;*	leaving 9 tracks for the system proper.
+;*
+;*	The first sector on track 1 is the PCOS file
+;*	descriptor block; the second is the boot file
+;*	header and the start of the system code.
+;*
+;*	This leaves something under 28K for the 
+;*	system (BIOS+BDOS+CCP).  It is assumed that
+;*	the system starts at its lowest address,
+;*	and that data follows immediately after code.
+;*
+;*	For now, we assume that the system starts at
+;*		<<11>>0000 (hex)
+;*
+;****************************************************
+
+
+;****************************************************
+;*
+;* Externals
+;*
+;****************************************************
+
+	.global	bios
+	.global _wboot
+
+;****************************************************
+;*
+;* Constants
+;*
+;****************************************************
+
+
+SYSTEM	.equ	0B000000h	; system address
+SYSSTK	.equ	SYSTEM+0BFFEh	; system stack top
+rtc_ext	.equ	02000022h	; real-time clock
+				;  ext. call addr
+
+BPT	.equ	16		; #blocks in a track
+BPS	.equ	256		; #bytes in a sector
+NBLKS	.equ	9*16		; #blocks in boot 
+HDRSIZE	.equ	24		; #bytes in header
+FILSIZE .equ	256*(NBLKS-1)	; file data size
+SYSSIZE	.equ	FILSIZE-HDRSIZE	; total system size
+S1SIZE	.equ	BPS-HDRSIZE	; data in sector 1
+
+SEG4	.equ	04000000h
+SEG2	.equ	02000000h
+
+SYSPSA	.equ	SEG2+100h	; system PSA
+BOOTPSA	.equ	SEG4+100h	; PSA in PROM for boot
+
+sscall	.macro		;short segmented call
+	.word	05f00h
+	.word	?1
+	.endm
+
+
+
+;****************************************************
+;*
+;* Entry Points and post-boot Initialization
+;*
+;****************************************************
+
+
+;* transfer vector 
+
+	jr	wboot
+	jr	wrboot
+	jr	entry
+
+;* post-boot init.
+
+entry:				;SEGMENTED
+
+	DI	VI,NVI
+
+	ldl	rr14, #SYSSTK	; init stack pointer
+
+	ldl	rr2, #SYSPSA	; copy PROM's PSA
+	ldctl	r4, psapseg
+	ldctl	r5, psapoff
+	ld	r0, #570/2
+	ldir	@r2, @r4, r0
+
+	ldl	rr2, #SYSPSA	; shift PSA pointer
+	ldctl	psapseg, r2
+	ldctl	psapoff, r3
+
+	ld	r2,#142h	;CROCK-- turn off
+	ld	r3,#1feh	; usart interrupts
+	out	@r2,r3
+
+	ldar   	r2, $		; go
+	ld	r3,#bios
+	jp	@r2
+
+
+wboot:	ldar	r2, $
+	ld	r3,#_wboot
+	jp	@r2
+
+
+;****************************************************
+;*
+;* Bootstrap Writer
+;*	Although written as if non-segmented,
+;*	this code actually has to run segmented.
+;*
+;****************************************************
+
+wrboot:
+
+;* Init
+
+	ldl	rr2,#BOOTPSA	; psa
+	ldctl	psapseg, r2
+	ldctl	psapoff, r3
+
+	ldl	rr14,#SYSSTK	; stack ptr
+	ldl	rr2,#rtc_ext	; disable real-time
+	ld	@r2,#0ffffh	;  clock ext call
+
+	EI	VI,NVI		; interrupts
+
+	ld	r2,#0202h	; type 2 drives & disks
+	ldl	rr4,#SEG2+0030h	; (kludge for Olivetti)
+	ld	@r4,r2
+	inc	r5,#2
+	ld	@r4,r2
+
+	sscall	047Ah		; screen init
+	sscall	046Eh    	; clock init
+	sscall	0462h		; disk init
+
+	ldar	r12, msg2	; "writing ..."
+	sscall	0486h     	; put message
+
+;* Write track 0 sector 0
+
+	ld	r8,#1
+	ld	r9,#0
+	ldar	r10,T0S0
+	calr	Write
+
+;* copy data into first sector
+
+	ldl	rr2,#SYSTEM
+	ldar	r4,s1data
+	ld	r0, #S1SIZE/2
+	ldir	@r4,@r2,r0
+
+;* write FDB and first data sector
+
+	ld	r8,#2
+	ld	r9,#BPT
+	ldar	r10,T1S0
+	calr	Write
+
+;* write rest of system.
+
+	ld	r8,#NBLKS-2
+	ld	r9,#BPT+2
+	ldl	rr10,#SYSTEM+S1SIZE
+	calr	Write
+
+;* hang up.
+
+	ldar	r12, msg1	; "done ..."
+	sscall	0486h     	; put message
+
+hang:
+	jr	hang
+
+
+;*------------- W R I T E   D I S K ------------------
+
+Write:		; write sectors to disk.
+			; r8  = block count
+			; r9  = block number
+			; rr10= data address
+
+		; add parameters for PROM routine
+
+	ldb	rh7,#0		; rh7 = drive #
+	ldb	rl7,#1 		; rl7 = command
+
+	sscall	0468h		; do it
+	ret
+
+
+;*--------------- messages -----------------------
+;* Note: must be in same program section as code
+
+msg1:	.byte	" Done "
+msg2:	.byte	"Writing Bootstrap..."
+	.byte	0 0
+
+
+;****************************************************
+;*
+;* Track 0 Sector 0
+;*
+;*	This sector contains the pointer to the
+;*	bootstrap file's FDB.
+;*
+;****************************************************
+
+T0S0:
+
+	.byte	0		; major version
+	.byte	0		; minor version
+	.word	40		; #tracks/surface ?? 35 ??
+	.byte	2		; #surfaces
+	.byte	16		; #sectors/track
+	.word	256		; #bytes/sector
+	.word	40		; ??? track # of control blk
+	.word	38h		; ??? vdb size
+	.word	136		; ??? block bitmap size
+	.byte	30		; ??? directory bitmap size
+	.byte	0		; ??? track count direction ???
+	.byte	0		; number of uses (if 0, no boot)
+	.byte	0		; copy protection (OFF)
+	.byte	0		; boot block read protect (OFF)
+	.byte	0		; boot block write protect (OFF)
+	.word	0		; soft error count
+	.word	0		; hard error count
+	.word	0		; lowest useable track side 0 ?1?
+	.word	39		; highest 
+	.word	0		;			side 1
+	.word	39		;
+	.word	0		;			side 2
+	.word	0		;
+	.word	0		;			side 3
+	.word	0		;
+	.long	BPT		; BOOT FILE FDB BLOCK NUMBER
+	.byte	"PCOS"		; system name??
+	.long	2		; ??? directory start addr
+	.long	0		; ??? drive data ???
+	.long	0
+	.long	0
+	.long	0
+	.long	0
+	.word	1		; disk valid (VALID)
+	.byte	0		; drive number required ???
+	.byte	0		; disk open
+	.byte	0		; format major version #
+	.byte	0		;        minor
+	.byte	2		; disk type = 320Kb
+	.byte	0		; 27 bytes of nothing
+	.byte	0		; 26
+	.byte	0		; 25
+	.byte	0		; 24
+	.byte	0		; 23
+	.byte	0		; 22
+	.byte	0		; 21
+	.byte	0		; 20
+	.byte	0		; 19
+	.byte	0		; 18
+	.byte	0		; 17
+	.byte	0		; 16
+	.byte	0		; 15
+	.byte	0		; 14
+	.byte	0		; 13
+	.byte	0		; 12
+	.byte	0		; 11
+	.byte	0		; 10
+	.byte	0		;  9
+	.byte	0		;  8
+	.byte	0		;  7
+	.byte	0		;  6
+	.byte	0		;  5
+	.byte	0		;  4
+	.byte	0		;  3
+	.byte	0		;  2
+	.byte	0		;  1
+	.block  22		;  forgotten, aparently
+
+
+
+
+
+
+;****************************************************
+;*
+;* Track 1 Sector 0
+;*
+;*	This sector is the FDB for the bootstrap 
+;*	file.  It has a single extent.
+;*
+;****************************************************
+
+T1S0:
+	.long	FILSIZE		; file length in bytes
+	.word	1		; #extents
+	.byte	0		; 14 password (14 bytes)
+	.byte	0		; 13
+	.byte	0		; 12
+	.byte	0		; 11
+	.byte	0		; 10
+	.byte	0		;  9
+	.byte	0		;  8
+	.byte	0		;  7
+	.byte	0		;  6
+	.byte	0		;  5
+	.byte	0		;  4
+	.byte	0		;  3
+	.byte	0		;  2
+	.byte	0		;  1
+	.word	0		; ??? verify location ???
+	.byte	0		; write protect
+	.byte	0		; future
+	.long	BPT+1		; STARTING BLOCK OF EXTENT
+	.word	NBLKS-1		; NUMBER OF BLOCKS IN EXTENT
+	.block	222		; other extents
+	.long	0		; next fdb
+
+
+
+
+
+;****************************************************
+;*
+;* Track 1 Sector 1
+;*
+;*	This sector is the header for the bootstrap
+;*	file, followed by the first S1SIZE bytes of
+;*	data, which are copied in.
+;*
+;****************************************************
+
+T1S1:
+
+	.word	0101h		; magic number
+	.byte	"PCPM"		; identifier
+	.byte	"x01."
+	.byte	"01"
+
+	.long	SYSTEM+6	; starting addr.
+	.word	1		; #code blocks
+
+	.long	SYSTEM		; load address
+	.word	SYSSIZE/2	; #words
+
+s1data  .block	S1SIZE		; data area
+
+

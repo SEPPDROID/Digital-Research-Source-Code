@@ -1,0 +1,1191 @@
+;
+;       individual function handlers
+;
+func13:        ;reset disk system 
+
+if	MPM
+
+	MOV	BX,DLOG
+	MOV	INFO,BX
+	CALL	DISKRESET
+	JZ	RESET_ALL
+	CALL	RESET_37
+	JMP	FUNC13_CONT
+RESET_ALL:
+
+endif
+
+
+        xor     bx,bx
+        mov     rodsk,bx
+        mov     dlog,bx
+
+if	MPM
+
+	MOV	RLOG,BX
+	MOV	TLOG,BX
+FUNC13_CONT:
+
+endif
+
+	XOR	AL,AL
+	MOV	SELDSK,AL
+	DEC	AL
+	MOV	CURDSK,AL
+	JMP	FUNC_48		;FLUSH BUFFERS
+
+func14:		;select disk info
+
+	CALL	SET_SELDSK
+
+if	MPM
+
+	CALL	CURSELECT
+	MOV	BX,RLR
+	MOV	AL,SELDSK
+	MOV	P_DSK[BX],AL
+	RET
+
+endif
+if	CPM
+
+	JMP	CURSELECT
+
+endif
+
+func15:        ;open file
+
+        call    parsave33r              ;copy fcb from user seg.
+	MOV	CL,8
+	CALL	COPY_DMA_IN
+        call    clrmodnum               ;clear the module number
+
+if	MPM
+
+	MOV	MAKE_FLAG,FALSE		
+	MOV	BYTE PTR SDCNT+1,0FFH	;INITIALIZE SDCNT
+	MOV	BX,OFFSET OPENFILE	;CHECK_FCB1 RETURNS TO OPEN_FILE
+	PUSH	BX			;IF CHECKSUM INVALID
+	MOV	CHECK_FCB_RET,TRUE
+	CALL	CHECK_FCB1		;RETURNS NORMALLY IF FCB CHKSUM VALID
+	POP	BX
+	CMP	HIGH_EXT,60H		;IS FILE OPEN IN READ/ONLY-USER 0 MODE?
+	JNE	OPEN_FILE		;NO
+	CALL	HOME			;ATTEMPT OPEN UNDER USER ZERO
+	CALL	SET_END_DIR
+	JMP	OPEN_USER_ZERO
+OPEN_FILE:
+	MOV	BX,INFO			;FCB(0) = USRCODE
+	MOV	AL,USRCODE
+	MOV	[BX],AL
+	MOV	BYTE PTR SDCNT+1,0FFH	;INITIALIZE SDCNT
+
+endif
+
+	CALL	RESET_CHECKSUM_FCB	;INVALIDATE FCB CHKSUM
+	CALL	CHECK_WILD		;CHECK FOR ?S IN FCB
+	CALL	GET_ATTS		;GET & CLEAR ATTS F5'-F8'
+	AND	AL,0C0H			;1ST 2 SPECIFY OPEN MODE
+
+if	MPM
+
+	CMP	AL,0C0H			;IF BOTH ON DEFAULT TO READ/ONLY
+	JNE	ATT_OK
+
+endif
+
+	AND	AL,40H			;REMOVE UNLOCKED MODE BIT
+ATT_OK:
+	MOV	HIGH_EXT,AL		;SAVE OPEN MODE
+
+if	MPM
+
+	MOV	AH,AL			;DEFINE ATTRIBUTES
+	SHR	AH,1			;BIT 0 ON = LOCKED MODE
+	JNZ	ATT_SET			;BIT 1 ON = UNLOCKED MODE
+	MOV	AH,80H			;BIT 2 ON = READ/ONLY MODE
+ATT_SET:
+	MOV	ATTRIBUTES,AH
+
+endif
+
+	AND	AL,80H			;IS OPEN MODE UNLOCKED?
+	JNZ	CALL_OPEN		;YES
+	CMP	USRCODE,0		;IS USER 0
+	JE	CALL_OPEN		;YES
+	MOV	AL,0FEH			;INITIALIZE SEARCH SWITCHES TO
+	MOV	BYTE PTR XDCNT+1,AL	;FLAG PRESENCE OF FILE UNDER USER
+	INC	AL			;ZERO IF FILE NOR PRESENT UNDER
+	MOV	SEARCH_USER0,AL		;CURRENT USER #
+
+if	MPM
+
+	MOV	BYTE PTR SDCNT0+1,AL	;INITIALIZE USER 0 SDCNT
+
+endif
+
+CALL_OPEN:
+	CALL	OPEN			;ATTEMPT TO OPEN FCB
+	CALL	OPENX			;RETURNS IF UNSUCCESSFUL
+	MOV	BX,OFFSET SEARCH_USER0
+	TEST	B[BX],TRUE		;IS SEARCH_USER0 TRUE?
+	JNZ	$+3			;YES
+RET30:	RET				;NO - OPEN FAILED
+	MOV	B[BX],FALSE		;SEARCH_USER0 = FALSE
+	CMP	BYTE PTR XDCNT+1,0FEH	;DOES FILE EXIST UNDER USER 0?
+	JE	RET30			;NO
+
+if	MPM
+
+	CALL	SWAP			;SWAP SDCNT,SDBLK & SDCNT0,SDBLK0
+
+endif
+
+	CALL	SET_DCNT_DBLK		;RESET DCNT,DBLK
+	MOV	HIGH_EXT,60H		;SET OPEN MODE TO READ/ON-USER 0
+OPEN_USER_ZERO:
+	MOV	BX,INFO			;FCB(0) = USER 0
+	MOV	B[BX],0
+	MOV	CL,NAMLEN		;ATTEMPT TO LOCATE FCB UNDER USER ZERO
+	CALL	SEARCHI
+	CALL	SEARCHN
+	CALL	OPEN1
+	CALL	OPENX			;OPENX RETURNS IF SEARCH UNSUCCESSFUL
+	RET
+
+;
+OPENX:
+	CALL	END_OF_DIR		;WAS OPEN SUCCESSFUL
+	JZ	RET30			;NO
+	POP	BX			;DISCARD RETURN ADDRESS
+
+if	MPM
+
+	MOV	AL,HIGH_EXT		;IS OPEN MODE READ/ONLY - USER 0?
+	CMP	AL,60H
+	JE	OPENX00			;YES
+	OR	AL,AL			;IS OPEN MODE LOCKED?
+	JNZ	OPENX0 			;NO
+	MOV	BX,INFO
+	OR	AL,AL			;IS USER NUMBER ZERO?
+	JNZ	OPENX0 			;NO
+	CALL	ROTEST			;IS FILE READ/ONLY ATTRIBUTE SET?
+	JNC	OPENX0			;NO
+	INC	BX			;IS FILE SYSTEM ATTRIBUTE SET?
+	MOV	AL,[BX]
+	RCL	AL,1
+	JNC	OPENX0			;NO
+
+OPENX00:
+
+endif
+if	CPM
+
+	CMP	HIGH_EXT,60H		;IS OPEN MODE READ/ONLY = USER 0?
+	JNE	OPENX0			;NO
+
+endif
+
+	MOV	ATTRIBUTES,20H		;OPEN FILE IN READ/ONLY-USER 0 MODE
+	MOV	BX,INFO			;IF FCB HAS SYSTEM ATTRIBUTE SET
+	MOV	AL,10[BX]
+	AND	AL,80H
+	JNZ	OPENX0			;SYSTEM ATTRIBUTE SET
+	MOV	HIGH_EXT,AL		;OPEN FAILED - SYSTEM ATTRIBUTE RESET
+	JMP	LRET_EQ_FF
+
+OPENX0:
+	CALL	RESET_CHECKSUM_FCB	;INVALIDATE CHECKSUM
+
+	CALL	GET_DIR_MODE		;AL = DIR LABEL DATA BYTE
+	OR	AL,AL			;AL = 0 => NO DIR LBL
+
+if	MPM
+
+	JZ	OPENX1			;NO DIR LBL
+
+endif
+if	CPM
+
+	JNZ	$+8
+	MOV	COMP_FCB_CKS,TRUE	;SET FCB CHKSUM FLAG
+   	RET
+
+endif
+
+	PUSH	AX			;AL = DIR LBL DATA BYTE
+	CALL	GET_XFCB
+	POP	CX			;CL = DIR LBL, AL = FCB PASSWORD MODE
+	AND	AL,0C0H			;IS PW MODE READ(0) OR WRITE(1)?
+	JZ	OPENX1			;NO - DON'T CHK PASSWORD
+	TEST	CL,80H			;ARE PWS ACTIVATED BY DIR LBL?
+	JZ	OPENX1			;NO
+	MOV	CH,AL			;CH = XFCB PW MODE
+	PUSH	CX			;CL = DIR LBL DATA BYTE
+	CALL	CMP_PW			;CHECK PASSWORDS
+	POP	CX
+	JZ	OPENX1			;JUMP IF PASSWORD CHECKS
+	TEST	CH,40H			;IS PW MODE WRITE(1)?
+	JNZ	$+5			;YES
+	JMP	CHK_PW1			;PASSWORD ERROR
+	MOV	XFCB_READ_ONLY,80H	;PROHIBIT ANY WRITES TO FILE
+OPENX1:
+
+if	MPM
+
+	call pack_sdcnt
+	;is this file currently open?
+	mov ch,3! call search_olist! jz openx04
+openx01:
+	;no - is olist full?
+	cmp free_root,0! jne openx03
+	;yes - error
+openx02:
+	mov al,11! jmp set_aret
+openx03:
+	;has process exceeded open file maximum?
+	call count_opens! jb openx035
+	;yes - error
+openx034:
+	mov al,10! jmp set_aret
+openx035:
+	;create new olist element
+	call create_olist_item
+	jmp openx08
+openx04:
+	;do file attributes match?
+	mov al,attributes! or al,2[bx]! cmp al,2[bx]! jnz openx06
+	;yes - is open mode locked?
+	and al,80h! jnz openx07
+	;no - has this file been opened by this process?
+	mov bx,prv_pos! mov cur_pos,bx
+	mov ch,5! call search_nlist! jnz openx01
+openx05:
+	;yes - increment open file count
+	inc word ptr 8[bx]! jmps openx08
+openx06:
+	;error - file opened by another process in
+	;        incompatible mode
+	mov al,5! jmp set_aret
+openx07:
+	;does this olist item belong to this process?
+	push bx! call compare_pds! pop bx! jnz openx06 ; no - error
+	jmps openx05 ; yes
+openx08:
+	;open successful
+	;was file opened in unlocked mode?
+	test attributes,40h! jz openx09 ; no
+	;yes - return .olist_item in ranrec field of FCB
+	call getrra! mov dx,cur_pos! mov [bx],dx
+	mov parlg,35 ;copy 35 bytes back to user FCB
+openx09:
+	mov comp_fcb_cks,true
+	test make_flag,true! jz $+3! ret
+	call get_dir_mode
+
+endif
+if 	CPM
+
+	MOV	COMP_FCB_CKS,TRUE
+	MOV	AL,CL
+
+endif
+
+	AND	AL,40H			;IS ACCESS DATE & TIME STAMPING
+					;ACTIVATED BY DIR LBL
+	JNZ	$+3			;YES
+RET32:	RET
+	CALL	END_OF_DIR		;WAS XFCB FOUND?
+	JZ	RET32			;NO
+	CALL	NOWRITE			;IS DISK READ/ONLY?
+	JNZ	RET32			;YES
+OPENX2:
+	CALL	STAMP1			;SET FILE ACCESS TIME STAMP
+	JMP	SEEK_COPY		;UPDATE XFCB
+                                        ;ret ;jmp goback
+
+func16:		;close file
+
+        call    parsave33r
+	CALL	GET_ATTS		;AL = INTERFACE ATTRIBUTES
+	MOV	ATTRIBUTES,AL
+
+if	MPM
+
+	MOV	BX,OFFSET CLOSE00	;CHECK_FCB1 GOES TO CLOSE00 IF
+	PUSH	BX			;A CHKSUM ERROR IS DETECTED
+	MOV	CHECK_FCB_RET,TRUE
+	CALL	CHECK_FCB1
+	POP	BX			;CHKSUM OK
+	MOV	BYTE PTR SDCNT+1,0FFH	;INITIALIZES SDCNT
+	CALL	GET_MODNUM		;PERFORM PARTIAL CLOSE IF
+	AND	AL,80H			;FCB(MODNUM) & 80H = 80H
+	JNZ	CLOSE01
+	CALL	CLOSE			;PERFORM FULL CLOSE
+	JMPS	CLOSE02
+CLOSE00:
+	MOV	AL,6			;CHECKSUM ERROR
+	JMP	SET_ARET
+CLOSE01:
+	MOV	DONT_CLOSE,TRUE		;PERFORM CLOSE BUT DON'T UPDATE
+	CALL	CLOSE1			;DIRECTORY FCB
+CLOSE02:
+
+endif
+if	CPM
+
+	CALL	CHEK_FCB		;CHECK FCB CHKSUM
+	MOV	AL,6
+	JZ	$+5
+	JMP	SET_ARET		;PASSWORD ERROR
+	CALL	CLOSE			;CLOSE FILE
+
+endif
+
+	CMP	LRET,0FFH
+	JNE	$+3
+RET34:	RET				;ERROR ON CLOSE
+	CALL	FUNC48			;FLUSH BLOCKING/DEBLOCKING BUFFERS
+	TEST	ATTRIBUTES,80H		;IS THIS A PARTIAL CLOSE
+	JNZ	RET34			;YES - RETURN
+
+if	MPM
+
+	call pack_sdcnt
+	;find olist item for this process and file
+	mov ch,5! call search_olist! jnz close03
+	;decrement open count
+	dec word ptr 8[bx]! cmp word ptr 8[bx],0ffffh
+	jnz close03
+	;yes - remove file's olist entry
+	mov file_id,bx! call delete_item
+	call reset_checksum_fcb
+	;if unlocked file, remove file's locktbl entries
+	test high_ext,80h! jz close03
+	mov bx,file_id! call remove_locks
+close03:
+
+endif
+
+	CALL	GETMODNUM		;IS FILE WRITE FLAG IN FCB TRUE?
+	AND	AL,40H
+	JZ	RET34			;NO - RETURN
+	CALL	GET_DIR_MODE		;IS UPDATE DATE & TIME STAMPING
+	AND	AL,20H			;ACTIVATED BY DIR LBL?
+	JZ	RET34			;NO - RETURN
+	CALL	GET_XFCB		;DOES FILE HAVE AN XFCB
+	JZ	RET34			;NO - RETURN
+	CALL	STAMP2			;PERFORM UPDATE TIME STAMP
+	JMP	SEEK_COPY		;UPDATE XFCB
+                                        ;ret ;jmp goback
+
+func17:		;search for first occurrence of a file
+
+if	MPM
+
+	mov bx,parametersegment		;SAVE USER SEGMENT & FCB OFFSET
+	mov srchabase,bx
+	mov bx,info
+	mov srchaofst,bx
+
+endif
+
+        call    parsave33
+
+	XOR	AL,AL
+CSEARCH:
+	PUSHF				;Z FLAG = 1 FOR SEARCH, 0 FOR SEARCHN
+	MOV	BX,INFO
+	CMP	B[BX],'?'		;DOES FCB(0) = '?'
+	JNE	CSEARCH1		;NO
+	CALL	CURSELECT		;CURRENT SELECTED DISK IS SEARCHED
+	MOV	CL,0			;RETURN FIRST OR NEXT FCB
+	JMPS	CSEARCH3		;ALL FCBS MATCH
+CSEARCH1:
+	CALL	GETEXTA			;DOES FCB(EXT) = '?'
+	CMP	B[BX],'?'
+	JE	CSEARCH2		;YES
+	CALL	CLR_EXT			;CLEAR HIGH 3 BITS OF FCB(EXT)
+	CALL	CLRMODNUM		;FCB(MODNUM) = 0
+CSEARCH2:
+	CALL	RESELECTX		;FCB(0) MAY SPECIFY DRIVE
+	MOV	CL,NAMLEN
+CSEARCH3:
+
+	POPF
+	MOV	BX,OFFSET DIR_TO_USER	;CALLED AFTER SEARCH | SEARCHN
+	PUSH	BX
+	JNZ	$+5
+	JMP	SEARCH
+	JMP	SEARCHN
+                                        ;ret ;jmp goback
+
+func18:		;search for next occurrence of a file name
+
+if	MPM
+
+	;copy user's dma to dir buffer
+	mov si,dmaad ! mov di,buffa
+	PUSH DS ! MOV DS,DMABASE
+	CLD
+	mov cx,64 ! rep movs ax,ax
+	POP DS
+		;set search parameters
+	mov bx,srchabase
+	mov parametersegment,bx
+	mov bx,srchaofst
+	mov info,bx
+	call parsave33
+	mov bx,info
+	mov srcha,bx
+
+endif
+if	CPM
+
+	mov	bx,srcha
+	mov	info,bx
+
+endif
+
+	OR	AL,1
+	JMP	CSEARCH
+                                        ;ret ;jmp goback
+
+func19:		;delete a file
+
+        call    parsave33r
+	MOV	CL,8
+	CALL	COPY_DMA_IN
+        JMP	DELET
+                                        ;ret ;jmp goback
+
+func20:		;read a file
+
+        call    parsave33r
+	CALL	CHECK_FCB
+        jmp     sqread
+                                        ;jmp goback
+
+func21:		;write a file
+
+        call    parsave33r
+	CALL	CHECK_FCB
+        jmp     sqwrite
+                                        ;jmp goback
+
+func22:		;make a file
+
+        CALL	PARSAVE33		;COPY USER'S FCB INTO BDOS DSEG
+	MOV	CL,9
+	CALL	COPY_DMA_IN
+	CALL	GET_ATTS		;GET AND CLEAR INTERFACE ATTS
+	MOV	ATTRIBUTES,AL
+	MOV	FCB_EXISTS,FALSE
+	CALL	CLR_EXT			;CLEAR HIGH 3 BITS OF FCB(EXT)
+        call    clrmodnum
+	CALL	RESELECT
+	CALL	CHECK_WILD		;VERIFY NO WILD CHARS EXIST IN FCB
+	MOV	XDCNT,0FFFFH		;INIT XDCNT FOR OPEN,MAKE
+
+if	MPM
+
+	MOV	BYTE PTR SDCNT+1,0FFH
+
+endif
+
+	CALL	OPEN			;ATTEMPT TO OPEN FCB
+	CALL	RESET_CHECKSUM_FCB	;INVALIDATE FCB CHKSUM IN CASE FILE
+					;ALREADY EXISTS
+	CALL	END_OF_DIR		;DOES FILE EXIST?
+	JZ	$+5
+	JMP	FILE_EXISTS		;YES - ERROR
+
+if	MPM
+
+	mov al,attributes! and al,80h! shr al,1! jnz makex00
+	mov al,80h
+makex00:
+	mov make_flag,al ; make_flag = open attribute
+	cmp byte ptr sdcnt+1,0ffh! jz makex01
+	call pack_sdcnt
+	mov ch,3! call search_olist! jz make_x02
+makex01:
+	cmp free_root,0! jne $+5! jmp openx02
+	jmps makex03
+makex02:
+	mov al,makeflag! and al,2[bx]! jnz $+5
+makex025:
+	jmp openx06
+	call compare_pds! jz makex03
+	test make_flag,80h! jnz makex025
+make_x03:
+
+endif
+
+	TEST	FCB_EXISTS,TRUE		;DO ANY FCBS EXIST FOR FILE?
+	JZ	MAKEX04			;NO
+	CALL	GET_DIR_MODE		;DOES DIR LBL REQUIRE PASSWORDS?
+	AND	AL,80H
+	JZ	MAKEX04			;NO
+	CALL	GET_XFCB		;DOES XFCB EXIST WITH MODE 1 OR 2 
+	AND	AL,0C0H			;PASSWORD?
+	JZ	MAKEX04			;NO
+	CALL	CHK_XFCB_PASSWORD1	;CHECK PASSWORD
+MAKEX04:
+	CALL	MAKE			;MAKE FCB
+	CALL	RESET_CHECKSUM_FCB	;INVALIDATE FCB CHKSUM IN CASE
+					;MAKE FAILS
+	CALL	END_OF_DIR		;DID MAKE FAIL?
+	JNZ	$+3			;NO
+RET36:	RET				;YES - NO ROOM IN DIRECTORY
+	CALL	GET_DIR_MODE		;GET DIR LBL DATA BYTE
+	OR	AL,AL
+	JZ	MAKE4			;ZERO IMPLIES NO DIR LBL
+	CALL	GET_XFCB		;DOES XFCB EXIST FOR FILE?
+	JNZ	MAKE000			;YES
+	CALL	GET_DIR_MODE		;GET DIR LBL AGAIN
+	AND	AL,10H			;IS AUTOMATIC XFCB CREATION SPECIFIED?
+	JZ	MAKE4			;NO
+	MOV	MAKE_XFCB,TRUE		;ATTEMPT TO MAKE XFCB
+	CALL	MAKE
+	JNZ	MAKE00			;MAKE SUCCEEDED
+	MOV	CL,NAMLEN		;DELETE THE FCB THAT WAS CREATED
+	CALL	SEARCH			;ABOVE
+	CALL	DELET0
+	JMP	LRET_EQ_FF		;RETURN NO ROOM IN DIR ERROR
+MAKE000:
+	TEST	FCB_EXISTS,TRUE		;DO OTHER FCBS EXIST FOR FILE?
+	JNZ	MAKE4			;YES
+MAKE00:
+	CALL	INIT_XFCB		;INITIALIZE XFCB
+	MOV	COMP_FCB_CKS,TRUE	;SET FCB CHKSUM FLAG
+	TEST	ATTRIBUTES,40H		;IS USER SETTING PASSWORD?
+	JZ	MAKE3			;NO
+	MOV	SI,XDMAAD		;PICK UP PASSWORD MODE FROM 9TH
+	ADD	SI,8			;BYTE OF DMA
+	LODS	AL
+	AND	AL,0E0H			;HAS PASSWORD MODE BEEN SPECIFIED?
+	JNZ	MAKE2			;YES
+	MOV	AL,80H			;DEFAULT TO READ MODE
+MAKE2:
+	PUSH 	AX
+	CALL	GET_XFCB1		;BX = .DIRBUFF XFCB(EXT)
+	POP	AX
+	MOV	[BX],AL			;XFCB(EXT) = PASSWORD MODE
+	CALL	SET_PW
+	MOV	[BX],CH			;XFCB(S1) = PASSWORD SUM
+MAKE3:
+	CALL	OPENX2			;PLACE CREATE TIME STAMP IN XFCB
+MAKE4:
+
+if	MPM
+
+	MOV	AL,MAKE_FLAG		;SET ATTRIBUTES TO OPEN ATTRIBUTES
+	MOV	ATTRIBUTES,AL
+	AND	AL,40H
+	SHL	AL,1
+	MOV	HIGH_EXT,AL		;HIGH_EXT = SHL(ATTRIBUTES,1)
+
+	test byte ptr sdcnt+1,0ffh! jnz makexx02
+	call sdcnt_eq_xdcnt! call pack_sdcnt
+	jmp openx03
+makexx02:
+	call fix_olist_item! jmp openx1
+
+endif
+
+	MOV	COMP_FCB_CKS,TRUE	;SET FCB CHKSUM FLAG
+	RET
+
+FILE_EXISTS:				;FILE ALREADY EXISTS
+	MOV	AL,8
+SET_ARET:
+	MOV	CL,AL			;SAVE ERROR INDEX
+	MOV	BYTE PTR ARET+1,AL	;ARET+1 = EXTENDED ERRORS
+	CALL	LRET_EQ_FF
+	CMP	ERROR_MODE,0FFH
+	JNE	$+5
+	JMP	GOBACK			;RETURN PHYSICAL & EXTENDED ERRORS
+	SUB	CL,3
+	SUB	CH,CH
+	ADD	CX,CX
+	MOV	BX,OFFSET XERR_LIST	;COMPUTE EXTENDED ERROR MESSAGE OFFSET
+	ADD	BX,CX
+	MOV	BX,[BX]
+	JMP	REPORT_ERR		;PRINT ERROR MESSAGE
+;
+func23:		;rename a file
+
+        call    parsave33r
+	MOV	CL,8
+	CALL	COPY_DMA_IN
+        JMP    	RENAME
+                                        ;ret ;jmp goback
+
+func24:		;return the login vector
+
+if	CPM
+
+        mov     bx,dlog
+        jmps    sthlret
+					;ret ;jmp goback
+
+endif
+if	MPM
+
+	mov bx,dlog
+	sub cx,cx ! ret
+
+endif
+
+func25:		;return selected disk number
+
+if	CPM
+
+        MOV	AL,SELDSK
+        jmp     staret
+					;ret ;jmp goback
+
+endif
+if	MPM
+
+	mov bx,rlr
+	mov bl,p_dsk[bx] ! mov bh,0
+	sub cx,cx ! ret
+
+endif
+
+func26:		;set the subsequent dma address to info
+
+if	CPM
+
+        mov     dmaad,dx                ;dmaad = info
+        jmp     setdata                 ;to data dma address
+                                        ;ret ;jmp goback
+endif
+if	MPM
+
+	mov u_dma_ofst,dx
+	sub bx,bx ! mov cx,bx
+	ret
+
+endif
+
+func27:		;return the login vector address
+
+	MOV	RETURNSEG,DS
+	CALL	XCURSELECT
+        mov     bx,alloca
+        jmps    sthlret
+					;ret ;jmp goback
+
+if	MPM
+
+func28:			;write protect current disk
+
+	MOV	SET_RO_FLAG,1
+	MOV	CL,SELDSK
+	MOV	BX,1
+	SHL	BX,CL			;form drive vector from seldsk
+	CALL	INTRNL_DISK_RESET	;verify no other process has files open
+	JMP	SET_RO
+
+endif
+if	CPM
+
+func28  equ     setro	;write protect current disk
+
+endif
+
+func29:		;return r/o bit vector
+
+if	CPM
+
+        mov     bx,rodsk
+        jmps    sthlret
+					;ret ;jmp goback
+
+endif
+if	MPM
+
+	mov bx,rodsk
+	sub cx,cx ! ret
+
+endif
+
+func30:		;set file indicators
+
+        call    parsave33
+	MOV	CL,8
+	CALL	COPY_DMA_IN
+	CALL	CHECK_WILD
+	CALL	RESELECTX
+	CALL	CHK_PASSWORD
+        call    indicators
+        jmp     cpydirloc               ;lret=dirloc
+                                        ;ret ;jmp goback
+
+func31:		;return address of disk parameter block
+
+	MOV	RETURNSEG,DS
+	CALL	XCURSELECT
+        mov     bx,dpbaddr
+sthlret:
+        mov     aret,bx
+        ret                             ;jmp goback
+
+func32:		;set user code
+
+if	CPM
+
+        mov     al,linfo
+        cmp     al,0ffh
+        jnz     setusrcode
+                                        ;interrogate user code instead
+        mov     al,usrcode
+        jmp     staret                  ;lret=usrcode   
+					;ret ;jmp goback
+setusrcode:
+        AND	AL,0FH
+        mov     usrcode,al
+        ret                             ;jmp goback
+
+endif
+if	MPM
+
+	mov si,rlr
+	cmp dl,0ffh ! jne setusrcode
+	    mov bl,p_user[si] ! mov bh,0
+	    sub cx,cx ! ret 
+
+setusrcode:
+	AND DL,0FH
+	mov p_user[si],dl
+	sub bx,bx ! mov cx,bx ! ret
+
+endif
+
+func33:		;random disk read operation
+
+        call    parsave36r               ;save 36 bytes from user seg
+	CALL	CHECK_FCB
+        jmp     rdread                  ;to perform the disk read
+                                        ;ret ;jmp goback
+
+func34:		;random disk write operation
+
+        call    parsave36r
+	CALL	CHECK_FCB
+        jmp     rdwrite                 ;to perform the disk write
+                                        ;ret ;jmp goback
+
+func35:		;return file size (0-65536)
+
+        call    parsave36r
+        jmp     getfilesize
+                                        ;ret ;jmp goback
+
+func36:		;set random record
+
+        call    parsave36
+	MOV	DX,INFO
+        jmp     setrandom
+                                        ;ret ;jmp goback
+
+func37:		;reset drive
+
+if	MPM
+
+	CALL	DISKRESET
+RESET_37:
+
+endif
+
+        mov     ax,info
+        not     ax
+        push    ax
+        mov     bx,offset dlog
+        and     ax,[bx]
+        mov     [bx],ax
+        pop     ax
+	PUSH	AX
+        mov     bx,offset rodsk
+        and     ax,[bx]
+        mov     [bx],ax
+	POP	AX
+	MOV	BX,OFFSET RLOG
+	AND	AX,[BX]
+	MOV	[BX],AX
+	MOV	CL,CURDSK		;IF CURDSK RESET, SET TO 0FFH
+	MOV	DX,DLOG
+	CALL	TEST_VECTOR1
+	JNZ	RET38
+	MOV	CURDSK,0FFH
+RET38:  ret
+
+if	MPM
+
+func38:		;access drive
+
+	mov word ptr packed_dcnt,0ffffh
+	mov byte ptr packed_dcnt+2,0ffh
+	xor al,al
+acc_drv0:
+	shl dx,1! adc al,0! or dx,dx! jnz acc_drv0
+	or al,al! jz ret38
+	mov dl,al! dec al! push ax
+	call acc_drv02
+	pop ax! jmp openx02
+acc_drv02:
+	call check_free0! pop bx
+	call count_opens! pop bx
+	add bl,open_cnt! jb acc_drv3
+	sub bl,openmax! jae acc_drv3
+	mov bx,info
+	mov al,curdsk! push ax! mov al,16
+acc_drv1:
+	dec al! shl bx,1! jb acc_drv2
+acc_drv15:
+	or al,al! jnz acc_drv1
+	pop ax! mov curdsk,al! ret
+acc_drv2:
+	push ax! push bx! mov curdsk,al
+	call create_olist_item
+	pop bx! pop ax! jmps acc_drv15
+acc_drv3:
+	jmp openx034
+
+func39:		;free drive
+
+	test open_root,0ffffh! jnz $+3
+retf39:
+	ret
+	mov incr_pdcnt,false! mov free_mode,1
+	mov bx,info! cmp bx,0ffffh! jnz free_drv1
+	mov free_mode,0! call free_files! jmp free_drv3
+free_drv1:
+	mov al,curdsk! push ax! mov al,16
+free_drv2:
+	dec al! shl bx,1! jb free_drv4
+free_drv25:
+	or al,al! jnz free_drv2
+	pop ax! mov curdsk,al
+free_drv3:
+	cmp incr_pdcnt,true! jnz retf39
+	jmp inc_pdcnt
+free_drv4:
+	push ax! push bx! mov curdsk,al
+	call free_files
+	pop bx! pop ax! jmp free_drv25
+
+endif
+if	CPM
+
+func38  equ     funcret		;access drive
+func39  equ     funcret		;free drive
+
+endif
+
+func40:		;write random with zero fill
+
+        ;random disk write with zero fill of unallocated block
+
+	call	parsave36r
+	CALL	CHECK_FCB
+        mov     seqio,2
+        mov     cl,false
+        call    rseek1
+	jz	func40a
+	ret
+func40a:
+        call    diskwite
+	ret
+
+FUNC41	EQU	FUNCRET			;TEST AND WRITE
+
+FUNC42:           			;LOCK RECORD
+	MOV	LOCK_UNLOCK,TRUE
+	JMP	LOCK
+
+FUNC43:           			;UNLOCK RECORD
+	MOV	LOCK_UNLOCK,FALSE
+	JMP	LOCK
+
+FUNC44:					;SET MULTI-SECTOR COUNT
+
+	OR	DL,DL
+	JZ	RETURN_NOT_OK
+	CMP	DL,17
+	JNB	RETURN_NOT_OK
+	MOV	U_MULT_CNT,DL
+RETURN_OK:
+	XOR	CX,CX
+	MOV	BX,CX
+	RET
+RETURN_NOT_OK:
+	XOR	CX,CX
+	MOV	BX,0FFH
+	RET
+
+FUNC45:					;SET BDOS ERROR MODE
+
+	MOV	U_ERROR_MODE,DL
+	JMPS	RETURN_OK
+
+FUNC46:					;GET DISK FREE SPACE
+
+	CALL	TMPSELECT		;PERFORM TEMPORARY SELECT OF
+					;SPECIFIED DRIVE
+
+	MOV	SI,ALLOCA		;SI = ALLOCATION VECTOR ADDR
+	CALL	GET_NALBS		;BX = # OF ALLOCATION VECTOR BYTES
+	XOR	CX,CX			;CX = TRUE BIT COUNTER
+
+	;COUNT # OF TRUE BITS IN ALLOCATION VECTOR
+
+GSP1:	LODS	AL			;INCREMENTS SI
+GSP2:	OR	AL,AL
+	JZ	GSP4
+GSP3:	SHR	AL,1
+	JNC	GSP3
+	INC	CX
+	JMPS	GSP2
+GSP4:	DEC	BX
+	JNZ	GSP1
+
+	;BX = 0 WHEN ALLOCATION VECTOR SCANNED
+	;COMPUTE MAXALL + 1 - BC
+
+	MOV	BX,MAXALL
+	INC	BX
+	SUB	BX,CX			;BX = # OF AVAILABLE BLOCKS ON DRIVE
+	MOV	CL,BLKSHF		;CONVERT # OF BLOCKS TO # OF RECORDS
+	XOR	CH,CH
+	MOV	AL,BH
+	XOR	AH,AH
+	SHL	BX,CL
+	SHL	AX,CL			;AH,BH,BL = # OF AVAILABLE RECORDS
+	MOV	DI,OFFSET COMMON_DMA	;STORE # OF RECORDS IN 1ST 3 BYTES
+	MOV	[DI],BX			;OF COMMON_DMA
+	MOV	2[DI],AH
+	MOV	CL,3
+	JMP	COPY_DMA_OUT		;COPY TO USER'S DMA
+
+FUNC47	EQU	FUNCRET			;CHAIN TO PROGRAM
+
+FUNC48:					;FLUSH BUFFERS
+
+	CALL	FLUSH
+	JMP	DIOCOMP
+
+FUNC49	EQU	FUNCRET			;??????
+FUNC50	EQU	FUNCRET			;DIRECT BIOS CALL
+
+
+if	MPM
+
+func51:		; set dma base
+
+	mov u_dma_seg,dx
+	sub cx,cx ! mov bx,cx
+	ret
+
+func52:		; get dma
+
+	MOV RETURN_SEG,DS
+	mov bx,u_dma_seg
+	mov u_retseg,bx
+	mov bx,u_dma_ofst
+	sub cx,cx ! ret
+
+endif
+
+FUNC100:
+	;DX -> .FCB
+	;	DRIVE LOCATION
+	;	NAME & TYPE FIELD'S USER'S DISCRETION
+	;	EXTENT FIELD DEFINITION
+	;	BIT 1 (80H): ENABLE PASSWORDS ON DRIVE
+	;	BIT 2 (40H): ENABLE FILE ACCESS
+	;	BIT 3 (20H): ENABLE FILE UPDATE STAMPING
+	;	BIT 8 (01H): ASSIGN PASSWORD TO DIR LBL
+	MOV	CL,16
+	CALL	COPY_DMA_IN
+	CALL	PARSAVE33
+	CALL	RESELECTX
+	CALL	CHECK_WRITE
+	MOV	BX,INFO			;DOES DIR LBL EXIST ON DRIVE?
+	MOV	B[BX],20H
+	MOV	CL,1
+	MOV	XDCNT,0FFFFH		;INITIALIZED FOR MAKE
+	CALL	SEARCH
+	JNZ	SDL1			;YES
+	MOV	MAKE_XFCB,0FFH		;NO - MAKE ONE
+	CALL	MAKE
+	JNZ	$+3
+	RET				;NO DIRECTORY SPACE
+	CALL	INIT_XFCB
+	CALL	STAMP1			;SET CREATE DATE AND TIME STAMP
+SDL1:
+	CALL	STAMP2			;SET UPDATE DATE AND TIME STAMP
+	CALL	GET_XFCB1		;VERIFY PASSWORD
+	CALL	CHK_XFCB_PASSWORD1	;NEW DIR LBL FALLS THROUGH
+	MOV	CX,0
+	CALL	INIT_XFCB0		;UPDATE DIR LBL NAME
+	MOV	SI,DX			;COPY USER'S DIR LBL DATA BYTE
+	LODS	AL			;INTO DIR LBL (EX BYTE)
+	OR	AL,1			;SET DIR LBL EXISTS FLAG
+	MOV	[BX],AL
+	MOV	DI,DRVLBLA		;UPDATE DRIVES DIR LBL DATA BYTE
+	STOS	AL
+SDL2:
+	DEC	SI    			;TEST FOR ASSIGNMENT OF NEW
+	LODS	AL			;PASSWORD TO DIR LBL OR XFCB
+	AND	AL,1
+	JZ	SDL3
+	ADD	XDMAAD,8		;ASSIGN NEW PASSWORD
+	CALL	SET_PW
+	MOV	[BX],CH			;SET PASSWORD CHECKSUM BYTE
+	SUB	XDMAAD,8
+SDL3:
+	JMP	SEEK_COPY		;WRITE DIR LBL OR XFCB TO DIRECTORY
+
+FUNC101:				;RETURN DIRECTORY LABEL DATA
+	CALL	TMPSELECT
+	CALL	GET_DIR_MODE
+	JMP	STA_RET
+
+FUNC102:				;READ FILE XFCB
+	CALL	PARSAVE33
+	CALL	RESELECTX
+	CALL	CHECK_WILD
+	CALL	GET_XFCB		;DOES XFCB EXIST FOR FILE?
+	MOV	AL,0FFH
+	JNZ	$+5
+	JMP	STA_RET			;NO
+	MOV	BX,INFO			;YES - COPY XFCB TO USER'S FCB
+	MOV	CL,NXTREC
+	JMP	MOVE
+
+FUNC103:				;WRITE OR UPDATE FILE XFCB
+	MOV	CL,16
+	CALL	COPY_DMA_IN
+	CALL	PARSAVE33
+	CALL	RESELECTX
+	CALL	CHECK_WILD
+	MOV	XDCNT,0FFFFH		;INITIALIZED FOR MAKE
+	CALL	GET_XFCB		;DOES XFCB EXIST FOR FILE?
+	JNZ	WXFCB1			;YES
+	CALL	GET_DIR_MODE		;NO - DOES DIR LBL EXIST?
+	OR	AL,AL
+	MOV	AL,0FFH
+	JNZ	$+5
+	JMP	STA_RET			;NO
+	MOV	MAKE_XFCB,AL		;DOES FILE EXIST?
+	MOV	CL,EXTNUM
+	CALL	SEARCH
+	JNZ	$+3
+WXFCB0:	RET				;NO
+	CALL	MAKE			;DOES DIRECTORY SPACE EXIST FOR MAKE?
+	JZ	WXFCB0			;NO
+	CALL	INIT_XFCB		;INITIALIZE XFCB
+WXFCB1:
+	CALL	CHK_XFCB_PASSWORD	;CHECK PASSWORD
+	MOV	SI,BX
+	CALL	GETEXTA
+	XCHG	BX,SI
+	TEST	B[BX],0FFH		;IS CURRENT PASSWORD MODE NON-ZERO
+	JNZ	WXFCB2			;YES
+	LODS	AL			;IS USER SPECIFYING A NEW PASSWORD?
+	DEC	SI
+	AND	AL,1
+	JNZ	WXFCB2			;YES
+	JMP	SEEK_COPY		;NO - PASSWORD MODE REMAINS ZERO
+WXFCB2:
+	LODS	AL			;ASSIGN NEW PASSWORD MODE TO XFCB
+	AND	AL,0E0H
+	JNZ	WXFCB3
+	MOV	AL,80H
+WXFCB3:
+	MOV	[BX],AL
+	JMP	SDL2			;CHECK FOR NEW PASSWORD
+
+FUNC104:				;SET CURRENT DATE AND TIME
+	MOV	CL,4
+	CALL	PARSAVE
+	MOV	PARCOPFL,FALSE
+	MOV	BX,OFFSET TOD
+	MOV	CL,4
+	MOV	DX,INFO
+	CALL	MOVE
+	MOV	BYTE PTR TOD+4,0
+	RET
+
+FUNC105:				;GET CURRENT DATE AND TIME
+
+	MOV	INFOSAVE,DX
+	MOV	BX,OFFSET LOC_PAR_AREA
+	MOV	INFO,BX
+	MOV	DX,OFFSET TOD
+	MOV	CL,4
+	CALL	MOVE
+	MOV	PARLG,4
+	JMP	PARUNSAVE
+
+FUNC106:				;SET DEFAULT PASSWORD
+	MOV	CL,8
+	CALL	PARSAVE
+	MOV	PARCOPFL,FALSE
+	MOV 	BX,INFO
+	MOV	SI,OFFSET DF_PASSWORD+7
+	PUSH	BX
+	MOV	CX,8
+	JMP	SET_PW0
+
+FUNC107	EQU	FUNCRET
+
+if	MPM
+
+GOBACK:
+	MOV	SP,SAVESP
+	JMP	BDOS_RETURN
+
+endif
+if	CPM
+
+goback:
+        ;arrive here at end of processing to return to user
+
+;       cmp     resel,0
+;       jz      jpretmon
+                                        ;reselection may have
+                                        ;taken place
+;       mov     bx,info
+;       mov     b[bx],0                 ;fcb(0)=0
+;       mov     al,fcbdsk
+;       or      al,al
+;	jnz	goback1
+;jpretmon:
+;       jmp      retmon
+                                        ;restore disk number
+;goback1:
+;       mov     [bx],al                 ;fcb(0)=fcbdsk
+;       mov     al,olddsk
+;       mov     linfo,al
+;       call    curselect
+;
+;       return from the disk monitor
+
+;retmon:
+;       cmp     parcopfl,true           ;test if parameter block
+;       jnz     retm1                   ;to be copied back to user
+;       call    parunsave
+;retm1:  mov     ax,aret
+;        mov     bx,ax
+;retmonret:
+;        ret
+
+endif
+
+;******************* end bdos file system *************
+

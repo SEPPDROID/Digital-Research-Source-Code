@@ -1,0 +1,79 @@
+
+title	'Screen Switch module'
+
+;****************************************************************
+;*								*
+;*	This module is the entry point for a screen switch	*
+;*	FILE NAME: switch.a86					*
+;*	LAST UPDATE: 2/13/84					*
+;*								*
+;****************************************************************
+
+include system.lib
+include flags.equ
+include	serdata.equ
+
+eject
+
+	dseg
+
+extrn	ocdesctbl:word
+extrn   f30_tbl:  word
+
+	cseg
+
+public	io_switch
+extrn	io_statline:near                ;; in statlin.a86
+extrn   vs_switch:near                  ;; in vscreen.a86
+extrn   supif:near		        ;; in headentr.a86
+         
+;=========
+io_switch:	; Function 7:  Switch Screen
+;=========
+;
+;	input:	dl = Vcon to switch to
+;		dh = Pcon to do the switch on
+;
+
+	push dx			               ;; save the Pcon and Vcon
+
+        call vs_switch                         ;; does fully buffered screen
+                                               ;; switch.
+
+        pop dx                                 ;; DH -> pcon, DL -> vcon
+        call set_up_bx                         ;; BX -> output Q ctl structure
+
+check_graph:         
+        mov CUR_VCON[bx],dl
+        push dx ! push bx		       ;; and check for a graphics
+        xor bh,bh			       ;; process that was flagwaited
+        mov bl,dl
+	shl bx,1
+	mov bx, f30_tbl[bx]
+        test bx, 010H			       ;; 010h = graphics is on
+	  jz go_stat
+	xor dh,dh
+        add dl, V_FLAG			       ;; Flag # = virt cons + bias	
+        mov cl, f_flagset		       ;; Do the system flag set.
+	  call supif
+go_stat:
+	 pop bx ! pop dx		       ;; DL -> phys cons #
+         mov CUR_VCON[bx],dl
+	 mov dl, dh                            ;; get pcon
+          jmp io_statline                      ;; update status line
+
+
+;-----------
+set_up_bx:
+;-----------
+
+	xor bx, bx
+	mov bl, dh		               ;; use Pcon to index into the Xmit Q's
+	shl bx, 1
+	mov bx, ocdesctbl[bx]	               ;; bx -> Xmit Q control
+        ret
+
+
+	end
+
+

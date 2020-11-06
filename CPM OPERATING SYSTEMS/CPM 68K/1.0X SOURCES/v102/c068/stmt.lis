@@ -1,0 +1,516 @@
+1File: STMT.C                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "parser.h"
+     9   #define	labgen(l,sl)	sl=l;l=nextlabel++;
+    10   int swp -1;
+    11    
+    12    
+    13   /* stmt - process a single statement*/
+    14   stmt()									/* returns - none*/
+    15   {
+    16   	register int token, lab, i;
+    17   	register struct tnode *tp;
+    18   	register char *p;
+    19    
+    20   	while( 1 ) {
+    21   		switch(token=gettok()) {
+    22    
+    23   		case LCURBR:					/*handle { ... }*/
+    24   			while( !next(EOF) ) {
+    25   				if( next(RCURBR) )
+    26   					return;
+    27   				stmt();
+    28   			}
+    29   		case EOF:
+    30   			error("{ not matched by }");
+    31   		case SEMI:						/*null statement*/
+    32   			return;
+    33    
+    34   		case RCURBR:
+    35   			pbtok(token);
+    36   			return;
+    37    
+    38   		case SYMBOL:					/*symbol: statement*/
+    39   			if( peekc(':') ) {
+    40   				dolabel();
+    41   				continue;
+    42   			}
+    43   		default:						/*anything else...*/
+    44   			pbtok(token);
+    45   			outexpr(expr());
+    46   			break;
+    47   	
+    48   		case RESWORD:
+    49   			switch(cvalue) {
+    50   	
+    51   			case R_BREAK:
+    52   				lab = brklabel();
+    53   				outgoto(lab);		/*branch to break label*/
+    54   				break;
+    55   	
+    56   			case R_CASE:
+    57   				docase();
+    58   				continue;
+    59   	
+1File: STMT.C                                                              Page       2
+    60   			case R_CONTINUE:
+    61   				lab = contlabel();	/*branch to continue label*/
+    62   				outgoto(lab);
+    63   				break;
+    64   	
+    65   			case R_DEFAULT:
+    66   				dodefault();
+    67   				continue;
+    68   	
+    69   			case R_DO:
+    70   				dodo();
+    71   				break;
+    72   	
+    73   			case R_FOR:
+    74   				dofor();
+    75   				return;
+    76   	
+    77   			case R_GOTO:
+    78   				lab = gotolabel();
+    79   				outgoto(lab);
+    80   				break;
+    81   	
+    82   			case R_IF:
+    83   				doif();
+    84   				return;
+    85   	
+    86   			case R_RETURN:
+    87   				doreturn();
+    88   				break;
+    89   	
+    90   			case R_SWITCH:
+    91   				doswitch();
+    92   				return;
+    93   	
+    94   			case R_WHILE:
+    95   				dowhile();
+    96   				return;
+    97    
+    98   			default:
+    99   				synerr("invalid keyword");
+   100   				return;
+   101   			}
+   102   		}
+   103   		if( !next(SEMI) )
+   104   			synerr("missing semicolon");
+   105   		return;
+   106   	}
+   107   }
+   108    
+   109   /* balpar - handle expression within parenthesis for while and if*/
+   110   /*		Merely checks for left and right parens and builds expression.*/
+   111   char *balpar()							/* returns pointer to expression*/
+   112   {
+   113   	register struct tnode *tp;
+   114    
+   115   	if( next(LPAREN) ) {
+   116   		reducep = 1;
+   117   		tp = expr();
+   118   		reducep = 0;
+1File: STMT.C                                                              Page       3
+   119   		if( next(RPAREN) )
+   120   			return(tp);
+   121   	}
+   122   	synerr("parenthesized expression syntax");
+   123   	return(0);
+   124   }
+   125    
+   126   /* synerr - syntax error*/
+   127   /*		Outputs error message and tries to resyncronize input.*/
+   128   synerr(s,x1,x2,x3,x4,x5,x6)				/* returns - none*/
+   129   char *s;								/* printf format string*/
+   130   int x1, x2, x3, x4, x5, x6;				/* printf arguments*/
+   131   {
+   132   	register int token;
+   133    
+   134   	error(s,x1,x2,x3,x4,x5,x6);
+   135   	while( (token=gettok()) != SEMI && token != EOF && token != LCURBR &&
+   136   			token != RCURBR )
+   137   		;
+   138   	pbtok(token);
+   139   }
+   140    
+   141   /* gotolabel - gets label id for goto*/
+   142   /*		This is used for both: goto symbol and if(...)goto symbol*/
+   143   gotolabel()							/* returns 0 if not, else label id*/
+   144   {
+   145   	register struct symbol *sp;
+   146    
+   147   	if( !next(SYMBOL) )
+   148   		synerr("expected label");
+   149   	else {
+   150   		sp = csp;
+   151   		if( !(sp->s_sc) ) {
+   152   			sp->s_type = LLABEL;
+   153   			if( !sp->s_offset )
+   154   				sp->s_offset = nextlabel++;
+   155   		}
+   156   		if( (!sp->s_sc || sp->s_sc == STATIC ) && sp->s_type == LLABEL )
+   157   			return(sp->s_offset);
+   158   		synerr("invalid label");
+   159   	}
+   160   	return(0);
+   161   }
+   162    
+   163   /* dolabel - do statement label*/
+   164   /*		Checks current symbol for already being defined, then sets*/
+   165   /*		symbol attributes for label.*/
+   166   dolabel()								/* returns - none*/
+   167   {
+   168   	register struct symbol *sp;
+   169    
+   170   	sp = csp;
+   171   	if( sp->s_sc )
+   172   		error("label redeclaration: %.8s",sp->s_symbol);
+   173   	else {
+   174   		sp->s_attrib =| SDEFINED;
+   175   		sp->s_sc = STATIC;
+   176   		sp->s_type = LLABEL;
+   177   		if( !sp->s_offset )
+1File: STMT.C                                                              Page       4
+   178   			sp->s_offset = nextlabel++;
+   179   		outlab(sp->s_offset);
+   180   	}
+   181   }
+   182    
+   183   /* brklabel - generate break label*/
+   184   /*		Checks if break label is undefined, and if so, generates message*/
+   185   brklabel()								/* returns label number*/
+   186   {
+   187   	if( !blabel )
+   188   		error("invalid break statement");
+   189   	return(blabel);
+   190   }
+   191    
+   192   /* contlabel - generate continue label*/
+   193   /*	Checks if continue label is undefined, and if so, generates message*/
+   194   contlabel()								/* returns label number*/
+   195   {
+   196   	if( !clabel )
+   197   		error("invalid continue statement");
+   198   	return(clabel);
+   199   }
+   200    
+   201   /* docase - handles: case constant : statement*/
+   202   /*		Checks for being in a switch statement, adds entry to switch table*/
+   203   docase()								/* returns - none*/
+   204   {
+   205   	register int value, lab;
+   206    
+   207   	colonstop++;
+   208   	value = cexpr();					/*get case value*/
+   209   	colonstop--;
+   210   	if( !next(COLON) )				/*check for colon*/
+   211   		synerr("missing colon");
+   212   	if( swp < 0 )
+   213   		error("case not inside a switch block");
+   214   	else if( swp >= (SWSIZE-1) )
+   215   		error("too many cases in switch");
+   216   	else {
+   217   		addswitch(&swtab[cswp],swp-cswp,value,lab=nextlabel++);
+   218   		outlab(lab);
+   219   		swp++;
+   220   	}
+   221   }
+   222    
+   223   /* dodefault - handles: default : statement*/
+   224   /*		Checks for colon and being in a switch statement*/
+   225   dodefault()								/* returns - none*/
+   226   {
+   227   	if( !next(COLON) )
+   228   		error("missing colon");
+   229   	if( swp < 0 )
+   230   		error("default not inside a switch block");
+   231   	else {
+   232   		dlabel = nextlabel++;			/*allocate default label*/
+   233   		outlab(dlabel);					/*output default label*/
+   234   	}
+   235   }
+   236    
+1File: STMT.C                                                              Page       5
+   237   /* dodo - handles: do statement while ( expression )*/
+   238   dodo()									/* returns - none*/
+   239   {
+   240   	register int lab, saveblab, saveclab;
+   241    
+   242   	labgen(blabel,saveblab);
+   243   	labgen(clabel,saveclab);
+   244   	lab = nextlabel++;
+   245   	outlab(lab);						/*branch back to here*/
+   246   	stmt();								/*do statement*/
+   247   	outlab(clabel);						/*continue label*/
+   248   	if( !nextrw(R_WHILE)  ) {
+   249   		error("missing while");			/*only advisory...*/
+   250   		outgoto(lab);
+   251   	}
+   252   	else
+   253   		outifgoto(balpar(),TRUE,lab);		/*while expression*/
+   254   	outlab(blabel);						/*break label*/
+   255   	blabel = saveblab;					/*restore labels*/
+   256   	clabel = saveclab;
+   257   }
+   258    
+   259   /*
+   260    * dofor - handle: for ( expression ; expression ; expression ) statement
+   261    *		Hard part is handling re-initialization expression, which is
+   262    *		parsed and saved, then the statement is parsed, then the reinit
+   263    *		clause expression tree is output.
+   264    */
+   265   dofor()									/* returns - none*/
+   266   {
+   267   	register int lab, saveblab, saveclab, reinit, clineno;
+   268   	register char *savep;
+   269   	register struct tnode *tp;
+   270    
+   271   	labgen(blabel,saveblab);
+   272   	labgen(clabel,saveclab);
+   273   	if( !next(LPAREN) ) {
+   274   forerr:
+   275   		synerr("invalid for statement");
+   276   		return;
+   277   	}
+   278   	if( !next(SEMI) ) {				/*do init expression*/
+   279   		outexpr(expr());
+   280   		if( !next(SEMI) )
+   281   			goto forerr;
+   282   	}
+   283   	outlab(clabel);						/*branch back to here*/
+   284   	if( !next(SEMI) ) {				/*do for condition*/
+   285   		outifgoto(expr(),FALSE,blabel);
+   286   		if( !next(SEMI) )
+   287   			goto forerr;
+   288   	}
+   289   	if( next(RPAREN) ) {				/*no re-init - easy case*/
+   290   		stmt();							/*output statement*/
+   291   		outgoto(clabel);					/*output continue label*/
+   292   	}
+   293   	else {								/*there is a re-init clause*/
+   294   		labgen(clabel,lab);
+   295   		savep = exprp;
+1File: STMT.C                                                              Page       6
+   296   		tp = expr();					/*save re-init tree until done*/
+   297   		exprp = opap;					/*remember until reinit is output*/
+   298   		reinit = lineno;
+   299   		if( !next(RPAREN) )
+   300   			goto forerr;
+   301   		stmt();							/*do statment*/
+   302   		clineno = lineno;
+   303   		lineno = reinit;
+   304   		outlab(clabel);					/*we branch to here for reinit*/
+   305   		outexpr(tp);					/*output re-init clause*/
+   306   		exprp = savep;
+   307   		lineno = clineno;
+   308   		outgoto(lab);						/*branch back to top of loop*/
+   309   	}
+   310   	outlab(blabel);						/*break to here*/
+   311   	blabel = saveblab;
+   312   	clabel = saveclab;					/*restore labels*/
+   313   }
+   314    
+   315   /* doif - handles: if ( expression ) statement [ else statement ]*/
+   316   /*		Handles special cases for goto, break, continue and return.*/
+   317   doif()									/* returns - none*/
+   318   {
+   319   	register struct tnode *tp;
+   320   	register int elselab, exitlab;
+   321    
+   322   	tp = balpar();						/*if( expr )...*/
+   323   	exitlab = 0;
+   324   	if( nextrw(R_GOTO) )
+   325   		exitlab = gotolabel();
+   326   	else if( nextrw(R_BREAK) )
+   327   		exitlab = brklabel();
+   328   	else if( nextrw(R_CONTINUE) )
+   329   		exitlab = contlabel();
+   330   	else if( nextrw(R_RETURN) ) {
+   331   		if( peekc(';') ) {
+   332   			exitlab = rlabel;
+   333   			putback(';');
+   334   		}
+   335   		else
+   336   			pbtok(RESWORD);
+   337   	}
+   338   	if( exitlab ) {						/*easy goto, do branch if true*/
+   339   		outifgoto(tp,TRUE,exitlab);
+   340   		if( !next(SEMI) )
+   341   			synerr("missing semicolon");
+   342   		if( nextrw(R_ELSE) )				/*else clause, just output it*/
+   343   			stmt();
+   344   	}
+   345   	else {								/*hard goto, branch over statement*/
+   346   		elselab = nextlabel++;
+   347   		outifgoto(tp,FALSE,elselab);
+   348   		stmt();
+   349   		if( nextrw(R_ELSE) ) {
+   350   			exitlab = nextlabel++;		/*branches over else clause*/
+   351   			outgoto(exitlab);				/*branch out of then clause*/
+   352   			outlab(elselab);			/*label to start else clause*/
+   353   			stmt();						/*else statement*/
+   354   			outlab(exitlab);
+1File: STMT.C                                                              Page       7
+   355   		}
+   356   		else
+   357   			outlab(elselab);			/*no else, just branch out*/
+   358   	}
+   359   }
+   360    
+   361   /*
+   362    * doreturn - handles: return [ expression ] ;
+   363    *		Expression is the hard part, must create an assignment expression
+   364    *		to assign expression to the type of the function, then get it
+   365    *		loaded into a specific register.
+   366    */
+   367   doreturn()								/* returns - none*/
+   368   {
+   369   	register struct tnode *tp;
+   370    
+   371   	if( !peekc(';') )				/*need to compute return?*/
+   372   		outforreg(FRETURN,frp,expr());
+   373   	else
+   374   		putback(';');
+   375   	outgoto(rlabel);						/*branch to the return label*/
+   376   }
+   377    
+   378   /*
+   379    * doswitch - handles: switch ( expression ) statement
+   380    *		Evaluates the expression, forces the result into a known register
+   381    *		collects the case statements in swtab, then outputs the switch
+   382    *		operator and switch cases.
+   383    */
+   384   doswitch()								/* returns - none*/
+   385   {
+   386   	register int saveblab, swlab, savedlab, saveswp, i;
+   387   	register struct tnode *tp;
+   388    
+   389   	labgen(blabel,saveblab);
+   390   	tp = balpar();
+   391   	integral(tp,-1);					/*must be integral type result*/
+   392   	outforreg(ASSIGN,snalloc(INT,AUTO,0,0,0),tp);
+   393   	saveswp = swp;						/*remember old switch pointer*/
+   394   	if( saveswp < 0 )
+   395   		swp++;
+   396   	i = cswp;
+   397   	cswp = swp;							/*remember real first entry*/
+   398   	swlab = nextlabel++;
+   399   	outgoto(swlab);						/*branch to switch code*/
+   400   	savedlab = dlabel;
+   401   	dlabel = 0;
+   402   	stmt();								/*do switch statement*/
+   403   	outgoto(blabel);					/*output branch just in case*/
+   404   	outlab(swlab);						/*here we now do the switch code*/
+   405   	if( !dlabel )
+   406   		dlabel = blabel;
+   407   	outswitch(swp-cswp,dlabel,&swtab[cswp]);
+   408   	outlab(blabel);						/*break to here*/
+   409   	cswp = i;
+   410   	swp = saveswp;
+   411   	blabel = saveblab;
+   412   	dlabel = savedlab;
+   413   }
+1File: STMT.C                                                              Page       8
+   414    
+   415   /* dowhile - handles: while ( expression ) statement*/
+   416   /*		This is fairly straight-forward.*/
+   417   dowhile()								/* returns - none*/
+   418   {
+   419   	register int saveclab, saveblab;
+   420    
+   421   	labgen(blabel,saveblab);
+   422   	labgen(clabel,saveclab);
+   423   	outlab(clabel);						/*continue label*/
+   424   	outifgoto(balpar(),FALSE,blabel);		/*condition clause*/
+   425   	stmt();								/*statement*/
+   426   	outgoto(clabel);						/*branch back to top of loop*/
+   427   	outlab(blabel);						/*break to here*/
+   428   	blabel = saveblab;
+   429   	clabel = saveclab;					/*restore labels*/
+   430   }
+   431    
+   432   /* nextrw - is next token the specified reserved word?*/
+   433   nextrw(rw)							/* returns 1 if match, 0 otherwise*/
+   434   int rw;								/* reserved word to match*/
+   435   {
+   436   	register int token;
+   437    
+   438   	if( (token=gettok()) != RESWORD || cvalue != rw ) {
+   439   		pbtok(token);
+   440   		return(0);
+   441   	}
+   442   	return(1);
+   443   }
+   444    
+   445   /*
+   446    * addswitch - add an entry into current switch table, bubble sorting
+   447    *		This makes it easier on the code generator and also checks for
+   448    *		duplicate labels at the "right" time.
+   449    */
+   450   addswitch(sp,ncases,nval,nlab)		/* returns - none*/
+   451   struct swtch *sp;					/* switch table pointer*/
+   452   int ncases;							/* number of cases in switch*/
+   453   int nval;							/* new value*/
+   454   int nlab;							/* new label*/
+   455   {
+   456   	register struct swtch *nswp, *s;
+   457   	register int temp, i;
+   458    
+   459   	nswp = &sp[ncases];
+   460   	nswp->sw_value = nval;
+   461   	nswp->sw_label = nlab;
+   462   	s = nswp--;
+   463   	for( ; --ncases >= 0; s--, nswp-- ) {
+   464   		if( s->sw_value == nswp->sw_value )
+   465   			error("duplicate case value");
+   466   		if( s->sw_value < nswp->sw_value ) {
+   467   			temp = s->sw_value;
+   468   			s->sw_value = nswp->sw_value;
+   469   			nswp->sw_value = temp;
+   470   			temp = s->sw_label;
+   471   			s->sw_label = nswp->sw_label;
+   472   			nswp->sw_label = temp;
+1File: STMT.C                                                              Page       9
+   473   		}
+   474   	}
+   475   }
+   476    
+   477   /* outforreg - generate assignment for switch and return*/
+   478   outforreg(op,ltp,rtp)			/*returns - none*/
+   479   int op;							/*operator for build tree*/
+   480   struct tnode *ltp;				/*left expression tree*/
+   481   struct tnode *rtp;				/*right expression tree*/
+   482   {
+   483   	register struct tnode *tp;
+   484    
+   485   	opp = opstack;
+   486   	opdp = opdstack;
+   487   	pushopd(ltp);
+   488   	pushopd(rtp);
+   489   	maketree(op);
+   490   	if( tp = popopd() )
+   491   		outcforreg(tp->t_right);
+   492   	opp = opdp = 0;
+   493   }
+   494    
+   495   /* outassign - generate assignment for function args*/
+   496   outassign(ltp,rtp)				/*returns - none*/
+   497   struct tnode *ltp;				/*left expression tree*/
+   498   struct tnode *rtp;				/*right expression tree*/
+   499   {
+   500   	opp = opstack;
+   501   	opdp = opdstack;
+   502   	pushopd(ltp);
+   503   	pushopd(rtp);
+   504   	maketree(ASSIGN);
+   505   	outexpr(popopd());
+   506   	opp = opdp = 0;
+   507   }

@@ -1,0 +1,595 @@
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   1
+Source File: pgmld.s
+
+   1                               
+   2                               *********************************
+   3                               *                               *
+   4                               *  Function 59 -- Program Load  *
+   5                               *   Assembly language version   *
+   6                               *                               *
+   7                               *        June  8, 1982          *
+   8                               *                               *
+   9                               *********************************
+  10                               
+  11                               .globl  _pgmld          * this routine is public
+  12                               
+  13                               secsize = 128           * CP/M sector size
+  14                               
+  15                               * d0 always contains the return parameter from pgmld
+  16                               * d1 is the return register from local subroutines
+  17                               * a0 contains the pointer to the Load Parm Block passed to pgmld
+  18                               
+  19                               * Return parameters in d0 are:
+  20                               *       00 - function successful
+  21                               *       01 - insufficient memory or bad header in file
+  22                               *       02 - read error on file
+  23                               *       03 - bad relocation information in file
+  24                               
+  25                               
+  26                               * Entry point for Program Load routine
+  27                               _pgmld:
+  28 00000000 48E77FFE                     movem.l d1-d7/a0-a6, -(sp) * save everything, just to be safe
+  29 00000004 206F003C                     move.l  60(sp),a0       * get pointer to LPB
+  30 00000008 4280                         clr.l   d0              * start with return parm cleared
+  31 0000000A 6154                         bsr     gethdr          * get header
+  32 0000000C 4A40                         tst     d0
+  33 0000000E 662A                         bne     lddone          * if unsuccessful, return
+  34 00000010 61000108                     bsr     setaddr         * set up load addresses
+  35 00000014 4A40                         tst     d0
+  36 00000016 6622                         bne     lddone          * if unsuccessful, return
+  37 00000018 61000258                     bsr     rdtxt           * read code and data text segments into mem
+  38 0000001C 4A40                         tst     d0
+  39 0000001E 661A                         bne     lddone          * if unsuccessful, return
+  40 00000020 2E3900000016                 move.l  tstart,d7
+  41 00000026 BEB900000024                 cmp.l   cseg,d7
+  42 0000002C 6704                         beq     noreloc
+  43 0000002E 61000350                     bsr     reloc           * do relocation if necessary
+  44                               noreloc:
+  45 00000032 4A40                         tst     d0
+  46 00000034 6604                         bne     lddone
+  47 00000036 610003E8                     bsr     setrtn          * set up return parameters
+  48                               lddone:
+  49 0000003A 222F0040                     move.l  64(sp), d1
+  50 0000003E 6116                         bsr     setdma          * restore dma address
+  51 00000040 4CDF7FFE                     movem.l (sp)+,d1-d7/a0-a6
+  52 00000044 4E75                         rts
+  53                               
+  54                               * Subroutines
+  55                               
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   2
+Source File: pgmld.s
+
+  56                               readseq:
+  57                               * CP/M read sequential function
+  58 00000046 2F00                         move.l  d0,-(sp)        * save return parm
+  59 00000048 22280000                     move.l  FCBPtr(a0),d1
+  60 0000004C 7014                         moveq   #20,d0          * read seq function
+  61 0000004E 4E42                         trap    #2              * call bdos
+  62 00000050 2200                         move.l  d0,d1           * return parm in d1
+  63 00000052 201F                         move.l  (sp)+,d0
+  64 00000054 4E75                         rts
+  65                               
+  66                               
+  67                               setdma:
+  68                               * CP/M set dma function
+  69 00000056 2F00                         move.l  d0,-(sp)        * save return parm
+  70 00000058 701A                         moveq   #26,d0          * set dma function
+  71 0000005A 4E42                         trap    #2              * call bdos
+  72 0000005C 201F                         move.l  (sp)+,d0        * restore d0
+  73 0000005E 4E75                         rts
+  74                               
+  75                               
+  76                               gethdr:
+  77                               * Get header into buffer in data segment
+  78 00000060 22280004                     move.l  LoAdr(a0),d1
+  79 00000064 61F0                         bsr     setdma
+  80 00000066 61DE                         bsr     readseq
+  81 00000068 4A41                         tst     d1              * read ok?
+  82 0000006A 6614                         bne     badhdr          * if no, return bad
+  83 0000006C 7E12                         moveq   #18,d7
+  84 0000006E 2A680004                     movea.l LoAdr(a0),a5
+  85 00000072 2C7C00000000                 movea.l #hdr,a6
+  86 00000078 3CDD                 geth1:  move.w  (a5)+,(a6)+     * move header into hdr
+  87 0000007A 51CFFFFC                     dbf     d7,geth1
+  88 0000007E 4E75                         rts
+  89 00000080 7002                 badhdr: moveq   #2,d0
+  90 00000082 4E75                         rts
+  91                               
+  92                               
+  93                               conflict:
+  94                               * input parms: d2, d3 = 4 * segment nmbr
+  95                               * if segment d2/4 overlaps segment d3/4, then return 1 in d1
+  96                               * else return 0 in d1
+  97                               * uses d7, a2, a3
+  98 00000084 4281                         clr.l   d1              * assume it will work
+  99 00000086 247C00000024                 movea.l #cseg,a2        * a2 points to start of segment addresses
+ 100 0000008C 267C00000002                 movea.l #csize,a3       * a3 points to start of segment lengths
+ 101 00000092 2E322000                     move.l  0(a2,d2),d7     * get 1st seg start
+ 102 00000096 BEB23000                     cmp.l   0(a2,d3),d7     * is 1st seg above 2nd seg?
+ 103 0000009A 6C0C                         bge     conf1
+ 104 0000009C DEB32000                     add.l   0(a3,d2),d7     * yes, find top of 1st seg
+ 105 000000A0 BEB23000                     cmp.l   0(a2,d3),d7     * above start of 2nd seg?
+ 106 000000A4 6E10                         bgt     confbd          * if yes, we have a conflict
+ 107 000000A6 4E75                         rts                     * else, return good
+ 108                               conf1:
+ 109 000000A8 2E323000                     move.l  0(a2,d3),d7
+ 110 000000AC DEB33000                     add.l   0(a3,d3),d7     * find top of 2nd seg
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   3
+Source File: pgmld.s
+
+ 111 000000B0 BEB22000                     cmp.l   0(a2,d2),d7     * above start of 1st seg?
+ 112 000000B4 6F02                         ble     confgd          * if no, we're ok
+ 113 000000B6 7201                 confbd: moveq.l #1,d1
+ 114 000000B8 4E75                 confgd: rts
+ 115                               
+ 116                               
+ 117                               trymemtp:
+ 118                               * entry: d2 is a segment nmbr [0..4]
+ 119                               * try to fit it at top of memory
+ 120                               * uses d3, d6, d7, a5, a6
+ 121                               * returns 0 in d1 if ok
+ 122 000000BA 2C02                         move.l  d2,d6           * d6 is loop counter for chksegs
+ 123 000000BC 5346                         subq    #1,d6
+ 124 000000BE E54A                         lsl     #2,d2           * multiply d2 by 4
+ 125 000000C0 2E280008                     move.l  HiAdr(a0),d7    * top of mem to d7
+ 126                               
+ 127                               chksegs:
+ 128                               * entry: d2 = 4 * (segment nmbr to try)
+ 129                               *        d6 = (d2/4) - 1  (loop counter)
+ 130                               *        d7 = address below which to try it
+ 131                               * check for conflicts with segments [0..d6] and low memory boundary
+ 132                               * return 0 in d1 if no conflicts, else d1 = 1
+ 133                               * uses d3, a5, a6
+ 134 000000C4 2A7C00000024                 movea.l #cseg,a5
+ 135 000000CA 2C7C00000002                 movea.l #csize,a6
+ 136 000000D0 9EB62000                     sub.l   0(a6,d2),d7     * subtract size of segment to try
+ 137 000000D4 08870000                     bclr    #0,d7           * make it even address
+ 138 000000D8 2B872000                     move.l  d7,0(a5,d2)     * insert address in segment table
+ 139 000000DC BEA80004                     cmp.l   LoAdr(a0),d7    * check for conflict with low memory
+ 140 000000E0 6DD4                         blt     confbd
+ 141 000000E2 4283                         clr.l   d3              * check for conflicts with 0..d6
+ 142                               chk1:
+ 143 000000E4 619E                         bsr     conflict
+ 144 000000E6 5883                         addq.l  #4,d3
+ 145 000000E8 4A81                         tst.l   d1              * conflict with this seg?
+ 146 000000EA 56CEFFF8                     dbne    d6,chk1         * if no, try next
+ 147 000000EE 4E75                         rts
+ 148                               
+ 149                               
+ 150                               fndseg:
+ 151                               * entry: d2 is a segment nmbr [0..4]
+ 152                               * try to fit segment d2 directly below segments 0..(d2-1)
+ 153                               * uses d3-d7, a5, a6
+ 154 000000F0 2A02                         move.l  d2,d5           * d5 is loop counter to find fit
+ 155 000000F2 5385                         subq.l  #1,d5
+ 156 000000F4 23C50000003C                 move.l  d5,temp
+ 157 000000FA E58A                         lsl.l   #2,d2           * multiply segment by 4
+ 158 000000FC 4284                         clr.l   d4              * d4 is segment to try to fit below
+ 159                               fnd1:
+ 160 000000FE 2C390000003C                 move.l  temp,d6         * d6 is loop counter for chksegs
+ 161 00000104 2A7C00000024                 movea.l #cseg,a5
+ 162 0000010A 2E354000                     move.l  0(a5,d4),d7     * segment address to d7
+ 163 0000010E 61B4                         bsr     chksegs         * check for conflicts
+ 164 00000110 5884                         addq.l  #4,d4
+ 165 00000112 4A81                         tst.l   d1
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   4
+Source File: pgmld.s
+
+ 166 00000114 57CDFFE8                     dbeq    d5,fnd1         * if conflict, try next
+ 167 00000118 4E75                         rts
+ 168                               
+ 169                               
+ 170                               setaddr:
+ 171                               * Set up load addresses for cseg, dseg, bss, basepg, and stack
+ 172 0000011A 3C3900000000                 move.w  magic,d6
+ 173 00000120 0246FFFE                     andi.w  #$fffe,d6
+ 174 00000124 0C46601A                     cmpi.w  #$601a,d6
+ 175 00000128 66000120                     bne     badadr          * if magic nmbr <> 601a or 601b, skip
+ 176 0000012C 23F90000000E00000038         move.l  bpsize,symsize
+ 177 00000136 2E3C00000100                 move.l  #256,d7
+ 178 0000013C 23C70000000E                 move.l  d7,bpsize       * base page is 256 bytes
+ 179 00000142 45F900000012                 lea     stksize,a2
+ 180 00000148 BE52                         cmp     (a2),d7
+ 181 0000014A 6D02                         blt     set0            * if stack size < 256, set to 256
+ 182 0000014C 2487                         move.l  d7,(a2)
+ 183 0000014E 0C79601B00000000     set0:   cmpi.w  #$601b,magic
+ 184 00000156 6708                         beq     seta
+ 185 00000158 4A790000001A                 tst.w   rlbflg
+ 186 0000015E 670C                         beq     set1
+ 187 00000160 23F90000001600000024 seta:   move.l  tstart,cseg     * if not relocatable or hdr = $601b,
+ 188 0000016A 6040                         bra     set2            * cseg starts at tstart
+ 189 0000016C 082800000015         set1:   btst    #0,Flags(a0)
+ 190 00000172 6616                         bne     sldhi
+ 191                               * relocatable, load low
+ 192 00000174 2E280004                     move.l  LoAdr(a0),d7
+ 193 00000178 DEBC00000101                 add.l   #$101,d7        * leave room for base page
+ 194 0000017E 08870000                     bclr    #0,d7
+ 195 00000182 23C700000024                 move.l  d7,cseg         * cseg is bottom of mem + $100 (even boundary)
+ 196 00000188 6022                         bra     set2
+ 197                               sldhi:
+ 198                               * relocatable, load high
+ 199 0000018A 2E280008                     move.l  HiAdr(a0),d7
+ 200 0000018E 9EB900000002                 sub.l   csize,d7
+ 201 00000194 9EB900000006                 sub.l   dsize,d7
+ 202 0000019A 9EB90000000A                 sub.l   bsize,d7
+ 203 000001A0 5987                         subq.l  #4,d7
+ 204 000001A2 08870000                     bclr    #0,d7           * put cseg at next even address below
+ 205 000001A6 23C700000024                 move.l  d7,cseg         *  high memory - (sum of sizes)
+ 206                               set2:
+ 207                               * Cseg has been set up.  Now do dseg, bseg
+ 208 000001AC 0C79601B00000000             cmpi.w  #$601b,magic
+ 209 000001B4 6616                         bne     set3
+ 210                               * if magic # = 601b, take addr from hdr
+ 211 000001B6 23F90000001C00000028         move.l  dstart,dseg
+ 212 000001C0 23F9000000200000002C         move.l  bstart,bseg
+ 213 000001CA 602A                         bra     set4
+ 214                               set3:
+ 215                               * if short header, dseg and bseg follow cseg
+ 216 000001CC 2E3900000024                 move.l  cseg,d7
+ 217 000001D2 DEB900000002                 add.l   csize,d7
+ 218 000001D8 5287                         addq.l  #1,d7
+ 219 000001DA 08870000                     bclr    #0,d7
+ 220 000001DE 23C700000028                 move.l  d7,dseg
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   5
+Source File: pgmld.s
+
+ 221 000001E4 DEB900000006                 add.l   dsize,d7
+ 222 000001EA 5287                         addq.l  #1,d7
+ 223 000001EC 08870000                     bclr    #0,d7
+ 224 000001F0 23C70000002C                 move.l  d7,bseg
+ 225                               set4:
+ 226                               * cseg, dseg, bseg set up
+ 227                               * now find a place for the base page and stack
+ 228 000001F6 7403                         moveq.l #3,d2
+ 229 000001F8 6100FEF6                     bsr     fndseg          * try to fit base page below cseg, dseg, bseg
+ 230 000001FC 4A81                         tst.l   d1
+ 231 000001FE 670A                         beq     set5            * if found, skip
+ 232 00000200 7403                         moveq.l #3,d2
+ 233 00000202 6100FEB6                     bsr     trymemtp        * else, try top of memory
+ 234 00000206 4A81                         tst.l   d1
+ 235 00000208 6640                         bne     badadr          * if fail, exit
+ 236 0000020A 7404                 set5:   moveq.l #4,d2
+ 237 0000020C 6100FEAC                     bsr     trymemtp        * try to fit stack at top of memory
+ 238 00000210 4A81                         tst.l   d1
+ 239 00000212 670A                         beq     set6            * if ok, skip
+ 240 00000214 7404                         moveq.l #4,d2
+ 241 00000216 6100FED8                     bsr     fndseg          * else, try to fit below other segs
+ 242 0000021A 4A81                         tst.l   d1
+ 243 0000021C 662C                         bne     badadr
+ 244                               set6:
+ 245                               * now check all segments for conflicts with low and high memory boundaries
+ 246 0000021E 2A7C00000024                 movea.l #cseg,a5
+ 247 00000224 2C7C00000002                 movea.l #csize,a6
+ 248 0000022A 4282                         clr.l   d2
+ 249 0000022C 7604                         moveq   #4,d3           * loop counter
+ 250 0000022E 2E352000             set7:   move.l  0(a5,d2),d7     * get segment base
+ 251 00000232 BEA80004                     cmp.l   LoAdr(a0),d7    * above bottom of memory?
+ 252 00000236 6D12                         blt     badadr
+ 253 00000238 DEB62000                     add.l   0(a6,d2),d7     * find top of segment
+ 254 0000023C BEA80008                     cmp.l   HiAdr(a0),d7    * below top of memory?
+ 255 00000240 6E08                         bgt     badadr
+ 256 00000242 5882                         addq.l  #4,d2           * point to next segment
+ 257 00000244 51CBFFE8                     dbf     d3,set7
+ 258 00000248 4E75                         rts
+ 259 0000024A 7001                 badadr: moveq.l #1,d0
+ 260 0000024C 4E75                         rts
+ 261                               
+ 262                               
+ 263                               movebuf:
+ 264                               * move (d3) bytes from the base page buffer to (a2)
+ 265                               * uses d6
+ 266 0000024E 227900000030                 movea.l basepg,a1
+ 267 00000254 2C3C00000080                 move.l  #secsize,d6
+ 268 0000025A 9C7900000042                 sub.w   bufbyts,d6      * address to move from =
+ 269 00000260 D2C6                         adda.w  d6,a1           *       (basepg) + secsize - (bufbyts)
+ 270 00000262 977900000042                 sub.w   d3,bufbyts      * update # bytes buffered
+ 271 00000268 6002                         bra     moveb2
+ 272 0000026A 14D9                 moveb1: move.b  (a1)+,(a2)+     * do the move
+ 273 0000026C 51CBFFFC             moveb2: dbf     d3,moveb1
+ 274 00000270 4E75                         rts
+ 275                               
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   6
+Source File: pgmld.s
+
+ 276                               
+ 277                               rdtxt:
+ 278                               * Read code and data text into memory
+ 279                               * during this routine, a2 is always the load address,
+ 280                               *                      d2 is number of bytes left to load
+ 281 00000272 7E3F                         moveq   #63,d7
+ 282 00000274 2A680004                     movea.l LoAdr(a0),a5
+ 283 00000278 2C7900000030                 movea.l basepg,a6
+ 284 0000027E 3CDD                 rdtxt1: move.w  (a5)+,(a6)+     * move header sector to base page
+ 285 00000280 51CFFFFC                     dbf     d7,rdtxt1
+ 286 00000284 3E3C0064                     move.w  #secsize-28,d7
+ 287 00000288 0C79601A00000000             cmpi.w  #$601a,magic    * short header?
+ 288 00000290 6702                         beq     rdtxt2
+ 289 00000292 5147                         subq.w  #8,d7
+ 290 00000294 33C700000042         rdtxt2: move.w  d7,bufbyts      * indicate # bytes of text in buffer
+ 291 0000029A 33FC000200000040             move.w  #2,loop         * do for code, data segments
+ 292 000002A2 247900000024                 move.l  cseg,a2         * start at cseg
+ 293 000002A8 243900000002                 move.l  csize,d2        * for csize bytes
+ 294                               rdtxt3:
+ 295 000002AE 4283                         clr.l   d3
+ 296 000002B0 363900000042                 move.w  bufbyts,d3
+ 297 000002B6 B682                         cmp.l   d2,d3           * # bytes in buffer >= # bytes to load?
+ 298 000002B8 6D06                         blt     rdtxt4
+ 299 000002BA 2602                         move.l  d2,d3
+ 300 000002BC 6190                         bsr     movebuf         * if yes, move # bytes to load
+ 301 000002BE 6048                         bra     finrd
+ 302                               rdtxt4:
+ 303 000002C0 9483                         sub.l   d3,d2           * if no, update # bytes to load
+ 304 000002C2 618A                         bsr     movebuf         * move remainder of buffer
+ 305 000002C4 263C00000080                 move.l  #secsize,d3     * d3 = secsize fo following loop
+ 306                               rdtxt5:
+ 307 000002CA B483                         cmp.l   d3,d2           * have at least one more full sector?
+ 308 000002CC 6D18                         blt     rdtxt6
+ 309 000002CE 220A                         move.l  a2,d1
+ 310 000002D0 6100FD84                     bsr     setdma          * if yes, set up dma address
+ 311 000002D4 6100FD70                     bsr     readseq         * read next sector
+ 312 000002D8 4A41                         tst.w   d1
+ 313 000002DA 6656                         bne     rdbad           * if no good, exit
+ 314 000002DC 9483                         sub.l   d3,d2           * decrement # bytes to load
+ 315 000002DE D5FC00000080                 adda.l  #secsize,a2     * increment dma address
+ 316 000002E4 60E4                         bra     rdtxt5
+ 317                               rdtxt6:
+ 318 000002E6 4A82                         tst.l   d2              * any more bytes to read?
+ 319 000002E8 671E                         beq     finrd
+ 320 000002EA 223900000030                 move.l  basepg,d1
+ 321 000002F0 6100FD64                     bsr     setdma
+ 322 000002F4 6100FD50                     bsr     readseq         * if yes, read into base page
+ 323 000002F8 4A41                         tst.w   d1
+ 324 000002FA 6636                         bne     rdbad
+ 325 000002FC 33C300000042                 move.w  d3,bufbyts      * indicate that we've buffered a sector
+ 326 00000302 2602                         move.l  d2,d3
+ 327 00000304 6100FF48                     bsr     movebuf         * move remainder of segment
+ 328                               finrd:
+ 329 00000308 247900000028                 move.l  dseg,a2         * set up to load data segment
+ 330 0000030E 243900000006                 move.l  dsize,d2
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   7
+Source File: pgmld.s
+
+ 331 00000314 537900000040                 sub.w   #1,loop
+ 332 0000031A 6692                         bne     rdtxt3
+ 333 0000031C 24790000002C                 move.l  bseg,a2         * clear the bss segment
+ 334 00000322 24390000000A                 move.l  bsize,d2
+ 335 00000328 6706                         beq     rdtxt8
+ 336 0000032A 421A                 rdtxt7: clr.b   (a2)+
+ 337 0000032C 5382                         subq.l  #1,d2
+ 338 0000032E 66FA                         bne     rdtxt7
+ 339 00000330 4E75                 rdtxt8: rts
+ 340                               
+ 341 00000332 7002                 rdbad:  moveq.l #2,d0
+ 342 00000334 4E75                         rts
+ 343                               
+ 344                               
+ 345                               relocword:
+ 346                               * relocate word at (a2) based on reloc bits at (a3)
+ 347                               * lsb of d2 indicates whether previous word was 1st half of long-word
+ 348 00000336 3E1B                         move.w  (a3)+,d7        * get relocation info
+ 349 00000338 02470007                     andi.w  #7,d7           * strip off symbol table bits
+ 350 0000033C E34F                         lsl     #1,d7           * multiply by 2
+ 351 0000033E 4EFB7002                     jmp     2(pc,d7)
+ 352                               
+ 353 00000342 6014                         bra     relabs
+ 354 00000344 6022                         bra     reldata
+ 355 00000346 6020                         bra     relcode
+ 356 00000348 601E                         bra     relbss
+ 357 0000034A 6006                         bra     relbad
+ 358 0000034C 6012                         bra     rellong
+ 359 0000034E 6002                         bra     relbad
+ 360 00000350 6006                         bra     relop
+ 361                               
+ 362 00000352 201F                 relbad: move.l  (sp)+,d0        * pop return address
+ 363 00000354 7003                         moveq   #3,d0           * return bad relocation to main routine
+ 364 00000356 4E75                         rts
+ 365                               
+ 366                               relabs:
+ 367 00000358 08820000             relop:  bclr    #0,d2           * reset long word flag
+ 368 0000035C 4A5A                         tst.w   (a2)+           * point to next word of segment
+ 369 0000035E 4E75                         rts
+ 370                               
+ 371                               rellong:
+ 372 00000360 08C20000                     bset    #0,d2           * set long word flag
+ 373 00000364 4A5A                         tst.w   (a2)+           * point to next word of segment
+ 374 00000366 4E75                         rts
+ 375                               
+ 376                               reldata:
+ 377                               relbss:
+ 378                               relcode:
+ 379 00000368 08820000                     bclr    #0,d2           * long word flag set?
+ 380 0000036C 6608                         bne     relc1           * if yes, skip
+ 381 0000036E 3C12                         move.w  (a2),d6
+ 382 00000370 DC45                         add.w   d5,d6
+ 383 00000372 34C6                         move.w  d6,(a2)+
+ 384 00000374 4E75                         rts
+ 385                               
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   8
+Source File: pgmld.s
+
+ 386 00000376 4A62                 relc1:  tst.w   -(a2)           * point to first word of long
+ 387 00000378 2C12                         move.l  (a2),d6
+ 388 0000037A DC85                         add.l   d5,d6
+ 389 0000037C 24C6                         move.l  d6,(a2)+        * note that a2 points past long word
+ 390 0000037E 4E75                         rts
+ 391                               
+ 392                               
+ 393                               reloc:
+ 394                               * Modify address references of code and data segments based on relocation bits
+ 395                               * During this routine,
+ 396                               * a2 points to text file to relocate
+ 397                               * a3 points to relocation word in basepg
+ 398                               * lsb of d2 is long word flag (set on reloc type 5, reset on next word)
+ 399                               * d3 is # words in relocation buffer
+ 400                               * d4 is nmbr of words left to relocate
+ 401                               * d5 is relocation offset
+ 402                               
+ 403 00000380 223900000030                 move.l  basepg,d1
+ 404 00000386 6100FCCE                     bsr     setdma          * we will always read into base page
+ 405                               * skip past the symbol table
+ 406 0000038A 2E3900000038                 move.l  symsize,d7
+ 407 00000390 8EFC0080                     divu    #secsize,d7     * calculate how many sectors to skip
+ 408                               * note that max # symbols is 8k, which is 896 sectors of 128 bytes
+ 409 00000394 3C07                         move.w  d7,d6           * d6 is nmbr sectors to skip
+ 410 00000396 4847                         swap    d7              * d7 is nmbr bytes to skip
+ 411 00000398 363900000042                 move.w  bufbyts,d3
+ 412 0000039E 9647                         sub.w   d7,d3           * subtract bytes to skip from buffer
+ 413 000003A0 6C06                         bge     skip1
+ 414 000003A2 06430080                     addi    #secsize,d3     *if amt in buffer < # bytes to skip,
+ 415 000003A6 5246                         addq    #1,d6           *  read in 1 extra sector
+ 416 000003A8 267900000030         skip1:  move.l  basepg,a3
+ 417 000003AE D6FC0080                     adda    #secsize,a3
+ 418 000003B2 96C3                         suba.w  d3,a3           * set up a3 to point to buffer
+ 419 000003B4 E24B                         lsr     #1,d3           * d3 is nmbr words in buffer
+ 420 000003B6 600A                         bra     skip3
+ 421                               skip2:
+ 422 000003B8 6100FC8C                     bsr     readseq         * read next symbol table sector
+ 423 000003BC 4A41                         tst.w   d1
+ 424 000003BE 6600FF72                     bne     rdbad
+ 425 000003C2 51CEFFF4             skip3:  dbf     d6,skip2
+ 426                               * we got past symbol table
+ 427                               * a3, d3 are set up
+ 428 000003C6 2A3900000024                 move.l  cseg,d5
+ 429 000003CC 2445                         move.l  d5,a2           * relocate cseg first
+ 430 000003CE 9AB900000016                 sub.l   tstart,d5       * d5 contains the relocation offset
+ 431 000003D4 283900000002                 move.l  csize,d4        * nmbr of bytes to relocate
+ 432 000003DA 33FC000200000040             move.w  #2,loop         * we're going to relocate 2 segments
+ 433                               reloc1:
+ 434                               * relocate one segment
+ 435 000003E2 4282                         clr.l   d2              * clear long word flag
+ 436 000003E4 E28C                         lsr.l   #1,d4           * make d4 indicate # words
+ 437 000003E6 601E                         bra     reloc4
+ 438                               reloc2:
+ 439 000003E8 5343                         subq.w  #1,d3
+ 440 000003EA 6A14                         bpl     reloc3
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page   9
+Source File: pgmld.s
+
+ 441 000003EC 6100FC58                     bsr     readseq         * if no more words in buffer, refill it
+ 442 000003F0 4A41                         tst.w   d1
+ 443 000003F2 6600FF3E                     bne     rdbad
+ 444 000003F6 267900000030                 move.l  basepg,a3
+ 445 000003FC 363C003F                     move.w  #(secsize/2)-1,d3
+ 446                               reloc3:
+ 447 00000400 6100FF34                     bsr     relocword       * relocate one word
+ 448 00000404 5384                         subq.l  #1,d4
+ 449                               reloc4:
+ 450 00000406 4A84                         tst.l   d4              * any more to relocate in this segment?
+ 451 00000408 66DE                         bne     reloc2          * if yes, do it
+ 452 0000040A 247900000028                 move.l  dseg,a2         * else, set up for dseg
+ 453 00000410 283900000006                 move.l  dsize,d4
+ 454 00000416 537900000040                 sub.w   #1,loop
+ 455 0000041C 66C4                         bne     reloc1
+ 456 0000041E 4E75                         rts
+ 457                               
+ 458                               
+ 459                               setrtn:
+ 460                               * Set up the return parameters in Ld Parm Blk and Base Page
+ 461 00000420 217900000030000C             move.l  basepg,BasPage(a0)
+ 462 00000428 2E3900000034                 move.l  stk,d7
+ 463 0000042E DEB900000012                 add.l   stksize,d7
+ 464 00000434 08870000                     bclr    #0,d7
+ 465 00000438 21470010                     move.l  d7,Stack(a0)
+ 466 0000043C 227900000030                 move.l  basepg,a1
+ 467 00000442 22E80004                     move.l  LoAdr(a0),(a1)+
+ 468 00000446 22E80008                     move.l  HiAdr(a0),(a1)+
+ 469 0000044A 22F900000024                 move.l  cseg,(a1)+
+ 470 00000450 22F900000002                 move.l  csize,(a1)+
+ 471 00000456 22F900000028                 move.l  dseg,(a1)+
+ 472 0000045C 22F900000006                 move.l  dsize,(a1)+
+ 473 00000462 22F90000002C                 move.l  bseg,(a1)+
+ 474 00000468 22B90000000A                 move.l  bsize,(a1)
+ 475                               * find size of free memory after bss segment
+ 476 0000046E 2E280008                     move.l  HiAdr(a0),d7    * d7 contains next segment above bss
+ 477 00000472 2C29FFFC                     move.l  -4(a1),d6
+ 478 00000476 DC99                         add.l   (a1)+,d6        * d6 points to start of free mem after bss
+ 479 00000478 2C7C00000024                 movea.l #cseg,a6        * a6 points to segment to try
+ 480 0000047E 7A04                         moveq   #4,d5           * try for all segments
+ 481 00000480 42B90000002C                 clr.l   bseg            *    but force bss not to appear
+ 482 00000486 BC96                 setb1:  cmp.l   (a6),d6         * segment above bss?
+ 483 00000488 6206                         bhi     setb2
+ 484 0000048A BE96                         cmp.l   (a6),d7         * segment is above bss. Is it below previous?
+ 485 0000048C 6302                         bls     setb2
+ 486 0000048E 2E16                         move.l  (a6),d7
+ 487 00000490 4A9E                 setb2:  tst.l   (a6)+           * point to next segment
+ 488 00000492 51CDFFF2                     dbf     d5,setb1
+ 489 00000496 9E86                         sub.l   d6,d7           * diff between bss top and next segment abv
+ 490 00000498 22C7                         move.l  d7,(a1)+
+ 491                               *                       now put disk number that we loaded from into base page
+ 492 0000049A 24680000                     movea.l FCBPtr(a0),a2
+ 493 0000049E 1012                         move.b  (a2),d0         * get disk select byte
+ 494 000004A0 6606                         bne     setb3           * if not auto-select, skip
+ 495 000004A2 7019                         move    #25,d0
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page  10
+Source File: pgmld.s
+
+ 496 000004A4 4E42                         trap    #2              * get default disk
+ 497 000004A6 5240                         addq    #1,d0           * we want it in range of 1..16
+ 498 000004A8 12C0                 setb3:  move.b  d0,(a1)+        * move disk number into base page
+ 499 000004AA 4280                         clr.l   d0              * function OK
+ 500 000004AC 4E75                         rts
+ 501                               
+ 502                               
+ 503 00000000                              .bss
+ 504                               
+ 505                               * offsets from start of parameter block
+ 506                               FCBPtr  = 0
+ 507                               LoAdr   = 4
+ 508                               HiAdr   = 8
+ 509                               BasPage = 12            * return parameters
+ 510                               Stack   = 16
+ 511                               Flags   = 21
+ 512                               
+ 513                               hdr:
+ 514                                                               * load file header is read into here
+ 515 00000000                      magic:          .ds.w   1
+ 516 00000002                      csize:          .ds.l   1
+ 517 00000006                      dsize:          .ds.l   1
+ 518 0000000A                      bsize:          .ds.l   1
+ 519 0000000E                      bpsize:         .ds.l   1       * symb tbl size is swapped with base page size
+ 520 00000012                      stksize:        .ds.l   1
+ 521 00000016                      tstart:         .ds.l   1
+ 522 0000001A                      rlbflg:         .ds.w   1
+ 523 0000001C                      dstart:         .ds.l   1
+ 524 00000020                      bstart:         .ds.l   1
+ 525                               
+ 526 00000024                      cseg:           .ds.l   1
+ 527 00000028                      dseg:           .ds.l   1
+ 528 0000002C                      bseg:           .ds.l   1
+ 529 00000030                      basepg:         .ds.l   1
+ 530 00000034                      stk:            .ds.l   1
+ 531                               
+ 532 00000038                      symsize:        .ds.l   1
+ 533 0000003C                      temp:           .ds.l   1
+ 534 00000040                      loop:           .ds.w   1
+ 535 00000042                      bufbyts:        .ds.w   1
+ 536                               
+ 537 00000044                              .end
+C P / M   6 8 0 0 0   A s s e m b l e r		Revision 02.03		Page  11
+Source File: pgmld.s
+
+S y m b o l   T a b l e
+
+BasPage   0000000C ABS   FCBPtr    00000000 ABS   Flags     00000015 ABS   HiAdr     00000008 ABS   
+LoAdr     00000004 ABS   Stack     00000010 ABS   _pgmld    00000000 TEXT  badadr    0000024A TEXT  
+badhdr    00000080 TEXT  basepg    00000030 BSS   bpsize    0000000E BSS   bseg      0000002C BSS   
+bsize     0000000A BSS   bstart    00000020 BSS   bufbyts   00000042 BSS   chk1      000000E4 TEXT  
+chksegs   000000C4 TEXT  conf1     000000A8 TEXT  confbd    000000B6 TEXT  confgd    000000B8 TEXT  
+conflict  00000084 TEXT  cseg      00000024 BSS   csize     00000002 BSS   dseg      00000028 BSS   
+dsize     00000006 BSS   dstart    0000001C BSS   finrd     00000308 TEXT  fnd1      000000FE TEXT  
+fndseg    000000F0 TEXT  geth1     00000078 TEXT  gethdr    00000060 TEXT  hdr       00000000 BSS   
+lddone    0000003A TEXT  loop      00000040 BSS   magic     00000000 BSS   moveb1    0000026A TEXT  
+moveb2    0000026C TEXT  movebuf   0000024E TEXT  noreloc   00000032 TEXT  rdbad     00000332 TEXT  
+rdtxt     00000272 TEXT  rdtxt1    0000027E TEXT  rdtxt2    00000294 TEXT  rdtxt3    000002AE TEXT  
+rdtxt4    000002C0 TEXT  rdtxt5    000002CA TEXT  rdtxt6    000002E6 TEXT  rdtxt7    0000032A TEXT  
+rdtxt8    00000330 TEXT  readseq   00000046 TEXT  relabs    00000358 TEXT  relbad    00000352 TEXT  
+relbss    00000368 TEXT  relc1     00000376 TEXT  relcode   00000368 TEXT  reldata   00000368 TEXT  
+rellong   00000360 TEXT  reloc     00000380 TEXT  reloc1    000003E2 TEXT  reloc2    000003E8 TEXT  
+reloc3    00000400 TEXT  reloc4    00000406 TEXT  relocwor  00000336 TEXT  relop     00000358 TEXT  
+rlbflg    0000001A BSS   secsize   00000080 ABS   set0      0000014E TEXT  set1      0000016C TEXT  
+set2      000001AC TEXT  set3      000001CC TEXT  set4      000001F6 TEXT  set5      0000020A TEXT  
+set6      0000021E TEXT  set7      0000022E TEXT  seta      00000160 TEXT  setaddr   0000011A TEXT  
+setb1     00000486 TEXT  setb2     00000490 TEXT  setb3     000004A8 TEXT  setdma    00000056 TEXT  
+setrtn    00000420 TEXT  skip1     000003A8 TEXT  skip2     000003B8 TEXT  skip3     000003C2 TEXT  
+sldhi     0000018A TEXT  stk       00000034 BSS   stksize   00000012 BSS   symsize   00000038 BSS   
+temp      0000003C BSS   trymemtp  000000BA TEXT  tstart    00000016 BSS   

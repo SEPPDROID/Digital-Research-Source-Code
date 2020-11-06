@@ -1,0 +1,119 @@
+
+;****************************************************************
+;*								*
+;*	CP/M-Z8K Interface module for the Loader BDOS		*
+;*		For "C" version of CP/M-Z8K    			*
+;*								*
+;*	Copyright (c) 1982 Digital Research, Inc.		*
+;*								*
+;*	Version 0.2 -- September 22, 1982			*
+;*	Z8000 version -- 830728					*
+;*								*
+;****************************************************************
+
+__text:	.sect
+
+;****************************************************
+;*
+;*  Globals
+;*
+;****************************************************
+
+
+	.global	_bios1		; 6 BIOS entry points from BDOS
+	.global	_bios2
+	.global	_bios3
+	.global	_bios4
+	.global	_bios5
+	.global	_swap		; byte swapper
+	.global	_udiv		; unsigned divide routine
+
+;****************************************************
+;*
+;* Externals and Constants
+;*
+;****************************************************
+
+	.global	_bios		; The Loader BDOS calls the BIOS direct
+
+;****************************************************
+;*
+;* BIOS Interface Routines
+;*
+;*  Note - there are 5 BIOS entry points from the BDOS, 
+;*	labelled BIOS1 - BIOS5, depending on the 
+;*	parameters passed.
+;*
+;****************************************************
+
+_bios5:
+; For BIOS functions sectran and set exception vector
+; (funct, word, long) 	offsets 2, 4, 6
+
+	ldl	rr6,6(r15)	; get 2nd param (long)
+	jp	_bios2		; join common routine
+
+_bios4:
+; For BIOS function seldsk
+; (func, word, word) 	offsets 2, 4, 6
+	ld	r7,6(r15)	; get 2nd param (word)
+	clr	r6		; extend to ulong
+	jp	_bios2		; join common routine
+
+_bios3:
+; For BIOS function set dma
+; (func, long)		offsets 2, 4
+	ldl	rr4,4(r15)	; get 1st param (long)
+	subl	rr6,rr6		; clear second
+	jp	_bios1		; join common routine
+
+_bios2:
+; For all BIOS functions with a word parameter
+; (func, word)		offsets 2, 4
+	ld	r5,4(r15)	; get 1st param (word)
+	clr	r4		; extend to ulong
+
+_bios1:
+; For all BIOS functions that have no parameter 
+; other than function number
+	ld	r3,2(r15)	; get function number
+	sub	r15, #10	; adjust sp...
+	ldm	@r15, r3, #5	; ... and push args on stack
+	call	_bios		; do BIOS call as a call...
+	add	r15, #10	; ...and readjust sp
+	ret			; returns value in rr7
+
+;****************************************************
+;*
+;*  Utility Subroutines
+;*
+;*  swap(word)		swap bytes of a word
+;*
+;*  uword udiv((long)   dividend, 
+;*	       (uword)  divisor, 
+;*	       (uword *)rem    )
+;*
+;****************************************************
+
+_swap:
+	ld	r7,2(r15)
+	exb	rh7,rl7
+	ret
+
+_udiv:
+	ldl	rr2,2(r15)	;long dividend
+	subl	rr0,rr0		;  as unsigned quad
+	ld	r5,6(r15)	;word divisor
+	clr	r4		;  as unsigned long
+	ldl	rr6,8(r15)	;->result
+
+	divl	rq0,rr4
+
+	ld	@r7,r1		; store remainder
+	ld	r7,r3		; return quotient
+	clr	r6
+
+
+	ret
+
+

@@ -1,0 +1,2033 @@
+
+include	equates.a86
+
+		dseg
+		extrn	lp_dos_module:word
+		extrn	lp_xios_entry:word	
+		extrn	pq_loader:word
+		extrn	pq_disk:word
+		extrn	search_path:byte
+		extrn	temp_drive:byte
+		extrn	bdos_8087_inuse:byte
+		extrn	rlr:word
+		extrn	cpu_vectors:dword
+
+		cseg
+		extrn	bdos_callback:near
+		extrn	far_ret_1:near
+
+		public	sup_main, sup_init
+
+sup_init:				; DATA XREF: dseg:0002o
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+sup_functions	dw offset P_CHAIN	; DATA XREF: bdos:0245o
+		dw offset P_LOAD
+		dw offset F_PARSE
+		dw offset Callback_103
+		dw offset DEV_WAITFLAG
+		dw offset DEV_SETFLAG
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+sup_main:				; DATA XREF: dseg:0000o
+		jmp	cs:sup_functions[si]
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+get_proc_dskdat:		; CODE XREF: P_CHAINp Callback_103p
+		inc	es:proc_indisk
+		mov	bx, offset pq_disk
+		mov	cx, 204h
+		call	bdos_callback
+		mov	ax, es:word ptr proc_drive
+		mov	cur_drive, ax
+		mov	al, es:proc_errmode
+		mov	cur_errmode, al
+		mov	ax, es:word ptr proc_dma
+		mov	word ptr cur_dma, ax
+		mov	ax, es:word ptr proc_dma+2
+		mov	word ptr cur_dma+2, ax
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+release_DMA:		; CODE XREF: P_CHAIN+68p P_CHAIN+A1p
+					; ...
+		mov	bx, offset pq_disk
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+release:		; CODE XREF: P_LOAD+133p
+		mov	cx, 205h
+		call	bdos_callback
+		mov	cx, 206h
+
+j_bdos_callback:			; CODE XREF: parse_command+6j
+		jmp	bdos_callback
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+parse_command:		; CODE XREF: P_CHAIN+1Bp P_CHAIN+115p
+					; ...
+		mov	dx, offset command_pfcb
+		mov	cx, 98h
+		jmps	j_bdos_callback
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+put_proc_dskdat:		; CODE XREF: P_CHAIN+65p P_CHAIN+9Ep
+					; ...
+		mov	ax, cur_drive
+		mov	es:word ptr proc_drive,	ax
+		mov	al, cur_errmode
+		mov	es:proc_errmode, al
+		mov	ax, word ptr cur_dma
+		mov	es:word ptr proc_dma, ax
+		mov	ax, word ptr cur_dma+2
+		mov	es:word ptr proc_dma+2,	ax
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+command_gettail:		; CODE XREF: P_CHAIN+22p
+		or	ax, ax
+		jz	no_tail
+		push	ax
+		sub	ax, offset commandline
+		mov	cx, 80h
+		sub	cx, ax
+		pop	si
+		mov	di, offset commandline
+		push	es
+		push	ds
+		pop	es
+
+		rep movsb
+		pop	es
+
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+no_tail:				; CODE XREF: command_gettail+2j
+		mov	commandline, ax
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+chain_find:		; CODE XREF: P_CHAIN+5Fp
+		mov	es:word ptr proc_dma, offset command_fcb+10h
+		mov	es:word ptr proc_dma+2,	ds
+		mov	es:proc_errmode, 0FEh
+		mov	si, offset command_fcb
+		jmps	cmd_find
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+rsx_find:		; CODE XREF: P_LOAD+C5p
+		mov	si, offset p_load_fcb
+
+cmd_find:				; CODE XREF: chain_find+15j
+		mov	cmd_findflag, 0
+		test	byte ptr [si], 0FFh; Drive specified?
+		jz	cmd_trypath2
+		mov	di, offset search_path+3
+		jmps	cmd_tryopen
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_trypath2:				; CODE XREF: rsx_find+Bj
+		mov	di, offset search_path
+
+cmd_trypath:				; CODE XREF: rsx_find+57j
+		mov	al, [di]
+		cmp	al, 0FFh
+		jz	cmd_notfound
+		mov	[si], al
+		or	al, al
+		jz	cmd_notdefault
+		dec	al
+		cmp	al, es:proc_drive
+		jnz	cmd_tryopen
+
+cmd_notdefault:				; CODE XREF: rsx_find+1Fj
+		test	cmd_findflag, 0FFh
+		jnz	cmd_findnext
+		mov	cmd_findflag, 0FFh
+
+cmd_tryopen:				; CODE XREF: rsx_find+10j rsx_find+28j
+		push	di
+		push	si
+		or	byte ptr 6[si], 80h
+		mov	dx, si
+		mov	cx, 0Fh		; Open file
+		call	bdos_callback
+		pop	si
+		pop	di
+		cmp	bl, 0FFh
+		jz	cmd_notthere
+		xor	cx, cx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_notthere:				; CODE XREF: rsx_find+49j
+		or	bh, bh
+		jnz	cmd_notfound
+
+cmd_findnext:				; CODE XREF: rsx_find+2Fj
+		inc	di
+		cmp	di, offset temp_drive
+		jb	cmd_trypath
+
+cmd_notfound:				; CODE XREF: rsx_find+19j rsx_find+50j
+		mov	cx, 1Eh
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+cmd_setprocname:		; CODE XREF: P_CHAIN+8Ap Callback_103+5Ap
+		mov	di, offset proc_name
+		mov	si, offset command_fcb+1
+		mov	cx, 4
+		rep movsw
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+call_p_load:		; CODE XREF: P_CHAIN+AFp
+		test	es:proc_flags, 2
+		jz	cpl_no8087	; Release the 8087
+		and	es:proc_flags, 0FFFDh
+		mov	bdos_8087_inuse, 0
+
+cpl_no8087:				; CODE XREF: call_p_load+7j
+		or	es:proc_flags, 8
+		mov	dx, offset command_fcb
+		mov	cx, 3Bh
+		call	bdos_callback
+		and	es:proc_flags, 0FFF7h
+		push	bx
+		push	cx
+		mov	cx, 10h
+		mov	dx, offset command_fcb
+		call	bdos_callback
+		mov	es:proc_errmode, 0
+		pop	cx
+		pop	bx
+		or	bx, bx
+		jnz	loaded_ok
+		mov	cx, 42
+
+loaded_ok:				; CODE XREF: call_p_load+41j
+		mov	loaded_cmd, bx
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+init_zpage_fcb:		; CODE XREF: P_CHAIN+10Bp Callback_103+12Ep
+		push	es
+		mov	es, loaded_cmd
+		mov	di, 5Ch
+		xor	ax, ax
+		stosb
+		mov	al, 20h
+		mov	cx, 0Bh
+		rep stosb
+		xor	ax, ax
+		mov	cl, 2
+		rep stosw
+		push	ds
+		push	es
+		pop	ds
+
+		mov	si, 5Ch
+		mov	cl, 8
+		rep movsw
+		pop	ds
+
+		pop	es
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+default_vectors:		; CODE XREF: P_CHAIN+9Bp Callback_103+18Ep
+		xor	di, di
+		push	es
+		mov	es, di
+
+		mov	si, offset cpu_vectors
+		mov	cx, 4
+		rep movsw
+		mov	cl, 4
+		add	di, cx
+		rep movsw
+		mov	di, offset INT_E0
+		mov	cl, 4
+		rep movsw
+		pop	es
+
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+P_CHAIN:		; CODE XREF: bdos:0245u
+					; DATA XREF: bdos:0239o
+		call	get_proc_dskdat
+		push	es
+		push	ds
+		mov	si, es:word ptr proc_dma
+		mov	di, offset commandline
+		push	ds
+		mov	ds, es:word ptr proc_dma+2
+		pop	es
+		mov	cx, 40h
+		rep movsw
+		pop	ds
+		pop	es
+		call	parse_command
+		jcxz	chain_got_name
+		jmps	chain_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+chain_got_name:				; CODE XREF: P_CHAIN+1Ej
+		call	command_gettail
+		mov	si, offset command_fcb
+		cmp	word ptr lp_dos_module+2, 0
+		jz	no_dos_support
+		mov	loading_dos, 0FFh
+		cmp	word ptr 9[si], 'OC'
+		jz	load_dos_prog
+		cmp	word ptr 9[si], 'XE'
+		jz	load_dos_prog
+
+no_dos_support:				; CODE XREF: P_CHAIN+2Dj
+		mov	loading_dos, 0
+		mov	word ptr 9[si], 'MC'
+		mov	byte ptr 11[si], 'D'
+		jmps	chain_loadprog
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+load_dos_prog:				; CODE XREF: P_CHAIN+39j P_CHAIN+40j
+		cmp	es:proc_background, 0
+		jz	chain_loadprog
+		mov	cx, 19h
+		jmps	chain_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+chain_loadprog:				; CODE XREF: P_CHAIN+50j P_CHAIN+58j
+		call	chain_find
+		jcxz	chain_foundfile
+
+chain_fail:				; CODE XREF: P_CHAIN+20j P_CHAIN+5Dj
+					; ...
+		push	cx
+		call	put_proc_dskdat
+		call	release_DMA
+		pop	cx
+		mov	bx, 0FFFFh
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+chain_foundfile:			; CODE XREF: P_CHAIN+62j
+		cli	
+		mov	es:word ptr proc_onblock, offset far_ret_1
+		mov	es:word ptr proc_onblock+2, cs
+		sti	
+		mov	cx, 307h	; mc_cleanprg?
+		call	bdos_callback
+		mov	cx, 20Ah	; p_020a
+		call	bdos_callback
+		call	cmd_setprocname
+		and	es:proc_flags, 0FFFBh
+		cmp	loading_dos, 0
+		jz	load_cpm
+		call	default_vectors
+		call	put_proc_dskdat
+		call	release_DMA
+		mov	dx, offset command_fcb
+		mov	cl, 1		; Hand off to DOS to load COM/EXE
+		callf	dword ptr lp_dos_module
+		jmps	load_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+load_cpm:				; CODE XREF: P_CHAIN+99j
+		call	call_p_load
+		jcxz	loaded_cpm
+		call	release_DMA
+
+load_fail:				; CODE XREF: P_CHAIN+ADj
+		mov	es:proc_errcode, 0FFFDh
+		mov	es:proc_delimiter, 24h
+		mov	dx, msg_cannot_load
+		mov	cx, 9
+		call	bdos_callback
+
+terminate:				; CODE XREF: P_CHAIN+D4j
+					; DATA XREF: Callback_103+175o
+		xor	cx, cx
+		mov	dx, cx
+		int	0E0h		; used by BASIC	while in interpreter
+		jmps	terminate
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+loaded_cpm:				; CODE XREF: P_CHAIN+B2j
+		push	bx
+		mov	ax, 20h
+		mov	cl, 2
+		mov	dl, 0
+		callf	dword ptr lp_xios_entry
+		pop	bx
+		push	es
+		mov	es, bx
+
+		mov	di, 81h
+		mov	si, offset commandline
+		mov	cx, 7Fh
+		mov	ah, ch
+
+cmdline_toupper:			; CODE XREF: P_CHAIN+103j
+		lodsb
+		or	al, al
+		jz	cmdline_end
+		cmp	al, 'a'
+		jb	cmdline_notlow
+		cmp	al, 'z'
+		ja	cmdline_notlow
+		and	al, 5Fh
+
+cmdline_notlow:				; CODE XREF: P_CHAIN+F8j P_CHAIN+FCj
+		stosb
+		inc	ah
+		loop	cmdline_toupper
+
+cmdline_end:				; CODE XREF: P_CHAIN+F4j
+		mov	es:byte ptr .80h, ah	; Command line length
+		pop	es
+
+		call	init_zpage_fcb
+		cmp	byte ptr commandline, 0
+		jz	j_proc_launch
+		call	parse_command
+		cmp	bx, 0FFFFh
+		jz	j_proc_launch
+		push	es
+		mov	es, loaded_cmd
+		mov	di, 5Ch		; Copy parsed FCB
+		mov	si, offset command_fcb
+		mov	cx, 8
+		rep movsw
+		mov	si, offset command_fcb+18h
+		lodsw			; Offset of first password
+		or	ax, ax
+		jz	no_first_passwd
+		sub	ax, 258h	; First	password
+
+no_first_passwd:			; CODE XREF: P_CHAIN+133j
+		mov	di, 51h
+		stosw
+		movsb			; Password length
+		pop	es
+		cmp	bx, 0		; More to come?
+		jz	j_proc_launch
+		inc	bx
+		mov	command_pfcb, bx
+		call	parse_command
+		mov	command_pfcb, offset commandline
+		cmp	bx, 0FFFFh
+		jz	j_proc_launch
+		push	es
+		mov	es, loaded_cmd
+		mov	di, 6Ch		; Second FCB
+		mov	si, offset command_fcb
+		mov	cx, 8
+		rep movsw
+		mov	si, offset command_fcb+18h
+		lodsw
+		or	ax, ax
+		jz	no_second_passw
+		sub	ax, 258h
+
+no_second_passw:			; CODE XREF: P_CHAIN+16Cj
+		mov	di, 54h
+		stosw
+		movsb
+		pop	es
+
+j_proc_launch:				; CODE XREF: P_CHAIN+113j P_CHAIN+11Bj
+					; ...
+		jmp	proc_launch
+
+;
+; Called from 'detach console' and other places.
+;
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+Callback_103:		; CODE XREF: bdos:0245u
+					; DATA XREF: bdos:023Fo
+		call	get_proc_dskdat
+		call	DEV_SETFLAG
+		mov	di, offset command_fcb+1
+		mov	al, ' '
+		mov	cx, 0Bh
+		push	es
+		push	ds
+		pop	es
+
+		rep stosb		; Set command FCB to blank name
+		pop	es
+
+		mov	bx, es
+		cmp	es:proc_fx, 93h	; Called from C_DETACH?
+		jnz	not_detach1
+		mov	cx, 208h	; Create a new process
+		call	bdos_callback	; Move the foreground process into it
+		cmp	bx, 0FFFFh
+		jnz	copy_proc
+		jmp	chain_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+copy_proc:				; CODE XREF: Callback_103+27j
+		push	ds		; Copy foreground process to the new entry
+		push	es
+		pop	ds
+
+		mov	es, bx
+		mov	si, offset proc_incpm
+		mov	di, si
+		mov	cx, 78h
+		rep movsw
+		mov	es:proc_errcode, 0
+		push	ds
+		pop	es
+		pop	ds
+
+		push	bx
+		mov	cx, 610h
+		call	bdos_callback
+		pop	bx
+;
+; BX = segment of process to background
+;
+
+not_detach1:				; CODE XREF: Callback_103+1Cj
+		mov	word ptr command_fcb+21h, bx
+		push	es
+		mov	es, bx
+		mov	es:proc_indisk,	1
+		call	cmd_setprocname	; Blank	process	name
+		pop	es
+		cmp	es:proc_fx, 93h	; Called from C_DETACH?
+		jz	detach2
+		jmp	not_detach2
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+detach2:				; CODE XREF: Callback_103+64j
+		push	es
+		push	ds
+		mov	cl, es:proc_pid
+		mov	dx, word ptr command_fcb+21h
+		mov	di, offset proc_passwd+6; BDOS pointer - 4
+		push	es
+		pop	ds
+
+		mov	si, di
+
+c103_freersxes:				; CODE XREF: Callback_103+B6j
+					; Callback_103+BBj
+		les	bx, 4[si]	; Get RSX address
+		mov	ax, es:4[bx]
+		or	ax, es:6[bx]
+		jz	c103_rsxend	; Reached the BDOS
+		cmp	cl, es:18[bx]	; Owner	PID
+		jz	c103_nextrsx
+		mov	ax, es:4[bx]
+		mov	4[si],	ax	; Remove RSX from chain
+		mov	ax, es:6[bx]
+		mov	6[si],	ax
+		push	ds
+		mov	ds, dx
+
+		mov	ax, bx
+		xchg	ax, 4[di]
+		mov	es:4[bx], ax
+		mov	ax, es
+		xchg	ax, 6[di]
+		mov	es:6[bx], ax
+		mov	di, bx
+		mov	dx, es
+		pop	ds
+		jmps	c103_freersxes
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+c103_nextrsx:				; CODE XREF: Callback_103+8Cj
+		lds	si, 4[si]
+		jmps	c103_freersxes
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+c103_rsxend:				; CODE XREF: Callback_103+86j
+		mov	ds, dx
+		mov	4[di],	bx
+		mov	6[di],	es
+		pop	ds
+		push	ds
+		mov	ds, rlr
+
+		cmp	proc_xxseg, 0
+		jz	havent_xxseg
+		mov	proc_xxseg, 0FFFFh
+
+havent_xxseg:				; CODE XREF: Callback_103+D0j
+		pop	ds
+
+		mov	es, word ptr command_fcb+21h
+		mov	es:proc_incpm, 1
+		mov	es:proc_fx, 0
+		mov	es:proc_indisk,	0
+		mov	es:proc_flags, 1
+		mov	dx, es
+		pop	es
+		push	dx
+		mov	cx, 209h
+		call	bdos_callback
+		mov	es:proc_background, 1
+		call	put_proc_dskdat
+		call	release_DMA
+		xor	bx, bx
+		pop	cx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+not_detach2:				; CODE XREF: Callback_103+66j
+		or	es:proc_flags, 4
+		cmp	es:proc_background, 0
+;
+; Make any temporary memory allocations	permanent?
+;
+		jnz	notemp
+		mov	cx, 306h
+		call	bdos_callback
+		cmp	bx, 0FFFFh
+		jnz	notemp
+
+notemp:					; CODE XREF: Callback_103+11Dj
+		mov	loaded_cmd, bx
+		call	init_zpage_fcb
+
+proc_launch:				; CODE XREF: P_CHAIN+177j
+		mov	ax, cur_drive
+		mov	es:word ptr proc_drive,	ax
+		and	es:proc_flags, 7
+		mov	es:proc_delimiter, 24h
+		mov	es:proc_conmode, 0
+		mov	es:proc_errmode, 0
+		mov	es:proc_multisec, 1
+		mov	es:word ptr proc_dma, 80h
+		mov	ax, loaded_cmd
+		mov	es:word ptr proc_dma+2,	ax
+		xchg	ax, bx		; BX = process data seg
+		cli	
+		push	es
+		pop	ss
+
+		mov	sp, 160h
+		mov	es:proc_incpm, 0
+		sti	
+		push	cs
+		mov	ax, offset terminate
+		push	ax		; Far RET from CMD terminates here
+		mov	dx, ds
+		mov	ds, bx
+
+		mov	ax, 0F200h	; Flags
+		push	ax
+		mov	ax, ds:word ptr .3	; CS
+		push	ax
+		mov	ah, ds:byte ptr .5	; IP = 256 * 8080_flag
+		xor	al, al
+		push	ax
+		mov	ds, dx
+
+		call	default_vectors
+		push	bx
+		call	release_DMA
+		pop	ds
+
+		mov	ax, ds:word ptr .0Fh	; Is there an extra segment?
+		or	ax, ax
+		jnz	es_present
+		mov	ax, ds
+
+es_present:				; CODE XREF: Callback_103+19Bj
+		mov	es, ax
+
+		xor	ax, ax
+		mov	bx, ax
+		mov	cx, ax
+		mov	dx, ax
+		mov	si, ax
+		mov	di, ax
+		mov	bp, ax
+		iret	
+
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+P_LOAD:		; CODE XREF: bdos:0245u
+					; DATA XREF: bdos:023Bo
+		inc	es:proc_indisk
+		push	dx
+		mov	bx, offset pq_loader
+		mov	cx, 204h
+		call	bdos_callback
+		pop	si
+
+		mov	di, offset p_load_fcb
+		mov	cx, 10h
+		push	es
+		push	ds
+		mov	ds, es:userDS
+		pop	es
+		rep movsw
+		push	es
+		pop	ds
+
+		pop	es
+		xor	ax, ax
+
+		mov	word ptr rsx_head, ax
+		mov	word ptr rsx_head+2, ax
+		mov	p_load_fcb+23h,	al
+		call	read_rsx_record
+		jcxz	cmd_gothead
+		jmp	p_load_end
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_gothead:				; CODE XREF: P_LOAD+31j
+		mov	ax, word ptr cmd_header+7Bh; RSX index record
+		mov	rsx_offset, 1
+		test	cmd_header+7Fh,	10h; Flags
+		jz	is_cmd
+		call	load_rsx
+		jcxz	rsx_loaded
+		jmp	p_load_end
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+rsx_loaded:				; CODE XREF: P_LOAD+49j
+		xor	bx, bx
+		jmp	p_load_ok
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+is_cmd:					; CODE XREF: P_LOAD+44j
+		mov	ax, word ptr cmd_header+7Bh
+		test	ax, ax
+		jnz	cmd_has_rsxs
+		jmp	after_rsx_load
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_has_rsxs:				; CODE XREF: P_LOAD+58j
+		mov	si, offset p_load_fcb
+		mov	di, offset p_load_fcb2
+		mov	cx, 12h
+		push	es
+		push	ds
+		pop	es
+
+		rep movsw
+		pop	es
+
+		mov	rsx_offset, ax
+		mov	bx, 1
+		mov	dx, offset rsx_list
+		mov	cx, ds
+		call	cmd_randread	; Read BX records at CX:DX. 
+					; AX = first record to read
+		jcxz	load_rsxes
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+load_rsxes:				; CODE XREF: P_LOAD+7Aj
+		mov	rsx_loadtype, 1	; 1=load static	0=load dynamic
+
+load_rsx_loop:				; CODE XREF: P_LOAD+EFj
+		mov	bx, offset rsx_list
+
+load_rsx_entry:				; CODE XREF: P_LOAD+E9j
+		cmp	word ptr [bx], 0FFFFh
+		jz	rsx_none
+		mov	ax, [bx]	; Offset to RSX
+		cmp	rsx_loadtype, 1	; 1=load static	0=load dynamic
+		jnz	load_dynarsx
+		or	ax, ax
+		jz	next_rsx
+		inc	ax
+		mov	rsx_offset, ax
+		dec	ax
+		push	bx
+		jmps	load_staticrsx
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+load_dynarsx:				; CODE XREF: P_LOAD+93j
+		or	ax, ax
+		jnz	next_rsx
+		push	bx
+		lea	si, 2[bx]
+		mov	di, offset p_load_fcb
+		mov	cx, 4
+		push	es
+		push	ds
+		pop	es
+
+		stosb
+		rep movsw
+		mov	ax, 'SR'
+		stosw
+		mov	al, 'X'
+		stosb
+		xor	ax, ax
+		stosw
+		stosw
+		pop	es
+
+		inc	ax
+		mov	rsx_offset, ax
+		call	rsx_find
+		jcxz	load_rsx_file
+		pop	bx
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+load_rsx_file:				; CODE XREF: P_LOAD+C8j
+		xor	ax, ax
+
+load_staticrsx:				; CODE XREF: P_LOAD+9Fj
+		call	read_rsx_record
+		jcxz	read_rsx_body
+		pop	bx
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+read_rsx_body:				; CODE XREF: P_LOAD+D3j
+		call	load_rsx
+		pop	bx
+		jcxz	next_rsx
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+next_rsx:				; CODE XREF: P_LOAD+97j P_LOAD+A3j
+					; ...
+		add	bx, 10h
+		cmp	bx, offset cmd_mcb_seg
+		jb	load_rsx_entry
+
+rsx_none:				; CODE XREF: P_LOAD+8Aj
+		dec	rsx_loadtype	; 1=load static	0=load dynamic
+		jz	load_rsx_loop
+		mov	di, offset p_load_fcb
+		mov	si, offset p_load_fcb2
+		mov	cx, 12h
+		push	es
+		push	ds
+		pop	es
+
+		rep movsw
+		pop	es
+
+		xor	ax, ax
+		call	read_rsx_record
+		jcxz	after_rsx_load
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+after_rsx_load:				; CODE XREF: P_LOAD+5Aj P_LOAD+105j
+		test	cmd_header+7Fh,	60h; 8087 flags
+		jz	no_8087_needed
+		call	retake_8087
+		or	bx, bx
+		jz	no_8087_needed
+		jmp	p_load_end
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+no_8087_needed:				; CODE XREF: P_LOAD+10Fj P_LOAD+116j
+		mov	rsx_offset, 1
+		call	cmd_alloc_mem
+		jcxz	p_load_ok
+		jmp	loadrsx_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+p_load_ok:				; CODE XREF: P_LOAD+50j P_LOAD+124j
+		push	bx
+		call	hookup_rsxes
+		pop	bx
+
+p_load_end:				; CODE XREF: P_LOAD+33j P_LOAD+4Bj
+					; ...
+		push	cx
+		push	bx
+		mov	bx, offset pq_loader
+		call	release
+		pop	bx
+		pop	cx
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+retake_8087:		; CODE XREF: P_LOAD+111p DEV_WAITFLAG+9p
+		xor	bx, bx
+		test	es:proc_flags, 2; Has taken 8087?
+		jnz	retake_end
+		test	bdos_8087_inuse, 0FFh
+		jnz	taken_already
+		test	cmd_header+7Fh,	20h; Wants 8087?
+		jz	retake_doit
+		test	xios_bh_8087, 0FFh; Is there one?
+		jnz	retake_doit
+
+taken_already:				; CODE XREF: retake_8087+10j
+		mov	cx, 2Eh
+		dec	bx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+retake_doit:				; CODE XREF: retake_8087+17j
+					; retake_8087+1Ej
+		mov	bdos_8087_inuse, 0FFh
+		or	es:proc_flags, 2
+
+retake_end:				; CODE XREF: retake_8087+9j
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+load_rsx:		; CODE XREF: P_LOAD+46p P_LOAD+D9p
+		mov	cx, 2Ah
+		test	cmd_header+7Fh,	10h
+		jz	loadrsx_fail	; Isn't an RSX
+		cmp	word ptr cmd_header+7Bh, 0
+		jnz	loadrsx_fail	; Has RSX index
+		mov	cx, 2Ah
+		test	cmd_header+7Fh,	60h; Uses the 8087
+		jnz	loadrsx_fail
+		call	cmd_alloc_mem
+		or	cx, cx
+		jnz	loadrsx_fail
+		mov	al, es:proc_pid
+		mov	cx, bx
+		push	es
+		mov	es, bx
+		xor	bx, bx
+		mov	bh, es:proc_pid
+		mov	es, es:proc_nextseg+1
+
+		mov	es:16[bx], cx
+		mov	es:18[bx], al
+		mov	ax, cmd_mcb_seg
+		mov	es:20[bx], ax
+		mov	si, offset rsx_head
+		lea	di, 4[bx]
+		movsw
+		movsw
+		mov	word ptr rsx_head, bx
+		mov	word ptr rsx_head+2, es
+		pop	es
+
+		xor	cx, cx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+loadrsx_fail:				; CODE XREF: P_LOAD+7Cj P_LOAD+CBj
+					; ...
+		push	cx
+;
+; Free any RSXes which have been loaded
+;
+
+loadrsx_free:				; CODE XREF: load_rsx+8Fj
+		push	es
+		les	bx, dword ptr rsx_head
+		mov	ax, es
+		or	ax, bx
+		jz	loadrsx_freed
+		mov	ax, es:4[bx]
+		mov	word ptr rsx_head, ax
+		mov	ax, es:6[bx]
+		mov	word ptr rsx_head+2, ax
+		mov	ax, es:20[bx]
+		pop	es
+		mov	bx, offset cmd_mcb_seg
+		mov	[bx], ax
+		mov	word ptr 2[bx], 0
+		mov	byte ptr 4[bx], 0
+		mov	dx, bx
+		mov	cx, 39h
+		call	bdos_callback
+		jmps	loadrsx_free
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+loadrsx_freed:				; CODE XREF: load_rsx+64j
+		pop	es
+		pop	cx
+		mov	bx, 0FFFFh
+		jmp	p_load_end
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+hookup_rsxes:		; CODE XREF: P_LOAD+12Ap
+		push	ds
+		lds	bx, dword ptr rsx_head
+		mov	ax, ds
+		or	ax, bx
+		jz	no_rsxes
+		mov	di, bx
+		mov	si, ds
+		xchg	di, es:proc_bdos_offs
+		xchg	si, es:proc_bdos_seg
+
+hook_rsx_loop:				; CODE XREF: hookup_rsxes+24j
+		mov	ax, 4[bx]
+		or	ax, 6[bx]
+		jz	hook_rsx_last
+		lds	bx, 4[bx]
+		jmps	hook_rsx_loop
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+hook_rsx_last:				; CODE XREF: hookup_rsxes+1Fj
+		mov	4[bx],	di
+		mov	6[bx],	si
+
+no_rsxes:				; CODE XREF: hookup_rsxes+9j
+		pop	ds
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+cmd_alloc_mem:		; CODE XREF: P_LOAD+121p load_rsx+1Bp
+		xor	ax, ax
+		mov	cx, 36h
+		mov	di, offset cmd_mcb_seg
+		push	es
+		push	ds
+		pop	es
+
+		rep stosw
+		pop	es
+
+		mov	cmd_cur_pos, ax
+		mov	cmd_grps_sofar,	ax
+		mov	cmd_ngroups, al
+		mov	cmd_is_8080, al
+		mov	si, offset cmd_load_info
+		mov	bx, offset cmd_header
+		mov	al, 7Fh[bx]
+		mov	cmd_flags, al
+		mov	ax, 7Dh[bx]
+		mov	cmd_fixups0, ax
+		mov	cmd_fixups1, ax
+		mov	dx, rsx_offset
+		mov	cl, 3
+		shl	dx, cl
+		mov	cx, 8
+
+cmd_group:				; CODE XREF: cmd_alloc_mem+C6j
+		cmp	byte ptr [bx], 0
+		jnz	cmd_handle_grp
+		jmp	skip_group
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_handle_grp:				; CODE XREF: cmd_alloc_mem+3Dj
+		mov	al, [bx]
+		cmp	al, 9		; Map 9	(shared	code) to 1 (code)
+		jnz	cmd_notscode
+		mov	al, 1
+		mov	[bx], al
+
+cmd_notscode:				; CODE XREF: cmd_alloc_mem+46j
+		mov	5[si],	al	; Group	type
+		mov	ax, 1[bx]	; Group	size
+		mov	10[si], ax
+		mov	8[si],	dx
+		add	dx, ax
+		mov	ax, 3[bx]	; Base address
+		mov	[si], ax
+		mov	ax, 5[bx]	; Min size
+		mov	6[si],	ax
+		cmp	word ptr 7[bx], 0
+		jz	cmd_nomaxsize
+		mov	ax, 7[bx]	; Max size
+
+cmd_nomaxsize:				; CODE XREF: cmd_alloc_mem+69j
+		mov	2[si],	ax
+		cmp	word ptr [si], 0
+		jnz	cmd_group_fixed
+		add	cmd_mcb_len, ax
+		jnb	mcb_len_overflo
+		mov	cmd_mcb_len, 0FFFFh
+
+mcb_len_overflo:			; CODE XREF: cmd_alloc_mem+7Aj
+		mov	ax, 6[si]
+		add	cmd_min_memory,	ax
+		jnb	min_len_overflo
+		mov	cmd_min_memory,	0FFFFh
+
+min_len_overflo:			; CODE XREF: cmd_alloc_mem+89j
+		inc	cmd_ngroups
+		jmps	cmd_group_next
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_group_fixed:			; CODE XREF: cmd_alloc_mem+74j
+		test	cmd_flags, 10h	; Is an	RSX
+		jz	cgf_not_rsx
+		mov	cx, 42
+		jmp	cmd_alloc_abort
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cgf_not_rsx:				; CODE XREF: cmd_alloc_mem+9Cj
+		push	bx
+		push	dx
+		push	cx
+		push	si
+		mov	dx, si		; MC_ABSMAX
+		mov	cx, 36h
+		call	bdos_callback
+		pop	si
+		or	bl, bl
+		jnz	fixalloc_fail
+		mov	byte ptr 4[si], 0FFh; Allocated fixed block
+
+G09E6:					; DATA XREF: dseg:0044o
+		mov	ax, 2[si]
+		cmp	6[si],	ax
+		jbe	got_enough_mem
+
+fixalloc_fail:				; CODE XREF: cmd_alloc_mem+B3j
+		pop	dx
+		pop	dx
+		pop	bx
+		jmps	cmd_alloc_abort
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+j_cmd_group:				; CODE XREF: cmd_alloc_mem+D6j
+		jmp	cmd_group
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+got_enough_mem:				; CODE XREF: cmd_alloc_mem+BFj
+		pop	cx
+		pop	dx
+		pop	bx
+
+cmd_group_next:				; CODE XREF: cmd_alloc_mem+95j
+		add	si, 0Ch
+		inc	cmd_grps_sofar
+
+skip_group:				; CODE XREF: cmd_alloc_mem+3Fj
+		add	bx, 9
+		loop	j_cmd_group
+		cmp	cmd_min_memory,	cx
+		jnz	cmd_notmin_1
+		jmp	cmd_load_image
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_notmin_1:				; CODE XREF: cmd_alloc_mem+DCj
+		test	cmd_flags, 10h
+		jz	cmd_notmin_2
+		mov	cmd_mcb_extra, 2
+
+cmd_notmin_2:				; CODE XREF: cmd_alloc_mem+E6j
+		mov	dx, offset cmd_mcb_seg
+		mov	cx, 35h
+		call	bdos_callback
+		or	bl, bl
+		jnz	cmd_alloc_abort
+		mov	cmd_mcb_extra, 0FFh
+		mov	ax, cmd_mcb_len
+		cmp	cmd_min_memory,	ax
+		jbe	cmd_notmin_3
+
+cmd_alloc_abort:			; CODE XREF: cmd_alloc_mem+A1j
+					; cmd_alloc_mem+C4j ...
+		push	cx
+		mov	bx, offset cmd_mcb_seg
+		mov	cx, cmd_grps_sofar
+		inc	cx
+
+cmd_grps_free:				; CODE XREF: cmd_alloc_mem+12Aj
+		cmp	byte ptr 4[bx], 0FFh
+		jnz	cmd_grp_nofree
+		mov	byte ptr 4[bx], 0
+		push	cx
+		push	bx
+		mov	dx, bx
+		mov	cx, 39h		; M_FREE
+		call	bdos_callback
+		pop	bx
+		pop	cx
+
+cmd_grp_nofree:				; CODE XREF: cmd_alloc_mem+115j
+		add	bx, 0Ch
+		loop	cmd_grps_free
+		mov	bx, 0FFFFh
+		pop	cx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_notmin_3:				; CODE XREF: cmd_alloc_mem+106j
+		mov	ax, cmd_mcb_len
+		mov	cmd_min_memory,	ax
+		mov	bx, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+		push	cmd_mcb_seg
+
+cmd_notmin_4:				; CODE XREF: cmd_alloc_mem+164j
+		cmp	word ptr [bx], 0
+		jnz	cmd_notmin_5
+		mov	ax, 6[bx]
+		sub	cmd_min_memory,	ax
+		cmp	ax, 2[bx]
+		jnz	cmd_notmin_5
+		mov	dx, cmd_mcb_seg
+		mov	[bx], dx
+		add	cmd_mcb_seg, ax
+		dec	cmd_ngroups
+
+cmd_notmin_5:				; CODE XREF: cmd_alloc_mem+145j
+					; cmd_alloc_mem+151j
+		add	bx, 0Ch
+		loop	cmd_notmin_4
+		mov	bx, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+cmd_notmin_6:				; CODE XREF: cmd_alloc_mem+1B0j
+		cmp	word ptr [bx], 0
+		jnz	cmd_notmin_10
+		mov	ax, cmd_mcb_seg
+		mov	[bx], ax
+		mov	ax, cmd_min_memory
+		or	ax, ax
+		jz	cmd_notmin_9
+		push	cx
+		xor	cx, cx
+		mov	dx, cx
+		mov	cl, cmd_ngroups
+		div	cx
+		pop	cx
+		or	dx, dx
+		jz	cmd_notmin_7
+		inc	ax
+
+cmd_notmin_7:				; CODE XREF: cmd_alloc_mem+18Cj
+		mov	dx, 2[bx]
+		sub	dx, 6[bx]
+		cmp	ax, dx
+		jbe	cmd_notmin_8
+		mov	ax, dx
+
+cmd_notmin_8:				; CODE XREF: cmd_alloc_mem+197j
+		add	6[bx],	ax
+		sub	cmd_min_memory,	ax
+
+cmd_notmin_9:				; CODE XREF: cmd_alloc_mem+17Cj
+		mov	ax, 6[bx]
+		add	cmd_mcb_seg, ax
+		dec	cmd_ngroups
+
+cmd_notmin_10:				; CODE XREF: cmd_alloc_mem+170j
+		add	bx, 0Ch
+		loop	cmd_notmin_6
+		pop	cmd_mcb_seg
+
+cmd_load_image:				; CODE XREF: cmd_alloc_mem+DEj
+		mov	si, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+cmd_loadgroup:				; CODE XREF: cmd_alloc_mem+1D9j
+		push	cx
+		cmp	word ptr 10[si], 0
+		jz	cmd_nextgroup
+		push	word ptr [si]
+		push	si
+		call	group_load
+		pop	si
+		pop	word ptr [si]
+		or	cx, cx
+		jz	cmd_nextgroup
+		pop	bx
+		jmp	cmd_alloc_abort
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_nextgroup:				; CODE XREF: cmd_alloc_mem+1C2j
+					; cmd_alloc_mem+1CFj
+		pop	cx
+		add	si, 0Ch
+		loop	cmd_loadgroup
+		test	cmd_flags, 80h
+		jz	cmd_nofixups
+
+cmd_do_fixups:				; CODE XREF: cmd_alloc_mem+22Aj
+		mov	ax, cmd_fixups0
+		call	read_rsx_record
+		jcxz	cmd_fixups_load
+		inc	cl
+		jnz	find_group_none
+		mov	ax, cmd_fixups1
+		cmp	ax, cmd_fixups0
+		jz	find_group_none
+		jmps	cmd_nofixups
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_fixups_load:			; CODE XREF: cmd_alloc_mem+1E8j
+		mov	si, offset cmd_header
+
+cmd_fixups_loop:			; CODE XREF: cmd_alloc_mem+224j
+		lodsb
+		test	al, al
+		jz	cmd_nofixups
+		push	ax
+		and	al, 0Fh
+		call	find_cmd_group
+		mov	dx, [di]
+		pop	ax
+		mov	cl, 4
+		shr	al, cl
+		call	find_cmd_group
+		lodsw
+		add	ax, [di]
+		push	es
+		mov	es, ax
+		xor	ax, ax
+		lodsb
+		mov	di, ax
+		add	es:[di], dx
+		pop	es
+		cmp	si, offset rsx_head
+		jnz	cmd_fixups_loop
+		inc	cmd_fixups0
+		jmps	cmd_do_fixups
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+find_cmd_group:		; CODE XREF: cmd_alloc_mem+204p
+					; cmd_alloc_mem+20Ep
+		mov	di, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+find_group_lp:				; CODE XREF: find_cmd_group+Fj
+		cmp	al, 5[di]
+		jz	find_group_foun
+		add	di, 0Ch
+		loop	find_group_lp
+		pop	ax
+		jmps	find_group_none
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+find_group_foun:			; CODE XREF: find_cmd_group+Aj
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+find_group_none:			; CODE XREF: cmd_alloc_mem+1ECj
+					; cmd_alloc_mem+1F5j
+					; ...
+		mov	cx, 41
+		jmp	cmd_alloc_abort
+
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_nofixups:				; CODE XREF: cmd_alloc_mem+1E0j
+					; cmd_alloc_mem+1F7j
+					; ...
+		mov	si, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+cmd_find_dseg:				; CODE XREF: bdos:0B84j
+		cmp	byte ptr 5[si], 2
+		jz	cmd_have_dseg
+		add	si, 0Ch
+		loop	cmd_find_dseg
+		mov	si, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+cmd_find_cseg:				; CODE XREF: bdos:0B96j
+		cmp	byte ptr 5[si], 1
+		jz	cmd_have_cseg
+		add	si, 0Ch
+		loop	cmd_find_cseg
+		mov	cx, 33		; No code or data segment found
+		jmp	cmd_alloc_abort
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_have_cseg:				; CODE XREF: bdos:0B91j
+		mov	cmd_is_8080, 1
+
+cmd_have_dseg:				; CODE XREF: bdos:0B7Fj
+		push	es
+		mov	es, [si]
+		mov	cmd_zeropage, es
+		xor	ax, ax
+		mov	di, ax
+		mov	cx, 2Dh
+		rep stosw
+		mov	al, cmd_is_8080
+		mov	es:proc_pid, al
+		mov	si, offset cmd_load_info
+		mov	cx, cmd_grps_sofar
+
+cmd_mk_zeropage:			; CODE XREF: bdos:0BFBj
+		cmp	byte ptr 5[si], 0
+		jz	cmd_mkz_skipgrp
+		mov	ax, 6
+		mov	bl, 5[si]
+		dec	bl
+		mul	bl
+		xchg	ax, bx
+		push	cx
+		mov	ax, 6[si]
+		or	ax, ax
+		jz	cmd_mkz_skip1
+		mov	dl, ah
+		xor	dh, dh
+		mov	cl, 4
+		shl	ax, cl
+		shl	dx, cl
+		sub	ax, 1
+		sbb	dh, 0
+		mov	es:[bx], ax
+		mov	es:2[bx], dh
+
+cmd_mkz_skip1:				; CODE XREF: bdos:0BD8j
+		pop	cx
+		mov	ax, [si]
+		mov	es:3[bx], ax
+
+cmd_mkz_skipgrp:			; CODE XREF: bdos:0BC5j
+		add	si, 0Ch
+		loop	cmd_mk_zeropage
+		cmp	cmd_is_8080, 1
+		jnz	cmd_mkz_not8080
+		xor	si, si		; Copy CS descriptor to	DS
+		mov	di, 6
+		push	ds
+		push	es
+		pop	ds
+
+		movsw
+		movsw
+		movsw
+		pop	ds
+
+
+cmd_mkz_not8080:			; CODE XREF: bdos:0C02j
+		mov	al, p_load_fcb
+		mov	es:byte ptr proc_countdown, al
+		pop	es
+		mov	bx, cmd_zeropage
+		retn	
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+group_load:		; CODE XREF: cmd_alloc_mem+1C7p
+					; group_load+7Dj
+		mov	bx, si
+		mov	ax, cmd_cur_pos
+		mov	cx, 8[bx]
+		cmp	cx, ax
+		jb	gload_gothead
+		sub	cx, ax
+		cmp	cx, 8
+		jnb	gload_gothead
+		mov	dx, 8
+		sub	dx, cx
+		cmp	dx, 10[bx]
+		jbe	gload_from_buf
+		mov	dx, 10[bx]
+;
+; Copy up to the next 128-byte boundary
+;
+
+gload_from_buf:				; CODE XREF: group_load+1Bj
+		mov	si, offset cmd_header
+		mov	ax, cx
+		mov	cl, 4
+		shl	ax, cl
+		add	si, ax
+		mov	ax, dx
+		mov	cl, 3
+		shl	ax, cl
+		mov	cx, ax
+		xor	di, di
+		push	es
+		mov	es, [bx]
+		rep movsw
+		pop	es
+		add	[bx], dx
+		sub	10[bx], dx
+		add	8[bx],	dx
+
+gload_gothead:				; CODE XREF: group_load+Aj
+					; group_load+11j ...
+		cmp	word ptr 10[bx], 0
+		jnz	gload_ckbody
+		xor	cx, cx
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+gload_ckbody:				; CODE XREF: group_load+47j
+		test	word ptr 8[bx], 7
+		jnz	gload_readbody
+		cmp	word ptr 10[bx], 8
+		jnb	gload_nobody
+;
+; Read the bit composed	of 128-byte records
+;
+
+gload_readbody:				; CODE XREF: group_load+51j
+		push	bx
+		mov	ax, 8[bx]
+		shr	ax, 1
+		shr	ax, 1
+		shr	ax, 1
+		call	read_rsx_record
+		pop	bx
+		jcxz	gload_nextrec
+		cmp	cx, 0FFh
+		jnz	gload_fail
+		xor	cx, cx
+
+gload_fail:				; CODE XREF: group_load+6Dj
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+gload_nextrec:				; CODE XREF: group_load+67j
+		mov	ax, 8[bx]
+		and	ax, 0FFF8h
+		mov	cmd_cur_pos, ax
+		mov	si, bx
+		jmp	group_load
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+gload_nobody:				; CODE XREF: group_load+57j
+		push	bx
+		sub	dx, dx
+		mov	cx, [bx]
+		mov	ax, 8[bx]
+		shr	ax, 1
+		shr	ax, 1
+		shr	ax, 1
+		mov	bx, 10[bx]
+		shr	bx, 1
+		shr	bx, 1
+		shr	bx, 1
+		push	bx
+		call	cmd_randread	; Read BX records at CX:DX. 
+					; AX = first record to read
+		pop	ax
+		pop	bx
+		jcxz	gload_nextbody
+		cmp	cx, 0FFh
+		jnz	gload_done
+		xor	cx, cx
+
+gload_done:				; CODE XREF: group_load+A3j
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+gload_nextbody:				; CODE XREF: group_load+9Dj
+		shl	ax, 1
+		shl	ax, 1
+		shl	ax, 1
+		add	[bx], ax
+		add	8[bx],	ax
+		sub	10[bx], ax
+		jmp	gload_gothead
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+read_rsx_record:		; CODE XREF: P_LOAD+2Ep P_LOAD+D0p
+					; ...
+		mov	bx, 1
+		mov	dx, offset cmd_header
+		mov	cx, ds
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+; Read BX records at CX:DX. 
+; AX = first record to read
+
+cmd_randread:		; CODE XREF: P_LOAD+77p group_load+98p
+		mov	es:word ptr proc_dma, dx
+		mov	es:word ptr proc_dma+2,	cx
+
+cmd_randread_0:				; CODE XREF: cmd_randread+61j
+		push	bx
+		push	ax
+		cmp	bx, 80h
+		jbe	cmd_randread_1
+		mov	bx, 80h
+
+cmd_randread_1:				; CODE XREF: cmd_randread+10j
+		mov	cl, es:proc_multisec
+		push	cx
+		mov	es:proc_multisec, bl
+		push	bx
+		mov	word ptr p_load_fcb+21h, ax
+		mov	cx, 21h
+		mov	dx, offset p_load_fcb
+		call	bdos_callback
+		pop	dx
+		pop	cx
+		mov	es:proc_multisec, cl
+		cmp	bl, 1
+		jbe	cmd_randread_in
+		mov	cx, 1Dh
+		mov	bx, 0FFFFh
+		pop	ax
+		pop	ax
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_randread_in:			; CODE XREF: cmd_randread+37j
+		mov	cl, bl
+		pop	ax
+		add	ax, dx
+		pop	bx
+		sub	bx, dx
+		shl	dx, 1
+		shl	dx, 1
+		shl	dx, 1
+		add	es:word ptr proc_dma+2,	dx
+		cmp	cl, 0
+		jz	cmd_randread_nx
+		mov	cx, 0FFh
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+cmd_randread_nx:			; CODE XREF: cmd_randread+58j
+		cmp	bx, 0
+		jnz	cmd_randread_0
+		xor	cx, cx
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+DEV_WAITFLAG:		; CODE XREF: bdos:0245u
+					; DATA XREF: bdos:0241o
+		mov	bx, offset pq_loader
+		mov	cx, 204h
+		call	bdos_callback
+		call	retake_8087	; Retake the 8087 (did we lose it?)
+		jmp	p_load_end
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+DEV_SETFLAG:		; CODE XREF: bdos:0245u Callback_103+3p
+					; DATA XREF: ...
+		mov	cx, 41Ah	; Flush	redirected I/O
+		call	bdos_callback
+		cmp	es:proc_background, 0
+		jnz	ds_nodos
+		cmp	word ptr lp_dos_module+2, 0
+		jz	ds_nodos
+		mov	cl, 0		; Init DOS emulator
+		callf	dword ptr lp_dos_module
+
+ds_nodos:				; CODE XREF: DEV_SETFLAG+Cj
+					; DEV_SETFLAG+13j
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+F_PARSE:		; CODE XREF: bdos:0245u
+					; DATA XREF: bdos:023Do
+		mov	ax, es:userDS
+		push	ds
+		mov	ds, ax
+		push	es
+		mov	es, ax
+		mov	bx, dx
+		mov	si, [bx]
+		mov	bx, 2[bx]
+		call	init_fcb
+		call	skip_spaces
+		mov	bp, 18h
+		call	check_charset
+		jnz	f_parse_1
+		jmp	f_parse_fail
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+f_parse_1:				; CODE XREF: F_PARSE+1Dj
+		mov	ch, al
+		inc	si
+		mov	al, [si]
+		cmp	al, ':'
+		jnz	no_drive
+		mov	bp, 17h
+		mov	al, ch
+		sub	al, 'A'
+		jb	bad_charset
+		cmp	al, 10h
+		jge	bad_charset
+		inc	al
+		mov	[bx], al
+		mov	bp, 18h
+		inc	si
+		call	check_charset
+		jnz	drive_done
+		cmp	al, '.'
+		jz	bad_charset
+		cmp	al, ':'
+		jz	bad_charset
+		cmp	al, ';'
+		jz	bad_charset
+		jmp	drive_done
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+no_drive:				; CODE XREF: F_PARSE+29j
+		dec	si
+
+drive_done:				; CODE XREF: F_PARSE+43j F_PARSE+51j
+		mov	di, bx
+		lea	bx, 1[di]
+		mov	ch, 8
+		call	parse_namepart
+		cmp	ch, 0
+		jnz	name_done
+		call	check_charset
+		jz	name_done
+
+bad_charset:				; CODE XREF: F_PARSE+32j F_PARSE+36j
+					; ...
+		mov	cx, bp
+		mov	bx, 0FFFFh
+		pop	es
+		pop	ds
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+name_done:				; CODE XREF: F_PARSE+62j F_PARSE+67j
+		cmp	al, '.'
+		jnz	type_done
+		mov	bp, 19h
+		mov	ch, 3
+		lea	bx, 9[di]
+		inc	si
+		call	parse_namepart
+		cmp	ch, 0
+		jnz	type_done
+		call	check_charset
+		jz	type_done
+		jmp	bad_charset
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+type_done:				; CODE XREF: F_PARSE+73j F_PARSE+84j
+					; ...
+		cmp	al, ';'
+		jnz	passwd_done
+		mov	bp, 26h
+		mov	ch, 8
+		lea	bx, 16[di]
+		inc	si
+		mov	24[di], si
+		call	parse_namepart
+		mov	cl, 8
+		sub	cl, ch
+		mov	26[di], cl
+		cmp	cl, 0
+		jnz	f_parse_2
+		mov	word ptr 24[di], 0
+
+f_parse_2:				; CODE XREF: F_PARSE+ABj
+		cmp	ch, 0
+		jnz	passwd_done
+		call	check_charset
+		jz	passwd_done
+		jmp	bad_charset
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+passwd_done:				; CODE XREF: F_PARSE+90j F_PARSE+B5j
+					; ...
+		mov	bx, si
+		call	skip_spaces
+		call	check_charset
+		jnz	f_parse_ok
+		mov	bx, si
+		cmp	al, 0
+		jz	f_parse_fail
+		cmp	al, 0Dh
+		jnz	f_parse_ok
+
+f_parse_fail:				; CODE XREF: F_PARSE+1Fj F_PARSE+CDj
+		mov	bx, 0
+
+f_parse_ok:				; CODE XREF: F_PARSE+C7j F_PARSE+D1j
+		sub	cx, cx
+		pop	es
+		pop	ds
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+parse_namepart:		; CODE XREF: F_PARSE+5Cp F_PARSE+7Ep
+					; ...
+		pop	dx
+		call	check_charset
+		push	dx
+		jz	parse_np_ret
+		cmp	al, '*'
+		jnz	parse_onechar
+		mov	byte ptr [bx], '?'
+		inc	bx
+		dec	ch
+		jnz	parse_namepart
+		jmp	parse_expanded
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+parse_onechar:				; CODE XREF: parse_namepart+9j
+		mov	[bx], al
+		inc	bx
+		dec	ch
+
+parse_expanded:				; CODE XREF: parse_namepart+13j
+		inc	si
+		cmp	ch, 0
+		jnz	parse_namepart
+
+parse_np_ret:				; CODE XREF: parse_namepart+5j
+		retn	
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+check_charset:		; CODE XREF: F_PARSE+1Ap F_PARSE+40p
+					; ...
+		mov	cl, 0Fh
+		mov	al, [si]
+		push	di
+		mov	di, offset terminators
+
+check_term:				; CODE XREF: check_charset+15j
+		cmp	cl, 0
+		jz	ckcset_1
+		cmp	cs:[di], al
+		jz	ckcset_4
+		dec	cl
+		inc	di
+		jmps	check_term
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+ckcset_1:				; CODE XREF: check_charset+Bj
+		cmp	al, ' '
+		ja	ckcset_2
+		pop	di
+		pop	bx
+		mov	cx, 18h
+		jmp	bad_charset
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+ckcset_2:				; CODE XREF: check_charset+19j
+		cmp	al, 'a'
+		jb	ckcset_4
+		cmp	al, 'z'
+		ja	ckcset_3
+		and	al, 5Fh
+
+ckcset_3:				; CODE XREF: check_charset+29j
+		and	al, 7Fh
+
+ckcset_4:				; CODE XREF: check_charset+10j
+					; check_charset+25j
+		pop	di
+		retn	
+
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+terminators	db 0, 9, 0Dh		; DATA XREF: check_charset+5o
+		db ' ', '!', ',', '.', '/', ':', ';', '<', '=', '>', '[', ']'
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+skip_spaces:		; CODE XREF: F_PARSE+14p F_PARSE+C1p
+					; ...
+		cmp	byte ptr [si], ' '
+		jz	sksp_1
+		cmp	byte ptr [si], 9
+		jz	sksp_1
+		retn	
+;컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴컴
+
+sksp_1:					; CODE XREF: skip_spaces+3j
+					; skip_spaces+8j
+		inc	si
+		jmps	skip_spaces
+
+
+;栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢栢
+
+;		S u b r	o u t i	n e
+
+init_fcb:		; CODE XREF: F_PARSE+11p
+		mov	di, bx
+		xor	al, al
+		stosb
+		mov	al, ' '
+		mov	cx, 0Bh
+		rep stosb
+		xor	ax, ax
+		mov	cl, 2
+		rep stosw
+		mov	al, ' '
+		mov	cl, 8
+		rep stosb
+		xor	al, al
+		mov	cl, 3
+		rep stosb
+		retn	
+
+		dseg
+cmd_findflag	db 0			; DATA XREF: rsx_find+3w rsx_find+2Ar
+					; ...
+cur_dma		dw 0,0			; DATA XREF: get_proc_dskdat+20w
+					; put_proc_dskdat+Er
+					; ...
+commandline	dw 0			; DATA XREF: command_gettail+5o
+					; command_gettail+Eo
+					; ...
+		rb 7Fh
+command_fcb	rb 23h			; DATA XREF: chain_find+12o
+					; call_p_load+1Co ...
+loaded_cmd	dw 0			; DATA XREF: call_p_load+46w
+					; init_zpage_fcb+1r ...
+cur_drive	dw 0			; DATA XREF: get_proc_dskdat+12w
+					; put_proc_dskdatr ...
+cur_errmode	db 0			; DATA XREF: get_proc_dskdat+19w
+					; put_proc_dskdat+7r
+
+command_pfcb	dw offset commandline	; DATA XREF: parse_commando
+					; P_CHAIN+144w	...
+		dw offset command_fcb
+loading_dos	db 0			; DATA XREF: P_CHAIN+2Fw P_CHAIN+42w
+					; ...
+		rb 3
+cmd_zeropage	dw 0			; DATA XREF: bdos:0BA6w bdos:0C18r
+cmd_grps_sofar	dw 0			; DATA XREF: cmd_alloc_mem+11w
+					; cmd_alloc_mem+CFw ...
+p_load_fcb	rb 24h			; DATA XREF: rsx_findo	P_LOAD+10o
+					; ...
+cmd_cur_pos	dw 0			; DATA XREF: cmd_alloc_mem+Ew
+					; group_load+2r ...
+					; CMD file: Current position in	paras?
+cmd_ngroups	db 0			; DATA XREF: cmd_alloc_mem+14w
+					; cmd_alloc_mem+91w ...
+		db 0
+cmd_is_8080	db 0			; DATA XREF: cmd_alloc_mem+17w
+					; bdos:0B9Ew ...
+cmd_flags	db 0			; DATA XREF: cmd_alloc_mem+23w
+					; cmd_alloc_mem+97r ...
+cmd_fixups0	dw 0			; DATA XREF: cmd_alloc_mem+29w
+					; cmd_alloc_mem+1E2r
+					; ...
+cmd_fixups1	dw 0			; DATA XREF: cmd_alloc_mem+2Cw
+					; cmd_alloc_mem+1EEr
+p_load_fcb2	rb 24h 			; DATA XREF: P_LOAD+60o P_LOAD+F4o
+cmd_header	rb 80h				; DATA XREF: cmd_alloc_mem+1Do
+					; cmd_alloc_mem+1F9o
+					; ...
+rsx_head	dw 0,0			; DATA XREF: P_LOAD+25w load_rsx+46o
+					; ...
+rsx_offset	dw 0			; DATA XREF: P_LOAD+39w P_LOAD+6Cw
+					; ...
+rsx_loadtype	db 0			; DATA XREF: P_LOAD+7Fw P_LOAD+8Er
+					; ...
+					; 1=load static	0=load dynamic
+rsx_list	rb 80h			; DATA XREF: P_LOAD+72o P_LOAD+84o
+cmd_mcb_seg	dw 0			; DATA XREF: P_LOAD+E5o load_rsx+3Fr
+					; ...
+cmd_mcb_len	dw 0			; DATA XREF: cmd_alloc_mem+76w
+					; cmd_alloc_mem+7Cw ...
+cmd_mcb_extra	db 0			; DATA XREF: cmd_alloc_mem+E8w
+					; cmd_alloc_mem+FAw
+		db 0
+cmd_min_memory	dw 0			; DATA XREF: cmd_alloc_mem+85w
+					; cmd_alloc_mem+8Bw ...
+		dw 0,0
+cmd_load_info	rb 61h			; DATA XREF: cmd_alloc_mem+1Ao
+					; cmd_alloc_mem+137o
+					; ...
+
+		end
+

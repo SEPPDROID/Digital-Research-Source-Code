@@ -1,0 +1,78 @@
+$ title ('Attach Console MP/M-86 2.0')
+$ compact
+
+attach:
+do;
+
+/* Attach the console assigned to this program by the CLI
+   to the process specified in the command line.  Make sure
+   the specified process has the same console number in its PD. */
+
+$include(copyrt.lit)
+
+$include (vaxcmd.lit)
+ 
+$include (comlit.lit)
+$include (proces.lit)
+
+dcl fcb (36) byte external;         /* use upper case for PD name */
+
+dcl cpm$terminate      lit '0',
+    mpm$print$con$buf  lit '9',
+    mpm$version        lit '12',
+    mpm$terminate      lit '143',
+    mpm$conassign      lit '149',
+    mpm$get$con        lit '153',
+    mpm$getpdadr       lit '156';
+
+mon1: procedure(f,a) external;
+  dcl f byte, a address;
+end mon1;
+
+mon2: procedure(f,a) byte external;
+  dcl f byte, a address;
+end mon2;
+
+mon3: procedure(f,a) address external;
+  dcl f byte, a address;
+end mon3;
+
+mon4: procedure(f,a) pointer external;
+  dcl f byte, a address;
+end mon4;
+
+dcl acb structure(
+    cns byte,
+    match byte,
+    pd address,
+    name (8) byte);
+
+dcl pd$pointer pointer;
+dcl pd based pd$pointer pd$structure;
+dcl mpm$86 lit '1130H';
+  
+plmstart: procedure public;
+  dcl ret address;
+
+  if mon3(mpm$version,0) <> mpm$86 then
+  do;
+     call mon1(mpm$print$con$buf,.(cr,lf,'Requires MP/M-86 $'));
+     call mon1(cpm$terminate,0);
+  end;
+
+  acb.cns = mon2(mpm$get$con,0);      /* get console number this program is */
+  acb.match = 0ffh;                  /* running at                         */
+  acb.pd = 0;
+  call move(8,.fcb(1),.acb.name);
+
+  if (ret := mon3(mpm$conassign, .acb)) = 20 then
+    call mon1(mpm$print$con$buf,.(cr,lf,'Can''t Find PD $'));
+  else if ret <> 0 then
+    call mon1(mpm$print$con$buf,.(cr,lf,'Attach Failed $'));
+
+  call mon1(mpm$terminate,0);
+
+end plmstart;
+
+end attach;
+

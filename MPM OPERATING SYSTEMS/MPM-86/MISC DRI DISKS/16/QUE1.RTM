@@ -1,0 +1,238 @@
+
+;*****************************************************
+;*
+;*	Queue Routines
+;*
+;*****************************************************
+
+;===========		=======================
+makeq_entry:		; Create a System Queue
+;===========		=======================
+;	input : DX = address of QD in u_wrkseg
+;		u_wrkseg = segment of QD
+;	output: BX = 0 if okay , 0ffffh if error
+;		CX = Error Code
+
+	call getqdaddr ! mov di,dx	;DI->QD addr
+	cmp cx,0 ! je qm_chk
+	    mov bx,0ffffh ! ret
+		;Make sure this queue doesn't already exist
+qm_chk:	pushf ! cli
+	push es ! mov es,sysdat
+	mov si,(offset qlr)-q_link
+qm_nxt:	mov si,q_link[si]
+	cmp si,0 ! je qm_go
+	    push di ! push si ! mov cx,qnamsiz/2
+	    add di,q_name ! add si,q_name
+	    repe cmpsw
+	    pop si ! pop di ! jne qm_nxt
+			;Names match
+		mov bx,0ffffh ! mov cx,e_q_inuse
+		pop es ! popf ! ret
+qm_go:	pop es
+		;We have a QD initialize it
+	mov dx,0 ! mov q_dq[di],dx
+	mov q_nq[di],dx ! mov q_msgcnt[di],dx
+	mov q_msgout[di],dx
+		;put it on QLR
+	mov ax,qlr ! mov q_link[di],ax
+	mov qlr,di ! sub bx,bx
+	mov cx,bx ! popf ! ret
+
+;===========		======================
+openq_entry:		; Find an active Queue
+;===========		======================
+;	input:	DX = address of QPB
+;		     segment is u_wrkseg
+;	output:	Fills QPB with appropriate info
+;		BX = 0 if okay, 0ffffh if not
+;		CX = Error Code
+
+	pushf ! cli
+	push es ! mov es,u_wrkseg
+	mov si,(offset qlr)-q_link ! mov di,dx
+qo_nqd:	mov si,q_link[si]
+	cmp si,0 ! je qo_noq
+	    push di ! push si ! mov cx,qnamsiz/2
+	    add si,q_name ! add di,qpb_name
+	    repe cmpsw
+	    pop si ! pop di ! jne qo_nqd
+			;Names match
+		mov es:qpb_qaddr[di],si
+		sub bx,bx ! mov cx,bx
+		pop es ! popf ! ret
+qo_noq:			;No name matches
+	mov cx,e_no_queue ! mov bx,0ffffh
+	pop es ! popf ! ret
+
+;=============		=======================
+deleteq_entry:		; Delete a System Queue
+;=============		=======================
+; Takes a qd off the qlr and places it in the qul.
+;	input:	DX = offset of QPB
+;			in u_wrkseg
+;	output:	BX = 0 if ok, 0ffffh if bad
+;		CX = Error Code
+
+	pushf ! cli
+	push es ! mov es,u_wrkseg
+	mov di,dx ! add di,qpb_qaddr
+	mov di,es:[di]
+	mov ax,q_dq[di] ! mov dx,q_nq[di]
+	add dx,ax ! jnz qd_use
+	    mov bx,(offset qlr)-q_link
+qd_nqd:	    mov si,q_link[bx]
+	    cmp si,0 ! jz qd_noq
+		cmp si,di ! jne qd_neq
+		    mov ax,q_link[si]!mov q_link[bx],ax
+		    call remqd
+		    mov bx,0 ! mov cx,bx
+		    pop es ! jmps qd_e
+qd_neq:		mov bx,si ! jmps qd_nqd
+qd_noq:	    mov cx,e_q_notactive ! jmps qd_be
+qd_use:	pop ax ! mov cx,e_q_inuse
+qd_be:	mov bx,0ffffh
+qd_e:	popf ! ret
+
+;===========		============
+readq_entry:		; Read Queue
+;===========		============
+	mov ax,0 ! jmps readq
+
+;============
+creadq_entry:		; Conditional Read Queue
+;============
+	mov ax,0ffffh
+	; jmps readq
+
+readq:		; Read message from queue
+;-----		-------------------------
+; If no buffer is available, the process is placed into the DQ list
+; of the queue and waits until another process writes into the queue.
+;	input:	DX = address of qpb in u_wrkseg
+;		AX = 0ffffh if conditional
+;		     0 if not
+;	output:	BX = 0 if okay
+;		     0ffffh if error
+;		CX = Error Code
+
+	push ax ! call queverify ! pop ax
+	cmp cx,0 ! je qr_ver
+	    mov bx,0ffffh ! ret
+qr_ver:	push es ! mov es,u_wrkseg
+	mov si,dx			;es:[si]->QPB
+	mov bx,es:qpb_qaddr[si]		;bx->QD
+	mov di,es:qpb_buffptr[si]	;es:[di]->buff
+	pushf ! cli
+	mov cx,q_msgcnt[bx]
+	cmp cx,0 ! jne qr_gmsg
+	    inc ax ! jnz qr_wait
+		mov bx,0ffffh ! mov cx,e_q_empty
+		popf ! pop es ! jmps qr_exit
+qr_wait:    lea dx,q_dq[bx]		;DX=addr of DQ List
+	    mov bx,rlr ! mov p_stat[bx],ps_dq	;status=DQ
+	    popf ! pop es ! push si
+	    mov cx,f_sleep ! call mpmif		;Sleep on DQ List
+	    pop dx ! jmps qr_ver
+qr_gmsg:mov cx,q_msglen[bx]
+	cmp cx,0 ! jne qr_lmsg
+	    mov cx,q_flags[bx]	; msglen=0
+	    and cx,qf_mx ! jz qr_finish
+		mov ax,rlr		;Its a MX queue
+		mov q_buf[bx],ax	;BUF = PD addr (owner)
+		jmps qr_finish
+qr_lmsg:			; msglen > 0
+	mov ax,q_msgout[bx] ! push ax
+	mul cx ! add ax,q_buf[bx]
+	mov si,ax ! rep movsb
+	pop ax ! inc ax
+	cmp ax,q_nmsgs[bx] ! jne qr_nend
+	    mov ax,0
+qr_nend:mov q_msgout[bx],ax
+qr_finish:
+	dec q_msgcnt[bx] ! popf
+	mov si,bx ! pop es
+	lea dx,q_nq[si]			;DX = NQ List
+	mov cx,f_wakeup			;Wakeup a process
+	call mpmif			; waiting to write
+	mov cx,0 ! mov bx,cx
+qr_exit:ret
+
+;============		=============
+writeq_entry:		; Write Queue
+;============		=============
+	mov ax,0 ! jmps writeq
+
+;=============		=========================
+cwriteq_entry:		; conditional Write Queue
+;=============		=========================
+	mov ax,0ffffh
+	;jmps writeq
+
+writeq:		; Write message into queue
+;------		--------------------------
+; If no buffer is available, the process is placed into the NQ list
+; of the queue and waits until another process reads from the queue.
+;	input:	DX = address of qpb in u_wrkseg
+;		BX = pd address
+;		AX = 0ffffh if conditional
+;		     0 if not
+;	output:	BX = 0 if okay
+;		     0ffffh if error
+;		CX = Error Code
+
+	push ax ! call queverify ! pop ax
+	cmp cx,0 ! je qw_ver
+	    mov bx,0ffffh ! ret
+qw_ver:	push es ! mov es,u_wrkseg
+	mov di,dx			; es:[di]->QPB
+	mov bx,es:qpb_qaddr[di]		; bx -> QD
+	mov si,es:qpb_buffptr[di]	; es:[si]->QPB.buff
+	pushf ! cli
+	mov cx,q_msgcnt[bx]
+	cmp cx,q_nmsgs[bx] ! jne qw_gbuf
+	    inc ax ! jnz qw_wait
+		popf ! pop es ! mov bx,0ffffh
+		mov cx,e_q_full ! jmps qw_exit
+qw_wait:    lea dx,q_nq[bx]			;DX = NQ List
+	    mov bx,rlr ! mov p_stat[bx],ps_nq	;status=NQ
+	    popf ! pop es ! push si
+	    mov cx,f_sleep ! call mpmif		;Sleep on NQ List
+	    pop dx ! jmps qw_ver		;try again
+qw_gbuf:mov cx,q_msglen[bx]			;there is a buffer
+	cmp cx,0 ! je qw_fin
+	    mov ax,q_msgout[bx] ! add ax,q_msgcnt[bx]
+	    cmp ax,q_nmsgs[bx] ! jb qw_move
+		sub ax,q_nmsgs[bx]
+qw_move:    mul cx ! add ax,q_buf[bx]
+	    mov di,ax				;DI=start of new msg
+	    push ds ! push es ! pop ds ! pop es
+	    rep movsb				; copy message
+	    push ds ! push es ! pop ds ! pop es
+qw_fin:	inc q_msgcnt[bx]
+	mov cx,q_flags[bx] ! and cx,qf_mx
+	jz qw_nomx
+	    mov q_buf[bx],0		;an MX queue,no owner
+qw_nomx:mov si,bx ! popf ! pop es
+	lea dx,q_dq[si]			;DX = DQ List
+	mov cx,f_wakeup			;Wakeup a process trying
+	call mpmif			; to read a message
+	sub bx,bx ! mov cx,bx
+qw_exit:ret
+
+
+queverify:		; check QLR for existence of QD address
+;---------		---------------------------------------
+;	input:	DX = offset of QPB
+;	output:	CX = error code
+
+	push ds ! mov ds,u_wrkseg
+	mov bx,dx ! mov si,qpb_qaddr[bx] ! pop ds
+	mov bx,offset qlr
+qv_nxt:	mov bx,q_link[bx]
+	cmp bx,0 ! jne qv_chk
+	    mov cx,e_no_queue ! ret
+qv_chk:	cmp bx,si ! je qv_fnd
+	    jmps qv_nxt
+qv_fnd:	mov cx,0 ! ret
+

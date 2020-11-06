@@ -1,0 +1,54 @@
+$ num
+CREATVMS.C
+CREATVMS.lsv
+$ num
+FTOAVMS.C
+FTOAVMS.lsv
+$ num
+LSEEKVMS.C
+LSEEKVMS.lsv
+$ num
+OPENVMS.C
+OPENVMS.lsv
+$ num
+SBRKVMS.C
+SBRKVMS.lsv
+$ num
+ULDIVVMS.C
+ULDIVVMS.lsv
+$ num
+UNLINKVMS.C
+UNLINKVMS.lsv
+$ num
+XFLSBFVMS.C
+XFLSBFVMS.lsv
+$ num
+VMS.H
+VMS.lsv
+$ num
+CREATVMS.C
+CREATVMS.lsv
+$ num
+FTOAVMS.C
+FTOAVMS.lsv
+$ num
+LSEEKVMS.C
+LSEEKVMS.lsv
+$ num
+OPENVMS.C
+OPENVMS.lsv
+$ num
+SBRKVMS.C
+SBRKVMS.lsv
+$ num
+ULDIVVMS.C
+ULDIVVMS.lsv
+$ num
+UNLINKVMS.C
+UNLINKVMS.lsv
+$ num
+XFLSBFVMS.C
+XFLSBFVMS.lsv
+$ num
+VMS.H
+VMS.lsv

@@ -1,0 +1,193 @@
+
+title	'Status Line module'
+
+include	system.lib
+include	sysdat.lib
+include	chrcomm.equ
+include	serdata.equ
+
+	dseg
+
+extrn	vccb_tbl:word
+extrn	ocdesctbl:word
+extrn	f30_tbl:word
+
+	cseg
+
+public	io_statline
+;public	update_stl
+
+extrn	usart_on:near
+
+;===========
+io_statline:
+;===========
+;
+;	CCP/M's entry point for status line updates
+;	
+;	ENTRY:	DL = physical console 
+;
+
+	xor	bx,bx
+	mov	bl,dl			; physical console number
+
+	;fill in status line info here !!
+
+	push es				; save the UDA
+	push dx				; save the Pcon
+
+	mov ax,ds			; set up for subsequent string
+	mov es,ax			; moves
+
+
+
+	xor bx, bx			; get the Xmit Q control stucture
+	mov bl, dl
+	shl bx, 1
+	mov bx, ocdesctbl[bx]		; bx -> Xmit Q control Structure
+
+	mov	bl, CUR_VCON[bx]	; al = current Vcon for this Pcon
+	xor	bh,bh
+	shl	bx,1
+;	and al, 0fh
+
+	mov	ax,f30_tbl[bx]
+	test	ax,0010H		; no update if in gen. graphic mode
+	jz	update
+;
+	pop	dx
+	pop	es
+	ret
+
+;    Going to update status line
+
+update:				;*** fill in console owner name
+	mov si, vccb_tbl[bx]		; si -> VCCB for this Pcon's 
+					; current Vcon
+
+	mov si, [si]			; get pd addr from ccb
+	add si, P_NAME			; move console owners
+	mov di, offset st_name		; name into status line
+
+	mov cx,4
+	cld
+	rep movsw
+
+				;*** update Vcon field
+	shr	bx,1			; get back Vcon number
+	add 	bl,'0'
+	mov 	vcon_numb,bl
+
+
+
+	mov al, dl		;*** fill in the physical console
+;	and al, 0fh
+	add al, '0'
+	mov pcon_numb, al
+
+
+
+	mov di,offset st_open	;*** fill in open file drive letters
+	mov cx, 6			; 6 drives
+	mov al,' '			; clear open file string
+	rep stosb
+
+	mov dx,open_vector
+	mov di,offset st_open
+update0:
+	shr dx,1! jnc update1
+	  mov al,cl
+	  add al,'A'
+	  stosb				;store drive letter
+update1:
+	inc cx
+	or dx,dx
+	jnz update0			;any more drives?
+
+;
+;    Send the status line to the console 
+;
+
+	pop dx				; get the Pcon back
+	pushf
+	cli
+
+	; check for room in the con-out circular buffer
+	; if ( omsgs - omsgcnt > st_len ) display the status line
+	; also check for not being in the middle of an escape sequence
+
+	; get the physical Q control structure
+
+	xor dh, dh			; clear the high byte
+	mov bx, dx
+	shl bx, 1
+	mov bx, ocdesctbl[bx]		; bx -> Xmit Queue control
+
+	mov ax, ONMSGS
+	sub ax, OMSGCNT[bx]
+	cmp ax, ST_LEN ! jb stl_ret 
+	  cmp OESC_CNT[bx], 0 ! jne stl_ret
+
+stl_now:
+	mov cx, ST_LEN - 1		; length of the status line
+	mov si, offset st_line		; addr of the status line
+	mov dx, OMSGCNT[bx]		; the chars in Q
+	mov bp, OMSGOUT[bx]		; current output pointer
+
+st_line_lp:
+	mov di, bp			; current char ptr => index reg
+	add di, dx			; add in the number of chars waiting
+	and di, (ONMSGS - 1)		; circular buffer...
+	lodsb				; get a char from the st line
+	mov OBUFFER[di+bx], al		; stuff the character
+	inc dx				; bump char waiting count
+	loop st_line_lp			; do it until the entire status line
+					; is moved into the con out buffer
+
+	mov OMSGCNT[bx], dx		; put the updated number of chars
+					; waiting to go out into the Q 
+					; control structure.
+
+	call usart_on			; start the engine ( if necessary )
+
+stl_ret:
+	popf
+	pop es				; es = UDA
+
+exit:
+	ret
+
+	dseg
+
+st_line	db	esc,'j'		;save cursor position
+	db	0,0,0,0		; wait for the Z 19
+
+	db	esc,'x1'	;enable status line
+	db	esc,'Y'		;direct cursor address
+	db	31+25,31+1	; line 25, column 1
+
+	db	'Pcon='
+pcon_numb db	'0'		;ascii Pcon number
+	db	'  '		; visual delimiter
+
+	db	'Vcon='
+vcon_numb db	'0'		; ascii Vcon number
+	db	'  '		; visual delimiter
+
+st_name	db	'        '	;console owner process name
+	db	'  '		; visual delimiter
+
+st_open	db	'xxxxxx'	;drives with open files
+
+;	db	;additional bytes for status line
+
+	db	esc,'k'		;restore cursor position
+	db	0,0,0,0
+	db	0ffh
+st_len	equ	(offset $-1) - (offset st_line)
+
+;	table to indicate if special status line is being displayed currently
+
+	end
+
+

@@ -1,0 +1,1233 @@
+.MB +5
+.MT -3
+.LL 65
+.PN 29
+.HE MP/M User's Guide
+.FT   (All Information Herein is Proprietary to Digital Research.)
+.sp
+.pp
+2.2  Basic Disk Operating System Functions
+.pp
+In general, the Basic Disk Operating System (BDOS) facilities are
+identical to that of CP/M 2.0.  Each function is covered in this
+section by describing the
+entry parameters, returned values, and any differences between
+CP/M and MP/M.
+.sp 2
+.cp 13
+.li
+***************************************
+*                                     *
+*  FUNCTION 0:  SYSTEM RESET          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  00H             *
+***************************************
+.pp
+The SYSTEM RESET function terminates the calling program,
+releasing the memory segment, console, and mutual exclusion
+messages owned by the calling program.
+When the console is released it is usually given back to the
+terminal message process (TMP) for that console.
+.pp
+Effectively the operation of the SYSTEM RESET function is the
+same for MP/M     as it is for CP/M 2.0 because the program
+is terminated and the operator receives the prompt to
+enter another command.
+However, MP/M does not re-initialize the disk subsystem
+by selecting and logging-in disk drive A.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 1:  CONSOLE INPUT         *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  01H             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  ASCII Character *
+***************************************
+.pp
+The CONSOLE INPUT function reads the next console character
+to register A.  Graphic characters, along with carriage return,
+line feed, and backspace (ctl-H) are echoed to the console.
+Tab characters (ctl-I) are expanded in columns of eight
+characters.  A check is made for start/stop scroll (ctl-S)
+and start/stop printer echo (ctl-P).
+The BDOS does not return to the calling program until a character
+has been typed, thus suspending execution if a character is
+not ready.
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 2:  CONSOLE OUTPUT        *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  02H             *
+*      Register   E:  ASCII Character *
+*                                     *
+***************************************
+.pp
+The ASCII character from register E is sent to the console
+device.  Similar to function 1, tabs are expanded and
+checks are made for start/stop scroll and printer echo.
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 3:  RAW CONSOLE INPUT     *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  03H             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  ASCII Character *
+***************************************
+.pp
+The RAW CONSOLE INPUT function reads the next console
+character to Register A.  There is no testing of the input
+character, that is, the system will directly pass through all
+characters including the control characters without any
+interpretation.   This function does not require that the console
+be attached, nor does it attach the console.
+.pp
+The READER INPUT function is not supported under MP/M.  All
+character I/O devices such as the reader/punch are treated as consoles.
+MP/M supports up to 16 consoles or character I/O devices.
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 4:  RAW CONSOLE OUTPUT    *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  04H             *
+*      Register   E:  ASCII Character *
+*                                     *
+***************************************
+.pp
+The  RAW  CONSOLE OUTPUT function sends the  ASCII  character
+from register E to the console device.  There is no testing of the
+output character, that is, tabs are not expanded and no checks are
+made  for start/stop scroll and printer echo.  This function  does
+not  require that the console be attached, nor does it attach  the
+console.  Thus, unsolicited messages may be sent to other consoles
+by  simply changing the console byte of the process descriptor  and
+then using this function.
+.pp
+The PUNCH OUTPUT function is not supported under MP/M.
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 5:  LIST OUTPUT           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  05H             *
+*      Register   E:  ASCII Character *
+*                                     *
+***************************************
+.pp
+The LIST OUTPUT function sends the ASCII character in register
+E to the logical listing device.
+.pp
+Caution  must be observed in the use of the  printer  since
+there is no implicit list device ownership.  That is, the
+list  device is not "opened" or "closed".  MP/M affords  a
+secondary   explicit   means  to  resolve  printer   mutual
+exclusion.  A queue named 'MXList' is created by the system
+to handle mutual exclusion.  To properly obtain use  of the
+printer  a program should open the 'MXList' queue and  read
+the message.  When the message is obtained the printer may
+be used.  When printing is completed the message should  be
+written back to the 'MXList' queue.  This technique is used
+by the MP/M PIP, SPOOLer, and TMP ctl-P operations.
+.sp 2
+.cp 20
+.li
+***************************************
+*                                     *
+*  FUNCTION 6:  DIRECT CONSOLE I/O    *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  06H             *
+*      Register   E:  0FFH (input) or *
+*                     0FEH (status)or *
+*                     char (output)   *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  char or status  *
+*                     (no value)      *
+***************************************
+.pp
+Direct console I/O is supported under MP/M for those specialized
+applications where unadorned console input and output is
+required.  Use of this function should, in general, be avoided
+since it bypasses all of MP/M's normal control character functions
+(e.g., control-S and control-P).
+Programs which perform direct I/O through the BIOS
+under previous releases of CP/M, however,
+should be changed to use direct I/O under BDOS so that they
+can be fully supported under MP/M and CP/M.
+.pp
+Upon entry to function 6, register E either contains hexadecimal
+FF, denoting a console input request, a hexadecimal FE, denoting
+a console input status request, or register E contains
+an ASCII character.  If the input value is FF, then function 6
+returns the next console input character.
+.pp
+If the input value is FE, then function 6 returns a value of FF
+if a character is ready, or a 00 if no character has been received.
+.pp
+If the input value in E is not FF or FE, then function 6 assumes that
+E contains a valid ASCII character which is sent to the
+console.
+.pp
+Note that BDOS functions 3 and 4 (raw console input/output) can be
+used for totally transparent console I/O.  When using functions 3 and 4,
+the console status operation can be performed by using function 6 with
+a parameter of FE.
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 7:  GET I/O BYTE          *
+*                                     *
+***************************************
+*                                     *
+*    Not supported under MP/M         *
+*                                     *
+***************************************
+.pp
+The GET I/O BYTE function is not supported under MP/M.
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 8:  SET I/O BYTE          *
+*                                     *
+***************************************
+*                                     *
+*    Not supported under MP/M         *
+*                                     *
+***************************************
+.pp
+The SET I/O BYTE function is not supported under MP/M.
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 9:  PRINT STRING          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  09H             *
+*      Registers DE:  String Address  *
+*                                     *
+***************************************
+.pp
+The PRINT STRING function sends the character string stored in
+memory at the location given by DE to the console device, until
+a "$" is encountered in the string.  Tabs are expanded as in
+function 2, and checks are made for start/stop scroll and printer
+echo.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 10: READ CONSOLE BUFFER   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0AH             *
+*      Registers DE:  Buffer Address  *
+*                                     *
+*  Returned   Value:                  *
+*      Console Characters in Buffer   *
+***************************************
+.pp
+The READ BUFFER function reads a line of edited console input
+into a buffer addressed by registers DE.  Console input is
+terminated when either the input buffer overflows.
+The READ BUFFER takes the
+form:
+.sp
+.cp 5
+.li
+    DE: +0 +1 +2 +3 +4 +5 +6 +7 +8    . . .    +n
+       -------------------------------------------
+       |mx|nc|c1|c2|c3|c4|c5|c6|c7|   . . .   |??|
+       -------------------------------------------
+.sp
+where "mx" is the maximum number of characters which the
+buffer will hold (1 to 255), "nc" is the number of characters
+read (set by BDOS upon return), followed by the characters
+read from the console.  if nc < mx, then uninitialized
+positions follow the last character, denoted by "??" in
+the above figure.
+A number of control functions are recognized during line
+editing:
+.sp
+.li
+         rub/del removes and echoes the last character
+          ctl-C  reboots when at the beginning of line
+          ctl-E  causes physical end of line
+          ctl-H  backspaces one character position
+          ctl-J  (line feed) terminates input line
+          ctl-M  (return) terminates input line
+          ctl-R  retypes the current line after new line
+          ctl-U  removes current line after new line
+          ctl-X  backspaces to beginning of current line
+.sp
+Note also that certain functions which return the carriage to
+the leftmost position (e.g., ctl-X) do so only to the column
+position where the prompt ended (in earlier releases, the carriage
+returned to the extreme left margin).  This convention
+makes operator data input and line correction more legible.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 11: GET CONSOLE STATUS    *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0BH             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Console Status  *
+***************************************
+.pp
+The CONSOLE STATUS function checks to see if a character
+has been typed at the console.  If a character is ready,
+the value 0FFH is returned in register A.  Otherwise a
+00H value is returned.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 12: RETURN VERSION NUMBER *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0CH             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  Version Number  *
+***************************************
+.pp
+Function 12 provides information which
+allows version independent programming.
+A two-byte value is returned, with H = 00 designating the CP/M
+release (H = 01 for MP/M), and L = 00 for all releases
+previous to 2.0.  CP/M 2.0 returns a hexadecimal 20 in register
+L, with subsequent version 2 releases in the hexadecimal
+range 21, 22, through 2F.  Using function 12, for example,
+you can write application programs which provide both
+sequential and random access functions, with random access
+disabled when operating under early releases of CP/M.
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 13: RESET DISK SYSTEM     *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0DH             *
+*                                     *
+*  Returned Value:                    *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The RESET DISK function is used to programmatically restore
+the file system to a reset state where all disks are set to
+read/write (see functions 28 and 29),
+and the default DMA address is reset to the memory segment base +0080H.
+This function can be used, for example, by an application
+program which requires a disk change without a system reboot.
+.pp
+The  RESET DISK SYSTEM function is qualified in  MP/M.  If
+there  are  any open files on any  drive, the  reset  disk
+system  is  denied  and  the reason  is  displayed  on  the
+console.
+The returned value indicates whether or not the reset  disk
+was  successful.  If any process is currently accessing  a
+drive, an error code of 0FFH is returned in the A register.
+A return code of 0 indicates success.
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 14: SELECT DISK           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0EH             *
+*      Register   E:  Selected Disk   *
+*                                     *
+***************************************
+.pp
+The SELECT DISK function designates the disk drive named in
+register E as the default disk for subsequent file operations,
+with E = 0 for drive A, 1 for drive B, and so-forth through
+15 corresponding to drive P in a full sixteen drive system.
+The drive is placed in an "on-line" status which, in particular,
+activates its directory until the next cold start, warm start,
+or disk system reset operation.  If the disk media is changed
+while it is on-line, the drive automatically goes to a read/only
+status in a standard MP/M environment (see function 28).
+FCB's which specify drive code zero (dr = 00H) automatically
+reference the currently selected default drive.  Drive code
+values between 1 and 16, however, ignore the selected default
+drive and directly reference drives A through P.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 15: OPEN FILE             *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  0FH             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The OPEN FILE operation is used to activate a file which
+currently exists in the disk directory for either the currently
+active user code or user code 0.  The BDOS scans the referenced disk
+directory for a match in positions 1 through 14 of the
+FCB referenced by DE (byte s1 is automatically zeroed),
+where an ASCII question mark (3FH) matches any directory
+character in any of these positions.  Normally, no
+question marks are included and, further, bytes "ex" and
+"s2" of the FCB are zero.
+.pp
+If a directory element is matched, the relevant directory
+information is copied into bytes d0 through dn of the FCB,
+thus allowing access to the files through subsequent read
+and write operations.  Note that an existing file must not
+be accessed until a sucessful open operation is completed.
+Upon return, the open function returns a "directory code"
+with the value 0 through 3 if the open was successful, or
+0FFH (255 decimal) if the file cannot be found.  If
+question marks occur in the FCB then the first matching
+FCB is activated.
+Note that the current record ("cr") must be zeroed by
+the program if the file is to be accessed sequentially
+from the first record.
+.pp
+The open file operation will succeed for files with either the
+current user code or user code 0.  This presents a problem when
+files with the same name exist under both the current user code
+and under user code 0.  When such a situation exists the first one
+found in the directory will be opened.  Even though this should
+not present a problem because user code 0 is intended only for
+system and commonly used files, a potential problem can be
+detected by using the search file function.  The search file
+function enables examination of the directory FCB and thus the
+actual file user code can be determined.
+.pp
+Opening a file sets the appropriate bit in the drive active vector
+of the calling processes process descriptor.  This bit is cleared
+only by terminating the process or making a free drive (function 39)
+call.  Setting of the bit in the drive active vector will prevent
+any other process from resetting the drive on which the file was
+opened.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 16: CLOSE FILE            *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  10H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The CLOSE FILE function performs the inverse of the open file
+function.  Given that the FCB addressed by DE has been previously
+activated through an open or make function (see functions 15 and 22),
+the close function permanently records the new FCB in the referenced
+disk directory.  The FCB matching process for the close is identical
+to the open function.  The directory code returned for a successful
+close operation is 0, 1, 2, or 3, while a 0FFH (255 decimal) is
+returned if the file name cannot be found in the directory.
+A file need not be closed if only read operations have taken
+place.  If write operations have occurred, however, the close operation
+is necessary to permanently record the new directory information.
+.pp
+Note that the close file function does not affect the drive active
+vector of the calling processes process descriptor.  The free drive
+function (function 39) must be used to reset the bit of the drive
+active vector.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 17: SEARCH FOR FIRST      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  11H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+SEARCH FIRST scans the directory for a match with the file
+given by the FCB addressed by DE.
+Files with either the currently active user code or user code 0
+will match.
+The value 255 (hexadecimal
+FF) is returned if the file is not found, otherwise
+0, 1, 2, or 3 is returned indicating the file is present.
+In the case that the file is found, the current DMA address
+is filled with the record containing the directory entry,
+and the relative starting position is A * 32 (i.e., rotate
+the A register left 5 bits, or ADD A five times).  Although
+not normally required for application programs, the directory
+information can be extracted from the buffer at this position.
+.pp
+An ASCII question mark (63 decimal, 3F hexadecimal) in any
+position from "f1" through "ex" matches
+the corresponding field of
+any directory entry on
+the default or auto-selected disk drive.
+If the "dr" field contains an ASCII question mark, then the
+auto disk select function is disabled, the default disk
+is searched, with the search function returning any
+matched entry, allocated or free, belonging to any user
+number.  This latter function is not normally used by
+application programs, but does allow complete flexibility
+to scan all current directory values.
+If the "dr" field is not a question mark, the "s2" byte is
+automatically zeroed.
+.pp
+To determine the user code of a successful search (it may be the
+currently active user code or user code 0), the returned directory
+code can be used as described above to index into the DMA buffer
+and the user code of the directory FCB can be obtained.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 18: SEARCH FOR NEXT       *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  12H             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The SEARCH NEXT function is similar to the Search First function,
+except that the directory scan continues from the last matched
+entry.  Similar to function 17, function 18 returns the decimal
+value 255 in A when no more directory items match.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 19: DELETE FILE           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  13H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The DELETE FILE function removes files which match the FCB
+addressed by DE.  The filename and type may contain ambiguous
+references (i.e., question marks in various positions), but
+the drive select code cannot be ambiguous, as in the Search
+and Search Next functions.
+.pp
+Function 19 returns a decimal 255 if the referenced file or
+files cannot be found, otherwise a value in the range
+0 to 3 is returned.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 20: READ SEQUENTIAL       *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  14H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+Given that the FCB addressed by DE has been activated
+through an open or make function (numbers 15 and 22), the
+READ SEQUENTIAL function reads the next 128 byte record
+from the file into memory at the current DMA address.
+the record is read from position "cr" of the extent, and
+the "cr" field is automatically incremented to the next
+record position.  If the "cr" field overflows
+then the next logical extent is automatically opened and the
+"cr" field is reset to zero in preparation for the next
+read operation.
+The value 00H is returned in the A register if the read
+operation was successful, while a non-zero value is returned
+if no data exists at the next record position (e.g., end of
+file occurs).
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 21: WRITE SEQUENTIAL      *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  15H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+Given that the FCB addressed by DE has been activated
+through an open or make function (numbers 15 and 22), the
+WRITE SEQUENTIAL function writes the 128 byte data record
+at the current DMA address to the file named by the FCB.
+the record is placed at position "cr" of the file, and
+the "cr" field is automatically incremented to the next
+record position.  If the "cr" field overflows
+then the next logical extent is automatically opened and the
+"cr" field is reset to zero in preparation for the next
+write operation.  Write operations can take place into an
+existing file, in which case newly written records overlay
+those which already exist in the file.
+Register A = 00H upon return from a successful write operation,
+while a non-zero value indicates
+a full disk.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 22: MAKE FILE             *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  16H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The MAKE FILE operation is similar to the open file operation
+except that the FCB must name a file which does not exist
+in the currently referenced disk directory (i.e., the one
+named explicitly by a non-zero "dr" code, or the default
+disk if "dr" is zero).  The FDOS creates the file and initializes
+both the directory and main memory value to an empty file.
+The programmer must ensure that no duplicate file names
+occur, and a preceding delete operation is sufficient if
+there is any possibility of duplication.
+Upon return, register A = 0, 1, 2, or 3 if the operation
+was successful and 0FFH (255 decimal) if no more directory
+space is available.  The make function has the side-effect
+of activating the FCB and thus a subsequent open is not
+necessary.
+.pp
+Making a file sets the appropriate bit in the drive active vector
+of the calling processes process descriptor.  This bit is cleared
+only by terminating the process or making a free drive (function 39)
+call.  Setting of the bit in the drive active vector will prevent
+any other process from resetting the drive on which the file was
+opened.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 23: RENAME FILE           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  17H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The RENAME FILE function uses the FCB addressed by DE to change
+all occurrences of the file named in the first 16 bytes
+to the file named in the second 16 bytes.  The drive code
+"dr" at position 0 is used to select the drive, while the
+drive code for the new file name at position 16 of the
+FCB is assumed to be zero.  Upon return, register A is
+set to a value between 0 and 3 if the rename was successful,
+and 0FFH (255 decimal) if the first file name could not
+be found in the directory scan.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 24: RETURN LOGIN VECTOR   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  18H             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  Login Vector    *
+***************************************
+.pp
+The login vector value returned by MP/M is a 16-bit
+value in HL, where the least significant bit of L corresponds
+to the first drive A, and the high order bit of H corresponds
+to the sixteenth drive, labelled P.
+A "0" bit indicates that the drive is not on-line, while
+a "1" bit marks an drive that is actively on-line due
+to an explicit disk drive selection, or an implicit drive
+select caused by a file operation which specified a
+non-zero "dr" field.
+Note that compatibility
+is maintained with earlier releases, since registers A and
+L contain the same values upon return.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 25: RETURN CURRENT DISK   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  19H             *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Current Disk    *
+***************************************
+.pp
+Function 25 returns the currently selected default disk
+number in register A.  The disk numbers range from 0 through
+15 corresponding to drives A through P.
+.sp 2
+.cp 15
+.li
+***************************************
+*                                     *
+*  FUNCTION 26: SET DMA ADDRESS       *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1AH             *
+*      Registers DE:  DMA Address     *
+*                                     *
+***************************************
+.pp
+"DMA" is an acronym for Direct Memory Address, which is often
+used in connection with disk controllers which directly
+access the memory of the mainframe computer to transfer
+data to and from the disk subsystem.  Although many
+computer systems use non-DMA access (i.e., the data is
+transfered through programmed I/O operations), the DMA
+address has, in MP/M, come to mean the address at which
+the 128 byte data record resides before a disk write
+and after a disk read.  Upon cold start, warm start, or
+disk system reset, the DMA address is automatically
+set to BOOT+0080H.  The Set DMA function, however, can
+be used to change this default value to address another
+area of memory where the data records reside.
+Thus, the DMA address becomes the value specified by
+DE until it is changed by a subsequent Set DMA function,
+cold start, warm start, or disk system reset.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 27: GET ADDR(ALLOC)       *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1BH             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  ALLOC Address   *
+***************************************
+.pp
+An "allocation vector" is maintained in main memory for each
+on-line disk drive.  Various system programs use the
+information provided by the allocation vector to determine
+the amount of remaining storage (see the STAT program).
+Function 27 returns the base address of the allocation
+vector for the currently selected disk drive.
+The allocation information may, however, be invalid if
+the selected disk has been marked read/only.
+Although this function is not normally used by application
+programs, additional details of the allocation vector
+are found in the "CP/M 2.0 Alteration Guide."
+.sp 2
+.cp 14
+.li
+***************************************
+*                                     *
+*  FUNCTION 28: WRITE PROTECT DISK    *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1CH             *
+*                                     *
+***************************************
+.pp
+The disk write protect function provides temporary write
+protection for the currently selected disk.  Any attempt
+to write to the disk, before the next cold or warm start
+operation produces the message
+.sp
+.ce
+Bdos Err on d: R/O
+.pp
+Use of this function is not recommended while operating under
+MP/M because it will deny read/write access to files on the
+disk by another user.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 29: GET READ/ONLY VECTOR  *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1DH             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  R/O Vector Value*
+***************************************
+.pp
+Function 29 returns a bit vector in register pair HL which
+indicates drives which have the temporary read/only bit set.
+Similar to function 24, the least significant bit corresponds
+to drive A, while the most significant bit corresponds to
+drive P.
+The R/O
+bit is set either by an explicit call to function 28, or
+by the automatic software mechanisms within MP/M which
+detect changed disks.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 30: SET FILE ATTRIBUTES   *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1EH             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Directory Code  *
+***************************************
+.pp
+The SET FILE ATTRIBUTES function allows programmatic manipulation
+of permanent indicators attached to files.  In particular, the
+R/O, System, and Update attributes (t1', t2', and t3') can be set or
+reset.  The DE pair addresses an unambiguous file
+name with the appropriate attributes set or reset.  Function
+30 searches for a match, and changes the matched directory
+entry to contain the selected indicators.  Indicators f1'
+through f4' are not presently used, but may be useful for
+applications programs, since they are not involved in the
+matching process during file open and close operations.
+Indicators f5' through f8' are reserved for
+future system expansion.
+.sp 2
+.cp 16
+.li
+***************************************
+*                                     *
+*  FUNCTION 31: GET ADDR(DISK PARMS)  *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  1FH             *
+*                                     *
+*  Returned   Value:                  *
+*      Registers HL:  DPB Address     *
+***************************************
+.pp
+The address of the BIOS resident disk parameter block is
+returned in HL as a result of this function call.  This
+address can be used for either of two purposes.  First,
+the disk parameter values can be extracted for
+display and space computation purposes,
+or transient programs can dynamically change the values
+of current disk parameters when the disk environment
+changes, if required.  Normally, application programs
+will not require this facility.
+.sp 2
+.cp 19
+.li
+***************************************
+*                                     *
+*  FUNCTION 32: SET/GET USER CODE     *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  20H             *
+*      Register   E:  0FFH (get) or   *
+*                     User Code (set) *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Current Code or *
+*                     (no value)      *
+***************************************
+.pp
+An application program can change or interrogate
+the currently active user
+number by calling function 32.  If register E = 0FFH, then
+the value of the current user number is returned in register A,
+where the value is in the range 0 to 15.  If register E is not
+0FFH, then the current user number is changed to the value of
+E (modulo 16).
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 33: READ RANDOM           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  21H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The READ RANDOM function is similar to the sequential file
+read operation of previous releases, except that the read
+operation takes place at a particular record number, selected
+by the 24-bit value constructed from the three byte field
+following the FCB (byte positions r0 at 33, r1 at 34, and
+r2 at 35).  Note that the sequence of 24 bits is stored
+with least significant byte first (r0), middle byte
+next (r1), and high byte last (r2).  MP/M
+does not reference byte r2, except in computing the size
+of a file (function 35).  Byte r2 must be zero, however,
+since a non-zero value indicates overflow past the end
+of file.
+.pp
+Thus, the r0,r1 byte pair is treated
+as a double-byte, or "word" value, which contains the
+record to read.  This value ranges from 0 to 65535, providing
+access to any particular record of the 8 megabyte file.
+In order to process a file using random access, the base
+extent (extent 0) must first be opened.  Although the base
+extent may or may not contain any allocated data, this
+ensures that the file is properly recorded in the directory,
+and is visible in DIR requests.  The selected record number
+is then stored into the random record field (r0,r1), and
+the BDOS is called to read the record.  Upon return from
+the call, register A either contains an error code, as
+listed below, or the value 00 indicating the operation
+was successful.  In the latter case, the current DMA
+address contains the randomly accessed record.  Note that
+contrary to the sequential read operation, the record
+number is not advanced.  Thus, subsequent random read
+operations continue to read the same record.
+.pp
+Upon each random read operation, the logical extent and current
+record values are automatically set.
+Thus, the file can be sequentially read or written, starting from
+the current randomly accessed position.  Note, however,
+that in this case, the last randomly read record will
+be re-read as you switch from random mode to sequential
+read, and the last record will be re-written as you
+switch to a sequential write operation.
+You can, of course, simply advance the random
+record position following each random read or write to obtain
+the effect of a sequential I/O operation.
+.pp
+Error codes returned in register A following a random
+read are listed below.
+.sp
+.cp 7
+.li
+                01  reading unwritten data
+                02  (not returned in random mode)
+                03  cannot close current extent
+                04  seek to unwritten extent
+                05  (not returned in read mode)
+                06  seek past physical end of disk
+.sp
+Error code 01 and 04 occur when a random read operation
+accesses a data block which has not been previously
+written, or an extent which has not been created, which
+are equivalent conditions.  Error 3 does not normally
+occur under proper system operation, but can be cleared
+by simply re-reading, or re-opening extent zero
+as long as the disk is not physically write protected.
+Error code 06 occurs whenever byte r2 is non-zero under
+the current 2.0 release.
+Normally, non-zero return codes can be treated as missing
+data, with zero return codes indicating operation complete.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 34: WRITE RANDOM          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  22H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The WRITE RANDOM operation is initiated similar
+to the READ RANDOM call, except that data is written to
+the disk from the current DMA address.  Further, if the
+disk extent or data block which is the target of the
+write has not yet been allocated, the allocation is performed
+before the write operation continues.  As in the Read
+Random operation, the random record number is not changed
+as a result of the write.  The logical extent number
+and current record positions of the file control block
+are set to correspond to the random record which is
+being written.
+Again, sequential read or write operations can commence
+following a random write, with the notation that the
+currently addressed record is either read or rewritten
+again as the sequential operation begins.
+You can also simply advance the random record position
+following each write to get the effect of a sequential
+write operation.  Note that in particular, reading or
+writing the last record of an extent in random mode
+does not cause an automatic extent switch as it does
+in sequential mode.
+.pp
+The error codes returned by a random write are identical
+to the random read operation with the addition of error
+code 05, which indicates that a new extent cannot be
+created due to directory overflow.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 35: COMPUTE FILE SIZE     *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  23H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Random Record Field Set        *
+***************************************
+.pp
+When computing the size of a file, the DE register pair addresses an FCB in random mode
+format (bytes r0, r1, and r2 are present).  The FCB contains
+an unambiguous file name which is used in the directory
+scan.  Upon return, the random record bytes contain the
+"virtual" file size which is, in effect, the record
+address of the record following the end of the file.
+if, following a call to function 35, the high record
+byte r2 is 01, then the file contains the maximum record
+count 65536.  Otherwise, bytes r0 and r1
+constitute a 16-bit value (r0 is the least significant byte,
+as before) which is the file size.
+.pp
+Data can be appended to the end of an existing
+file by simply calling function 35 to set the random
+record position to the end of file, then performing a
+sequence of random writes starting at the preset record
+address.
+.pp
+The virtual size of a file corresponds to the physical
+size when the file is written sequentially.  If, instead,
+the file was created in random mode and "holes" exist
+in the allocation, then the file may in fact contain
+fewer records than the size indicates.  If, for example,
+only the last record of an eight megabyte file is written
+in random mode (i.e., record number 65535), then the
+virtual size is 65536 records, although only one
+block of data is actually allocated.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 36: SET RANDOM RECORD     *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  24H             *
+*      Registers DE:  FCB Address     *
+*                                     *
+*  Returned   Value:                  *
+*      Random Record Field Set        *
+***************************************
+.pp
+The SET RANDOM RECORD function causes
+the BDOS to automatically produce the random
+record position from a file which has been read or
+written sequentially to a particular point.  The function
+can be useful in two ways.
+.pp
+First, it is often necessary to initially read and
+scan a sequential file to extract the positions of
+various "key" fields.  As each key is encountered, function
+36 is called to compute the random record position
+for the data corresponding to this key.  If the data
+unit size is 128 bytes, the resulting record position
+is placed into a table with the key for later retrieval.
+After scanning the entire file and tabularizing the
+keys and their record numbers, you can move instantly
+to a particular keyed record by performing a random
+read using the corresponding random record number
+which was saved earlier.  The scheme is easily generalized
+when variable record lengths are involved since the
+program need only store the buffer-relative byte
+position along with the key and record number in order
+to find the exact starting position of the keyed data
+at a later time.
+.pp
+A second use of function 36 occurs when switching from
+a sequential read or write over to random read or
+write.  A file is sequentially accessed to a particular
+point in the file, function 36 is called which sets
+the record number, and subsequent random read and
+write operations continue from the selected point in
+the file.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 37:  RESET DRIVE          *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  25H             *
+*      Register  DE:  Drive Vector    *
+*                                     *
+*  Returned   Value:                  *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The  RESET  DRIVE  function  allows  resetting  of  specified
+drive(s).  The passed parameter is a 16 bit vector of drives to be
+reset,  the  least significant bit is drive A:.  If there are  any
+open files on a specified drive,  the reset drive is denied and the
+reason is displayed on the console.
+.pp
+The  returned value indicates whether or not the reset  drive
+was successful.  If any process is currently accessing a drive  to
+be reset,  an error code of 0FFH is returned in the A register.  A
+return code of 0 indicates success.                 
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 38:  ACCESS DRIVE         *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  26H             *
+*      Register  DE:  Drive Vector    *
+*                                     *
+***************************************
+.pp
+The  ACCESS  DRIVE function allows setting the  drive  access
+bit(s)  in  the calling processes process descriptor.  The  passed
+parameter is a 16 bit vector of drive(s) to be accessed,  the least
+significant bit is drive A:.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 39:  FREE DRIVE           *
+*                                     *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  27H             *
+*      Register  DE:  Drive Vector    *
+*                                     *
+***************************************
+.pp
+The  FREE  DRIVE  function allows freeing  the  drive  access
+bit(s)  in the calling processes process  descriptor.  The  passed
+parameter  is  a 16 bit vector of drive(s) to be freed,  the  least
+significant bit is drive A:.
+.sp 2
+.cp 17
+.li
+***************************************
+*                                     *
+*  FUNCTION 40:  WRITE RANDOM WITH    *
+*                   ZERO FILL         *
+***************************************
+*  Entry Parameters:                  *
+*      Register   C:  28H             *
+*      Register  DE:  FCB Address     *
+*                                     *
+*  Returned Value:                    *
+*      Register   A:  Return Code     *
+***************************************
+.pp
+The  WRITE  RANDOM  WITH ZERO FILL operation  is  similar  to
+FUNCTION  34: WRITE RANDOM with the exception that a previously unallocated
+record is filled with zeroes before the data is written.
+

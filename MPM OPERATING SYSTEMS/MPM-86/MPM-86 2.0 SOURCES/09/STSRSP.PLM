@@ -1,0 +1,93 @@
+$title('MP/M-86 2.0 Status Process - RSP')
+$compact
+
+status:                      /* use compact model for 32 bit pointers */
+do;
+
+$include(copyrt.lit)
+
+/* VAX generation commands
+
+asm86 rspasm.a86
+plm86 stsrsp.plm optimize(3) debug 'p1' 'p2' 'p3'
+link86 rspasm.obj, stsrsp.obj to stsrsp.lnk
+loc86 stsrsp.lnk od(sm(dats,code,data,const)) -
+      ad(sm(dats(0),code(0))) ss(stack(0))
+h86 stsrsp
+
+then on a micro
+
+vax stsrsp.h86 $fans
+gencmd stsrsp
+ren mpmstat.rsp=stsrsp.cmd
+
+Notes:
+	The stack is declared in the assemble module, RSPASM.A86.
+	The const(ants) come last to force hex generation.
+
+*/
+
+
+$include (stscom.plm)
+
+dcl rsplink word external;
+
+dcl sts$qd qd$structure initial (
+    0,0,0,qf$keep + qf$rsp,'MPMSTAT ',131,1,0,0,0,0,.sts$qd$buf);
+
+dcl sts$qd$buf (131) byte;	/* not copied if within 64K of sysdat */
+
+dcl sts$cmd structure(	/* info from qd$buf copied here */
+    pd address, tail (129) byte);
+
+dcl sts$qpb qpb$structure initial(0,0,0,1,.sts$cmd,'MPMSTAT ');
+
+
+plm$start:
+  procedure public;
+    dcl vers word;
+    dcl vers$str$pointer pointer;
+    dcl vers$str$ptr structure (
+      offset word,
+      segment word) at (@vers$str$pointer);
+
+    call mon1(qmake,.sts$qd);		/* make MPMSTAT queue	*/
+    call mon1(qopen,.sts$qpb);		/* open it		*/
+
+    ccb$ptr.segment,flag$ptr.segment,md$ptr.segment,ms$ptr.segment,
+    sat$ptr.segment,qd$ptr.segment,pd$ptr.segment, sysdat$ptr.segment
+    = rsplink;
+    sysdat$ptr.offset = 0;
+
+    vers$str$ptr.offset = sd.version + 3;  /* skip cr, lf's */
+    vers$str$ptr.segment = sd.supmod(1);
+
+    call mon1(setprior,200);            /* back to the same as transients */
+
+    do while true;
+      call mon1(qread,.sts$qpb);
+  
+      pd$ptr.offset = sts$cmd.pd;
+      call mon1(setdefcon,pd.cns);	/* to who typed MPMSTAT */
+      call crlf;
+      call display$text(0,vers$str$pointer);
+      call print$buffer (.(
+      '****** Status Display - Values Shown In Hexadecimal *****',
+      cr,lf,lf,'$'));
+      call display$config;
+      call display$ready;
+      call display$DQ;
+      call display$NQ;
+      call display$delay;
+      call display$poll;
+      call display$flag$wait;
+      call display$flag$set;
+      call display$queues;
+      call display$ccb(.('Consoles:$'), 0, sd$byte(ncondev));
+      call display$ccb(.('Printers:$'), sd$byte(ncondev), sd$byte(nciodev));
+      call display$memory;
+      call mon1 (condetach,dummy);
+    end;
+  end plmstart; 
+end status;
+

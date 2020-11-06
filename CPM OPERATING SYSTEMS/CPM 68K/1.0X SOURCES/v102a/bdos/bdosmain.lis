@@ -1,0 +1,310 @@
+1File: BDOSMAIN.C                                                          Page       1
+     1    
+     2   /****************************************************************
+     3   *								*
+     4   *		CP/M-68K BDOS Main Routine			*
+     5   *								*
+     6   *	This is the main routine for the BDOS for CP/M-68K	*
+     7   *	It has one entry point, _bdos, which is  called from 	*
+     8   *	the assembly language trap handler found in bdosif.s.	*
+     9   *	The parameters are a function number (integer) and an	*
+    10   *	information parameter (which is passed from bdosif as 	*
+    11   *	both an integer and a pointer).
+    12   *	The BDOS can potentially return a pointer, long word,	*
+    13   *	or word							*
+    14   *								*
+    15   *	Configured for Alcyon C on the VAX			*
+    16   *								*
+    17   ****************************************************************/
+    18    
+    19   #include "bdosinc.h"		/* Standard I/O declarations */
+    20    
+    21   #include "bdosdef.h"		/* Type and structure declarations for BDOS */
+    22    
+    23   #include "biosdef.h"		/* Declarations of BIOS functions */
+    24    
+    25   /*  Declare EXTERN functions */
+    26    
+    27   EXTERN		warmboot();	/* Warm Boot function 		*/
+    28   EXTERN BOOLEAN	constat();	/* Console status		*/
+    29   EXTERN UBYTE	conin();	/* Console Input function	*/
+    30   EXTERN 		tabout();	/* Console output with tab expansion */
+    31   EXTERN UBYTE	rawconio();	/* Raw console I/O		*/
+    32   EXTERN		prt_line();	/* Print line until delimiter	*/
+    33   EXTERN		readline();	/* Buffered console read	*/
+    34   EXTERN		seldsk();	/* Select disk			*/
+    35   EXTERN BOOLEAN	openfile();	/* Open File			*/
+    36   EXTERN UWORD	close_fi();	/* Close File			*/
+    37   EXTERN UWORD	search();	/* Search first and next fcns	*/
+    38   EXTERN UWORD	dirscan();	/* General directory scanning routine */
+    39   EXTERN UWORD	bdosrw();	/* Sequential and Random disk read/write */
+    40   EXTERN BOOLEAN	create();	/* Create file			*/
+    41   EXTERN BOOLEAN	delete();	/* Delete file			*/
+    42   EXTERN BOOLEAN	rename();	/* Rename file			*/
+    43   EXTERN BOOLEAN	set_attr();	/* Set file attributes		*/
+    44   EXTERN		getsize();	/* Get File Size		*/
+    45   EXTERN		setran();	/* Set Random Record		*/
+    46   EXTERN		free_sp();	/* Get Disk Free Space		*/
+    47   EXTERN UWORD	flushit();	/* Flush Buffers		*/
+    48   EXTERN UWORD	pgmld();	/* Program Load			*/
+    49   EXTERN UWORD	setexc();	/* Set Exception Vector		*/
+    50   EXTERN		set_tpa();	/* Get/Set TPA Limits		*/
+    51   EXTERN		move();		/* general purpose byte mover	*/
+    52    
+    53    
+    54   /*  Declare "true" global variables; i.e., those which will pertain to the
+    55       entire file system and thus will remain global even when this becomes
+    56       a multi-tasking file system */
+    57    
+    58   GLOBAL UWORD	log_dsk;	/* 16-bit vector of logged in drives */
+    59   GLOBAL UWORD	ro_dsk;		/* 16-bit vector of read-only drives */
+1File: BDOSMAIN.C                                                          Page       2
+    60   GLOBAL UWORD	crit_dsk;	/* 16-bit vector of drives in "critical"
+    61   				   state.  Used to control dir checksums */
+    62   GLOBAL BYTE	*tpa_lp;	/* TPA lower boundary (permanent)	*/
+    63   GLOBAL BYTE	*tpa_lt;	/* TPA lower boundary (temporary)	*/
+    64   GLOBAL BYTE	*tpa_hp;	/* TPA upper boundary (permanent)	*/
+    65   GLOBAL BYTE	*tpa_ht;	/* TPA upper boundary (temporary)	*/
+    66    
+    67    
+    68   /*  Declare the "state variables".  These are globals for the single-thread
+    69       version of the file system, but are put in a structure so they can be
+    70       based, with a pointer coming from the calling process		*/
+    71    
+    72   GLOBAL struct stvars gbls;
+    73    
+    74   struct tempstr
+    75   {
+    76         UBYTE	tempdisk;
+    77         BOOLEAN	reselect;
+    78         struct fcb *fptr;
+    79   };
+    80    
+    81   /****************************************************************
+    82   *								*
+    83   *		_bdos MAIN ROUTINE				*
+    84   *								*
+    85   *	Called with  _bdos(func, info, infop)			*
+    86   *								*	
+    87   *	Where:							*
+    88   *		func	is the BDOS function number (d0.w)	*
+    89   *		info	is the word parameter (d1.w)		*
+    90   *		infop	is the pointer parameter (d1.l)		*
+    91   *			note that info is the word form of infop*
+    92   *								*
+    93   ****************************************************************/
+    94    
+    95    
+    96   UWORD _bdos(func,info,infop)
+    97   REG WORD func;		/* BDOS function number */
+    98   REG UWORD info;		/* d1.w word parameter  */
+    99   REG UBYTE *infop;	/* d1.l pointer parameter */
+   100   {
+   101       REG UWORD rtnval;
+   102       LOCAL struct tempstr temp;
+   103       BSETUP
+   104    
+   105   	temp.reselect = FALSE;
+   106   	temp.fptr = infop;
+   107    	rtnval = 0;
+   108    
+   109   	switch (func)	/* switch on function number */
+   110   	{
+   111   	  case 0:   warmboot(0);		/* warm boot function */
+   112   		    /* break; */
+   113    
+   114   	  case 1:   return((UWORD)conin());	/* console input function */
+   115   		    /* break; */
+   116    
+   117   	  case 2:   tabout((UBYTE)info);	/* console output with 	*/
+   118   		    break;			/*    tab expansion	*/
+1File: BDOSMAIN.C                                                          Page       3
+   119    
+   120   	  case 3:   return((UWORD)brdr());	/* get reader from bios */
+   121   		    /* break; */
+   122    
+   123   	  case 4:   bpun((UBYTE)info);		/* punch output to bios */
+   124   		    break;
+   125    
+   126   	  case 5:   blstout((UBYTE)info);	/* list output from bios */
+   127   		    break;
+   128    
+   129   	  case 6:   return((UWORD)rawconio(info)); /* raw console I/O */
+   130   		    /* break; */
+   131    
+   132   	  case 7:   return(bgetiob());		/* get i/o byte */
+   133   		    /* break; */
+   134    
+   135   	  case 8:   bsetiob(info);		/* set i/o byte function */
+   136   		    break;
+   137    
+   138   	  case 9:   prt_line(infop);		/* print line function */
+   139   		    break;
+   140    
+   141   	  case 10:  readline(infop);		/* read buffered con input */
+   142   		    break;
+   143    
+   144   	  case 11:  return((UWORD)constat());	/* console status */
+   145   		    /* break; */
+   146    
+   147   	  case 12:  return(VERSION);		/* return version number */
+   148   		    /* break; */
+   149    
+   150   	  case 13:  log_dsk = 0;		/* reset disk system */
+   151   		    ro_dsk  = 0;
+   152   		    crit_dsk= 0;
+   153   		    GBL.curdsk = 0xff;
+   154   		    GBL.dfltdsk = 0;
+   155   		    break;
+   156    
+   157   	  case 14:  seldsk((UBYTE)info);	/* select disk */
+   158   		    GBL.dfltdsk = (UBYTE)info;
+   159   		    break;
+   160    
+   161   	  case 15:  tmp_sel(&temp);		/* open file */
+   162   		    infop->extent = 0;
+   163   		    infop->s2 = 0;
+   164   		    rtnval = dirscan(openfile, infop, 0);
+   165   		    break;
+   166    
+   167   	  case 16:  tmp_sel(&temp);		/* close file */
+   168   		    rtnval = close_fi(infop);
+   169   		    break;
+   170    
+   171   	  case 17:  GBL.srchp = infop;		/* search first */
+   172   		    rtnval = search(infop, 0, &temp);
+   173   		    break;
+   174    
+   175   	  case 18:  infop = GBL.srchp;		/* search next */
+   176   		    temp.fptr = infop;
+   177   		    rtnval = search(infop, 1, &temp);
+1File: BDOSMAIN.C                                                          Page       4
+   178   		    break;
+   179    
+   180   	  case 19:  tmp_sel(&temp);		/* delete file */
+   181   		    rtnval = dirscan(delete, infop, 2);
+   182   		    break;
+   183    
+   184   	  case 20:  tmp_sel(&temp);		/* read sequential */
+   185   		    rtnval = bdosrw(infop, TRUE, 0);
+   186   		    break;
+   187    
+   188   	  case 21:  tmp_sel(&temp);		/* write sequential */
+   189   		    rtnval = bdosrw(infop, FALSE, 0);
+   190   		    break;
+   191    
+   192   	  case 22:  tmp_sel(&temp);		/* create file */
+   193   		    infop->extent = 0;
+   194   		    infop->s1 = 0;
+   195   		    infop->s2 = 0;
+   196   		    infop->rcdcnt = 0;
+   197   			/* Zero extent, S1, S2, rcrdcnt. create zeros rest */
+   198   		    rtnval = dirscan(create, infop, 8);
+   199   		    break;
+   200    
+   201   	  case 23:  tmp_sel(&temp);		/* rename file */
+   202   		    rtnval = dirscan(rename, infop, 2);
+   203   		    break;
+   204    
+   205   	  case 24:  return(log_dsk);		/* return login vector */
+   206   		    /* break; */
+   207    
+   208   	  case 25:  return(UBWORD(GBL.dfltdsk)); /* return current disk */
+   209   		    /* break; */
+   210    
+   211   	  case 26:  GBL.dmaadr = infop;		/* set dma address */
+   212   		    break;
+   213    
+   214   	  /* No function 27 -- Get Allocation Vector */
+   215    
+   216   	  case 28:  ro_dsk |= 1<<GBL.dfltdsk;	/* set disk read-only */
+   217   		    break;
+   218    
+   219   	  case 29:  return(ro_dsk);		/* get read-only vector */
+   220   		    /* break; */
+   221    
+   222   	  case 30:  tmp_sel(&temp);		/* set file attributes */
+   223   		    rtnval = dirscan(set_attr, infop, 2);
+   224   		    break;
+   225    
+   226   	  case 31:  if (GBL.curdsk != GBL.dfltdsk) seldsk(GBL.dfltdsk);
+   227   		    move( (GBL.parmp), infop, sizeof *(GBL.parmp) );
+   228   		    break;		/* return disk parameters */
+   229    
+   230   	  case 32:  if ( (info & 0xff) <= 15 )	/* get/set user number */
+   231   			GBL.user = (UBYTE)info;
+   232   		    return(UBWORD(GBL.user));
+   233   		    /* break; */
+   234    
+   235   	  case 33:  tmp_sel(&temp);		/* random read */
+   236   		    rtnval = bdosrw(infop, TRUE, 1);
+1File: BDOSMAIN.C                                                          Page       5
+   237   		    break;
+   238    
+   239   	  case 34:  tmp_sel(&temp);		/* random write */
+   240   		    rtnval = bdosrw(infop, FALSE, 1);
+   241   		    break;
+   242    
+   243   	  case 35:  tmp_sel(&temp);		/* get file size */
+   244   		    getsize(infop);
+   245   		    break;
+   246    
+   247   	  case 36:  tmp_sel(&temp);		/* set random record */
+   248   		    setran(infop);
+   249   		    break;
+   250    
+   251   	  case 37:  info = ~info;		/* reset drive */
+   252   		    log_dsk &= info;
+   253   		    ro_dsk  &= info;
+   254   		    crit_dsk &= info;
+   255   		    break;
+   256    
+   257   	  case 40:  tmp_sel(&temp);		/* write random with 0 fill */
+   258   		    rtnval = bdosrw(infop, FALSE, 2);
+   259   		    break;
+   260    
+   261   	  case 46:  free_sp(info);		/* get disk free space */
+   262   		    break;
+   263    
+   264   	  case 47:  GBL.chainp = GBL.dmaadr;	/* chain to program */
+   265   		    warmboot(0);		/* terminate calling program */
+   266   		    /* break; */
+   267    
+   268   	  case 48:  return( flushit() );	/* flush buffers	*/
+   269   		    /* break; */
+   270    
+   271   	  case 59:  return(pgmld(infop,GBL.dmaadr));  /* program load */
+   272   		    /* break; */
+   273    
+   274   	  case 61:  return(setexc(infop));	/* set exception vector */
+   275   		    /* break; */
+   276    
+   277   	  case 63:  set_tpa(infop);		/* get/set TPA limits	*/
+   278   		    break;
+   279    
+   280   	  default:  return(-1);			/* bad function number */
+   281   		    /* break; */
+   282    
+   283   	};					/* end of switch statement */
+   284   	if (temp.reselect) infop->drvcode = temp.tempdisk;
+   285   				/* if reselected disk, restore it now */
+   286    
+   287   	return(rtnval);			/* return the BDOS return value */
+   288   }					/* end _bdos */
+   289    
+   290    
+   291   tmp_sel(temptr)			/* temporarily select disk pointed to by fcb */
+   292   REG struct tempstr *temptr;
+   293   {
+   294       REG struct fcb *fcbp;
+   295       REG UBYTE tmp_dsk;
+1File: BDOSMAIN.C                                                          Page       6
+   296       BSETUP
+   297    
+   298       fcbp = temptr->fptr;	/* get local copy of fcb pointer */	
+   299       tmp_dsk = (temptr->tempdisk = fcbp->drvcode);
+   300       seldsk( tmp_dsk ? tmp_dsk - 1 : GBL.dfltdsk );
+   301    
+   302       fcbp->drvcode = GBL.user;
+   303       temptr->reselect = TRUE;
+   304   }

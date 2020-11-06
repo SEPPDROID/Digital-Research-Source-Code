@@ -1,0 +1,602 @@
+;
+;*****************************************************************
+;*****************************************************************
+;**                                                             **
+;**   B a s i c    D i s k   O p e r a t i n g   S y s t e m    **
+;**                                                             **
+;*****************************************************************
+;*****************************************************************
+;
+selerror:
+                                        ;report select error
+        LEA     BX,seler                ;
+;
+;
+goerr:
+                                        ;BX = .errorhandler,call subr.
+        JMP     w[bx]                   ;to subroutine
+;
+;
+;
+;       local subroutines for bios interface
+;
+move:
+        ;move data length of length CL from source DX to
+        ;destination given by BX
+        push    cx
+        mov     ch,0
+        mov     si,dx
+        mov     di,bx
+rep     movs    al,al
+        pop     cx
+        ret
+;
+;
+selectdisk:
+        ;select the disk drive given by curdsk, and fill
+        ;the base addresses curtrka - alloca, then fill
+        ;the values of the disk parameter block
+;
+        MOV     cl,curdsk               ;current disk# to CL
+                                        ;lsb of DL = 0 if not yet
+                                        ;logged in
+        CALL    seldskf                 ;BX filled by call
+                                        ;BX = 0000 if error,
+                                        ;otherwise disk headers
+        cmp     bx,0
+        jz      ret4                    ;rz
+        MOV     DX,[bx]
+        add     bx,2
+        MOV     cdrmaxa,BX
+        add     bx,2
+        MOV     curtrka,BX
+        add     bx,2
+        MOV     curreca,BX
+        add     bx,2
+                                        ;DX still contains .tran
+        xchg    bx,dx
+        MOV     tranv,bx                ;.tran vector
+        LEA     BX,buffa                ;DX= source for move, BX=dest
+        MOV     CL,addlist
+        CALL    move                    ;addlist filled
+                                        ;now fill the disk
+                                        ;parameter block
+        MOV     dx,dpbaddr
+        LEA     BX,sectpt               ;BX is destination
+        MOV     CL,dpblist
+        CALL    move                    ;data filled
+                                        ;set single/double map mode
+        MOV     al,byte ptr maxall+1    ;largest allocation number
+        LEA     BX,single
+        MOV     b[bx],true                      ;assume a=00
+        OR      AL,AL
+        JZ      retselect
+                                        ;high order of maxall not
+                                        ;zero, use double dm
+        MOV     b[bx],false
+retselect:
+        MOV     AL,true
+        OR      AL,AL
+ret4:   RET                             ;select disk function ok
+;
+home:
+        ;move to home position, then offset to start of dir
+        CALL    homef
+                                        ;first directory pos. selected
+        XOR     AX,AX                   ;constant zero to accumulator
+        MOV     BX,curtrka
+        MOV     [bx],ax                         ;curtrk=0000
+                                        ;curtrk, currec both set to 0
+        RET
+;
+rdbuff:
+        ;read buffer and check if ok
+        CALL    readf                   ;current drive, track,....
+        jmps    diocomp                 ;check for i/o errors
+;
+wrbuff:
+        ;write buffer and check condition
+        ;write type (wrtype) is in register CL
+        ;wrtype = 0 => normal write operation
+        ;wrtype = 1 => directory write operation
+        ;wrtype = 2 => start of new block
+        CALL    writef                  ;current drive, track, ...
+diocomp:                                ;check for disk errors
+        OR      AL,AL
+        jz      ret4                    ;rz
+        LEA     BX,pererr
+        JMP     goerr
+;
+seekdir:
+        ;seek the record containing the current dir entry
+        MOV     BX,dcnt                 ;directory counter to BX
+        MOV     CL,dskshf
+        shr     bx,cl                   ;value to BX
+        MOV     arecord,BX
+        MOV     drec,BX                 ;ready for seek
+                                        ; jmp seek
+                                        ;ret
+;
+seek:
+        ;seek the track given by arecord (actual record)
+;
+;
+        mov     ax,arecord              ;compute track/sector
+        mov     dx,0
+        div     sectpt                  ;dx=sector, ax=track
+        push    dx
+        mov     cx,ax                   ;update curtrk
+        mov     si,curtrka
+        mov     [si],cx
+        add     cx,offsetv              ;set BIOS track
+        call    settrkf
+        pop     cx                      ;set BIOS sector
+        mov     dx,tranv
+        call    sectran
+        mov     cx,bx
+        jmp     setsecf
+        ;ret
+;
+;
+;       utility functions for file access
+;
+dmposition:
+        ;compute disk map position for vrecord to BX
+        lea     bx,blkshf
+        MOV     CL,[bx]                 ;shift count to CL
+        MOV     AL,lvrecord             ;current virtual record to A
+        shr     al,cl
+        ;A = shr(vrecord,blkshf) = vrecord/2**(sect/block)
+        MOV     CH,AL                   ;save it for later addition
+        MOV     cl,7
+        SUB     cl,[bx]
+        MOV     AL,extval               ;extent value ani extmsk
+;
+                                        ;blkshf = 3,4,5,6,7
+                                        ;CL=4,3,2,1,0
+                                        ;shift is 4,3,2,1,0
+        shl     al,cl
+;arrive here with A = shl(ext and extmsk,7-blkshf)
+        ADD     AL,CH                   ;add the previous
+                                        ;shr(vrecord,blkshf) value
+                                        ;AL is one of the following
+                                        ;values, depending upon alloc
+                                        ;bks blkshf
+                                        ;1k   3     v/8 + extval * 16
+                                        ;2k   4     v/16+ extval * 8
+                                        ;4k   5     v/32+ extval * 4
+                                        ;8k   6     v/64+ extval * 2
+                                        ;16k  7     v/128+extval * 1
+        RET                             ;with dm$position in A
+;
+getdm:
+        ;return disk map value from position given by CX
+        MOV     BX,info                 ;base address of file
+                                        ;file control block
+        ADD     BX,dskmap               ;bx=.diskmap
+        ADD     BX,CX                   ;index by asingle byte value
+        cmp     single,0                ;single byte/map entry?
+        JZ      getdmd                  ;get disk map single byte
+        MOV     BL,[bx]
+        MOV     BH,0
+        RET                             ;with BX=00bb
+getdmd:
+        ADD     BX,CX                   ;bx=.fcb(dm+1*2)
+                                        ;return double precision value
+        MOV     bx,[bx]
+        RET
+;
+index:
+        ;compute disk block number from current FCB
+        CALL    dmposition              ;0...15 in register AL
+        MOV     CL,AL
+        MOV     CH,0
+        CALL    getdm                   ;value to BX
+        MOV     arecord,BX
+        RET
+;
+alloct:
+        ;called following index to see if block allocated
+        MOV     BX,arecord
+        or      bx,bx
+        RET
+;
+atran:
+        ;compute actual record address, assuming index called
+        MOV     cl,blkshf               ;shift count to reg AL
+        MOV     BX,arecord
+        shl     bx,cl
+        MOV     ablock,BX               ;save shifted block #  
+        MOV     AL,lvrecord
+        AND     AL,blkmsk               ;masked value in AL
+        OR      bl,al
+        MOV     arecord,BX              ;arecord=BX or 
+                                        ;(vrecord and blkmsk)
+        RET
+;
+getexta:
+        ;get current extent field address to AL
+        MOV     BX,info
+        add     bx,extnum               ;bx=.fcb(extnum)
+        mov     al,[bx]
+        RET
+;
+gtfcba:
+        ;compute reccnt and nxtrec addresses for get/setfcb
+        MOV     DX,reccnt
+        add     dx,info                 ;DX=.fcb(reccnt)
+        MOV     BX,(nxtrec-reccnt)
+        ADD     BX,DX                   ;bx=.fcb(nxtrec)
+        RET
+;
+getfcb:
+        ;set variables from currently addressed FCB
+        CALL    gtfcba                  ;addresses in DX, BX
+        MOV     AL,[bx]
+        MOV     lvrecord,al             ;vrecord=fcb(nxtrec)
+        XCHG    BX,DX
+        MOV     AL,[bx]
+        MOV     rcount,AL               ;rcount=fcb(reccnt)
+        CALL    getexta                 ;BX=.fcb(extnum)
+        MOV     AL,extmsk               ;extent mask to a
+        AND     AL,[bx]                 ;fcb(extnum) and extmsk
+        MOV     extval,AL
+        RET
+;
+setfcb:
+        ;place values back into current fcb
+        CALL    gtfcba                  ;addresses to DX, BX
+        MOV     AL,seqio
+        CMP     AL,02
+        JNZ     setfc1
+        XOR     AL,AL                   ;check ranfill  
+setfc1:
+                                        ;=1 if sequential i/o
+        add     AL,lvrecord              
+        MOV     [bx],al                 ;fcb(nxtrec)=vrecord+seqio
+        XCHG    BX,DX
+        MOV     AL,rcount
+        MOV     [bx],al                 ;fcb(reccnt)=rcount
+        RET
+;
+;
+cmpecs:
+        ;compute checksum for current directory buffer
+        MOV     cx,recsiz               ;size of directory buffer
+        MOV     BX,buffa                ;current directory buffer
+        XOR     AL,AL                   ;clear checksum value
+cmpec0:
+        ADD     AL,[bx]
+        INC     BX
+        loop    cmpec0
+        RET                             ;with checksum in A
+;
+setcdisk:
+        ;set a "1" value in curdsk position of CX
+        PUSH    CX                      ;save input parameter
+        MOV     cl,curdsk
+        MOV     BX,1                    ;number to shift
+        shl     bx,cl                   ;BX = mask to integrate
+        POP     CX                      ;original mask
+        or      bx,cx                   ;BX = mask or rol(1,curdsk)
+        RET
+;
+nowrite:
+        ;return true if dir checksum difference occurred
+        MOV     ax,rodsk
+        MOV     cl,curdsk
+        shr     ax,cl
+        AND     AL,1
+        RET                             ;non zero if nowrite
+;
+setro:
+                                        ;set current disk to read only
+        mov     cx,rodsk
+        CALL    setcdisk                ;sets bit to 1
+        MOV     rodsk,BX
+                                        ;high water mark in directory
+                                        ;goes to max
+        MOV     dx,dirmax
+        INC     dx
+        MOV     BX,cdrmaxa              ;BX = .cdrmax
+        MOV     [bx],dx                 ;cdrmax = dirmax
+        RET
+;
+ckrodir:
+        ;check current directory element for read/only status
+        CALL    getdptra                ;address of element
+;                                               
+ckrofile:
+        ;check current buff(dptr) or fcb(0) for r/o status
+        MOV     DX,rofile
+        ADD     BX,DX                   ;offset to r/o bit
+        MOV     AL,[bx]
+        RCL     AL,1
+        jae     ret5                    ;rnc
+        LEA     BX,rofer
+        JMP     goerr                   ;
+;       jmp roferror ;exit to read only disk message
+;
+;
+checkwrite:
+        ;check for write protected disk
+        CALL    nowrite
+        jz      ret5                    ;rz
+        LEA     BX,roderr
+        JMP     goerr
+;       jmp roderror ;read only disk error
+;
+getdptra:
+        ;compute the address of a directory element at
+        ;positon dptr in the buffer
+        MOV     BX,buffa
+        MOV     AL,dptr
+addh:
+        ;BX = BX + AL
+        mov     ah,0
+        add     bx,ax
+ret5:   ret
+;
+;
+getmodnum:
+        ;compute the address of the module number
+        ;bring module number to accumulator
+        ;(high order bit is fwf (file write flag)
+        MOV     BX,info
+        add     bx,modnum
+        MOV     AL,[bx]
+        RET                             ;AL=fcb(modnum)
+;
+clrmodnum:
+        ;clear the module number field for user open/make
+        CALL    getmodnum
+        MOV     b[bx],0                 ;fcb(modnum)=0
+        RET
+;
+setfwf:
+        CALL    getmodnum               ;BX=.fcb(modnum),
+                                        ;AL=fcb(modnum)
+                                        ;set fwf(file write flag) to 1
+        OR      AL,fwfmsk
+        MOV     [bx],al                 ;fcb(modnum)=fcb(modnum) + 80h
+                                        ;also returns non zero
+                                        ;in accumulator
+        RET
+;
+;
+compcdr:
+        ;return cy if cdrmax > dcnt
+        MOV     dx,dcnt                 ;DX = directory counter
+        MOV     BX,cdrmaxa              ;BX=.cdrmax
+        cmp     dx,[bx]
+                                        ;condition dcnt - cdrmax
+                                        ;produces cy if cdrmax>dcnt
+ret6:   RET
+;
+setcdr:
+        ;if not (cdrmax > dcnt) then cdrmax = dcnt+1
+        CALL    compcdr
+        jb      ret6                    ;return if cdrmax > dcnt
+                                        ;otherwise, BX = .cdrmax+1,
+                                        ;DX = dcnt
+        INC     DX
+        MOV     [bx],dx
+        RET
+;
+subdh:
+        ;compute BX = DX - BX
+        push    dx
+        sub     dx,bx
+        mov     bx,dx
+        pop     dx
+        RET
+;
+newchecksum:
+        ;drop through to compute new checksum
+        MOV     CL,true
+checksum:
+        ;compute current checksum record and update the
+        ;directory element if CL=true, or check for = if not
+        ;drec < chksiz?
+        MOV     DX,drec
+        MOV     BX,chksiz
+        CALL    subdh                   ;DX-BX
+        jae     ret6                    ;skip checksum if past
+                                        ;checksum vector size
+                                        ;drec < chksiz, so continue
+        PUSH    CX                      ;save init flag
+        CALL    cmpecs                  ;check sum value to AL
+        MOV     BX,drec                 ;value of drec
+        ADD     BX,checka               ;bx=.check(drec)
+        POP     CX                      ;recall true or false to CL
+        INC     CL                      ;true produces zero flag
+        JZ      initcs
+                                        ;not initializing, compare
+        CMP     AL,[bx]                 ;compute$cs=check(drec)?
+        jz      ret7                    ;no message if ok
+                                        ;checksum error, are we beyond
+                                        ;the end of the disk?
+        CALL    compcdr
+        jae     ret7                    ;no message if so
+        CALL    setro                   ;read/only disk set
+        RET
+initcs:
+                                        ;initializing the checksum
+        MOV     [bx],al
+ret7:   RET
+;
+;
+wrdir:
+        ;write the current directory entry, set checksum
+        CALL    newchecksum             ;initialize entry
+        CALL    setdir                  ;directory dma
+        MOV     CL,1                    ;indicates a write directory
+        CALL    wrbuff                  ;write the buffer
+        JMP     setdata                 ;to data dma address
+                                        ;ret
+;
+rddirbuf:
+        ;read a directory entry into the directory buffer
+        CALL    setdir                  ;directory dma
+        CALL    rdbuff                  ;directory record loaded
+                                        ; jmp setdata
+                                        ; ret
+;
+setdata:
+        ;set data dma address
+        mov     cx,dmabase
+        call    setdmbf                 ;set BIOS disk I/O base
+        LEA     BX,dmaad
+        jmps    setdma                  ;to complete the call
+;
+setdir:
+        ;set directory dma address
+        mov     cx,ds
+        call    setdmbf                 ;set BIOS disk I/O base
+        LEA     BX,buffa                ;jmp setdma to complete call     
+;
+setdma:
+        ;BX=.dma address to set (i.e., buffa or dmaad)
+        MOV     CX,[bx]                 ;parameter ready
+        JMP     setdmf
+;
+;
+dirtouser:
+        ;copy the directory entry to the user buffer
+        ;after call to search or searchn by user code
+        MOV     DX,buffa                ;source is directory buffer
+        MOV     BX,dmaad                ;destination is user dma addr.
+        MOV     CL,recsiz               ;copy entire record
+        push    es                      ;move to user segment
+        mov     es,parametersegment
+        call    move
+        pop     es
+        ret
+                                        ;ret
+;
+endofdir:
+        ;return zero flag if at end of director, non zero
+        ;if not at end (end of dir if dcnt = 0ffffh)
+        LEA     BX,dcnt
+        MOV     AL,[bx]                 ;may be 0ffh
+        INC     BX
+        CMP     AL,[bx]                 ;low(dcnt) = high(dcnt)?
+        jnz     ret8                    ;return non zero if different
+                                        ;high and low the same,= 0ffh?
+        INC     AL                      ;0ffh becomes 00 if so
+ret8:   RET
+;
+setenddir:
+        ;set dcnt to the end of the directory
+        MOV     BX,enddir
+        MOV     dcnt,bx
+        RET
+;
+rddir:
+        ;read next directory entry, with CL=true if initializing
+        MOV     DX,dirmax               ;in preparation for subtract
+        MOV     BX,dcnt
+        INC     BX
+        MOV     dcnt,bx                 ;dcnt=dcnt+1
+                                        ;continue while dirmax >= dcnt
+                                        ;(dirmax-dcnt no cy)
+        CALL    subdh                   ;DX-BX
+        JAE     rddir0
+                                        ;yes, set dcnt to end
+                                        ;of directory
+        jmps    setenddir
+;               ret
+rddir0:
+        ;not at end of directory, seek next element
+                                        ;CL=initialization flag
+        MOV     AL,ldcnt
+        AND     AL,dskmsk               ;low(dcnt) and dskmsk
+        push    cx
+        MOV     cl,fcbshf               ;to multiply by fcb size
+        shl     al,cl
+        pop     cx
+                                        ;A = (low(dcnt) and dskmsk)
+                                        ;shl fcbshf
+        MOV     dptr,AL                 ;ready for next dir operation
+        OR      AL,AL
+        jnz     ret71                   ;return if not a new record
+        PUSH    CX                      ;save initialization flag CL
+        CALL    seekdir                 ;seek proper record
+        CALL    rddirbuf                ;read the directory record
+        POP     CX                      ;recall initialization flag
+        JMP     checksum                ;checksum the directory elt
+                                        ;ret
+;
+;
+getallocbit:
+        ;given allocation vector
+        ;position on CX, return byte
+        ;containing CX shifted so that the least significant
+        ;bit is in the low order accumulator position. BX is
+        ;the address of the byte for
+        ;possible replacement in
+        ;memory upon return, and DH contains the number of shifts
+        ;required to place the returned value back into position
+;
+        MOV     dl,CL
+        AND     dl,111b
+        INC     dl
+        MOV     DH,dl
+                                        ;dh and dl both contain the
+                                        ;number of bit positions to
+                                        ;shift
+        MOV     AL,CL
+        mov     cl,3
+        ror     al,cl
+        AND     AL,11111b
+        MOV     CL,AL                   ;CL shr 3 to CL
+        push    cx
+        mov     cl,5
+        shl     al,cl
+        pop     cx
+        or      CL,AL                   ;bbbccccc to CL
+        MOV     AL,CH
+        ROR     AL,1
+        ROR     AL,1
+        ROR     AL,1
+        AND     AL,11111b
+        MOV     CH,AL                   ;CX shr 3 to CX
+        MOV     BX,alloca               ;base addr. of alloc. vector
+        ADD     BX,CX
+                                        ;byte to A, hl =
+        MOV     AL,[bx]                 ;.alloc(CX shr 3)
+                                        ;now move the bit to the
+                                        ;low order position of AL
+        push    cx
+        mov     cl,dl
+        rol     al,cl
+        pop     cx
+ret71:  RET
+;
+;
+setallocbit:
+        ;CX is the bit position of ALLOC to set or reset. The
+        ;value of the bit is in register DL.
+        PUSH    DX
+        CALL    getallocbit             ;shifted val AL,count in DL
+        AND     AL,11111110b            ;mask low bit to zero
+                                        ;(may be set)
+        POP     CX
+        OR      AL,CL                   ;low bit of CL masked into AL
+                                        ; jmp rotr
+                                        ; ret
+rotr:
+        ;byte value from ALLOC is in register AL, with shift count
+        ;in register CH (to place bit back into position), and
+        ;target ALLOC position in registers BX, rotate and replace
+;
+        push    cx
+        mov     cl,ch
+        ror     al,cl
+        mov     [bx],al
+        pop     cx
+        ret
+;
+;************* end BDOS filesystem part 1 **************
+end
+

@@ -1,0 +1,140 @@
+.th ld8k 1 Loader/linker
+.sh DESCRIPTION
+
+ld8k - loader/linker
+
+.sh SYNOPSIS
+
+ld8k [option] file ...
+
+.sh DESCRIPTION
+
+Ld8k combines several object programs into one.  It is capable of linking
+both segmented and non-segmented Z8000 object modules.  However, all of
+the modules linked must be of the same type.  Ld8k also has facilities for
+searching libraries in the format prepared by ar8k.  
+Normally, the output (default = x.out) is prepared for execution, however
+the -r option may be used to preserve relocation information so that the
+output can be used as further input to ld8k.
+
+If no errors occur during the execution of ld8k, the output module is
+marked with a magic word that indicates that it is executable.
+
+Arguments to ld8k are processed in the order that they appear in the
+command line.  Libraries are searched exactly once at the point at which
+they appear in the command.  Only routines that resolve at least one
+external reference are loaded.  Therefore ordering of libraries is
+important.
+
+Whether segmented or non-segmented linking is done depends on the
+type of the first object module encountered, since no mixing of types
+is permissible.  In searching archives, only entry points in modules
+having the correct type are considered.  Hence archives can have modules
+with duplicated entry point names so long as they are in different object
+module types.
+
+There are several options.  Except for library specification (-lxx),
+all should appear before any file names.
+
+.in+5
+.ti-5
+-i\ \ \ Prepare the object file for "split I and D" space.  That is,
+start the data addresses at zero, and in the case of segmented loads,
+segment numbers can also be reused.
+
+.ti-5
+-lxx\ Search the library name "libxx.a".
+This may appear anywhere in the command line.
+
+.ti-5
+-n\ \ \ Mark the text read only so that it may be shared.  This is
+meaningful only for non-segmented loads.  The data boundary is moved up
+to the next 8K byte boundary.
+
+.ti-5
+-o\ \ \ The next argument is taken as the name of the object file
+instead of "x.out".
+
+.ti-5
+-r\ \ \ Preserve relocation information in the output even if all references
+are resolved.
+
+.ti-5
+-s\ \ \ "Strip" the output by removing the symbol table and relocation
+information to save space in the object file.
+
+.ti-5
+-t\ \ \ The next argument is a decimal number that sets the size of the
+stack segment.
+
+.ti-5
+-u\ \ \ Enter the next argument as an undefined reference so that loading
+can be accomplished solely from an archive file.
+
+.ti-5
+-d\ \ \ The next argument is taken to be a file name containing segment
+numbers and name correspondences.  In this way specific segment numbers
+can be assigned to named segments, or the loader can be forced to ignore
+specific segment numbers.  The are two formats for the descriptor file.
+The first format is a sequence of ASCII lines as follows:
+
+<number>[,<typechar>]*=<name>[,<name>]*
+
+or
+
+<number>
+
+The first form requires the named segments to be assigned the given
+number.  The <typechar> should be one of the letters "t", "b", "d", or "c"
+to indicate segment types text, data, bss, or constant respectively.  If
+the type is not indicated, the type of the named segment will be used.
+If all of the named segments with the same name
+will not fit into 64KB, an error
+message will be issued.  The order in which the named segments are assigned
+to the numbered segment is the order in which the names appear in the
+control line.  The second form effectively reserves the segment number and
+does not permit the loader to use it.
+
+The second form of the descriptor file is as follows:
+
+<type>=<number>[-<number][,<number[-<number]]*
+
+In this form the type is one of the names: "text", "bss", "data", or "cons",
+and the numbers are the valid numbers for this type of segment.
+
+In both forms, the output file will have the segments appearing in the
+same order in which they are first encountered in the descriptor file.  In
+this way, the object order can be forced.  For example:
+
+.nf
+.in+10
+text=11,9,7
+cons=10,12,8
+data=15-18
+bss=3-1
+.in-10
+.fi
+
+will cause text to be put first in segment 11, then 9, then 7 (as each of
+the segments is filled in turn), constants into 10, 12, and 8, data into
+15, 16, 17, and 18, and bss to be filled into 3, 2, and 1.  The specific
+ordering will be preserved in each case.  If this proves to be an insufficient
+number of preallocated segments, segments 0, 4, 5, 6, 13, 14, 19+ will be
+selected in turn.  (Remember that segments can be avoided using the first
+form above.)
+
+If segment types are mixed (text=5/data=5 for example), both types of
+segments will be allocated first in segment 5, then subsequent allocation
+will be separated.  However, if the file reads text=4,6/data=5,6, both
+data and text will be allowed to spill into segment 6.
+
+.ti-5
+-d"descriptor line"  this is a shorthand form of the preceding control
+in which one line will suffice.  -d commands may be repeated, in which
+case they are processed in the order they are encountered.
+.in-5
+
+.sh FILES
+
+lib*.a               libraries
+x.out                object file

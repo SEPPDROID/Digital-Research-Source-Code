@@ -1,0 +1,485 @@
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   1
+
+     1  
+     2                            ; **********************************************************************
+     3                            ; initdira - Provides BIOS (XIOS) assembler interface for INITDIR.PLI
+     4                            ;          - Also provides examples of how to:
+     5                            ;               1. Call CCP/M-86 XIOS
+     6                            ;               2. Lock up disk system for direct disk I/O
+     7                            ;               3. Lock up console, to prevent a job from being switched out
+     8                            ; **********************************************************************
+     9  
+    10  
+    11                                    cseg
+    12  
+    13                                    public  bstdma          ; sets DMA segment and offset
+    14                                    public  rdsec           ; reads a physical sector
+    15                                    public  sectrn          ; translates a sector
+    16                                    public  seldsk          ; selects a drive
+    17                                    public  setsec          ; sets the sector to be read/written
+    18                                    public  settrk          ; sets the track to be read/written
+    19                                    public  wrsec           ; writes a physical sector
+    20  
+    21                                    public  openvec         ; returns open files vector
+    22                                    public  syslock         ; locks up the disk system
+    23                                    public  sysunlock       ; unlocks the disk system
+    24                                    public  conlock         ; locks the console into foreground mode
+    25                                    public  conunlock       ; unclocks the console
+    26  
+    27  
+    28     0009                   IO_SELDSK equ     9             ; XIOS function number
+    29     000A                   IO_READ   equ    10             ; XIOS function number
+    30     000B                   IO_WRITE  equ    11             ; XIOS function number
+    31     0091                   P_PRIORITY equ  145             ; BDOS function: set Process PRIORITY
+    32     009A                   S_SYSDAT  equ   154             ; BDOS function: get SYStem DATa page address
+    33     009C                   P_PDADR   equ   156             ; BDOS function: get Process Descriptor address
+    34     0087                   Q_OPEN    equ   135             ; Open Queue
+    35     008A                   Q_READC   equ   138             ; Read Queue Conditional
+    36     008B                   Q_WRITEC  equ   139             ; Write Queue Conditional
+    37  
+    38     0028                   XIOS_ptr  equ   dword ptr .28h  ; loc of XIOS entry in SYSDAT 
+    39     0088                   OPVEC     equ   word ptr .88h   ; loc of Open_Files_on_Drives vector
+    40     0010                   UDA_seg   equ   word ptr 10h    ; loc of UDA seg in Process Descriptor
+    41  
+    42  
+    43  
+    44                            ;*****************************************************************
+    45                            ;***   PL/I Utility Functions                                  ***
+    46                            ;*****************************************************************
+    47                            getp1:  ; get single byte parameter to register DL
+    48   0000 8B1F                        mov     bx,[bx]         ;BX = .char
+    49   0002 8A17                        mov     dl,[bx]         ;to register DL
+    50   0004 C3                          ret
+    51  
+    52                            getp2:  ; get single word value to DX
+    53                            getp2i: ; same as getp2
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   2
+
+    54  
+    55   0005 8B1F                        mov     bx,[bx]
+    56   0007 8B17                        mov     dx,[bx]
+    57   0009 C3                          ret
+    58  
+    59  
+    60                            getsu:  ;get sysdat and uda addrs
+    61                                    ;enters: DS=local data seg
+    62                                    ;exits:  DS=SYSDAT seg, ES=UDA seg (for call to XIOS)
+    63   000A 8B0E0200     R              mov     cx,udaaddr      ;get the saved value
+    64   000E 0BC9                        or      cx,cx           ;set flags
+    65   0010 7409           001B         jz      getsu1          ;uninitialized, go do the OS call
+    66   0012 8EC1                        mov     es,cx           ;we've been here before, just load regs
+    67   0014 8B0E0000     R              mov     cx,sysaddr
+    68   0018 8ED9                        mov     ds,cx
+    69   001A C3                          ret
+    70  
+    71                            getsu1:
+    72   001B B19C                        mov     cl,P_PDADR      ;get Process Descriptor
+    73   001D CDE0                        int     0E0h            ;call BDOS
+    74   001F 268B4F10                    mov     cx,es:UDA_seg[bx] ;grab UDA_seg
+    75   0023 890E0200     R              mov     udaaddr,cx      ;save for future calls
+    76   0027 51                          push    cx              ;save UDA_seg
+    77   0028 B19A                          mov   cl,S_SYSDAT     ;get address of SYStem DATa area
+    78   002A CDE0                          int   0E0h            ;call BDOS
+    79   002C 8CC1                          mov   cx,es           ;mov ds,es
+    80   002E 890E0000     R                mov   sysaddr,cx      ;save for future calls
+    81   0032 8ED9                          mov   ds,cx
+    82   0034 07                          pop     es              ;restore UDA_seg
+    83   0035 C3                          ret
+    84  
+    85  
+    86  
+    87                            ;*****************************************************************
+    88                            ;***   Simulate old XIOS style functions                       ***
+    89                            ;*****************************************************************
+    90                            bstdma: ; sets DMA segment and offset
+    91   0036 E8CCFF         0005         call    getp2           ;dma address to DX
+    92   0039 89163100     R              mov     dmaoff,dx       ;stuff addr in IOPB's offset field
+    93   003D 8C1E2F00     R              mov     dmaseg,ds       ;assume all addresses relative to DS
+    94   0041 C3                          ret                     ;no BDOS/XIOS call, just init the IOPB
+    95  
+    96  
+    97                            sectrn: ; translates a sector
+    98   0042 E8C0FF         0005         call    getp2           ;get sector number to DX
+    99   0045 8BDA                        mov     bx,dx           ;no translation: return (unchanged) value
+   100   0047 C3                          ret
+   101  
+   102  
+   103                            setsec: ; sets the sector to be read/written
+   104   0048 E8BAFF         0005         call    getp2i          ;sector number to DX
+   105   004B 89162D00     R              mov     sector,dx       ;stuff sector into IOPB
+   106   004F C3                          ret
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   3
+
+   107  
+   108  
+   109  
+   110                            settrk: ; sets the track to be read/written
+   111   0050 E8B2FF         0005         call    getp2i          ;track number to DX
+   112   0053 89162B00     R              mov     track,dx        ;stuff track into IOPB
+   113   0057 C3                          ret
+   114  
+   115  
+   116                            ;*****************************************************************
+   117                            ;***  Physical I/O calls                                       ***
+   118                            ;*****************************************************************
+   119                            rdsec:  ; reads a physical sector
+   120   0058 B80A00                      mov     ax,IO_READ
+   121   005B E90300         0061         jmp     xiosiopb        ;jump around this code
+   122  
+   123                            wrsec:  ; writes a physical sector
+   124   005E B80B00                      mov     ax,IO_WRITE     ;fall thru to xiosiopb
+   125  
+   126                            xiosiopb:       ;put the IOPB on the stack, call XIOS
+   127   0061 1E                          push    ds              ;ds will contain SYSDAT seg
+   128   0062 06                          push    es              ;es will contain UDA seg
+   129                                            ;someday change this to a block move?
+   130   0063 8A2E2900     R              mov     ch,mscnt
+   131   0067 8A0E2A00     R              mov     cl,drv
+   132   006B 51                          push    cx              ;1st word of IOPB
+   133   006C 8B0E2B00     R              mov     cx,track
+   134   0070 51                          push    cx              ;2nd word
+   135   0071 8B0E2D00     R              mov     cx,sector
+   136   0075 51                          push    cx              ;3rd word
+   137   0076 8B0E2F00     R              mov     cx,dmaseg
+   138   007A 51                          push    cx              ;4th word
+   139   007B 8B0E3100     R              mov     cx,dmaoff
+   140   007F 51                          push    cx              ;5th word
+   141  
+   142   0080 50                          push    ax              ;save XIOS_function
+   143   0081 E886FF         000A         call    getsu           ;set up DS-SYSDAT and ES-UDA
+   144   0084 58                          pop     ax              ;restore XIOS_function
+   145   0085 FF1E2800                    callf   XIOS_ptr        ;call indirect the XIOS
+   146                                                            ;bl contains return status
+   147   0089 59                          pop     cx              ;dma offset
+   148   008A 59                          pop     cx              ;dma segment
+   149   008B 59                          pop     cx              ;track
+   150   008C 59                          pop     cx              ;sector
+   151   008D 59                          pop     cx              ;drv & mscnt
+   152   008E 07                          pop     es              ;restore original es
+   153   008F 1F                          pop     ds              ;ditto for ds
+   154   0090 C3                          ret     
+   155  
+   156  
+   157                            ;*****************************************************************
+   158                            ;*** XIOS Select Disk Routine                                  ***
+   159                            ;*****************************************************************
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   4
+
+   160  
+   161                            seldsk: ; selects a drive
+   162                                    ; also resets login sequence number of drive to 0,
+   163                                    ;   to force permanent media to be logged in again on disk reset
+   164  
+   165   0091 E86CFF         0000         call    getp1           ;drive to DL
+   166   0094 88162A00     R              mov     drv,dl          ;stuff drive into IOPB
+   167   0098 061E                        push es ! push ds       ;save context ************
+   168                                                            ;do the XIOS SELDSK call
+   169   009A 52                          push    dx              ;save drive
+   170   009B E86CFF         000A         call    getsu           ;set up DS and ES
+   171   009E 59                          pop     cx              ;restore drive
+   172   009F B80900                      mov     ax,IO_SELDSK
+   173   00A2 BA0000                      mov     dx,0            ;this better not be the first call
+   174   00A5 FF1E2800                    callf   XIOS_ptr        ;call indirect XIOS
+   175                                                            ;xfer DPH locally
+   176   00A9 0706                        pop es ! push es        ;restore & save Data Segment into es
+   177   00AB BF0400       R              mov     di,offset dph   ;set up destination
+   178   00AE 8BF3                        mov     si,bx           ;ptr to dph returned from XIOS call
+   179   00B0 C6440600                    mov     log_seqn[si],0  ;force disk reset: 0 login sequence number
+   180   00B4 B91400                      mov     cx,dphsiz
+   181   00B7 F3A4                        rep movsb               ;move copy of DPH into local storage
+   182                                                            ;xfer DPB locally
+   183   00B9 BF1800       R              mov     di,offset dpb   ;set up destination
+   184   00BC 268B360C00   R              mov     si,es:dpbptr    ;get this info from DPH
+   185   00C1 B91100                      mov     cx,dpbsiz
+   186   00C4 F3A4                        rep movsb               ;move copy of DPB into local storage
+   187                                                            ;cleanup
+   188   00C6 1F07                        pop ds ! pop es         ;restore context ************
+   189   00C8 C7060C001800 R              mov     dpbptr,offset dpb ;set up local ptr in DPH
+   190   00CE BB0400       R              mov     bx,offset dph   ;return address of local copy of DPH
+   191   00D1 C3                          ret
+   192  
+   193  
+   194                            ;*****************************************************************
+   195                            ;***  Open Drives Vector                                       ***
+   196                            ;*****************************************************************
+   197                            openvec:        ; returns vector of drives with open files
+   198   00D2 06                          push    es              ;save extra seg
+   199   00D3 1E                          push    ds              ;save data seg
+   200   00D4 B19A                        mov     cl,S_SYSDAT     ;look in the system data page
+   201   00D6 CDE0                        int     0E0h            ;call bdos
+   202   00D8 26A18800                    mov     ax,es:OPVEC     ;get the vector of drives containing open files
+   203   00DC 8BD8                        mov     bx,ax           ;stuff both regs
+   204   00DE 1F                          pop     ds              ;restore data seg
+   205   00DF 07                          pop     es              ;restore extra seg
+   206   00E0 C3                          ret
+   207  
+   208  
+   209                            ;*****************************************************************
+   210                            ;***  System Lock and Unlock Routines                          ***
+   211                            ;*****************************************************************
+   212                            syslock:        ; locks up the disk system
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   5
+
+   213  
+   214                                            ; returns 0 in ax,bx if everything ok, -1 o.w.
+   215   00E1 06                          push    es              ;save extra seg
+   216   00E2 1E                          push    ds              ;save data seg
+   217  
+   218   00E3 B19A                        mov     cl,S_SYSDAT     ;look in the system data page
+   219   00E5 CDE0                        int     0E0h            ;call bdos
+   220   00E7 268B0E8800                  mov     cx,es:OPVEC     ;get the vector of drives containing open files
+   221   00EC F7C1FFFF                    test    cx,0FFFFh       ;check all drives
+   222   00F0 7539           012B         jnz     syslfail        ;fail if any open files
+   223  
+   224   00F2 B98700                      mov     cx,Q_OPEN
+   225   00F5 BA3300       R              mov     dx,offset qpb   ;mxdisk queue parm block
+   226   00F8 CDE0                        int     0E0h            ;call bdos
+   227   00FA 0BC0                        or      ax,ax           ;test return
+   228   00FC 750F           010D         jnz     sysltry2        ;if non zero, try kluge
+   229   00FE B98A00                      mov     cx,Q_READC      ;see if we can read the queue
+   230   0101 BA3300       R              mov     dx,offset qpb   ;insurance
+   231   0104 CDE0                        int     0E0h            ;call bdos
+   232   0106 0BC0                        or      ax,ax           ;test retrun
+   233   0108 7521           012B         jnz     syslfail        ;fail if we can't read mxdisk queue
+   234   010A E91800         0125         jmp     syslokay        ;okay, tell 'em so
+   235  
+   236                            sysltry2:                       ;kluge for old systems
+   237   010D B98700                      mov     cx,Q_OPEN
+   238   0110 BA4300       R              mov     dx,offset qpb2  ;mxdisk queue parm block
+   239   0113 CDE0                        int     0E0h            ;call bdos
+   240   0115 0BC0                        or      ax,ax           ;test return
+   241   0117 7512           012B         jnz     syslfail        ;if non zero
+   242   0119 B98A00                      mov     cx,Q_READC      ;see if we can read the queue
+   243   011C BA4300       R              mov     dx,offset qpb2  ;insurance
+   244   011F CDE0                        int     0E0h            ;call bdos
+   245   0121 0BC0                        or      ax,ax           ;test retrun
+   246   0123 7506           012B         jnz     syslfail        ;fail if we can't read mxdisk queue
+   247                            syslokay:
+   248   0125 B80000E90300   012E         mov ax,0 ! jmp syslret  ;return code 0, everything okay
+   249                            syslfail:
+   250   012B B8FFFF                      mov ax,0FFFFh           ;return code -1, failure
+   251                            syslret:
+   252   012E 8BD8                        mov     bx,ax           ;stuff both regs
+   253   0130 1F                          pop     ds              ;restore data seg
+   254   0131 07                          pop     es              ;restore extra seg
+   255   0132 C3                          ret
+   256  
+   257  
+   258  
+   259                            sysunlock:      ;undoes a 'syslock' function
+   260   0133 B98B00                      mov     cx,Q_WRITEC     ;conditionally write to mxdisk queue
+   261   0136 BA3300       R              mov     dx,offset qpb
+   262   0139 CDE0                        int     0E0h
+   263   013B B98B00                      mov     cx,Q_WRITEC     ;kluge to handle old systems
+   264   013E BA4300       R              mov     dx,offset qpb2
+   265   0141 CDE0                        int     0E0h
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   6
+
+   266  
+   267   0143 C3                          ret
+   268  
+   269  
+   270                            ;*****************************************************************
+   271                            ;***  Console Lock and Unlock Routines                         ***
+   272                            ;*****************************************************************
+   273  
+   274     0002                   CCB_BACKGRD  equ 0002h          ;Console in Background mode
+   275     0008                   CCB_NOSWITCH equ 0008h          ;Console not allowed to switch mode
+   276     002C                   CCB_SIZE     equ 2Ch            ;size of CCB 
+   277     000E                   CCB_STATE    equ word ptr 0Eh   ;addr of Console State word in CCB
+   278     0020                   CON_NUM      equ byte ptr 020h  ;addr of console number in PD
+   279     0054                   CCB_PTR      equ word ptr .054h ;addr of CCB table in SYSDAT
+   280  
+   281     0006                   PD_FLAG      equ word ptr 06    ;addr of FLAGs word in PD
+   282     0002                   PD_KEEP      equ 0002h          ;Keep Process Flag
+   283     0097                   TOP_PRIOR    equ 151            ;What we set to for Top Priority (arbitrary)
+   284     00C8                   REG_PRIOR    equ 200            ;Default Regular Priority
+   285  
+   286  
+   287                            conlock:        ;locks the console into the foreground, sets Keep Flag,
+   288                                            ;  and boosts priority
+   289                                            ;returns 0 in ax,dx if everything okay, -1 o.w.
+   290   0144 06                          push    es              ;save extra seg
+   291   0145 E84700         018F         call    concalc         ;ES=SYSDAT, bx=CCB offset
+   292   0148 26F7470E0200                test    es:CCB_STATE[bx],CCB_BACKGRD    ;is console in background?
+   293   014E 751C           016C         jnz     conlfail        ;background operation not allowed!
+   294   0150 26814F0E0800                or      es:CCB_STATE[bx],CCB_NOSWITCH   ;make sure they don't switch
+   295   0156 B19C                        mov     cl,P_PDADR      ;get Process Descriptor
+   296   0158 CDE0                        int     0E0h            ;call BDOS
+   297   015A 26814F060200                or      es:PD_FLAG[bx],PD_KEEP ;set Keep flag
+   298   0160 B297                        mov     dl,TOP_PRIOR    ;let's be quick
+   299   0162 B191                        mov     cl,P_PRIORITY   ;set Priority
+   300   0164 CDE0                        int     0E0h            ;call BDOS
+   301  
+   302                            conlokay:
+   303   0166 B80000E90300   016F         mov     ax,0 ! jmp conlret
+   304                            conlfail:
+   305   016C B8FFFF                      mov     ax,0FFFFh
+   306                            conlret:
+   307   016F 8BD8                        mov     bx,ax
+   308   0171 07                          pop     es              ;restore extra seg
+   309   0172 C3                          ret
+   310  
+   311  
+   312  
+   313                            conunlock:      ;undoes the 'conlock' function
+   314   0173 06                          push    es              ;save extra seg
+   315   0174 E81800         018F         call    concalc         ;ES=sysdat, bx=CCB offset
+   316   0177 2681670EF7FF                and     es:CCB_STATE[bx],NOT CCB_NOSWITCH ;let them switch now
+   317   017D B19C                        mov     cl,P_PDADR      ;get Process Descriptor
+   318   017F CDE0                        int     0E0h            ;call BDOS
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   7
+
+   319  
+   320   0181 26816706FDFF                and     es:PD_FLAG[bx],NOT PD_KEEP ;reset Keep flag
+   321   0187 B2C8                        mov     dl,REG_PRIOR    ;finished with quick
+   322   0189 B191                        mov     cl,P_PRIORITY   ;set Priority
+   323   018B CDE0                        int     0E0h            ;call BDOS
+   324  
+   325   018D 07                          pop     es              ;restore extra seg
+   326   018E C3                          ret
+   327  
+   328  
+   329  
+   330                            concalc:        ;put SYSDAT in ES, offset of CCB in bx
+   331   018F B99C00                      mov     cx,P_PDADR      ;get Process Descriptor Addr
+   332   0192 CDE0                        int     0E0h            ;call the bdos
+   333   0194 33C0                        xor     ax,ax           ;clear ax
+   334   0196 268A4720                    mov     al,es:CON_NUM[bx] ;grab the console number
+   335   019A B92C00                      mov     cx,CCB_SIZE     ;stuff cx with size
+   336   019D F7E1                        mul     cx              ;compute ccb address
+   337   019F 50                          push    ax              ;save ccb offset
+   338   01A0 B19A                        mov     cl,S_SYSDAT     ;get the System Data Segment
+   339   01A2 CDE0                        int     0E0h            ;call the bdos
+   340   01A4 5B                          pop     bx              ;restore ccb offset
+   341   01A5 26031E5400                  add     bx,es:CCB_PTR   ;compute offset of ccb
+   342   01AA C3                          ret
+   343  
+   344  
+   345  
+   346                            ;*****************************************************************
+   347                            ;***  Data Segment                                             ***
+   348                            ;*****************************************************************
+   349  
+   350                                    dseg    
+   351  
+   352   0000 0000                sysaddr dw      0       ; save location for sysdat addr
+   353   0002 0000                udaaddr dw      0       ; save location for process uda addr
+   354  
+   355     0014                   dphsiz  equ     014h    ; size of Disk Parm Header
+   356   0004                     dph     rb      dphsiz  ; local save area
+   357     0006                   log_seqn equ    byte ptr 6      ; byte to force reset of permanent media
+   358     000C                   dpbptr  equ     word ptr dph+8  ; word of interest: DPB offset
+   359  
+   360     0011                   dpbsiz  equ     011h    ; size of Disk Parameter Buffer
+   361   0018                     dpb     rb      dpbsiz  ; local save area
+   362  
+   363  
+   364   0029                     iopb    rb      0       ; the iopb structure filled in by above rtns
+   365   0029 01                  mscnt   db      1       ; multi sector count
+   366   002A                     drv     rb      1       ; select drive
+   367   002B                     track   rw      1       ; select track
+   368   002D                     sector  rw      1       ; select sector
+   369   002F                     dmaseg  rw      1       ; set dma address
+   370   0031                     dmaoff  rw      1       ; set dma address
+   371     000A                   iopbsiz equ     (offset $)-(offset iopb)
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE   8
+
+   372  
+   373  
+   374  
+   375   0033                     qpb     rb      0       ; queue parameter block
+   376   0033 0000                        dw      0       ; reserved
+   377   0035 0000                        dw      0       ; queueid
+   378   0037 0000                        dw      0       ; nmsgs
+   379   0039 0000                        dw      0       ; buffer
+   380   003B 4D586469736B                db      'MXdisk  ' ; queue name
+   381        2020
+   382  
+   383   0043                     qpb2    rb      0       ; queue parameter block number 2: be persistent
+   384   0043 0000                        dw      0       ; reserved
+   385   0045 0000                        dw      0       ; queueid
+   386   0047 0000                        dw      0       ; nmsgs
+   387   0049 0000                        dw      0       ; buffer
+   388   004B 6D786469736B                db      'mxdisk  ' ; queue name
+   389        2020
+   390  
+   391  
+   392  END OF ASSEMBLY.  NUMBER OF ERRORS:   0.  USE FACTOR:  2%
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE 009
+
+BSTDMA           0036 L    13    90#
+CCB?BACKGRD      0002 N 
+CCB?NOSWITCH     0008 N 
+CCB?PTR          0054 V 
+CCB?SIZE         002C N 
+CCB?STATE        000E N 
+CONCALC          018F L   291   315   330#
+CONLFAIL         016C L   293   304#
+CONLOCK          0144 L    24   287#
+CONLOKAY         0166 L   302#
+CONLRET          016F L   303   306#
+CONUNLOCK        0173 L    25   313#
+CON?NUM          0020 N 
+CS               SREG V 
+DMAOFF           0031 V    92   139   370#
+DMASEG           002F V    93   137   369#
+DPB              0018 V   183   189   361#
+DPBPTR           000C V   184   189   358#
+DPBSIZ           0011 N   185   360#  361 
+DPH              0004 V   177   190   356#  358 
+DPHSIZ           0014 N   180   355#  356 
+DRV              002A V   131   166   366#
+DS               SREG V    68    81    93   127   153   167   188   199   204   216 
+                          253 
+ES               SREG V    66    74    79    82   128   152   167   176   176   184 
+                          188   198   202   205   215   220   254   290   292   294 
+                          297   308   314   316   320   325   334   341 
+GETP1            0000 L    47#  165 
+GETP2            0005 L    52#   91    98 
+GETP2I           0005 L    53#  104   111 
+GETSU            000A L    60#  143   170 
+GETSU1           001B L    65    71#
+IOPB             0029 V   364#  371 
+IOPBSIZ          000A N   371#
+IO?READ          000A N 
+IO?SELDSK        0009 N 
+IO?WRITE         000B N 
+LOG?SEQN         0006 N 
+MSCNT            0029 V   130   365#
+OPENVEC          00D2 L    21   197#
+OPVEC            0088 V    39#  202   220 
+PD?FLAG          0006 N 
+PD?KEEP          0002 N 
+P?PDADR          009C N 
+P?PRIORITY       0091 N 
+QPB              0033 V   225   230   261   375#
+QPB2             0043 V   238   243   264   383#
+Q?OPEN           0087 N 
+Q?READC          008A N 
+Q?WRITEC         008B N 
+RDSEC            0058 L    14   119#
+REG?PRIOR        00C8 N 
+SECTOR           002D V   105   135   368#
+CP/M RASM-86 1.0A  SOURCE: INITDIRA.A86                                                                      PAGE 010
+
+SECTRN           0042 L    15    97#
+SELDSK           0091 L    16   161#
+SETSEC           0048 L    17   103#
+SETTRK           0050 L    18   110#
+SS               SREG V 
+SYSADDR          0000 V    67    80   352#
+SYSLFAIL         012B L   222   233   241   246   249#
+SYSLOCK          00E1 L    22   212#
+SYSLOKAY         0125 L   234   247#
+SYSLRET          012E L   248   251#
+SYSLTRY2         010D L   228   236#
+SYSUNLOCK        0133 L    23   259#
+S?SYSDAT         009A N 
+TOP?PRIOR        0097 N 
+TRACK            002B V   112   133   367#
+UDAADDR          0002 V    63    75   353#
+UDA?SEG          0010 N 
+WRSEC            005E L    19   123#
+XIOSIOPB         0061 L   121   126#
+XIOS?PTR         0028 V 

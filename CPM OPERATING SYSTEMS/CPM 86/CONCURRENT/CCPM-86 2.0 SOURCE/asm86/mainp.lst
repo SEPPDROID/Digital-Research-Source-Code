@@ -1,0 +1,649 @@
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   1
+
+
+ISIS-II PL/M-86 V2.0 COMPILATION OF MODULE MAINP
+OBJECT MODULE PLACED IN MAINP.OBJ
+COMPILER INVOKED BY:  :F0: MAINP.PLM DEBUG OPTIMIZE(2) DATE(10/5/81) PAGEWIDTH(100) XREF
+
+
+
+              $title ('ASM86 MAIN PROGRAM')
+   1          mainp:
+              do;
+              /*
+
+                      This is the main program of the CP/M 8086
+                      assembler. This module activates the i/o
+                      modules and goes through the source text
+                      in 3 passes. The module then for each source
+                      line calls the external subroutine DECODELINE
+                      to perform assembly of each line;
+              */
+
+              /*
+
+                 modified  3/25/81  R. Silberstein
+                 modified  3/28/81  R. Silberstein
+                 modified  3/30/81  R. Silberstein
+                 modified  4/7/81   R. Silberstein
+                 modified  4/20/81  R. Silberstein
+                 modified  6/16/81  R. Silberstein
+                 modified  7/24/81  R. Silberstein
+                 modified  7/27/81  R. Silberstein
+                 modified  8/21/81  R. Silberstein
+
+              */
+
+              $include (:f1:macro.lit)
+          =   $nolist
+              $include (:f1:struc.lit)
+          =   $nolist
+              $include (:f1:equals.lit)
+          =   $nolist
+              $include (:f1:dev.lit)
+          =   $nolist
+              $include (:f1:ermod.lit)
+          =   $nolist
+              $include (:f1:subr2.ext)
+          =   $nolist
+              $include (:f1:io.ext)
+          =   $nolist
+              $include (:f1:files.ext)
+          =   $nolist
+              $include (:f1:outp.ext)
+          =   $nolist
+              $include (:f1:scan.ext)
+          =   $nolist
+              $include (:f1:print.ext)
+          =   $nolist
+              $include (:f1:symb.ext)
+          =   $nolist
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   2
+
+
+              $include (:f1:ermod.ext)
+          =   $nolist
+              $include (:f1:mglob.ext)
+          =   $nolist
+              $include (:f1:text.ext)
+          =   $nolist
+              $include (:f1:dline.ext)
+          =   $nolist
+
+ 218   1      DECLARE ASM86 LABEL PUBLIC;
+
+ 219   1      closefiles: procedure;
+ 220   2        call close$source;
+ 221   2        call close$print;
+ 222   2        call close$symbol;
+ 223   2        call close$hex;
+ 224   2      end closefiles;
+
+ 225   1      open$output$files: procedure;
+ 226   2        CALL OPENPRINT;
+ 227   2        CALL OPENHEX;
+ 228   2        CALL OPENSYMBOL;
+ 229   2      end open$output$files;
+
+ 230   1      userbreak: proc byte;  /* test if keyboard break from user */
+ 231   2        if not constat then return false; /* test console status */
+ 233   2        if readconsole then;  /* skip first break key */
+ 235   2        do forever;
+ 236   3          call outtext(.usbreaktext); /* USER BREAK. OK (Y/N)? */
+ 237   3          i=upper(readconsole);
+ 238   3          call crlf;
+ 239   3          if i = yes then return true;
+ 241   3          if i = no then return false;
+                end$forever;
+ 244   2      end userbreak;
+
+ 245   1      varinit: proc;
+ 246   2        CALL FILL (0, .PRINT$ON-.CIP, .CIP);
+ 247   2        errors=0;
+ 248   2        printswitchoff,includeon=false;
+ 249   2        IFLEVEL = 0;
+ 250   2        IFLIST = TRUE;
+ 251   2        csegtype=rcs;
+ 252   2      end varinit;
+
+ 253   1      pass0init: proc;  /* initialize pass 0 */
+ 254   2        simform=false;
+ 255   2        maxcol=119;
+ 256   2        if printdevice=console then maxcol=79;
+ 258   2        call symbinit;  /* initialize symbol table */
+ 259   2        print$on=false;
+ 260   2        call varinit;
+ 261   2      end pass0init;
+
+ 262   1      pass1init: proc;  /* initialize for pass 1 */
+ 263   2        call varinit;
+ 264   2      end pass1init;
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   3
+
+
+
+ 265   1      pass2init: proc;  /* initialize for pass 2 (last pass) */
+ 266   2        print$on=true;
+ 267   2        call varinit;
+ 268   2        call emitinit;
+ 269   2      end pass2init;
+
+ 270   1      pass0terminate: proc;  /* terminate pass 0 */
+ 271   2        call outtext(.pass0text);  /* End of pass 0 */
+ 272   2      end pass0terminate;
+
+ 273   1      pass1terminate: proc;  /* terminate pass 1 */
+ 274   2        print$on=false;      /* dummy */
+ 275   2        call outtext(.pass1text);  /* End of pass 1 */
+ 276   2      end pass1terminate;
+
+ 277   1      pass2terminate: proc;  /* terminate pass 2 (last pass) */
+ 278   2        DECLARE USEFACT BYTE;
+ 279   2        USEFACT = (FREEPT-.MEMORY) / ((ENDOFSYMBTAB-.MEMORY) / 100 + 1);
+ 280   2        errorprinted=false;
+ 281   2        call emitterminate;    /* terminate hex output module */
+ 282   2        call symbterminate;    /* print symbols */
+ 283   2        if printdevice <> console then call printterminate (USEFACT);
+ 285   2        CALL CLOSEFILES;
+ 286   2        call outtext(.endtext);  /* END OF ASSEMBLY... */
+ 287   2        call decout(errors,.help(0));  /* print no of errors */
+ 288   2        call outtext(.help(2));
+ 289   2        CALL OUTTEXT (.USEFACTOR);
+ 290   2        CALL DECOUT (USEFACT, .HELP(0));
+ 291   2        CALL OUTTEXT (.HELP(3));
+ 292   2        CALL WRITECONSOLE (25H);   /* % */
+ 293   2        CALL CRLF;
+ 294   2      end pass2terminate;
+
+ 295   1      include$close: proc (flag);
+ 296   2        declare flag byte;
+ 297   2        if eofset and include$on then$do
+ 299   3          call close$include;
+ 300   3          include$on,eofset=false;
+ 301   3          if flag then$do
+ 303   4            call scan;       /* skip EOF */
+ 304   4            call scan;       /* prepare for next source line */
+ 305   4          end$if;
+                end$if;
+ 307   2      end include$close;
+
+ 308   1      ASM86:
+
+              call globalinit;      /* initialize some globals */
+
+ 309   1      call outtext(.asm86text); /* CP/M 8086 ASSEMBLER.... */
+
+ 310   1      if not filesetup then$do
+ 312   2        call outtext(.parerrtext);  /* PARAMETER ERROR */
+ 313   2        CALL SYSTEMRESET;
+ 314   2      end$if;
+
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   4
+
+
+ 315   1      CALL OPENSOURCE;
+
+ 316   1      CALL OPENOUTPUTFILES;
+
+ 317   1      pass=0ffh;
+ 318   1      do while (pass:=pass+1) < 3;
+ 319   2        do case pass;
+ 320   3          call pass0init;    /* pass 0 */
+ 321   3          call pass1init;    /* pass 1 */
+ 322   3          call pass2init;    /* pass 2 */
+ 323   3        end$case;
+ 324   2        call scaninit;
+ 325   2        call scan;
+ 326   2        do while not eofset;
+ 327   3          if userbreak then$do
+ 329   4            eofset=true;
+ 330   4            pass=3;
+ 331   4          else$do
+ 333   4            errorprinted=false;
+ 334   4            call decodeline;
+ 335   4            call includeclose(false);  /* close include file if necessary */
+ 336   4            call scan;
+ 337   4            call includeclose(true);  /* close include file if necessary */
+ 338   4          end$if;
+ 339   3        end$while;
+ 340   2        do case pass;
+ 341   3          call pass0terminate;  /* pass 0 */
+ 342   3          call pass1terminate;  /* pass 1 */
+ 343   3          call pass2terminate;  /* pass 2 */
+ 344   3          do; end;              /* do nothing if userbreak */
+ 346   3        end$case;
+ 347   2      end$while;
+
+ 348   1      call system$reset;
+
+ 349   1      end$module mainp;
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   5
+
+
+CROSS-REFERENCE LISTING
+-----------------------
+
+
+   DEFN  ADDR   SIZE  NAME, ATTRIBUTES, AND REFERENCES
+  ----- ------ -----  --------------------------------
+
+
+      2               ADDR . . . . . . .    LITERALLY        12   18   36   39   42   45  138
+                                             179  180  186  189  192  195  198  201  204  207
+                                             212 
+     26  0000H        ALPHANUMERIC . . .    PROCEDURE BYTE EXTERNAL(5) STACK=0000H
+     29  0000H        ASCIICHAR. . . . .    PROCEDURE BYTE EXTERNAL(6) STACK=0000H
+    206  0000H     2  ASCIIPTR . . . . .    WORD PARAMETER       207 
+    218  0010H        ASM86. . . . . . .    LABEL PUBLIC         308 
+    215  0000H     1  ASM86TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(106)         309 
+      3               BASEREGBIT . . . .    LITERALLY
+      3               BASEREGCOUNT . . .    LITERALLY
+      3               BREGBIT. . . . . .    LITERALLY
+      3               BREGCOUNT. . . . .    LITERALLY
+      5               BYT. . . . . . . .    LITERALLY
+     23  0000H     1  CH . . . . . . . .    BYTE PARAMETER        24 
+    163  0000H     1  CH . . . . . . . .    BYTE PARAMETER       164 
+    102  0000H     1  CH . . . . . . . .    BYTE PARAMETER       103 
+    146  0000H     1  CH . . . . . . . .    BYTE PARAMETER       147 
+     26  0000H     1  CH . . . . . . . .    BYTE PARAMETER        27 
+     17  0000H     1  CH . . . . . . . .    BYTE PARAMETER        18 
+     29  0000H     1  CH . . . . . . . .    BYTE PARAMETER        30 
+     20  0000H     1  CH . . . . . . . .    BYTE PARAMETER        21 
+    105  0000H     1  CH . . . . . . . .    BYTE PARAMETER       106 
+     32  0000H     1  CH . . . . . . . .    BYTE PARAMETER        33 
+    108  0000H     1  CH . . . . . . . .    BYTE PARAMETER       109 
+     64  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        65 
+     61  0000H     1  CHAR . . . . . . .    BYTE PARAMETER        62 
+    212  0000H     2  CIP. . . . . . . .    WORD EXTERNAL(83)         246 
+    215  0000H     1  CLOSEERRTEXT . . .    BYTE ARRAY(1) EXTERNAL(112)
+     80  0000H        CLOSEFILE. . . . .    PROCEDURE BYTE EXTERNAL(27) STACK=0000H
+    219  00CDH    17  CLOSEFILES . . . .    PROCEDURE STACK=0004H          285 
+    131  0000H        CLOSEHEX . . . . .    PROCEDURE EXTERNAL(48) STACK=0000H       223 
+    129  0000H        CLOSEINCLUDE . . .    PROCEDURE EXTERNAL(47) STACK=0000H       299 
+    133  0000H        CLOSEPRINT . . . .    PROCEDURE EXTERNAL(49) STACK=0000H       221 
+    125  0000H        CLOSESOURCE. . . .    PROCEDURE EXTERNAL(45) STACK=0000H       220 
+    135  0000H        CLOSESYMBOL. . . .    PROCEDURE EXTERNAL(50) STACK=0000H       222 
+      4               CODE . . . . . . .    LITERALLY
+     10               CODEMACROERR . . .    LITERALLY
+      3               CODEMACROHEAD. . .    LITERALLY
+      9               CONSOLE. . . . . .    LITERALLY       256  283 
+     67  0000H        CONSTAT. . . . . .    PROCEDURE BYTE EXTERNAL(22) STACK=0000H       231
+      2               CR . . . . . . . .    LITERALLY
+     92  0000H        CREATEFILE . . . .    PROCEDURE BYTE EXTERNAL(31) STACK=0000H
+    100  0000H        CRLF . . . . . . .    PROCEDURE EXTERNAL(34) STACK=0000H       238  293
+    212  0000H     1  CSEGTYPE . . . . .    BYTE EXTERNAL(84)         251 
+     44  0000H     2  D. . . . . . . . .    WORD PARAMETER        45 
+     41  0000H     2  D. . . . . . . . .    WORD PARAMETER        42 
+     35  0000H     2  D. . . . . . . . .    WORD PARAMETER        36 
+     38  0000H     2  D. . . . . . . . .    WORD PARAMETER        39 
+      2               DCL. . . . . . . .    LITERALLY
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   6
+
+
+    216  0000H        DECODELINE . . . .    PROCEDURE EXTERNAL(117) STACK=0000H      334 
+     44  0000H        DECOUT . . . . . .    PROCEDURE EXTERNAL(11) STACK=0000H       287  290
+      4               DELETEDSYMB. . . .    LITERALLY
+     83  0000H        DELETEFILE . . . .    PROCEDURE EXTERNAL(28) STACK=0000H
+    194  0000H     2  DEST . . . . . . .    WORD PARAMETER       195 
+    137  0000H     1  DEV. . . . . . . .    BYTE PARAMETER       138 
+     20  0000H        DIGIT. . . . . . .    PROCEDURE BYTE EXTERNAL(3) STACK=0000H
+     71  0000H     1  DISKNUMBER . . . .    BYTE PARAMETER        72 
+    215  0000H     1  DISKREADERRTEXT. .    BYTE ARRAY(1) EXTERNAL(109)
+    215  0000H     1  DISKWRITEERRTXT. .    BYTE ARRAY(1) EXTERNAL(110)
+     97  0000H     2  DMAADDRESS . . . .    WORD PARAMETER        98 
+      4               DOUBLEDEFINED. . .    LITERALLY
+     10               DOUBLEDEFLAB . . .    LITERALLY
+     10               DOUBLEDEFSYMB. . .    LITERALLY
+     10               DOUBLEDEFVAR . . .    LITERALLY
+      5               DWRD . . . . . . .    LITERALLY
+    177  0000H        EJECT. . . . . . .    PROCEDURE EXTERNAL(68) STACK=0000H
+      2               ELSEDO . . . . . .    LITERALLY
+    146  0000H        EMITCODEBYTE . . .    PROCEDURE EXTERNAL(55) STACK=0000H
+    142  0000H        EMITINIT . . . . .    PROCEDURE EXTERNAL(53) STACK=0000H       268 
+    144  0000H        EMITTERMINATE. . .    PROCEDURE EXTERNAL(54) STACK=0000H       281 
+    161  0000H        EMPTYLINE. . . . .    PROCEDURE BYTE EXTERNAL(61) STACK=0000H
+     56  0000H     2  ENDBUF . . . . . .    WORD EXTERNAL(17)
+      2               ENDCASE. . . . . .    LITERALLY
+      2               ENDDO. . . . . . .    LITERALLY
+      2               ENDFOREVER . . . .    LITERALLY       242 
+      2               ENDIF. . . . . . .    LITERALLY       305 
+      2               ENDMODULE. . . . .    LITERALLY
+      2               ENDOFFILE. . . . .    LITERALLY
+     10               ENDOFLINEERR . . .    LITERALLY
+    180  0000H     2  ENDOFSYMBTAB . . .    WORD EXTERNAL(70)         279 
+      2               ENDPROC. . . . . .    LITERALLY
+    215  0000H     1  ENDTEXT. . . . . .    BYTE ARRAY(1) EXTERNAL(104)         286 
+      2               ENDWHILE . . . . .    LITERALLY
+    197  0000H        ENTERATTRIBUTES. .    PROCEDURE EXTERNAL(77) STACK=0000H
+    212  0000H     1  EOFSET . . . . . .    BYTE EXTERNAL(92)         297  300  326  329 
+     35  0000H        EQUAL. . . . . . .    PROCEDURE BYTE EXTERNAL(8) STACK=0000H
+    209  0000H        ERRMSG . . . . . .    PROCEDURE EXTERNAL(81) STACK=0000H
+    209  0000H     1  ERRNO. . . . . . .    BYTE PARAMETER       210 
+      4               ERROR. . . . . . .    LITERALLY
+    212  0000H     1  ERRORPRINTED . . .    BYTE EXTERNAL(93)         280  333 
+    212  0000H     2  ERRORS . . . . . .    WORD EXTERNAL(91)         247  287 
+      2               FALSE. . . . . . .    LITERALLY       232  242  248  254  259  274  280
+                                             300  333  335 
+     53  0000H     1  FCB. . . . . . . .    BYTE ARRAY(1) EXTERNAL(14)
+     54  0000H     1  FCB16. . . . . . .    BYTE ARRAY(1) EXTERNAL(15)
+     83  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        84 
+     92  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        93 
+     89  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        90 
+     86  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        87 
+     80  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        81 
+     77  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        78 
+     74  0000H     2  FCBADDRESS . . . .    WORD PARAMETER        75 
+     14  0000H     2  FCBADR . . . . . .    WORD PARAMETER        15 
+     14  0000H        FILEABORT. . . . .    PROCEDURE EXTERNAL(1) STACK=0000H
+      3               FILEISTRUCTURE . .    LITERALLY
+      3               FILEOSTRUCTURE . .    LITERALLY
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   7
+
+
+    140  0000H        FILESETUP. . . . .    PROCEDURE BYTE EXTERNAL(52) STACK=0000H       310
+     10               FILESYNTERR. . . .    LITERALLY
+     17  0000H        FILL . . . . . . .    PROCEDURE EXTERNAL(2) STACK=0000H        246 
+    137  0000H     2  FILNAM . . . . . .    WORD PARAMETER       138 
+    137  0000H     2  FILTYP . . . . . .    WORD PARAMETER       138 
+    200  0000H        FINDCODEMACRO. . .    PROCEDURE BYTE EXTERNAL(78) STACK=0000H
+    191  0000H        FINDSYMBOL . . . .    PROCEDURE BYTE EXTERNAL(75) STACK=0000H
+     10               FIRSTITEM. . . . .    LITERALLY
+    295  0004H     1  FLAG . . . . . . .    BYTE PARAMETER AUTOMATIC       296  301 
+      2               FOREVER. . . . . .    LITERALLY       235 
+      2               FORMFEED . . . . .    LITERALLY
+    179  0000H     2  FREEPT . . . . . .    WORD EXTERNAL(69)         279 
+    212  0000H     1  FULLSYMBTAB. . . .    BYTE EXTERNAL(94)
+     47  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        48 
+     50  0000H     1  FUNC . . . . . . .    BYTE PARAMETER        51 
+    194  0000H        GETATTRIBUTES. . .    PROCEDURE EXTERNAL(76) STACK=0000H
+    213  0000H        GLOBALINIT . . . .    PROCEDURE EXTERNAL(99) STACK=0000H       308 
+    212  0000H     5  HELP . . . . . . .    BYTE ARRAY(5) EXTERNAL(97)          287  288  290
+                                             291 
+     38  0000H        HEX1OUT. . . . . .    PROCEDURE EXTERNAL(9) STACK=0000H
+     41  0000H        HEX2OUT. . . . . .    PROCEDURE EXTERNAL(10) STACK=0000H
+    212  0000H     1  I. . . . . . . . .    BYTE EXTERNAL(98)         237  239  241 
+      4               IDENT. . . . . . .    LITERALLY
+    137  0000H        IFILESETUP . . . .    PROCEDURE EXTERNAL(51) STACK=0000H
+    212  0000H     1  IFLEVEL. . . . . .    BYTE EXTERNAL(96)         249 
+    212  0000H     1  IFLIST . . . . . .    BYTE EXTERNAL(87)         250 
+     10               IFPARERR . . . . .    LITERALLY
+     10               ILLEGALMACRO . . .    LITERALLY
+     10               ILLEGALPSEUDO. . .    LITERALLY
+     10               ILLEXPRELEM. . . .    LITERALLY
+     10               ILLIOPER . . . . .    LITERALLY
+    295  0232H    44  INCLUDECLOSE . . .    PROCEDURE STACK=0006H          335  337 
+    212  0000H     1  INCLUDEON. . . . .    BYTE EXTERNAL(95)         248  297  300 
+      3               INDEXREGBIT. . . .    LITERALLY
+      3               INDEXREGCOUNT. . .    LITERALLY
+     50  0000H     2  INFO . . . . . . .    WORD PARAMETER        51 
+     47  0000H     2  INFO . . . . . . .    WORD PARAMETER        48 
+    113  0000H        ININCLUDEBYTE. . .    PROCEDURE BYTE EXTERNAL(39) STACK=0000H
+      2               INIT . . . . . . .    LITERALLY
+    215  0000H     1  INITIALS . . . . .    BYTE ARRAY(1) EXTERNAL(102)
+    111  0000H        INSOURCEBYTE . . .    PROCEDURE BYTE EXTERNAL(38) STACK=0000H
+     10               INSTRERR . . . . .    LITERALLY
+     95  0000H        INTERROGATEDISK. .    PROCEDURE BYTE EXTERNAL(32) STACK=0000H
+      3               IREGBIT. . . . . .    LITERALLY
+      3               IREGCOUNT. . . . .    LITERALLY
+      4               LAB. . . . . . . .    LITERALLY
+     10               LABOUTOFRANGE. . .    LITERALLY
+      8               LEFTBRACKET. . . .    LITERALLY
+     23  0000H        LETTER . . . . . .    PROCEDURE BYTE EXTERNAL(4) STACK=0000H
+      2               LF . . . . . . . .    LITERALLY
+    206  0000H     1  LG . . . . . . . .    BYTE PARAMETER       207 
+    203  0000H     1  LG . . . . . . . .    BYTE PARAMETER       204 
+    200  0000H     1  LG . . . . . . . .    BYTE PARAMETER       201 
+    191  0000H     1  LG . . . . . . . .    BYTE PARAMETER       192 
+    188  0000H     1  LG . . . . . . . .    BYTE PARAMETER       189 
+    185  0000H     1  LG . . . . . . . .    BYTE PARAMETER       186 
+      2               LIT. . . . . . . .    LITERALLY         2    3    4    5    6    7    8
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   8
+
+
+                                               9   10 
+    188  0000H     2  MACDEFPT . . . . .    WORD PARAMETER       189 
+      1  0002H   203  MAINP. . . . . . .    PROCEDURE STACK=0010H
+    215  0000H     1  MAKEERRTEXT. . . .    BYTE ARRAY(1) EXTERNAL(111)
+    212  0000H     1  MAXCOL . . . . . .    BYTE EXTERNAL(88)         255  257 
+         0000H        MEMORY . . . . . .    BYTE ARRAY(0)        279 
+     10               MISSIFERR. . . . .    LITERALLY
+     10               MISSINGPSEUDO. . .    LITERALLY
+     10               MISSINSTR. . . . .    LITERALLY
+     10               MISSSEGMINFO . . .    LITERALLY
+     10               MISSTYPEINFO . . .    LITERALLY
+     47  0000H        MON1 . . . . . . .    PROCEDURE EXTERNAL(12) STACK=0000H
+     50  0000H        MON2 . . . . . . .    PROCEDURE BYTE EXTERNAL(13) STACK=0000H
+     35  0000H     1  N. . . . . . . . .    BYTE PARAMETER        36 
+     17  0000H     1  N. . . . . . . . .    BYTE PARAMETER        18 
+     44  0000H     2  N. . . . . . . . .    WORD PARAMETER        45 
+     41  0000H     2  N. . . . . . . . .    WORD PARAMETER        42 
+     38  0000H     1  N. . . . . . . . .    BYTE PARAMETER        39 
+      4               NEGLECTED. . . . .    LITERALLY
+     10               NEGLECTERR . . . .    LITERALLY
+     10               NESTEDIFERR. . . .    LITERALLY
+     10               NESTEDINCLUDEERR .    LITERALLY
+    203  0000H        NEWCMBODY. . . . .    PROCEDURE BYTE EXTERNAL(79) STACK=0000H
+    206  0000H        NEWCMNAME. . . . .    PROCEDURE BYTE EXTERNAL(80) STACK=0000H
+    188  0000H        NEWMACRO . . . . .    PROCEDURE BYTE EXTERNAL(74) STACK=0000H
+    185  0000H        NEWSYMBOL. . . . .    PROCEDURE BYTE EXTERNAL(73) STACK=0000H
+      5               NIL. . . . . . . .    LITERALLY
+    215  0000H     1  NO . . . . . . . .    BYTE EXTERNAL(101)        241 
+      3               NOOVERCOUNT. . . .    LITERALLY
+      3               NOOVERRIDEBIT. . .    LITERALLY
+      9               NULL . . . . . . .    LITERALLY
+      4               NUMBER . . . . . .    LITERALLY
+      8               OAND . . . . . . .    LITERALLY
+      8               OEQ. . . . . . . .    LITERALLY
+      8               OGE. . . . . . . .    LITERALLY
+      8               OGT. . . . . . . .    LITERALLY
+      8               OLAST. . . . . . .    LITERALLY
+      8               OLE. . . . . . . .    LITERALLY
+      8               OLENGTH. . . . . .    LITERALLY
+      8               OLT. . . . . . . .    LITERALLY
+      8               OMOD . . . . . . .    LITERALLY
+      8               ONE. . . . . . . .    LITERALLY
+      8               ONOT . . . . . . .    LITERALLY
+      8               OOFFSET. . . . . .    LITERALLY
+      8               OOR. . . . . . . .    LITERALLY
+    215  0000H     1  OPENERRTEXT. . . .    BYTE ARRAY(1) EXTERNAL(108)
+     74  0000H        OPENFILE . . . . .    PROCEDURE BYTE EXTERNAL(25) STACK=0000H
+    119  0000H        OPENHEX. . . . . .    PROCEDURE EXTERNAL(42) STACK=0000H       227 
+    117  0000H        OPENINCLUDE. . . .    PROCEDURE EXTERNAL(41) STACK=0000H
+    225  00DEH    14  OPENOUTPUTFILES. .    PROCEDURE STACK=0004H          316 
+    121  0000H        OPENPRINT. . . . .    PROCEDURE EXTERNAL(43) STACK=0000H       226 
+     77  0000H        OPENROFILE . . . .    PROCEDURE BYTE EXTERNAL(26) STACK=0000H
+    115  0000H        OPENSOURCE . . . .    PROCEDURE EXTERNAL(40) STACK=0000H       315 
+    123  0000H        OPENSYMBOL . . . .    PROCEDURE EXTERNAL(44) STACK=0000H       228 
+      3               OPERANDSTRUC . . .    LITERALLY
+      4               OPERATOR . . . . .    LITERALLY
+     10               OPMISMATCH . . . .    LITERALLY
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE   9
+
+
+      8               OPTR . . . . . . .    LITERALLY
+      8               OSEG . . . . . . .    LITERALLY
+      8               OSHL . . . . . . .    LITERALLY
+      8               OSHORT . . . . . .    LITERALLY
+      8               OSHR . . . . . . .    LITERALLY
+      8               OTYPE. . . . . . .    LITERALLY
+    102  0000H        OUTHEXBYTE . . . .    PROCEDURE EXTERNAL(35) STACK=0000H
+    105  0000H        OUTPRINTBYTE . . .    PROCEDURE EXTERNAL(36) STACK=0000H
+    108  0000H        OUTSYMBOLBYTE. . .    PROCEDURE EXTERNAL(37) STACK=0000H
+     11  0000H        OUTTEXT. . . . . .    PROCEDURE EXTERNAL(0) STACK=0000H        236  271
+                                             275  286  288  289  291  309  312 
+      8               OXOR . . . . . . .    LITERALLY
+    215  0000H     1  PAGETEXT . . . . .    BYTE ARRAY(1) EXTERNAL(103)
+    215  0000H     1  PARERRTEXT . . . .    BYTE ARRAY(1) EXTERNAL(107)         312 
+    212  0000H     1  PASS . . . . . . .    BYTE EXTERNAL(82)         317  318  319  330  340
+    253  015AH    38  PASS0INIT. . . . .    PROCEDURE STACK=000EH          320 
+    270  0198H    12  PASS0TERMINATE . .    PROCEDURE STACK=0006H          341 
+    215  0000H     1  PASS0TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(115)         271 
+    262  0180H     8  PASS1INIT. . . . .    PROCEDURE STACK=000EH          321 
+    273  01A4H    17  PASS1TERMINATE . .    PROCEDURE STACK=0006H          342 
+    215  0000H     1  PASS1TEXT. . . . .    BYTE ARRAY(1) EXTERNAL(116)         275 
+    265  0188H    16  PASS2INIT. . . . .    PROCEDURE STACK=000EH          322 
+    277  01B5H   125  PASS2TERMINATE . .    PROCEDURE STACK=0008H          343 
+      7               PCODEMACRO . . . .    LITERALLY
+      7               PCSEG. . . . . . .    LITERALLY
+      7               PDB. . . . . . . .    LITERALLY
+      7               PDBIT. . . . . . .    LITERALLY
+      7               PDD. . . . . . . .    LITERALLY
+      7               PDSEG. . . . . . .    LITERALLY
+      7               PDW. . . . . . . .    LITERALLY
+      7               PEJECT . . . . . .    LITERALLY
+      7               PEND . . . . . . .    LITERALLY
+      7               PENDIF . . . . . .    LITERALLY
+      7               PENDM. . . . . . .    LITERALLY
+      7               PEQU . . . . . . .    LITERALLY
+      7               PESEG. . . . . . .    LITERALLY
+      7               PIF. . . . . . . .    LITERALLY
+      7               PIFLIST. . . . . .    LITERALLY
+      7               PINCLUDE . . . . .    LITERALLY
+      7               PLIST. . . . . . .    LITERALLY
+      7               PMODRM . . . . . .    LITERALLY
+      7               PNOIFLIST. . . . .    LITERALLY
+      7               PNOLIST. . . . . .    LITERALLY
+      7               PNOSEGFIX. . . . .    LITERALLY
+      7               PORG . . . . . . .    LITERALLY
+      7               PPAGESIZE. . . . .    LITERALLY
+      7               PPAGEWIDTH . . . .    LITERALLY
+      7               PRB. . . . . . . .    LITERALLY
+      7               PRELB. . . . . . .    LITERALLY
+      7               PRELW. . . . . . .    LITERALLY
+    166  0000H        PRINTCRLF. . . . .    PROCEDURE EXTERNAL(63) STACK=0000H
+    212  0000H     1  PRINTDEVICE. . . .    BYTE EXTERNAL(89)         256  283 
+      9               PRINTER. . . . . .    LITERALLY
+    172  0000H        PRINTINIT. . . . .    PROCEDURE EXTERNAL(66) STACK=0000H
+    168  0000H        PRINTNEWPAGE . . .    PROCEDURE EXTERNAL(64) STACK=0000H
+    212  0000H     1  PRINTON. . . . . .    BYTE EXTERNAL(85)         246  259  266  274 
+    163  0000H        PRINTSINGLEBYTE. .    PROCEDURE EXTERNAL(62) STACK=0000H
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE  10
+
+
+    170  0000H        PRINTSOURCELINE. .    PROCEDURE EXTERNAL(65) STACK=0000H
+    212  0000H     1  PRINTSWITCHOFF . .    BYTE EXTERNAL(86)         248 
+    174  0000H        PRINTTERMINATE . .    PROCEDURE EXTERNAL(67) STACK=0000H       284 
+      2               PROC . . . . . . .    LITERALLY        26   29   38   41   44  102  105
+                                             108  111  113  115  117  119  121  123  125  127
+                                             129  131  133  135  137  140  142  144  146  149
+                                             151  153  155  158  161  163  166  168  170  172
+                                             174  177  181  183  185  188  191  194  197  200
+                                             203  206  209  216  230  245  253  262  265  270
+                                             273  277  295 
+      7               PRS. . . . . . . .    LITERALLY
+      7               PRW. . . . . . . .    LITERALLY
+      7               PSEGFIX. . . . . .    LITERALLY
+      4               PSEUDO . . . . . .    LITERALLY
+     10               PSEUDOOPERR. . . .    LITERALLY
+      7               PSIMFORM . . . . .    LITERALLY
+      7               PSSEG. . . . . . .    LITERALLY
+     17  0000H     2  PT . . . . . . . .    WORD PARAMETER        18 
+      7               PTITLE . . . . . .    LITERALLY
+    203  0000H     2  PTR. . . . . . . .    WORD PARAMETER       204 
+      6               RAH. . . . . . . .    LITERALLY
+      6               RAL. . . . . . . .    LITERALLY
+      6               RAX. . . . . . . .    LITERALLY
+      6               RBH. . . . . . . .    LITERALLY
+      6               RBL. . . . . . . .    LITERALLY
+      6               RBP. . . . . . . .    LITERALLY
+      6               RBX. . . . . . . .    LITERALLY
+      6               RCH. . . . . . . .    LITERALLY
+      6               RCL. . . . . . . .    LITERALLY
+      6               RCS. . . . . . . .    LITERALLY       251 
+      6               RCX. . . . . . . .    LITERALLY
+      6               RDH. . . . . . . .    LITERALLY
+      6               RDI. . . . . . . .    LITERALLY
+      6               RDL. . . . . . . .    LITERALLY
+      6               RDS. . . . . . . .    LITERALLY
+      6               RDX. . . . . . . .    LITERALLY
+     59  0000H        READCONSOLE. . . .    PROCEDURE BYTE EXTERNAL(19) STACK=0000H       233
+                                             237 
+     86  0000H        READRECORD . . . .    PROCEDURE BYTE EXTERNAL(29) STACK=0000H
+      2               REENT. . . . . . .    LITERALLY
+      4               REG. . . . . . . .    LITERALLY
+      6               RES. . . . . . . .    LITERALLY
+    200  0000H     2  RESULT . . . . . .    WORD PARAMETER       201 
+    191  0000H     2  RESULT . . . . . .    WORD PARAMETER       192 
+    185  0000H     2  RESULT . . . . . .    WORD PARAMETER       186 
+    206  0000H     2  RETURNPTR. . . . .    WORD PARAMETER       207 
+    127  0000H        REWINDSOURCE . . .    PROCEDURE EXTERNAL(46) STACK=0000H
+      8               RIGHTBRACKET . . .    LITERALLY
+      6               RSI. . . . . . . .    LITERALLY
+      6               RSP. . . . . . . .    LITERALLY
+      6               RSS. . . . . . . .    LITERALLY
+     35  0000H     2  S. . . . . . . . .    WORD PARAMETER        36 
+    151  0000H        SCAN . . . . . . .    PROCEDURE EXTERNAL(57) STACK=0000H       303  304
+                                             325  336 
+    149  0000H        SCANINIT . . . . .    PROCEDURE EXTERNAL(56) STACK=0000H       324 
+      3               SEGMBIT. . . . . .    LITERALLY
+      3               SEGMCOUNT. . . . .    LITERALLY
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE  11
+
+
+      3               SEGTYPEBIT . . . .    LITERALLY
+      3               SEGTYPECOUNT . . .    LITERALLY
+     71  0000H        SELECTDISK . . . .    PROCEDURE EXTERNAL(24) STACK=0000H
+     97  0000H        SETDMAADDRESS. . .    PROCEDURE EXTERNAL(33) STACK=0000H
+    212  0000H     1  SIMFORM. . . . . .    BYTE EXTERNAL(90)         254 
+    153  0000H        SKIPRESTOFLINE . .    PROCEDURE EXTERNAL(58) STACK=0000H
+    158  0000H        SKIPUNTIL. . . . .    PROCEDURE BYTE EXTERNAL(60) STACK=0000H
+    197  0000H     2  SOURCE . . . . . .    WORD PARAMETER       198 
+      2               SPACE. . . . . . .    LITERALLY
+      4               SPEC . . . . . . .    LITERALLY
+    155  0000H        SPECIALTOKEN . . .    PROCEDURE BYTE EXTERNAL(59) STACK=0000H
+    200  0000H     2  STRADR . . . . . .    WORD PARAMETER       201 
+    191  0000H     2  STRADR . . . . . .    WORD PARAMETER       192 
+    188  0000H     2  STRADR . . . . . .    WORD PARAMETER       189 
+    185  0000H     2  STRADR . . . . . .    WORD PARAMETER       186 
+      4               STRING . . . . . .    LITERALLY
+      2               STRUC. . . . . . .    LITERALLY
+    197  0000H     2  SYMBADR. . . . . .    WORD PARAMETER       198 
+    194  0000H     2  SYMBADR. . . . . .    WORD PARAMETER       195 
+    215  0000H     1  SYMBFULLERRTEXT. .    BYTE ARRAY(1) EXTERNAL(113)
+    183  0000H        SYMBINIT . . . . .    PROCEDURE EXTERNAL(72) STACK=0000H       258 
+      4               SYMBOL . . . . . .    LITERALLY
+      3               SYMBOLHEAD . . . .    LITERALLY
+      3               SYMBOLSTRUC. . . .    LITERALLY
+    181  0000H        SYMBTERMINATE. . .    PROCEDURE EXTERNAL(71) STACK=0000H       282 
+     57  0000H        SYSTEMRESET. . . .    PROCEDURE EXTERNAL(18) STACK=0000H       313  348
+     11  0000H     2  T. . . . . . . . .    WORD PARAMETER        12 
+      2               TAB. . . . . . . .    LITERALLY
+     55  0000H     1  TBUFF. . . . . . .    BYTE ARRAY(1) EXTERNAL(16)
+     14  0000H     2  TEXTADR. . . . . .    WORD PARAMETER        15 
+      2               THENDO . . . . . .    LITERALLY       297  301  310  327 
+    158  0000H     1  TOK. . . . . . . .    BYTE PARAMETER       159 
+    155  0000H     1  TOK. . . . . . . .    BYTE PARAMETER       156 
+      2               TRUE . . . . . . .    LITERALLY       235  240  250  266  329  337 
+    146  0000H     1  TYP. . . . . . . .    BYTE PARAMETER       147 
+      3               TYPEBIT. . . . . .    LITERALLY
+      3               TYPECOUNT. . . . .    LITERALLY
+      4               UDEFSYMB . . . . .    LITERALLY
+     10               UDEFSYMBOL . . . .    LITERALLY
+     32  0000H        UPPER. . . . . . .    PROCEDURE BYTE EXTERNAL(7) STACK=0000H        237
+    215  0000H     1  USBREAKTEXT. . . .    BYTE ARRAY(1) EXTERNAL(114)         236 
+    278  0000H     1  USEFACT. . . . . .    BYTE       279  284  290 
+    174  0000H     1  USEFACT. . . . . .    BYTE PARAMETER       175 
+    215  0000H     1  USEFACTOR. . . . .    BYTE ARRAY(1) EXTERNAL(105)         289 
+    230  00ECH    63  USERBREAK. . . . .    PROCEDURE BYTE STACK=0006H          327 
+      9               VALIDDISK. . . . .    LITERALLY
+      4               VARIABLE . . . . .    LITERALLY
+    245  012BH    47  VARINIT. . . . . .    PROCEDURE STACK=000AH          260  263  267 
+     69  0000H        VERSION. . . . . .    PROCEDURE WORD EXTERNAL(23) STACK=0000H
+      5               WRD. . . . . . . .    LITERALLY
+     61  0000H        WRITECONSOLE . . .    PROCEDURE EXTERNAL(20) STACK=0000H       292 
+     64  0000H        WRITELIST. . . . .    PROCEDURE EXTERNAL(21) STACK=0000H
+     89  0000H        WRITERECORD. . . .    PROCEDURE BYTE EXTERNAL(30) STACK=0000H
+    215  0000H     1  YES. . . . . . . .    BYTE EXTERNAL(100)        239 
+PL/M-86 COMPILER    ASM86 MAIN PROGRAM                                           10/5/81    PAGE  12
+
+
+MODULE INFORMATION:
+
+     CODE AREA SIZE     = 025EH    606D
+     CONSTANT AREA SIZE = 0000H      0D
+     VARIABLE AREA SIZE = 0001H      1D
+     MAXIMUM STACK SIZE = 0010H     16D
+     932 LINES READ
+     0 PROGRAM ERROR(S)
+
+END OF PL/M-86 COMPILATION

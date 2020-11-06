@@ -1,0 +1,108 @@
+1File: INTERF.C                                                            Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "parser.h"
+     9   int bol;
+    10    
+    11   outinit(tp,type)						/* returns - none*/
+    12   struct tnode *tp;
+    13   {
+    14   	outexpr(tnalloc(INIT,type,0,0,tp));
+    15   }
+    16    
+    17   outcforreg(tp)
+    18   struct tnode *tp;
+    19   {
+    20   	outexpr(tnalloc(CFORREG,tp->t_type,0,0,tp));
+    21   }
+    22    
+    23   outifgoto(tp,dir,lab)
+    24   struct tnode *tp;
+    25   int dir;
+    26   int lab;
+    27   {
+    28   	outexpr(tnalloc(IFGOTO,dir,lab,0,tp));
+    29   }
+    30    
+    31   outexpr(tp)
+    32   struct tnode *tp;
+    33   {
+    34   	if( !bol )
+    35   		putchar('\n');
+    36   	printf(".%x\n",lineno);
+    37   	outtree(tp);
+    38   }
+    39    
+    40   outtree(tp)
+    41   struct tnode *tp;
+    42   {
+    43   	if( !tp )
+    44   		return;
+    45   	printf("%x.%x",tp->t_op,tp->t_type);
+    46   	switch( tp->t_op ) {
+    47    
+    48   	case CINT:
+    49   		printf(".%x\n",tp->t_value);
+    50   		break;
+    51    
+    52   	case CLONG:
+    53   		printf(".%x.%x\n",tp->t_lvalue.hiword,tp->t_lvalue.loword);
+    54   		break;
+    55    
+    56   	case CFLOAT:	/*[vlh] 3.4*/
+    57   		printf(".%x.%x\n",tp->t_lvalue.hiword,tp->t_lvalue.loword);
+    58   		break;
+    59    
+1File: INTERF.C                                                            Page       2
+    60   	case SYMBOL:
+    61   		printf(".%x",tp->t_sc);
+    62   		if( tp->t_sc == EXTERNAL )
+    63   			printf(".%.8s\n",tp->t_symbol);
+    64   		else
+    65   			printf(".%x\n",tp->t_offset);
+    66   		break;
+    67    
+    68   	case 0:
+    69   		putchar('\n');
+    70   		break;
+    71    
+    72   	case IFGOTO:
+    73   	case BFIELD:
+    74   		printf(".%x\n",tp->t_dp);
+    75   		outtree(tp->t_left);
+    76   		break;
+    77    
+    78   	default:
+    79   		putchar('\n');
+    80   		outtree(tp->t_left);
+    81   		if( binop(tp->t_op) )
+    82   			outtree(tp->t_right);
+    83   		break;
+    84   	}
+    85   }
+    86    
+    87   /* snalloc - symbol node allocation*/
+    88   /*		Allocates a tree symbol node and sets the info in it*/
+    89   char *snalloc(type,sc,off,dp,ssp)	/* returns pointer to node alloc'ed*/
+    90   int type;							/* symbol type*/
+    91   int sc;								/* storage class*/
+    92   int off;							/* offset*/
+    93   int dp;								/* dimension pointer or other info*/
+    94   int ssp;							/* structure size pointer*/
+    95   {
+    96   	register struct symnode *snp;
+    97    
+    98   	snp = talloc(sizeof(*snp));
+    99   	snp->t_op = SYMBOL;
+   100   	snp->t_sc = sc;
+   101   	snp->t_type = type;
+   102   	snp->t_dp = dp;
+   103   	snp->t_ssp = ssp;
+   104   	snp->t_offset = off;
+   105   	return(snp);
+   106   }

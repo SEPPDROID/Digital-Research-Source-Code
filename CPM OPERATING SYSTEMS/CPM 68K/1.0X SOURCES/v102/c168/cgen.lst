@@ -1,0 +1,200 @@
+1File: CGEN.H                                                              Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include <stdio.h>
+     9   #include <klib.h>
+    10   #undef	 putchar
+    11   #define	putchar	xputchar
+    12   #undef	 ferror
+    13   #define	ferror	xferror
+    14   #define	 printf xprintf
+    15   #include "icode.h"
+    16    
+    17   char brtab[][2];
+    18   int invrel[];
+    19   int swaprel[];
+    20   char *strtab[];
+    21   char null[];
+    22    
+    23   	/*operator tree node for unary and binary operators*/
+    24   struct tnode {
+    25   	int t_op;						/*operator*/
+    26   	int t_type;						/*data type of result*/
+    27   	int t_su;						/*Sethy-Ullman number*/
+    28   	int t_ssp;
+    29   	struct tnode *t_left;			/*left sub-tree*/
+    30   	struct tnode *t_right;			/*right sub-tree (undefined if unary)*/
+    31   };
+    32    
+    33   	/*constant terminal node*/
+    34   struct conode {
+    35   	int t_op;						/*operator*/
+    36   	int t_type;						/*type*/
+    37   	int t_su;						/*Sethy-Ullman number*/
+    38   	int t_ssp;
+    39   	int t_value;					/*value or label number*/
+    40   };
+    41    
+    42   struct lconode {
+    43   	int t_op;						/*operator*/
+    44   	int t_type;						/*type*/
+    45   	int t_su;						/*Sethy-Ullman number*/
+    46   	int t_ssp;
+    47   	long t_lvalue;					/*value or label number*/
+    48   };
+    49    
+    50   	/*local symbol terminal node*/
+    51   struct symnode {
+    52   	int t_op;						/*operator*/
+    53   	int t_type;						/*symbol data type*/
+    54   	int t_su;						/*Sethy-Ullman number*/
+    55   	int t_ssp;
+    56   	int t_sc;						/*storage class*/
+    57   	int t_offset;					/*register offset*/
+    58   	int t_reg;						/*register number*/
+    59   	int t_label;					/*label number if static*/
+1File: CGEN.H                                                              Page       2
+    60   };
+    61    
+    62   	/*external symbol reference node*/
+    63   struct extnode {
+    64   	int t_op;						/*operator*/
+    65   	int t_type;						/*symbol data type*/
+    66   	int t_su;						/*Sethy-Ullman number*/
+    67   	int t_ssp;
+    68   	int t_sc;						/*storage class*/
+    69   	int t_offset;					/*register offset*/
+    70   	int t_reg;						/*register number*/
+    71   	char t_symbol[SSIZE];			/*symbol name*/
+    72   };
+    73    
+    74   	/*68000 special - indexed symbol node*/
+    75   	/*this is used to generate a An(off,Xn.type) address*/
+    76   struct indexnode {
+    77   	int t_op;
+    78   	int t_type;
+    79   	int t_su;
+    80   	int t_ssp;
+    81   	int t_sc;
+    82   	int t_offset;
+    83   	int t_reg;
+    84   	int t_xreg;
+    85   	int t_xtype;
+    86   };
+    87    
+    88   int lflag;
+    89   int dflag;
+    90   int mflag;
+    91   int cflag;
+    92   int eflag;
+    93   int fflag;
+    94   int oflag;
+    95   struct io_buf ibuf, obuf;
+    96   int lineno;
+    97   int naregs;
+    98   int ndregs;
+    99   int errcnt;
+   100   int opinfo[];
+   101   int nextlabel;
+   102   char null[];
+   103   char optab[][6];
+   104   char *mnemonics[];
+   105   char *codeskels[];
+   106   int stacksize;
+   107    
+   108   char *tnalloc();
+   109   char *snalloc();
+   110   char *cenalloc();
+   111   char *xnalloc();
+   112   char *talloc();
+   113   char *cnalloc();
+   114   char *lcnalloc();
+   115   char *fpcnalloc();
+   116   char *canon();
+   117   char *commute();
+   118   char *constant();
+1File: CGEN.H                                                              Page       3
+   119   char *match();
+   120   char *addptree();
+   121   char *fixbfield();
+   122   char *coffset();
+   123   char *tcopy();
+   124    
+   125   #define	wallign(add)	((add+1)&(~1))
+   126   #define	array(type)		((type&SUPTYP)==ARRAY)
+   127   #define	function(type)	((type&SUPTYP)==FUNCTION)
+   128   #define	pointer(type)	((type&SUPTYP)==POINTER)
+   129   #define	notarray(type)		((type&SUPTYP)!=ARRAY)
+   130   #define	notfunction(type)	((type&SUPTYP)!=FUNCTION)
+   131   #define	notpointer(type)	((type&SUPTYP)!=POINTER)
+   132   #define isfloat(type)	(type==FLOAT)
+   133   #define	btype(type)		(type&TYPE)
+   134   #define	suptype(type)	(type&SUPTYP)
+   135   #define	alltype(type)	(type&(SUPTYP|TYPE))
+   136   #define	asgop(op)		((opinfo[op]&OPASSIGN)!=0)
+   137   #define	relop(op)		((opinfo[op]&OPREL)!=0)
+   138   #define	lintegral(op)	((opinfo[op]&OPLWORD)!=0)
+   139   #define	rintegral(op)	((opinfo[op]&OPRWORD)!=0)
+   140   #define	rasop(op)		((opinfo[op]&OPRAS)!=0)
+   141   #define	binop(op)		((opinfo[op]&OPBIN)!=0)
+   142   #define	unaryop(op)		((opinfo[op]&(OPBIN|OPTERM))==0)
+   143   #define	leafop(op)		((opinfo[op]&OPTERM)!=0)
+   144   #define	notleafop(op)	((opinfo[op]&OPTERM)==0)
+   145   #define	lvalop(op)		((opinfo[op]&OPLVAL)!=0)
+   146   #define	oppriority(op)	(opinfo[op]&OPPRI)
+   147   #define	commop(op)		((opinfo[op]&OPCOM)!=0)
+   148   #define	convop(op)		((opinfo[op]&OPCONVS)!=0)
+   149   #define	notconvop(op)	((opinfo[op]&OPCONVS)==0)
+   150   #define	max(a,b)		(a>b?a:b)
+   151   #define min(a,b)		(a<b?a:b)
+   152    
+   153   #define	QUICKVAL		8
+   154   #define	LEP				14
+   155   #define	FORCC			1
+   156   #define	FOREFF			2
+   157   #define	FORSTACK		3
+   158   #define	FORCREG			4
+   159   #define	FORSP			5
+   160   #define	FORREG			4
+   161   #define	HICREG			2
+   162   #define	NCREGS			3
+   163   #define	AREGLO			8
+   164   #define	IMMED			1
+   165   #define	NOTIMMED		0
+   166   #define	NOTLOFFSET		0
+   167    
+   168   /* one line routines turned into defines [vlh] for speed */
+   169    
+   170   /*outgoto - output "bra L[labno]"*/
+   171   #define outgoto(lab)	if (lab>0) printf("bra L%d\n",lab)
+   172   /*outlab - output "L[labno]:"*/
+   173   #define outlab(lab)		if (lab>0) printf("L%d:",lab)
+   174    
+   175   /*outext - output register sign extension*/
+   176   #define outext(reg)		printf("ext.l R%d\n",reg)
+   177   /*outuext - output unsigned to long register extension*/
+1File: CGEN.H                                                              Page       4
+   178   #define outuext(reg)	printf("swap R%d\nclr R%d\nswap R%d\n",reg,reg,reg)
+   179   /*outswap - output swap register instruction*/
+   180   #define outswap(reg)	printf("swap R%d\n",reg)
+   181   /*outaddr - output "add [type] R1 R2" instruction*/
+   182   #define outaddr(r1,r2,tp)	outrr("add",r1,r2,(tp))
+   183   /*outccsave - ouput instruction to move cc's to register*/
+   184   #define outccsave(reg)	printf("move sr,R%d\n",reg)
+   185   /*outccrestore - output instruction to restore cc's from register*/
+   186   #define outccrestore(reg)	printf("move R%d,ccr\n",reg)
+   187   /*basetype - get the btype info sans unsigned*/
+   188   #define basetype(type)	((type==UNSIGNED) ? INT : type)
+   189   #define unsign(type)	((type) == UNSIGNED)
+   190   #define longorptr(type)	(type==LONG || (type&SUPTYP))
+   191   #define unorptr(type)	(type==UNSIGNED || (type&SUPTYP))
+   192   #define dreg(reg)		((reg) & (~AREGLO))
+   193   #define areg(reg)		((reg) | AREGLO)
+   194   #define isareg(reg)		((reg) >= AREGLO)
+   195   #define isdreg(reg)		((reg) < AREGLO)
+   196   #define isreg(tp)		((tp)->t_op == SYMBOL && (tp)->t_sc == REGISTER)

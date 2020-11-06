@@ -1,0 +1,137 @@
+1File: INTERF.C                                                            Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   int bol;
+    10   int onepass;
+    11    
+    12   /* outexpr - output expression*/
+    13   outexpr(tp)						/* returns - none*/
+    14   struct tnode *tp;						/* pointer to tree node*/
+    15   {
+    16   	if( dflag )
+    17   		outline();
+    18   	if( exprok(tp) )
+    19   		scodegen(canon(tp),FOREFF,0);
+    20   }
+    21    
+    22   outifgoto(tp,dir,lab)
+    23   struct tnode *tp;
+    24   int dir;
+    25   int lab;
+    26   {
+    27   	if( dflag )
+    28   		outline();
+    29   	if( exprok(tp) )
+    30   		condbr(canon(tp),dir,lab,0);
+    31   }
+    32    
+    33   outcforreg(tp)
+    34   struct tnode *tp;
+    35   {
+    36   	if( dflag )
+    37   		outline();
+    38   	if( exprok(tp) )
+    39   		outmovr(scodegen(canon(tp),FORREG,0),0,tp);
+    40   }
+    41    
+    42   outinit(tp)							/* returns - none*/
+    43   struct tnode *tp;
+    44   {
+    45   	register int typeout;
+    46    
+    47   	if( dflag )
+    48   		outline();
+    49   	if( exprok(tp) ) {
+    50   		typeout = tp->t_type;
+    51   		tp = canon(tp);
+    52   		if( tp->t_op == ADDR )
+    53   			tp = tp->t_left;
+    54   		if( tp->t_op == CINT || tp->t_op == SYMBOL ) {
+    55   			if( tp->t_op != CINT )
+    56   				printf(".dc.l ");
+    57   			else {
+    58   				printf(".dc");
+    59   				outtype(typeout);
+1File: INTERF.C                                                            Page       2
+    60   				putchar(' ');
+    61   			}
+    62   			outaexpr(tp,NOTIMMED);		/* [vlh] 4.0 not immed... */
+    63   		}
+    64   		else
+    65   			error("invalid initialization");
+    66   		putchar('\n');
+    67   	}
+    68   }
+    69    
+    70   /* snalloc - code generator symbol node allocation*/
+    71   /*		This might be coalesced into parser snalloc.*/
+    72   char *snalloc(type,sc,offset,dp,ssp)	/* returns ptr to node alloced*/
+    73   int type;						/* type of symbol*/
+    74   int sc;							/* storage class*/
+    75   int offset;						/* offset from Local Environment Ptr*/
+    76   int dp;							/*for compatability with parser*/
+    77   int ssp;						/*for compatability with parser*/
+    78   {
+    79   	register struct symnode *sp;
+    80    
+    81   	sp = talloc(sizeof(*sp));
+    82   	sp->t_op = SYMBOL;
+    83   	sp->t_type = type;
+    84   	sp->t_su = dp;
+    85   	sp->t_ssp = ssp;
+    86   	sp->t_sc = sc;
+    87   	switch( sc ) {
+    88    
+    89   	case STATIC:
+    90   		sp->t_offset = 0;
+    91   		sp->t_reg = 0;
+    92   		sp->t_label = offset;
+    93   		break;
+    94    
+    95   	case REGISTER:
+    96   		sp->t_offset = 0;
+    97   		sp->t_reg = offset;
+    98   		sp->t_label = 0;
+    99   		break;
+   100    
+   101   	case AUTO:
+   102   		sp->t_sc = REGOFF;
+   103   		sp->t_offset = offset;
+   104   		sp->t_reg = LEP;
+   105   		sp->t_label = 0;
+   106   		break;
+   107    
+   108   	default:
+   109   		sp->t_offset = offset;
+   110   		sp->t_reg = 0;
+   111   		sp->t_label = 0;
+   112   		break;
+   113   	}
+   114   	return(sp);
+   115   }
+   116    
+   117   exprok(tp)
+   118   struct tnode *tp;
+1File: INTERF.C                                                            Page       3
+   119   {
+   120   	if( tp < exprarea || tp > &exprarea[EXPSIZE] )
+   121   		return(0);
+   122   	if( leafop(tp->t_op) )
+   123   		return(1);
+   124   	if( binop(tp->t_op) && !exprok(tp->t_right) )
+   125   		return(0);
+   126   	return( exprok(tp->t_left) );
+   127   }
+   128    
+   129   outline()
+   130   {
+   131   	if( onepass && !bol )
+   132   		putchar('\n');
+   133   	printf("*line %d\n",lineno);
+   134   }

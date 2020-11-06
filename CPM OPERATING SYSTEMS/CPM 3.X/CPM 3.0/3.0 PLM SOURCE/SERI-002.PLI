@@ -1,0 +1,249 @@
+
+	/* SERIALIZATION FOR CP/M  VERSION 3.0  */
+
+	/************************************************************
+	* NOTE:  This program contains Digital Research proprietary *
+	* information and must not be reproduced, copied, or        *
+	* transcribed in any form whatsoever.                       *
+	*************************************************************
+
+
+
+	COPYRIGHT (C) 1980
+	DIGITAL RESEARCH
+	BOX 579
+	PACIFIC GROVE, CA. 93950    */
+
+serial:
+	/************************************************************
+	*                                                           *
+	*  Thió prograí ió calleä bù thå rooô productioî modulå tï  *
+	*  dï  thå serializatioî oæ CP/M-3.0.  Iô useó fouò globaì  *
+	*  variableó froí thå rooô moduleº  srce_drive¬ dest_drivå  *
+	*  org_number¬    anä   ser_number®                         *
+	*                                     12/30/80 DLD          *
+	*                                      8/09/82 DRL          *
+	*                                                           *
+	************************************************************/
+
+	proc;
+	%replace
+		TRUE          by '1'b,
+		FALSE         by '0'b,
+		invalid_address by 66,
+		max_programs by 18,
+		too_many_programs by 68;
+
+	/* global variables */
+	dcl
+		(srce_drive char(1),
+		dest_drive char(1),
+		seri_init_flag bit(1),
+		debug_flag bit(1),
+		org_number bit(16),
+		ser_number bit(16)) external;
+
+	/* local variables */
+	dcl
+		k fixed bin(7),
+		name char(12),
+		number_of_programs fixed bin(7),
+		data file,
+		end_of_file bit(1),
+		line char(80) varying,
+		patchrecord fixed bin(15),
+		patchbyte fixed bin(15),
+		patch file,
+		product_code bit(8) static initial('00'b4);
+
+	/* serialization data structure */
+	dcl
+		1 serial(max_programs),
+			2 filename char(12) varying,
+			2 byteoffset bit(16);
+
+	/* initialize serialization data if flag is false */
+	if ^seri_init_flag then
+		begin;
+
+		on endfile(data)
+		begin;
+			number_of_programs = k - 1;
+			end_of_file = true;
+			end;
+
+		on error(too_many_programs)
+		begin;
+			put skip list
+			('FATAL ERROR -- Too Many Programs To Be Serialized.');
+			put skip edit
+			('This program needs to be recompiled with the ',
+			 'following change:','the constant "max_programs" ',
+			 'needs to be set to a greater number -- probably ',
+			 max_programs+5,' will do.')
+			(a,a,skip,x(5),a,a,f(2),a);
+			stop;
+			end;
+
+		seri_init_flag = true;
+		open file(data) stream input title('SERI-002.DAT');
+		end_of_file = false;
+		do k = 1 repeat(k + 1)  while(^end_of_file);
+		get file(data) edit (line) (a);
+		if ^end_of_file then
+		do;
+		if k > max_programs then signal error(too_many_programs);
+		serial(k).filename = substr(line,1,12);
+		serial(k).byteoffset = hex_to_bit(substr(line,17,1))||
+		                       hex_to_bit(substr(line,18,1))||
+		                       hex_to_bit(substr(line,19,1))||
+		                       hex_to_bit(substr(line,20,1));
+		if debug_flag then
+		do;
+		/* display header for diagnostics */
+		put skip(2) edit
+		(' Serialization Diagnostics: ')
+		(column(24),a);
+		put skip edit
+		('File: ',serial(k).filename,
+		 'Byte: ',serial(k).byteoffset)
+		(a,x(1),a,x(1),a,x(1),b4);
+		end;		/* debug diagnostics */
+		end;		/* ^end_of_file */
+		end;		/* do -- repeat -- while  loop */
+		close file(data);
+
+		/* message to operator */
+		put skip(3) list
+		('The files to be serialized for this product are:');
+		put skip(2) edit
+		((serial(k).filename do k = 1 to number_of_programs))
+		(5(a(12),x(4)),skip);
+		return;
+		end;		/* serial initialization */
+
+	/* error conditions */
+	on undefinedfile(patch)
+		begin;
+		put skip list
+		(name, ' NOT serialized');
+		k = k + 1;
+		goto loop;
+		end;
+
+	/* serialization loop */
+	k = 1;
+	loop:
+	do while(k <= number_of_programs);
+	name = serial(k).filename;
+
+	/* initialize remaining variables */
+	patchrecord = binary(substr(serial(k).byteoffset,1,9));
+	patchbyte = binary(serial(k).byteoffset & '007F'b4);
+
+	open file(patch) input title(dest_drive || ':' || name);
+	close file(patch);
+	open file(patch) direct update env(f(128),b(128))
+		title(dest_drive  || ':' || name);
+
+	call serialize_6;
+
+	put skip list
+	(name, ' has been serialized');
+	close file(patch);
+	k = k + 1;
+	end;
+
+	serialize_6:
+	/************************************************************
+	*                                                           *
+	*  This procedure does a standard consecutive six byte      *
+	*  serialization using the variables patchrecord, patchbyte *
+	*  org_number, ser_number, and patch(file).                 *
+	*                                                           *
+	************************************************************/
+
+	proc;
+	dcl
+		i fixed bin(7),
+		patch_byte(6) bit(8),
+		test_byte(6) bit(8) static
+			initial('36'b4,'35'b4,'34'b4,'33'b4,'32'b4,'31'b4),
+		p ptr,
+		serial_byte(2) bit(8) based(p),
+		q ptr,
+		origin_byte(2) bit(8) based(q);
+
+	/* patch buffer */
+	dcl
+		1 record,
+			2 byte(0:127) bit(8);
+
+	/* set error conditions */
+	on error(invalid_address)
+		begin;
+		put skip(2) list('FATAL ERROR: INVALID SERIAL ADDRESS');
+		put skip edit
+		('File: ',name,
+		'Record: ',patchrecord,'Byte: ',patchbyte)
+		 (a,a,skip,a,f(6),x(3),a,f(6));
+		stop;
+		end;
+
+	/* set serial number bytes */
+	p = addr(ser_number);
+	q = addr(org_number);
+	patch_byte(1) = origin_byte(1);		/* low order byte */
+	patch_byte(2) = product_code;
+	patch_byte(3) = origin_byte(2);		/* high order byte */
+	patch_byte(4) = '00'b4;
+	patch_byte(5) = serial_byte(2);
+	patch_byte(6) = serial_byte(1);
+
+	/* read patchrecord into buffer and set serial byte */
+	do i = 1 to 6;
+	if debug_flag then
+	do;
+	put skip edit
+	('patchrecord: ',patchrecord,
+	 'patchbyte:   ',patchbyte)
+	(a,f(5),skip);
+	end;
+	read file(patch) into(record) key(patchrecord);
+
+	if record.byte(patchbyte) ^= test_byte(i) then
+		signal error(invalid_address);
+
+	record.byte(patchbyte) = patch_byte(i);
+
+	/* write buffer back to file */
+	write file(patch) from(record) keyfrom(patchrecord);
+	patchbyte = patchbyte + 1;
+	patchrecord = patchrecord + patchbyte/128;
+	patchbyte = mod(patchbyte,128);
+	end;
+	end serialize_6;
+
+	hex_to_bit:
+	proc(xc) returns(bit(4));
+	dcl
+		xc char(1),
+		xi fixed bin(7),
+		hex(16) bit(4) static initial
+		('0000','0001','0010','0011',
+		 '0100','0101','0110','0111',
+		 '1000','1001','1010','1011',
+		 '1100','1101','1110','1111'),
+		list char(16) static initial
+		('0123456789ABCDEF');
+	xi = index(list,xc);
+	if xi = 0 then
+		do;
+		put skip list('INVALID HEX CHARACTER:');
+	signal error(1);
+	end;
+	else
+	return(hex(xi));
+	end hex_to_bit;
+
+end serial;

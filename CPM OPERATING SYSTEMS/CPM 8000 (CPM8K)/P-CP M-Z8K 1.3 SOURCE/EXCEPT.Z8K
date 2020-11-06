@@ -1,0 +1,352 @@
+;************************************************
+;*						*
+;*	P-CP/M Basic Disk Operating System 	*
+;*		Exception Handling Module	*
+;*						*
+;*	Version 0.0 -- July    21, 1982		*
+;*	Version 0.1 -- July    25, 1982		*
+;*	Version 0.2 -- 821014 (Zilog)		*
+;*	Version 0.3 -- 821222 (Zilog)		*
+;*						*
+;************************************************
+
+;  01/11/83	Adapted for Z8002 (DMH)
+
+	.input	"biosdefs2.z8k"
+
+__text:	.sect
+
+;****************************************************
+;*
+;* Externals
+;*
+;****************************************************
+
+	.global	_sysseg
+	.global _tpa_lp
+	.global _tpa_hp
+
+
+;****************************************************
+;*
+;* Globals and Constants
+;*
+;****************************************************
+
+	.global	_initexc
+
+BGETSEG .equ 18		;Bios call to get mem seg tbl
+BSETEXC	.equ 22		;Bios call to set xvec
+
+
+;****************************************************
+;*
+;* initexc(vecarray) -- initialize exception vector
+;*
+;*	The BDOS maintains its OWN exception vector.
+;*	This routine sets up the BIOS exception
+;*	vectors to point to handlers in this module,
+;*	that vector again using the BDOS vectors.
+;*
+;*	Only vectors  2-23 and 36-38 are handled by
+;*	the BDOS, leaving 0-1 and 24-35 for the BIOS
+;*
+;****************************************************
+
+_initexc:
+				;* sp -> return addr
+				;*    +2 table addr
+
+	ld	r3,#BSETEXC	; r3 =  BIOS command
+	ldl	rr4,#2		;rr4 =  exception #
+	ld	r6,_sysseg	;rr6 -> handler
+	lda	r7,exchndl	;exception handler offset
+
+	dec	r15,#10		;space to save regs
+				; on stack over SC
+initloop:
+	ldm	@r15,r3,#5
+	sc	#BIOS_SC
+	ldm	r3,@r15,#5
+	inc	r5,#1		;step exception #
+	inc	r7,#2		;and handler addr.
+	cp	r5,#24		;done 23 yet?
+	jr ne	init1		; no
+	ld	r5,#36		; yes--skip to 36
+	inc	r7,#8		;  we have entries in
+				;  table for 32-36
+				;  but system uses 
+				;  them.  Skip.
+init1:	cp	r5,#48		;done all 48?
+	jr ne	initloop	; no--loop
+
+	inc	r15,#10		;clean stack
+
+	ld	r2,2(r15)	;save vector address
+	ld	evec_adr,r2
+
+	ld	r0,#18		; 18 long entries
+	subl	rr4,rr4
+init2:				;clear vector array
+
+; should check current entry, and keep it if
+; between old TPA and current TPA limits.
+
+; The TPA limits are flaky because we have two TPA's,
+; for split and merged spaces, not to mention
+; segmented programs.
+
+; What we are going to do is clear the lot.
+; Programs that want permanent traps can use the
+; Bios to set the trap vector.
+
+	ldl	rr6,@r2		; rr6 = exception addr
+
+	ldl	@r2,rr4
+init3:
+	inc	r2,#4
+	djnz	r0,init2
+
+	ret			;return
+
+;****************************************************
+;*
+;* Exception Handler Routine
+;*
+;*	An exception handler is called as a subroutine
+;*	with all registers saved on the stack.
+;*
+;*	Returning (ret) from the handler (in segmented
+;*	mode) will return to the state-restorer.
+;*
+;****************************************************
+
+exchndl:
+	calr	except
+excrtn0:
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+	calr	except
+
+
+except:				; general exception handler
+	pop	r1,@r15		; get return address 
+				; from above array
+	sub	r1,#excrtn0	; r1 now = 2 * encoded 
+	sll	r1,#2		; r1 now = 4 * encoded
+
+; r1/4 = [0..21, 22..37] represents exceptions
+;        [2..23, 32..47].
+;
+; If r1/4 is in the range [0..9, 22..29] then the
+; exception may be redirected by the BDOS.
+
+	cp	r1,#36
+	jr le	chkredir
+	cp	r1,#88
+	jr lt	dfltexc
+	cp	r1,#116
+	jr gt	dfltexc
+				; in range of redirected exceptions
+	sub	r1,#48		; subtract 4*12 to normalize [0..9,22..29]
+				;			into [0..9,10..17]
+chkredir:
+	ld	r2,evec_adr	; index into exception
+				;  vector array
+	ldl	rr4,r2(r1)	; rr4 -> handler
+	testl	rr4		; if non-zero
+	jr nz	usrexc		;   go do it
+
+				;not redirected, 
+				; do default handler
+	cp	r1,#40
+	jr lt	dfltexc
+	add	r1,#48		; add 4*12 sub'd above
+dfltexc:
+	srl	r1,#2		; divide r1 by 4
+				; r1 =    [0..21,22..37]
+				; meaning [2..23,32..47]
+	add	r1,#2		;get back real except#
+	cp	r1,#23
+	jr le	lowexc
+	add	r2,#12
+lowexc:	
+	push	@r15,r1		; save exception #
+				; print default msg
+	clr	r6
+	ld	r7,#excmsg1
+	calr	print
+	calr	prtdollar
+	pop	r1,@r15
+	calr	prtbyte
+	clr	r6
+	ld	r7,#excmsg2
+	calr	print
+	calr	prtdollar
+	pop	r1,@r15
+	sub	r0,r0
+	calr	prtlong
+	clr	r6
+	ld	r7,#excmsg3
+	calr	print
+
+	clr	r5		; warm boot
+	sc	#2
+	ret
+
+usrexc:			; call user exception handler
+			;	rr4 -> handler
+
+; user exception handler called in with FCW restored
+; to that at the time of the exception, with the
+; stack containing a copy of the context block.
+; On top of the context block will be a GARBAGE
+; return address of the appropriate mode.
+
+; Handler must exit with XFER system call.
+
+; stack now contains:
+;	return address to trap_ret
+;	normal r0..r15
+;	reason, fcw, PC
+
+	ldl	usr_vec,rr4		; save user exception vector
+	ld	r7,r15			; map current stack pointer
+	sub	r6,r6			; dummy segment
+	ld	r5,#2			; system space code
+	subl	rr2,rr2			; for map_adr call
+	sc	#MEM_SC			; do map_adr call
+	ldl	rr2,rr6			; save map_addr results
+	ld	r1,scfcw+co(r15)	; get user fcw
+	ld	r5,#2			; anticipate system space code
+	bit	r1,#14			; system mode?
+ 	jr	nz,sysexc		; yes.
+	ld	r5,#4			; Normal space code
+
+sysexc:	ld	r7,nr15+co(r15)		; user stack
+	sub	r7,#FRAMESZ+co		; allocate stack frame on user's stack
+	sub	r6,r6			; dummy segment, dest. in rr6
+	pushl	@r15,rr2		; save source on stack
+	subl	rr2,rr2			; for map_adr call
+	sc	#MEM_SC			; do map_adr call
+	popl	rr4,@r15		; retrieve source
+	ldl	rr2,#FRAMESZ+co		; length
+	sc	#MEM_SC			; transfer stack frame to user stack
+	ldl	rr4,usr_vec		; restore user exception vector
+	ld	r0,scfcw+co(r15)	; get back user's fcw
+	push	@r15,r5			; push on user's exception vector.
+	pushl	@r15,rr0		; push identifier and user's fcw
+	iret				; go
+
+;****************************************************
+;*
+;*  Subroutines
+;*
+;****************************************************
+
+print:
+	ld	r5,#9		;PRINTMSG
+	sc	#2		;BDOS
+	ret
+
+prtdollar:
+	ld	r5,#2		;PRINTCHAR
+	ldl	rr6,#24h	; dollarsign
+	sc	#2
+	ret
+
+prtlong:		; print rr0 as hex long
+	push	@r15,r1
+	ex	r0,r1
+	calr	prtword
+	pop	r1,@r15
+
+prtword:		; print r1 as hex word
+	push	@r15,r1
+	ldb	rl1,rh1
+	calr	prtbyte
+	pop	r1,@r15
+
+prtbyte: 		; Print rl1 as hex byte
+	push	@r15,r1
+	srl	r1,#4
+	calr	prtnib
+	pop	r1,@r15
+
+prtnib:
+	and	r1,#15
+	cp	r1,#10
+	jr	lt,lt10
+	add	r1,#7
+lt10:
+	add	r1,#30h
+	ld	r7,r1
+	ld	r5,#2		;PRINTBYTE
+	sc	#2		;BDOS
+	ret
+
+;****************************************************
+;*
+;* data
+;*
+;****************************************************
+
+__con:	.sect
+
+excmsg1:
+	.byte	13,10,10,"Exception $"
+
+excmsg2:
+	.byte	" at user address $"
+
+excmsg3:
+	.byte	".  Aborted.$"
+
+
+;****************************************************
+;*
+;* bss
+;*
+;****************************************************
+
+__bss:	.sect
+
+evec_adr:
+	.block	2
+usr_vec:
+	.block	4
+	.end

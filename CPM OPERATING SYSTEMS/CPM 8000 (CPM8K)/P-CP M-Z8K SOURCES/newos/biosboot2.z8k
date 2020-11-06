@@ -1,0 +1,80 @@
+;********** wboot.s -- Olivetti bootstrap writer*****
+;*
+;* 821013 S. Savitzky (Zilog) -- adapt for nonseg.
+;* 820930 S. Savitzky (Zilog) -- created
+;*
+;****************************************************
+
+;  01/12/83	Adapted for the Kontron ECB/16 Z8002 (DMH)
+;  01/16/83	Added relocation code to relocate the
+;		Z8002 CP/M from 8000h to 0000h (DMH).
+__text:	.sect
+
+;****************************************************
+;*
+;* NOTE -- THIS CODE IS HIGHLY SYSTEM-DEPENDENT
+;*
+;*	This module contains the code that receives
+;*	control after being booted.
+;*
+;*	The main function is to make sure that the 
+;*	system, whose entry point is called "bios",
+;*	is passed a valid stack and PSA pointer.
+;*
+;****************************************************
+
+
+
+;****************************************************
+;*
+;* Externals
+;*
+;****************************************************
+
+	.global	bios
+	.global _wboot
+
+;****************************************************
+;*
+;* Constants
+;*
+;****************************************************
+
+
+SYSTEM	.equ	00000000h	; system address
+SYSSTK	.equ	08000h-200h	; system stack top, leave room for PSA
+SYSPSA	.equ	SYSSTK		; system PSA
+
+
+
+;****************************************************
+;*
+;* Entry Points and post-boot Initialization
+;*
+;****************************************************
+
+
+;* transfer vector 
+
+	jr	wboot
+	jr	entry			; there is no write boot entry
+	jr	entry
+
+;* post-boot init
+;* (note that this code  
+;* is position indepent).
+
+entry:	DI	VI,NVI
+	ld	r15, #SYSSTK	; init stack pointer
+	ld	r3, #SYSPSA	; initialize PSA
+	ldctl	psap, r3
+	ld	r7,#0		; destination of system copy
+	ld	r5,#8000h	; source of system copy
+	ld	r0,#4000h	; copy 16k words
+	ldir	@r7,@r5,r0	; Zip it!
+	ld	r3,#bios
+	jp	@r3		; Actually jumping to low address
+
+wboot:	ld	r3,#_wboot
+	jp	@r3
+

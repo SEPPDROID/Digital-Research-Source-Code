@@ -1,0 +1,238 @@
+dmp86:
+	proc options(main);
+	/* dump 8086 relocatable object file */
+	%replace
+		true    by '1'b,
+		false   by '0'b;
+		/*
+		80h	THEADR	T-module header
+		82h	LHEADR	L-module header
+		84h	PEDATA	Physical Enumerated Data
+		86h	PIDATA	Physical Iterated Data
+		88h	HEX-88
+		8ah	MODEND	Module end
+		8ch	HEX-8C
+		8eh	HEX-8E
+		90h	HEX-90
+		92h	HEX-92
+		94h	HEX-94
+		98h	HEX-98
+		9ah	HEX-9A
+		9ch	HEX-9C
+		*/
+
+	dcl
+		rec_hex(0:14) bit(8) static initial
+		('00'b4,
+		 '80'b4, '82'b4, '84'b4, '86'b4,
+		 '88'b4, '8A'b4, '8C'b4, '8E'b4,
+		 '90'b4, '92'b4, '94'b4, '98'b4,
+		 '9A'b4, '9C'b4),
+		rec_sym(0:14) char(6) static initial
+		('BADREC',
+		 'THEADR','LHEADR','PEDATA','PIDATA',
+		 'HEX-88','MODEND','HEX-8C','HEX-8E',
+		 'HEX-90','HEX-92','HEX-94','HEX-98',
+		 'HEX-9A','HEX-9C');
+
+	dcl
+		module file;
+	dcl
+		buffer (0:127) fixed(7),
+		b_inx fixed(15);
+	dcl
+		line char(254) var;
+	dcl
+		b bit(8), c char(1),
+		i fixed,
+		mod_eof   bit,
+		check_sum fixed(7),
+		rec_type  fixed(7),
+		rec_inx   fixed(7),
+		rec_len   fixed(15);
+
+	on undefinedfile(module)
+		begin;
+		put skip list('Missing Input File');
+		stop;
+		end;
+	open file(module) keyed title('$1.$1') env(f(128),b(4096));
+	on endfile(module)
+		begin;
+		put skip list('Premature EOF');
+		stop;
+		end;
+	b_inx = hbound(buffer,1) + 1;
+	mod_eof = false;
+		do while (^mod_eof);
+		/* get next record */
+		check_sum = 0;
+		rec_len = 32767;
+		rec_type = lod_byte();
+		rec_len = lod_word();
+
+		i = match_rec();
+		put edit(unspec(rec_type),rec_sym(i))
+			(skip,b4(2),x(2),a);
+
+		go to case(i);
+		case(0):  /* BADREC */
+			go to clear_rec;
+
+		case(1):  /* THEADR */
+			line = ' T-Module Name ' || lod_sym();
+			go to put_line;
+
+		case(2):  /* LHEADR */
+			line = ' L-Module Name ' || lod_sym();
+			go to put_line;
+
+		case(3):  /* PEDATA */
+			go to data_rec;
+
+		case(4):  /* PIDATA */
+			go to data_rec;
+
+		case(5):  /* HEX-88 */
+			go to clear_rec;
+
+		case(6):  /* MODEND */
+			mod_eof = true;
+			go to clear_rec;
+
+		case(7):  /* HEX-8C */
+			go to clear_rec;
+
+		case(8):  /* HEX-8E */
+			go to clear_rec;
+
+		case(9):  /* HEX-90 */
+			go to clear_rec;
+
+		case(10): /* HEX-92 */
+			go to clear_rec;
+
+		case(11): /* HEX-94 */
+			go to clear_rec;
+
+		case(12): /* HEX-98 */
+			go to clear_rec;
+
+		case(13): /* HEX-9A */
+			go to clear_rec;
+
+		case(14): /* HEX-9C */
+			go to clear_rec;
+
+		data_rec:
+			put edit(' Frame',lod_addr(),' Offset',gnb())
+				(a,b4(5),a,b4(3));
+		go to clear_rec;
+
+		put_line:
+			put list(line);
+
+		clear_rec:
+			do while (rec_len > 1);
+			put edit('    ') (skip,a);
+			line = '';
+				do rec_type = 1 to 16 while(rec_len > 1);
+				b = lod_bit8();
+				put edit (b) (x(1),b4);
+				if b < '80'b4 & b >= '20'b4 then
+					unspec(c) = b;
+				else
+					c = '.';
+				line = line || c;
+				end;
+			put edit(line) (x(1),a);
+			end;
+			/* read the checksum information */
+			rec_type = lod_byte();
+			if check_sum ^= 0 then
+				put skip list('** Check Sum Error **');
+		end;
+	stop;
+
+	match_rec:
+		proc returns(fixed);
+		dcl
+			i fixed;
+			do i = 1 to hbound(rec_hex,1);
+			if rec_hex(i) = unspec(rec_type) then
+				return (i);
+			end;
+		return (0);
+		end match_rec;
+
+	lod_sym:
+		proc returns(char(254) var);
+		dcl
+			(i,len) fixed(7),
+			x char(254) var;
+		x = '';
+		len = lod_byte();
+		if len < 0 then
+			return ('** Bad Symbol **');
+			do i = 1 to len;
+			x = x || lod_char();
+			end;
+		return(x);
+		end lod_sym;
+
+	lod_char:
+		proc returns(char(1));
+		dcl x char(1);
+		unspec(x) = lod_bit8();
+		return (x);
+		end lod_char;
+
+	lod_byte:
+		proc returns(fixed(7));
+		return (gnf());
+		end lod_byte;
+
+	lod_bit8:
+		proc returns (bit(8));
+		return (gnb());
+		end lod_bit8;
+
+	lod_word:
+		proc returns (fixed(15));
+		dcl x fixed(15);
+		unspec(x) = lod_addr();
+		return (x);
+		end lod_word;
+
+	lod_addr:
+		proc returns(bit(16));
+		dcl x bit(8);
+		x = gnb();
+		return (gnb() || x);
+		end lod_addr;
+
+	gnb:
+		proc returns(bit(8));
+		dcl x fixed(7);
+		x = gnf();
+		return (unspec(x));
+		end gnb;
+
+	gnf:
+		proc returns(fixed(7));
+		dcl x fixed(7);
+		if b_inx > hbound(buffer,1) then
+			do;
+			read file(module) into(buffer);
+			b_inx = 0;
+			end;
+		x = buffer(b_inx);
+		check_sum = check_sum + x;
+		b_inx = b_inx + 1;
+		rec_len = rec_len - 1;
+		if rec_len = -1 then
+			put skip list('** Read Past EOR **');
+		return (x);
+		end gnf;
+	end dmp86;
+

@@ -1,0 +1,126 @@
+$ title ('MP/M-86 2.0 Abort a Program')
+abort:
+do;
+
+$include(copyrt.lit)
+
+$include (vaxcmd.lit)
+
+$include (comlit.lit)
+
+  mon1:
+    procedure (func,info) external;
+      declare func byte;
+      declare info address;
+    end mon1;
+
+  mon2:
+    procedure (func,info) byte external;
+      declare func byte;
+      declare info address;
+    end mon2;
+
+  mon3:
+    procedure (f,a) address external;
+      dcl f byte, a address;
+    end mon3;
+
+  declare fcb (1) byte external;
+  declare fcb16 (1) byte external;
+  declare tbuff (1) byte external;
+
+  /**************************************
+   *                                    *
+   *       B D O S   Externals          *
+   *                                    *
+   **************************************/
+
+  print$console$buffer:
+    procedure (buff$adr);
+      declare buff$adr address;
+      call mon1 (9,buff$adr);
+    end print$console$buffer;
+
+  terminate:
+    procedure;
+      call mon1 (143,0);
+    end terminate;
+
+  console$number:
+    procedure byte;
+      return mon2 (153,0);
+    end console$number;
+
+  abort$process:
+    procedure (abort$pb) byte;
+      declare abort$pb address;
+      return mon2 (157,abort$pb);
+    end abort$process;
+
+  dcl
+    mpm$version        lit '12';         /* version function */
+
+  declare abort$pb structure (
+    pd address,
+    term address,
+    cns byte,
+    net byte,
+    pname (8) byte) initial (
+    0,00ffh,0,0,'        ');
+
+  dcl i byte;
+  dcl console address;
+  dcl mpm$86 lit '1130h';
+
+  /*
+    Main Program
+  */
+
+  dcl plmstart label public;
+
+plmstart:
+  do;
+    if mon3(mpm$version,0) <> mpm$86 then
+    do;
+      call print$console$buffer(.(cr,lf,'Requires MP/M-86$'));
+      call mon1(0,0);
+    end;
+
+    if fcb16(1) = ' ' then
+    do;
+      abort$pb.cns = console$number;
+    end;
+    else
+    do;
+      i = 1; console = 0;
+      do while fcb16(i) <> ' ' and i < 4;  
+        if (fcb16(i) := fcb16(i) - '0') <= 9 then
+        do;
+          console = fcb16(i) + 10 * console;
+          i = i + 1;
+        end;
+        else
+          i = 255;                           /* non - numeric */
+      end;
+      if console > 253 or i = 255 then
+      do;
+        call print$console$buffer (.(cr,lf,
+          'Illegal Console, Use 0-253 $'));
+        call terminate;
+      end;
+      abort$pb.cns = low(console);
+    end;
+
+    call move (8,.fcb(1),.abort$pb.pname);
+    if abort$process (.abort$pb) = 0ffh then
+    do;
+      call print$console$buffer (.(cr,lf,
+        'Abort Failed.','$'));
+    end;
+                    /* abort first PD found with same name and console */
+                    /* consistent with MP/M-80 II but not MP/M 1.x     */
+    call terminate;
+  end;
+
+end abort;
+

@@ -1,0 +1,97 @@
+
+title	' Console Output Entry Module'
+
+;*******************************************
+;					   *
+;	CONOUT  MODULE			   *
+;	Last changed : 2/11/84		   *
+;					   *
+;*******************************************
+
+include	chrcomm.equ
+include	serdata.equ
+include vscreen.equ
+
+eject
+
+	dseg
+
+extrn	ocdesctbl:word
+extrn	vccb_tbl:word          ; in vs_screen.a86
+extrn	oq0desc:byte
+extrn	stoppoll:word          ; in headentr.a86
+
+	cseg
+
+public	io_conout
+public	pmsg
+public  conout1
+
+extrn	serial_out:near         ; in serout.a86
+extrn	supif:near              ; in headentr.a86
+extrn   vs_conout:near          ; in vs_screen.a86
+
+;====
+pmsg:
+;====
+; print message on current console until 0ffh
+;	input:	BX = address of message
+
+        push stoppoll		
+	mov stoppoll,0ffffh	
+	mov dl, 0		; signon to console 0
+ploop:
+	mov cl,[bx]		; get next char
+	cmp cl,0ffh
+          je pmsg_ret	        ; return if 0ffh
+				; CL = character
+	  push dx		;save device number
+	  push bx		;save string ptr
+	  call io_conout	;display it
+	  pop bx		;regain <BX>
+	  pop dx		;console
+	  inc bx		;bump to next char
+	  jmps ploop		;loop till done
+pmsg_ret:
+	pop stoppoll
+	ret			; end of message
+
+
+;=========
+io_conout:	; Function 2:  Console Output
+;=========
+;
+;	input:	CL = character       
+;		DL = virtual console number
+;
+;	output:	None
+;
+
+        xor dh,dh
+        jmp vs_conout                   ; for virtual screen buffering
+                                        ; omit this jump to disable buffering
+conout1:
+	push dx				; save the Virtual con 
+	mov bx, dx
+	shl bx, 1
+	mov bx, vccb_tbl[bx]		; bx -> VCCB
+	mov bl, vccb_pcon[bx]		; get the Physical console #
+	xor bh, bh
+	shl bx, 1
+	mov bx, ocdesctbl[bx]		; bx -> Xmit Q control structure
+
+	pop dx				; get the Vcon back
+	cmp dl, CUR_VCON[bx] 
+          je co1                        ; if background and dynamic,
+	     ret                        ; bit bucket the char
+co1:
+	cmp cl, ESC 			; Check for an escape character.
+           jne co2			; Worst case (VT-52) is 4 char's.
+	mov OESC_CNT[bx], 4             ; init escape count
+co2:
+	call serial_out
+	ret
+
+	end
+
+

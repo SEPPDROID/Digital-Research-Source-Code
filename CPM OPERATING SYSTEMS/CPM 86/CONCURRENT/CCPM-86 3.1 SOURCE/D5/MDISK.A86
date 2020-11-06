@@ -1,0 +1,60 @@
+
+title	'M disk module'
+include	diskhdr.equ
+
+MDISKBASE	EQU	6000H
+
+	cseg
+
+public	read_m_dsk, write_m_dsk
+
+read_m_dsk:	
+;----------
+	call mdisk_calc		;calculate byte address
+	push es			;save UDA
+	les di,dword ptr dmaoff ;load destination DMA address
+	xor si,si		;setup source DMA address
+	push ds			;save current DS
+	mov ds,bx		;load pointer to sector in memory
+	rep movsw		;execute move of 128 bytes....
+	pop ds			;then restore user DS register
+	pop es			;restore UDA
+	xor ax,ax		;return with good return code
+	ret
+
+write_m_dsk:
+;-----------
+	call mdisk_calc		;calculate byte address
+	push es			;save UDA
+	mov es,bx		;setup destination DMA address
+	xor di,di
+	push ds			;save user segment register
+	lds si,dword ptr dmaoff ;load source DMA address
+	rep movsw		;move from user to disk in memory
+	pop ds			;restore user segment pointer
+	pop es			;restore UDA
+	xor ax,ax		;return no error
+	ret
+
+
+mdisk_calc:
+;----------
+;	output:	BX = sector paragraph address
+;		CX = length in words to transfer
+
+	mov bx,track		;pickup track number
+	mov cl,3		;times eight for relative sector number
+	shl bx,cl
+	mov cx,sector		;plus sector
+	add bx,cx		;gives relative sector number
+	mov cl,3		;times eight for paragraph of sector start
+	shl bx,cl
+	add bx,mdiskbase+1	;plus base address of disk in memory
+	mov cx,64		;length for move of 1 sector
+	mov al,mcnt
+	xor ah,ah
+	mul cx			;length * multi sector count
+	mov cx,ax
+	cld
+	ret
+

@@ -1,0 +1,769 @@
+1File: CODEGEN.C                                                           Page       1
+     1   /*
+     2   	Copyright 1982
+     3   	Alcyon Corporation
+     4   	8716 Production Ave.
+     5   	San Diego, Ca.  92121
+     6   */
+     7    
+     8   #include "cgen.h"
+     9   #include "cskel.h"
+    10    
+    11    
+    12   /* scodegen - over-all code generation for expression*/
+    13   /*		Picks off post-fix ++, --.*/
+    14   scodegen(tp,cookie,reg)				/* returns register result is in*/
+    15   struct tnode *tp;
+    16   int cookie;
+    17   int reg;
+    18   {
+    19   	struct tnode *clist[20];
+    20   	struct tnode **clp;
+    21   	register struct tnode **cp;
+    22   	register int r;
+    23   	register int ccflag;
+    24   	register struct tnode *rtp;
+    25    
+    26   	if( tp->t_op == COMMA ) {
+    27   		scodegen(tp->t_left,FOREFF,reg);
+    28   		return(scodegen(tp->t_right,cookie,reg));
+    29   	}
+    30   	ccflag = 0;
+    31   	clp = clist;
+    32   	tp = addptree(tp,&clp);
+    33   	if( clp > clist ) {
+    34   	/*
+    35   	 * post ++, -- in tree.  We need to compile the tree post operators
+    36   	 * then generate code to do the post operators, then do any fix up of
+    37   	 * condition codes since the Stupid 68000 architect was a nimnul.
+    38   	 */
+    39   		if( cookie == FORCC ) {
+    40   	/*
+    41   	 * here we make the observation that if we are comparing something with
+    42   	 * zero OR the top operator of the tree is not a comparison operator,
+    43   	 * we can compile the tree to a register, and then set the condition
+    44   	 * codes OK with a tst instruction at the end.
+    45   	 */
+    46   			if( relop(tp->t_op) ) {
+    47   				if( (rtp=constant(tp->t_right)) && !rtp->t_value ) {
+    48   					ccflag = 1;
+    49   					tp = tp->t_left;
+    50   					cookie = FORREG;
+    51   				}
+    52   				else
+    53   					ccflag = 2;
+    54   			}
+    55   			else {
+    56   				ccflag = 1;
+    57   				cookie = FORREG;
+    58   			}
+    59   		}
+1File: CODEGEN.C                                                           Page       2
+    60   	}
+    61   	r = codegen(tp,cookie,reg);
+    62   	if( clp > clist ) {
+    63   		if( ccflag == 2 )
+    64   			outccsave(r);
+    65   		for( cp = clist; cp < clp; cp++ )
+    66   			codegen(*cp,FOREFF,r+1);
+    67   		if( ccflag == 1 )
+    68   			outcmp0(r,tp);
+    69   		else if( ccflag == 2 )
+    70   			outccrestore(r);
+    71   	}
+    72   	return(r);
+    73   }
+    74    
+    75   /* addptree - prune off postfix ++, -- from expression tree*/
+    76   /*		This prunes off ++, -- and collects those expressions for*/
+    77   /*		scodegen.*/
+    78   char *addptree(tp,clp)				/* returns pointer to pruned tree*/
+    79   struct tnode *tp;
+    80   struct tnode ***clp;
+    81   {
+    82   	register int op;
+    83    
+    84   	op = tp->t_op;
+    85   	if( leafop(op) || op == QMARK )	/* [vlh] 4.0 QMARK... */
+    86   		return(tp);
+    87   	if( op == POSTINC || op == POSTDEC ) {
+    88   		*(*clp)++ = tp;
+    89   		return( tcopy(tp->t_left) );
+    90   	}
+    91   	if( binop(op) )
+    92   		tp->t_right = addptree(tp->t_right,clp);
+    93   	tp->t_left = addptree(tp->t_left,clp);
+    94   	return(tp);
+    95   }
+    96    
+    97   /* codegen - generate code for expression*/
+    98   /*		This calls up rcodegen, which prunes off any special register*/
+    99   /*		optimization code, then calls ucodegen (unrecursive) code*/
+   100   /*		generation.*/
+   101   codegen(tp,cookie,reg)				/* returns reg result is in*/
+   102   struct tnode *tp;					/* tree pointer*/
+   103   int cookie;							/* code generation goals*/
+   104   int reg;							/* first available register*/
+   105   {
+   106   	register int size, savestk, ssize, r, i, scookie;
+   107   	register struct tnode *rtp;
+   108    
+   109   #ifndef NODEBUG
+   110   	if( cflag )
+   111   		printf("codegen op=%d cookie=%d reg=%d\n",tp->t_op,cookie,reg);
+   112   #endif
+   113   	switch( tp->t_op ) {
+   114    
+   115   	case CALL:
+   116   	case NACALL:
+   117   		ssize = 0;
+   118   		savestk = stacksize;
+1File: CODEGEN.C                                                           Page       3
+   119   		if( tp->t_left->t_op != SYMBOL )
+   120   			stacksize++;
+   121   		if( tp->t_op == CALL ) {
+   122   			rtp = tp->t_right;
+   123   			while( rtp->t_op == COMMA ) {
+   124   				ssize =+ dofarg(rtp->t_right);
+   125   				rtp = rtp->t_left;
+   126   			}
+   127   			ssize =+ dofarg(rtp);
+   128   		}
+   129   		tp->t_op = FJSR;				/*generate JSR (unary op)*/
+   130   		codegen(tp,FORREG,reg);
+   131   		popstack(ssize);
+   132   		stacksize = savestk;
+   133   		fixresult(tp,cookie,0);
+   134   		return(0);						/*result in R0*/
+   135    
+   136   	case COMMA:
+   137   		codegen(tp->t_left,FOREFF,reg);
+   138   		return(codegen(tp->t_right,cookie,reg));
+   139    
+   140   	case AND:
+   141   		if( cookie == FORCC && (i=isonebit(tp->t_right)) >= 0 &&
+   142   				(i=dobitadd(tp->t_left,i)) >= 0 ) {
+   143   			if( convop(tp->t_right->t_op) )
+   144   				tp->t_right = tp->t_right->t_left;
+   145   			tp->t_right->t_value = i;
+   146   			tp->t_op = BTST;
+   147   			tp = canon(tp);
+   148   			sucomp(tp,reg,1);
+   149   		}
+   150   		break;
+   151   	}
+   152   	if( rcodegen(&tp,cookie,reg) ) {
+   153   		if( cookie == FORCC && tp->t_op == SYMBOL && tp->t_sc == REGISTER
+   154   				&& isdreg(tp->t_reg))
+   155   			return(reg);
+   156   	}
+   157   	r = ucodegen(tp,cookie,reg);
+   158   	return(r);
+   159   }
+   160    
+   161   /* fixresult - fix result of code generation*/
+   162   fixresult(tp,cookie,reg)	/* returns - none*/
+   163   struct tnode *tp;
+   164   int cookie;							/* wanted this cookie*/
+   165   int reg;
+   166   {
+   167   #ifndef NODEBUG
+   168   	if (cflag)
+   169   		printf("fixresult cookie=%d reg=%d op=%d\n",cookie,reg,tp->t_op);
+   170   #endif
+   171   	switch( cookie ) {
+   172    
+   173   	case FORCC:
+   174   		outcmp0(reg,tp);
+   175   		break;
+   176    
+   177   	case FORSP:
+1File: CODEGEN.C                                                           Page       4
+   178   	case FORSTACK:
+   179   		stacksize++;
+   180   		outrpush(reg,tp,cookie==FORSTACK);
+   181   		break;
+   182    
+   183   	}
+   184   	return(reg);
+   185   }
+   186    
+   187   /* ucodegen - generate code for tree given cookie and starting register*/
+   188   /*		Handles the matching of the expression tree node with the*/
+   189   /*		corresponding code generation table.  When a match is found,*/
+   190   /*		expand is called to expand the code skeleton macro.*/
+   191   ucodegen(tp,cookie,reg)				/* returns reg result is in*/
+   192   struct tnode *tp;					/* pointer to expression tree*/
+   193   int cookie;							/* (FORCC,FOREFF,FORREG,FORSTACK)*/
+   194   int reg;							/* first available register*/
+   195   {
+   196   	register int r;
+   197   	register char *p;
+   198    
+   199   #ifndef NODEBUG
+   200   	if(cflag)
+   201   		putexpr("ucodegen",tp);
+   202   #endif
+   203   	switch( tp->t_op ) {
+   204    
+   205   	case STASSIGN:	/*[vlh]*/
+   206   		outstrcpy(codegen(tp->t_left,FORREG,areg(reg)),
+   207   					codegen(tp->t_right,FORREG,areg(reg+1)), tp->t_type);
+   208   		return(reg);
+   209   		break;
+   210    
+   211   	case SYMBOL:
+   212   		if( cookie == FOREFF )
+   213   			return(reg);
+   214   		break;
+   215    
+   216   	case LSH:
+   217   		if( (isareg(reg)) && (p=constant(tp->t_right)) &&
+   218   				!(unsign(tp->t_left->t_type)) &&
+   219   				(p->t_value == 1 || p->t_value == 2) ) {
+   220   			r = codegen(tp->t_left,FORREG,reg);
+   221   			outmovr(r,reg,tp->t_left);
+   222   			if( p->t_value == 2 )
+   223   				outaddr(reg,reg,tp);
+   224   			outaddr(reg,reg,tp);
+   225   			fixresult(tp,cookie,reg);
+   226   			return(reg);
+   227   		}
+   228   		break;
+   229    
+   230   	case EQMULT:
+   231   	case EQDIV:
+   232   	case LEQMULT:
+   233   	case LEQDIV:
+   234   	case EQMOD:
+   235   	case LEQMOD:
+   236   	case EQRSH:
+1File: CODEGEN.C                                                           Page       5
+   237   	case EQLSH:
+   238   	case EQAND:
+   239   	case EQOR:
+   240   	case EQXOR:
+   241   		if( indexreg(tp->t_left) ) {
+   242   			reg = dreg(reg);
+   243   			outmovr(r=tp->t_left->t_reg,reg,tp);
+   244   			tp->t_left->t_reg = reg;
+   245   			codegen(tp,cookie,reg+1);
+   246   			outmovr(reg,r,tp);
+   247   			return(reg);
+   248   		}
+   249   		break;
+   250    
+   251   	case ADD:
+   252   	case EQADD:
+   253   		if( (p=constant(tp->t_right)) && p->t_value < 0 &&
+   254   				p->t_value >= -QUICKVAL ) {
+   255   			p->t_value = - p->t_value;
+   256   			tp->t_op =+ (SUB-ADD);
+   257   		}
+   258   		break;
+   259   	}
+   260   	sucomp(tp,reg,1);
+   261   	if( (r=loadexpr(tp,cookie,reg)) >= 0 )
+   262   		return(r);
+   263   	if( (r=cqmark(tp,cookie,reg)) >= 0 )
+   264   		return(r);
+   265   	if( (r=hardrel(tp,cookie,reg)) >= 0 )
+   266   		return(r);
+   267   	if( cookie == FORCC && (p=match(tp,FOREFF,reg)) != 0 ) {
+   268   		r = expand(tp,FOREFF,reg,p);
+   269   		if( asgop(tp->t_op) && indexreg(tp->t_left) )
+   270   			outcmp0(tp->t_left->t_reg,tp->t_left);
+   271   	}
+   272   	else if( p = match(tp,cookie,reg) )
+   273   		r = expand(tp,cookie,reg,p);
+   274   	else if( cookie != FORREG )
+   275   		r = fixresult(tp,cookie,ucodegen(tp,FORREG,reg));
+   276   	else
+   277   		error("no code table for %d",tp->t_op);
+   278   	return(r);
+   279   }
+   280    
+   281   /* outstrcpy - output structure copy */
+   282   outstrcpy(lr,rr,size)	/*[vlh]*/
+   283   int lr, rr;				/* left register, right register */
+   284   int size;				/* structure size to copy */
+   285   {
+   286   	register int lab;
+   287   	lab = nextlabel++;
+   288   	printf("move #%d,r%d\n",(size/2)-1,dreg(lr));
+   289   	outlab(lab);
+   290   	printf("move (r%d)+,(r%d)+\ndbra r%d,L%d\n",rr,lr,dreg(lr),lab);
+   291   }
+   292    
+   293   /* loadexpr - load an addressable expression into a register*/
+   294   /*		This checks for any possible usage of the register indexed*/
+   295   /*		addressing mode.  Note that this relies on the good graces of the*/
+1File: CODEGEN.C                                                           Page       6
+   296   /*		load code skeletons not to muck up the compiler registers before*/
+   297   /*		loading an addressable expression...*/
+   298   loadexpr(tp,cookie,reg)					/* returns register loaded or -1*/
+   299   struct tnode *tp;						/* pointer to expression tree*/
+   300   int reg;								/* register to load*/
+   301   {
+   302   	register struct tnode *rtp, *ltp, *xtp, *atp;
+   303   	register int off, r, type, nr, ar, xr, xt;
+   304    
+   305   	if( tp->t_op == INDR || LOADABLE(tp) ) {
+   306   		type = tp->t_type;
+   307   		if( tp->t_op == INDR && (ltp=tp->t_left)->t_op == ADD ) {
+   308   			rtp = ltp->t_right;
+   309   			ltp = ltp->t_left;
+   310   			off = 0;
+   311   			if( rtp->t_op == CINT && ((off=rtp->t_value) < -128 ||
+   312   					off > 127 || ltp->t_op != ADD ) ) {
+   313   				tp = snalloc(type,AUTO,off,0,0);
+   314   				if( indexreg(ltp) )
+   315   					tp->t_reg = ltp->t_reg;
+   316   				else {
+   317   					r = codegen(ltp,FORREG,areg(reg));
+   318   					if( isdreg(r) )
+   319   						outmovr(r,areg(r),ltp);
+   320   					tp->t_reg = areg(r);
+   321   				}
+   322   			}
+   323   			else {
+   324   				if( rtp->t_op == CINT ) {
+   325   					rtp = ltp->t_right;
+   326   					ltp = ltp->t_left;
+   327   				}
+   328   				if(indexreg(rtp) || (!(indexreg(ltp)) && (isreg(rtp)))) {
+   329   					xtp = ltp;
+   330   					ltp = rtp;
+   331   					rtp = xtp;
+   332   				}
+   333   				xtp = atp = 0;
+   334   				if( indexreg(ltp) ) {
+   335   					ar = ltp->t_reg;
+   336   					if( (isreg(rtp)) && rtp->t_type != CHAR ) {
+   337   						xr = rtp->t_reg;
+   338   						xt = rtp->t_type;
+   339   					}
+   340   					else
+   341   						xtp = rtp;
+   342   				}
+   343   				else if( (isreg(ltp)) && ltp->t_type != CHAR &&
+   344   						(lflag || rtp->t_op != ADDR) ) {
+   345   					xr = ltp->t_reg;
+   346   					xt = ltp->t_type;
+   347   					atp = rtp;
+   348   				}
+   349   				else if( rtp->t_op == ADDR ) {
+   350   					atp = ltp;
+   351   					xtp = rtp;
+   352   				}
+   353   				else {
+   354   					atp = rtp;
+1File: CODEGEN.C                                                           Page       7
+   355   					xtp = ltp;
+   356   				}
+   357   				nr = 0;
+   358   				if( atp )
+   359   					nr++;
+   360   				if( xtp && (xtp->t_op != ADDR || lflag ) )
+   361   					nr++;
+   362   				if( dreg(nr+reg) <= HICREG ) {
+   363   					r = reg;
+   364   					if( atp ) {
+   365   						ar = codegen(atp,FORREG,areg(r));
+   366   						if( isdreg(ar) ) {
+   367   							outmovr(ar,areg(ar),atp);
+   368   							ar = areg(ar);
+   369   						}
+   370   						r++;
+   371   					}
+   372   					if( xtp && xtp->t_op == ADDR && !lflag ) {
+   373   						tp = xtp->t_left;
+   374   						tp->t_sc =+ (EXTOFF-EXTERNAL);
+   375   						tp->t_offset =+ off;
+   376   						tp->t_reg = ar;
+   377   					}
+   378   					else {
+   379   						if( xtp ) {
+   380   							xr = codegen(xtp,FORREG,areg(r));
+   381   							xt = xtp->t_type;
+   382   						}
+   383   						tp = xnalloc(type,ar,off,xr,xt);
+   384   					}
+   385   				}
+   386   			}
+   387   		}
+   388   		if( (isareg(reg)) && tp->t_type == CHAR )
+   389   			reg = dreg(reg);
+   390   		tp = tnalloc(LOAD,tp->t_type,SU_EASY,0,tp,null);
+   391   		return( codegen(tp,cookie,reg) );
+   392   	}
+   393   	return(-1);
+   394    
+   395   }
+   396    
+   397   /* coffset - check offset for addressable node*/
+   398   char *coffset(tp)						/* returns ptr to const off node*/
+   399   struct tnode *tp;						/* pointer to node*/
+   400   {
+   401   	register struct tnode *rtp;
+   402    
+   403   	if( tp->t_op == ADD ) {
+   404   		rtp = tp->t_right;
+   405   		if( rtp->t_op == CINT )
+   406   			return(rtp);
+   407   		if(!lflag) {
+   408   			if( rtp->t_op == ADDR )
+   409   				return(rtp->t_left);
+   410   			rtp = tp->t_left;
+   411   			if( rtp->t_op == ADDR ) {
+   412   				tp->t_left = tp->t_right;
+   413   				tp->t_right = rtp;
+1File: CODEGEN.C                                                           Page       8
+   414   				return(rtp->t_left);
+   415   			}
+   416   		}
+   417   	}
+   418   	return(0);
+   419   }
+   420    
+   421   /* hardrel - do relationals returning a value*/
+   422   hardrel(tp,cookie,reg)				/* returns reg or -1*/
+   423   struct tnode *tp;					/* pointer to tree*/
+   424   int cookie;							/* cookie for code generation*/
+   425   int reg;							/* low register*/
+   426   {
+   427   	char *p;
+   428   	int op, lab1, lab2;
+   429    
+   430   	if( cookie != FORCC && (relop(op=tp->t_op) || op == LOR ||
+   431   			op == LAND || op == NOT) ) {
+   432   		lab1 = nextlabel++;
+   433   		condbr(tp,TRUE,lab1,reg);
+   434   		p = canon(cnalloc(INT,0));
+   435   		codegen(p,cookie,reg);
+   436   		lab2 = nextlabel++;
+   437   		outgoto(lab2);
+   438   		outlab(lab1);
+   439   		p = canon(cnalloc(INT,1));
+   440   		codegen(p,cookie,reg);
+   441   		outlab(lab2);
+   442   		return(reg);
+   443   	}
+   444   	return(-1);
+   445   }
+   446    
+   447   /* cqmark - compile question mark operator*/
+   448   /*		This does the compilation of the question mark operator.*/
+   449   cqmark(tp,cookie,reg)				/* returns reg or -1*/
+   450   struct tnode *tp;
+   451   int cookie;
+   452   int reg;
+   453   {
+   454   	register int lab1, lab2, savestk, r;
+   455    
+   456   	if( tp->t_op == QMARK && cookie != FORCC ) {
+   457   		lab1 = nextlabel++;
+   458   		condbr(tp->t_left,FALSE,lab1,reg);
+   459   		savestk = stacksize;
+   460   		r = scodegen(tp->t_right->t_left,cookie,reg);	/* [mc] 4.0 */
+   461   		outmovr(r,reg,tp);
+   462   		stacksize = savestk;
+   463   		outgoto(lab2=nextlabel++);
+   464   		outlab(lab1);
+   465   		r = scodegen(tp->t_right->t_right,cookie,reg);	/* [mc] 4.0 */
+   466   		outmovr(r,reg,tp);
+   467   		outlab(lab2);
+   468   		return(reg);
+   469   	}
+   470   	return(-1);
+   471   }
+   472    
+1File: CODEGEN.C                                                           Page       9
+   473   /* condbr - handle conditional branch code generation*/
+   474   /*		This handles the conditional branch code generation, handling*/
+   475   /*		the special cases for constants, ||, &&, ! and generating the*/
+   476   /*		correct conditional branch instruction.*/
+   477   condbr(tp,dir,lab,reg)
+   478   struct tnode *tp;
+   479   int dir;
+   480   int lab;
+   481   int reg;
+   482   {
+   483   	register struct tnode *ltp, *rtp;
+   484   	register int lab1, optype, op, subdir;
+   485    
+   486   	ltp = tp->t_left;
+   487   	if( binop(op=tp->t_op) )
+   488   		rtp = tp->t_right;
+   489   	subdir = dir;					/*set up for LOR*/
+   490   	switch( op ) {
+   491    
+   492   	case CINT:
+   493   		if( !tp->t_value ) {
+   494   			if( dir == FALSE )
+   495   				outgoto(lab);
+   496   		}
+   497   		else if( dir != FALSE )
+   498   			outgoto(lab);
+   499   		break;
+   500    
+   501   	case NOT:
+   502   		condbr(ltp,!dir,lab,reg);
+   503   		break;
+   504    
+   505   	case LAND:
+   506   		dir = !dir;
+   507   	case LOR:
+   508   		if( dir == FALSE ) {
+   509   			lab1 = nextlabel++;
+   510   			condbr(ltp,!subdir,lab1,reg);
+   511   			condbr(rtp,subdir,lab,reg);
+   512   			outlab(lab1);
+   513   		}
+   514   		else {
+   515   			condbr(ltp,subdir,lab,reg);
+   516   			condbr(rtp,subdir,lab,reg);
+   517   		}
+   518   		break;
+   519    
+   520   	case COMMA:
+   521   		scodegen(tp->t_left,FOREFF,reg);
+   522   		condbr(tp->t_right,dir,lab,reg);
+   523   		break;
+   524    
+   525   	default:
+   526   		if( op == NEQUALS && ltp->t_op == PREDEC &&
+   527   				isdreg(ltp->t_left->t_reg) && ltp->t_left->t_type == INT &&
+   528   				rtp->t_op == CINT && rtp->t_value == -1 ) {
+   529   			outdbra(ltp->t_left->t_reg,lab);
+   530   			break;
+   531   		}
+1File: CODEGEN.C                                                           Page      10
+   532   		if( relop(op) && ltp->t_op == AUTOINC && rtp->t_op == AUTOINC &&
+   533   				ltp->t_type == rtp->t_type )
+   534   			outcmpm(tp);
+   535   		else
+   536   			scodegen(tp,FORCC,reg);
+   537   		optype = 0;
+   538   		if( relop(op) ) {
+   539   			if( unorptr(ltp->t_type) || unorptr(rtp->t_type) )
+   540   				optype =+ 1;
+   541   		}
+   542   		else
+   543   			op = NEQUALS;
+   544   		if(!dir)
+   545   			op = invrel[op-EQUALS];
+   546   		optype = brtab[op-EQUALS][optype];
+   547   		printf("%s L%d\n",mnemonics[optype],lab);
+   548   		break;
+   549   	}
+   550   }
+   551    
+   552   rcodegen(tpp,cookie,reg)			/* returns changed flag*/
+   553   struct tnode **tpp;					/* pointer to tree*/
+   554   int cookie;							/* code generation cookie*/
+   555   int reg;							/* register to use for code*/
+   556   {
+   557   	register int change, op;
+   558   	register struct tnode *tp;
+   559    
+   560   	tp = *tpp;
+   561   	op = tp->t_op;
+   562   	change = 0;
+   563   	if( notleafop(op) && op != COMMA ) {
+   564   		change =+ rcodegen(&tp->t_left,cookie,reg);
+   565   		if( binop(op) )
+   566   			change =+ rcodegen(&tp->t_right,cookie,reg);
+   567   		change =+ rcgen(tpp,cookie,reg);
+   568   	}
+   569   	if( change )
+   570   		*tpp = canon(*tpp);
+   571   	return(change);
+   572   }
+   573    
+   574   rcgen(tpp,cookie,reg)				/* returns changed flag*/
+   575   struct tnode **tpp;					/* pointer to tree*/
+   576   int cookie;							/* code generation goals*/
+   577   int reg;							/* register to use*/
+   578   {
+   579   	register struct tnode *tp, *p, *ltp, *rtp;
+   580   	register int op, change;
+   581    
+   582   	change = 0;
+   583   	for( tp = *tpp ; binop(op=tp->t_op); *tpp=tp=canon(tp), change++ ) {
+   584   		ltp = tp->t_left;
+   585   		if( ltp->t_op != SYMBOL )
+   586   			break;
+   587   		rtp = tp->t_right;
+   588   		switch( op ) {
+   589    
+   590   		case ASSIGN:
+1File: CODEGEN.C                                                           Page      11
+   591   			if( ltp->t_sc != REGISTER )
+   592   				return(change);
+   593   			switch( rtp->t_op ) {
+   594    
+   595   			case MULT:
+   596   			case DIV:
+   597   			case MOD:
+   598   			case AND:
+   599   			case OR:
+   600   			case XOR:
+   601   			case LSH:
+   602   			case RSH:
+   603   				if( isareg(ltp->t_reg) )
+   604   					return(change);
+   605   			case ADD:
+   606   			case SUB:
+   607   				p = rtp->t_right;
+   608   				if(NOTADDRESSABLE(ltp) || !noref(rtp->t_right,ltp->t_reg))
+   609   					return(change);
+   610   				p = rtp->t_left;
+   611   				if( p->t_op != SYMBOL || p->t_sc != REGISTER ||
+   612   						p->t_reg != ltp->t_reg ) {
+   613   					tp->t_right = p;
+   614   #ifndef NODEBUG
+   615   					if( cflag > 1 )
+   616   						putexpr("rcgen",tp);
+   617   #endif
+   618   					codegen(tp,FOREFF,reg);
+   619   				}
+   620   				tp->t_right = rtp->t_right;
+   621   				tp->t_op = rtp->t_op + (EQADD-ADD);
+   622   				continue;
+   623   			}
+   624   		case EQLSH:
+   625   		case EQRSH:
+   626   			if( ltp->t_sc != REGISTER )
+   627   				return(change);
+   628   		case EQADD:
+   629   		case EQSUB:
+   630   		case EQAND:
+   631   		case EQOR:
+   632   		case EQXOR:
+   633   			if( ltp->t_type == CHAR )
+   634   				return(change);
+   635   #ifndef NODEBUG
+   636   			if( cflag > 1 )
+   637   				putexpr("rcgen",tp);
+   638   #endif
+   639   			ucodegen(tp,FOREFF,reg);
+   640   			tp = ltp;
+   641   			continue;
+   642    
+   643   		case PREDEC:
+   644   		case PREINC:
+   645   			if( cookie == FORCC || ltp->t_type == CHAR )
+   646   				return(change);
+   647   			ucodegen(tp,FOREFF,reg);
+   648   			tp = ltp;
+   649   			continue;
+1File: CODEGEN.C                                                           Page      12
+   650   		}
+   651   		break;
+   652   	}
+   653   	return(change);
+   654   }
+   655    
+   656   noref(tp,reg)		/* 4.0 change */
+   657   struct tnode *tp;	/* returns 1 if no reference in tree to reg */
+   658   int reg;
+   659   {
+   660   	if ( leafop(tp->t_op) ) {
+   661   		if (tp->t_op == SYMBOL && tp->t_sc == REGISTER && tp->t_reg == reg)
+   662   			return(0);
+   663   		return(1);
+   664   	}
+   665   	if ( !noref(tp->t_left,reg) )
+   666   		return(0);
+   667   	if (binop(tp->t_op))
+   668   		return( noref(tp->t_right,reg) );
+   669   	return(1);
+   670   }
+   671    
+   672   /* cdsize - compute size of data item*/
+   673   cdsize(tp)						/* returns data size in bytes*/
+   674   struct tnode *tp;
+   675   {
+   676   	register int type;
+   677    
+   678   	type = tp->t_type;
+   679   	if( suptype(type) )
+   680   		return(PTRSIZE);
+   681   	switch( type ) {
+   682    
+   683   	case CHAR:
+   684   	case INT:
+   685   	case UNSIGNED:
+   686   		return(INTSIZE);
+   687    
+   688   	case LONG:
+   689   	case FLOAT:		/* [vlh] 3.4 */
+   690   		return(LONGSIZE);
+   691   	}
+   692   	error("cdsize: invalid type %d",type);
+   693   	return(0);
+   694   }
+   695    
+   696   dofarg(tp)						/* returns number of bytes pushed*/
+   697   struct tnode *tp;				/* pointer to expression tree*/
+   698   {
+   699   	register int nb;
+   700    
+   701   	nb = 0;
+   702   	if( tp->t_op == SYMBOL && tp->t_sc == STRUCT )
+   703   		error("structure operation not implemented");
+   704   	else if( stacksize ) {
+   705   		codegen(tp,FORSTACK,0);
+   706   		nb = cdsize(tp);
+   707   	}
+   708   	else
+1File: CODEGEN.C                                                           Page      13
+   709   		codegen(tp,FORSP,0);
+   710   	return( nb );
+   711   }
+   712    
+   713   /* dobitadd - do bit operation address checking and fixup*/
+   714   dobitadd(tp,bitno)						/* returns -1 if can't or bitno*/
+   715   struct tnode *tp;
+   716   int bitno;
+   717   {
+   718   	register int offset;
+   719    
+   720   	if( tp->t_type == CHAR )
+   721   		offset = 0;
+   722   	else
+   723   		offset = cdsize(tp) - (bitno/BITSPBYTE) - 1;
+   724   	if( tp->t_op == SYMBOL ) {
+   725   		switch( tp->t_sc ) {
+   726    
+   727   		case REGISTER:
+   728   			if( isdreg(tp->t_reg) )
+   729   				return(bitno);
+   730   		default:
+   731   			return(-1);
+   732    
+   733   		case EXTERNAL:
+   734   		case STATIC:
+   735   		case REGOFF:
+   736   		case STATOFF:
+   737   		case EXTOFF:
+   738   			tp->t_offset =+ offset;
+   739   			return( bitno % BITSPBYTE );
+   740   		}
+   741   	}
+   742   	else if( tp->t_op == INDR ) {
+   743   		tp->t_left = tnalloc(ADD,tp->t_left->t_type,0,0,tp->t_left,
+   744   							cnalloc(INT,offset));
+   745   		return( bitno % BITSPBYTE );
+   746   	}
+   747   	return(-1);
+   748   }
+   749    
+   750   isonebit(tp)					/* returns -1 if not 1 bit, else bitno*/
+   751   struct tnode *tp;					/* pointer to tree*/
+   752   {
+   753   	if( tp = constant(tp) )
+   754   		return( onebit(tp->t_value) );
+   755   	return(-1);
+   756   }

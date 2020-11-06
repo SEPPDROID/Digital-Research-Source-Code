@@ -1,0 +1,992 @@
+
+M	EQU	Byte Ptr 0[BX]
+;	title	'Serialization Program for MP/M-86  09/14/81'
+version	EQU	20			;version 2.0
+system	EQU	1			;MP/M 86 system
+;	Serialization Program for MP/M 86 diskettes
+; Note **********************************************************
+; This program contains Digital Research proprietary information,
+; and must not be reproduced, copied, or transcribed in any form
+; whatsoever
+; ***************************************************************
+;	Copyright (C) 1979, 1980, 1981
+;	Digital Research
+;	Box 579 Pacific Grove
+;	California, 93950
+;	Revised:
+;	  14 Sept 81  by Thomas Rolander (MP/M II 8080)
+;	  18 Sept 81  by Danny Horovitz  (MP/M-8086)
+;		'$' signs taken out of identifiers and labels for
+;		ASM86 compatibility, names of serialized
+;		programs changed, only one disk to be serialized
+tpa	EQU	100h			;transient program area
+	ORG	tpa
+	JMP	start
+L@1	EQU	$
+	DSEG
+	ORG	Offset L@1
+Copyright	RS	0
+	DB	'COPYRIGHT (C) 1981,'
+	DB	' DIGITAL RESEARCH '
+L@2	EQU	$
+	CSEG
+	ORG	Offset L@2
+L@3:
+CoNmLen	EQU	(Offset $)-(Offset Copyright)
+;
+;	global equates
+boot	EQU	0000h
+bdos	EQU	0005h
+;
+;	BDOS equates
+conin	EQU	1			;read console device
+conout	EQU	2			;write console device
+pbuff	EQU	9			;print buffer
+rdbuff	EQU	10			;read buffer
+resetds	EQU	13			;reset disk system
+selectd	EQU	14			;select disk
+openf	EQU	15			;open file
+rdseqf	EQU	20			;read sequential file
+wrseqf	EQU	21			;write sequential file
+stdmadr	EQU	26			;set DMA address
+dirbios	EQU	50			;direct BIOS call-CP/M-86
+;	Hardware dependent equates
+begtrk	EQU	0			;beginning track #
+dirtrk	EQU	2			;directory track #
+maxtrk	EQU	76			;maximum track #
+sectrk	EQU	26			;sectors per track
+srcdsk	EQU	2			;source disk
+dstdsk	EQU	3			;destination disk
+secsiz	EQU	128			;sector size in # bytes
+nsrlsec	EQU	4			;# of sectors to search serial #
+cr	EQU	0dh
+lf	EQU	0ah
+;
+readtrk	EQU	(Offset $)
+writtrk	EQU	(Offset $)+3
+reread	EQU	(Offset $)+6
+;	track read/write routines, filled in later
+	JMPS	readdisk
+L@4:
+	JMPS	writedisk
+L@5:
+	JMPS	rereaddisk
+L@6	EQU	$
+	DSEG
+	ORG	Offset L@6
+track	RS	1			;set to track to read/write
+buffa	RS	2			;set to buffer address to read/write
+iof	RS	1			;io function 0 = read, 1 = write
+L@7	EQU	$
+	CSEG
+	ORG	Offset L@7
+;
+readdisk:
+;read disk drive a, from track 'track'
+;into the address given by 'buffa'
+	MOV	cl,srcdsk	
+	CALL	sel			;select src drive
+	JMPS	readd
+;
+;
+writedisk:
+;write to disk drive b, to track 'track'
+;from the address given by 'buffa'
+	MOV	AL,1	
+	MOV	Byte Ptr iof,AL		;set iofunction to write
+	MOV	cl,dstdsk	
+	CALL	sel			;select dst drive
+	JMPS	rwdisk
+;
+rereaddisk:
+;read from dstdsk, from track 'track'
+;to the address given by 'buffa'
+	MOV	cl,dstdsk	
+	CALL	sel			;dst drive selected
+readd:	XOR	AL,AL	
+	MOV	Byte Ptr iof,AL		;set to read function
+rwdisk:				;read or write disk
+	MOV	BX,(Offset track)	
+	MOV	CL,M			;get track number
+	CALL	trk			;track selected
+	MOV	BX,Word Ptr buffa	;get dma address
+	MOV	DX,sectrk		;d = 0, e = sectors per track
+rwloop:				;read/write loop
+	INC	DH			;to next sector
+	PUSH	DX	
+	PUSH	BX	
+	MOV	CL,DH	
+	MOV	CH,0
+	MOV	BX,(Offset skewtbl)	
+	MOV	AL,M	
+	OR	AL,AL
+	JZ	noskew			;jump if no skew table
+	DEC	CL	
+	LAHF	
+	ADD	BX,CX	
+	SAHF	
+	MOV	CL,M
+noskew:
+	CALL	sec			;sector set
+	POP	CX	
+	PUSH	CX			;get dma address
+	CALL	dma			;dma address set
+;perform io function
+	MOV	AL,Byte Ptr iof	
+	OR	AL,AL			;0=read, 1=write
+	JNZ	writefunc
+;read disk
+	CALL	dread
+	JMPS	rwcomplete
+writefunc:
+;write disk
+	CALL	dwrite
+rwcomplete:				;function complete
+	POP	BX			;recall dma address
+	MOV	DX,secsiz	
+	ADD	BX,DX			;to nxt dma
+	POP	DX			;recall sector and count
+; check error conditions
+	OR	AL,AL	
+	JZ	L@8	
+	RET				;rtn with non zero flag set
+L@8:
+	DEC	DL			;count = count - 1
+	JNZ	rwloop			;for another sector
+	RET				;with zero flag set for io complete
+;
+;
+;	utility subroutines for direct disk io
+
+
+seldsk	EQU	9			;select disk
+settrk	EQU	10			;set track
+setsec	EQU	11			;set sector
+setdma	EQU	12			;set dma address
+readf	EQU	13			;read disk
+writef	EQU	14			;write disk
+;
+sel:					;select drive given by register cl
+	MOV	al,seldsk
+	jmps	bios
+;
+trk:					;set track given by cl
+	mov	al,settrk
+	jmps	bios
+;
+sec:					;set sector given by cl
+	mov	al,setsec
+	jmps	bios
+;
+dma:					;set dma address to value of cx
+	mov	al,setdma
+	jmps	bios
+;
+dread:					;perform read operation
+	mov	al,readf
+	jmps	bios
+;
+dwrite:					;perform write operation
+	mov	al,writef
+	jmps	bios
+
+				;definition of direct BIOS parameter block
+bpb_func	equ	0
+bpb_CX		equ	1
+bpb_DX		equ	3
+
+bios:
+	mov	bx,offset bpb		;bios parameter block
+	mov	bpb_func[bx],al
+	mov	bpb_cx[bx],cx
+	mov	bpb_dx[bx],dx
+	mov	cl,dirbios
+	mov	dx,bx
+	int	224
+	ret
+	
+;
+start:
+	MOV	SP,(Offset stack)
+	CALL	signonmsg		;display sign on message
+	CALL	sysdskmsg	
+	CALL	ci			;system disk serialize ?
+	AND	AL,0dfh	
+	CMP	AL,'Y'	
+	MOV	AL,dirtrk
+	JNZ	sd1
+	MOV	BX,(Offset sysdsk)	
+	INC	M	
+	MOV	AL,begtrk
+sd1:	MOV	Byte Ptr strtrk,AL
+	CALL	dskslctmsg	
+	CALL	read			;select 1/2, 2/2, or 1/2 & 2/2
+	MOV	BX,(Offset disk)	
+	MOV	M,CL
+	CALL	orgmsg	
+	CALL	read			;origin prompt
+	MOV	BX,(Offset origin)	
+	MOV	M,CL			;saved the origin number
+	INC	BX	
+	MOV	M,CH			;high order origin number byte
+	MOV	BX,(Offset comlen)	
+	MOV	CH,M	
+	INC	BX	
+	XCHG	BX,DX
+	MOV	BX,(Offset aorigin)	;ascii version of the origin
+org2:	MOV	SI,DX	
+	MOV	AL,[SI]	
+	OR	AL,AL	
+	JZ	org3
+	INC	DX	
+	MOV	M,AL	
+	INC	BX	
+	DEC	CH	
+	JNZ	org2
+;ascii version moved to buffer, pad it
+org3:	MOV	M,'-'	
+	INC	BX	
+	MOV	M,'$'			;ready for printing
+;
+;	now read the serial number
+	CALL	sermsg	
+	CALL	read
+	MOV	BX,(Offset bserial)	
+	MOV	M,CL	
+	INC	BX	
+	MOV	M,CH			;binary copied
+	MOV	BX,(Offset comlen)	
+	MOV	AL,5	
+	SUB	AL,M			;difference in reg-a
+	MOV	BX,(Offset aserial)	
+	JZ	pad1			;pad high order positions with 0
+pad0:	MOV	M,'0'	
+	INC	BX	
+	DEC	AL	
+	JNZ	pad0
+pad1:	MOV	DX,(Offset cbuff)	;addressing buffer
+pad2:	MOV	SI,DX	
+	MOV	AL,[SI]	
+	OR	AL,AL	
+	JZ	pad3			;looking for binary 0
+	MOV	M,AL	
+	INC	BX	
+	INC	DX	
+	JMPS	pad2			;another char
+pad3:					;end of ascii fill (right adjusted in aserial)
+;
+rddsk:					;read disk and copy
+	MOV	SP,(Offset stack)	;reset stack pointer (entry from errors)
+	CALL	insmsg	
+	CALL	ci			;wait for response
+;
+nextdisk:
+	CALL	curmsg	
+	CALL	asermsg	
+	CALL	newmsg	
+	CALL	ci
+;new disk is ready, try the copy operation
+	MOV	AL,Byte Ptr strtrk	;get start track
+	MOV	BX,(Offset track)	
+	MOV	M,AL			;initialize the track number
+	MOV	BX,(Offset trcount)	
+	MOV	M,'0'	
+	LAHF	
+	INC	BX	
+	SAHF	
+	MOV	M,'0'
+;
+rdtrk:		;read the next source track, compare with 0e5h for end
+	MOV	BX,(Offset ibuff)	
+	MOV	Word Ptr buffa,BX	
+	CALL	L@3
+	JZ	readok	
+	CALL	read0msg	
+	JMPS	rddsk
+readok:
+;track is in memory, track 0?
+	MOV	AL,Byte Ptr track	
+	OR	AL,AL
+;if track 0, do MPMLDR serialization
+	JNZ	L@9	
+	CALL	serialize
+L@9:
+;
+;track in memory, check for last track
+	MOV	BX,(Offset ibuff)	
+	MOV	CX,trlen
+trcomp:	MOV	AL,0e5h	
+	CMP	AL,M	
+	JNZ	wrtrk
+	INC	BX	
+	DEC	CX	
+	MOV	AL,CL	
+	OR	AL,CH
+	JNZ	trcomp
+;end of copy, all 0e5h's
+endcopy:
+;write serial # into files in FCB table
+	MOV	AL,Byte Ptr sysdsk	
+	OR	AL,AL	
+	MOV	BX,(Offset FCBtabledisk1)
+	JZ	nonsysdsk	
+	MOV	BX,(Offset FCBtablesysdisk1)
+nonsysdsk:
+;write serial # into disk1
+	MOV	AL,Byte Ptr disk	
+	AND	AL,01h	
+	JZ	L@10	
+	CALL	srlfile
+L@10:
+;write serial # into disk2
+	MOV	BX,(Offset FCBtabledisk2)
+	MOV	AL,Byte Ptr disk	
+	AND	AL,02h	
+	JZ	L@11	
+	CALL	srlfile
+L@11:
+	MOV	DX,(Offset trmsg)	
+	CALL	prmsg
+	CALL	incserial	
+	JMP	nextdisk
+;
+;not end of copy, write track to disk from ibuff
+wrtrk:	CALL	L@4
+	JZ	wrok	
+	CALL	write0msg	
+	JMP	nextdisk
+wrok:
+;written to disk, now read it back and compare
+	MOV	BX,(Offset obuff)	
+	MOV	Word Ptr buffa,BX	
+	CALL	L@5
+	JZ	read1ok	
+	CALL	read1msg	
+	JMP	nextdisk
+read1ok:
+	MOV	BX,(Offset ibuff)	
+	MOV	DX,(Offset obuff)	
+	MOV	CX,trlen
+wrcomp:	MOV	SI,DX	
+	MOV	AL,[SI]	
+	CMP	AL,M	
+	JNZ	wrerr
+	INC	BX	
+	INC	DX	
+	DEC	CX	
+	MOV	AL,CL	
+	OR	AL,CH
+	JNZ	wrcomp
+;compare ok, increment track count and cycle
+	MOV	BX,(Offset track)	
+	INC	M
+	MOV	AL,maxtrk+1	
+	CMP	AL,M
+;jump if last track on disk copied
+	JNZ	L@12	
+	JMP	endcopy
+L@12:
+	MOV	BX,(Offset trcount)+1	
+	INC	M	
+	MOV	AL,M	
+	CMP	AL,'9'+1
+	JNB	L@13	
+	JMP	rdtrk			;overflow to high order track number
+L@13:
+	MOV	M,'0'	
+	LAHF	
+	DEC	BX	
+	SAHF	
+	INC	M	
+	JMP	rdtrk
+;
+wrerr:					;verify error
+	CALL	vererr	
+	JMP	nextdisk
+;
+;
+;	utility subroutines
+ci:	MOV	CL,conin	
+	INT	224			;read a character
+	RET
+;
+prmsg:	MOV	CL,pbuff	
+	INT	224			;print a buffer
+	RET
+;
+rderr:	CALL	invalid
+;
+read:					;read constant value to b,c
+	MOV	DX,(Offset maxlen)	
+	MOV	CL,rdbuff	
+	INT	224			;buffer filled
+	MOV	BX,(Offset comlen)	
+	MOV	AL,M	
+	OR	AL,AL	
+	JZ	rderr			;non zero length
+	INC	BX	
+	MOV	DL,AL	
+	MOV	DH,0	
+	ADD	BX,DX			;h,l address last pos+1
+	MOV	M,0			;cleared for end of scan
+	MOV	BX,(Offset cbuff)	
+	MOV	CX,0
+conv:	MOV	AL,M	
+	OR	AL,AL	
+	JNZ	L@14	
+	RET				;return if end of convert
+L@14:
+	SUB	AL,'0'	
+	CMP	AL,10	
+	JNB	rderr
+	PUSH	BX	
+	PUSH	CX	
+	POP	BX			;b,c copied to h,l
+	SHL	BX,1	
+	SHL	BX,1	
+	SHL	BX,1	
+	ADD	BX,CX	
+	ADD	BX,CX
+	PUSH	BX	
+	POP	CX	
+	POP	BX			;bc=bc*10
+	INC	BX	
+	ADD	AL,CL	
+	MOV	CL,AL	
+	MOV	AL,0	
+	ADC	AL,CH	
+	MOV	CH,AL
+	JNB	L@15	
+	JMP	rderr	
+L@15:
+	JMPS	conv			;tested for overflow
+;
+incserial:
+;increment the serial number
+	MOV	BX,Word Ptr bserial	
+	INC	BX	
+	MOV	Word Ptr bserial,BX	;test for overflow
+	MOV	AL,BL	
+	OR	AL,BH	
+	JZ	serover
+;
+	MOV	BX,(Offset aserial)+4	
+	MOV	CH,5			;length of serial number
+inc0:	INC	M	
+	MOV	AL,M	
+	CMP	AL,'9'+1	
+	JNB	L@16	
+	RET				;return if carry
+L@16:
+	MOV	M,'0'			;clear the number
+	DEC	BX	
+	DEC	CH	
+	JNZ	inc0
+;
+serover:
+;overflow in serial number
+	CALL	overmsg
+	MOV	CL,0
+	MOV	DL,0
+	INT	224
+;
+serialize:
+;match ' DIGITAL RESEARCH ' and update serial #
+	MOV	BX,(Offset ibuff)	
+	MOV	CX,nsrlsec*secsiz
+search:	PUSH	BX	
+	PUSH	CX
+	MOV	DX,(Offset Copyright)	
+	MOV	CL,(Offset CoNmLen)
+comp0:	MOV	SI,DX	
+	MOV	AL,[SI]	
+	CMP	AL,M
+	JNZ	nomatch
+	LAHF	
+	INC	BX	
+	SAHF	
+	LAHF	
+	INC	DX	
+	SAHF	
+	DEC	CL	
+	JNZ	comp0
+;match complete, we've found the serial number
+	POP	CX	
+	POP	DX			;clears stack
+	XCHG	BX,DX	
+	MOV	BX,Word Ptr origin	
+	XCHG	BX,DX	
+	MOV	M,DL			;low byte origin
+	LAHF	
+	INC	BX	
+	SAHF	
+	MOV	M,version		;version number in binary
+	LAHF	
+	INC	BX	
+	SAHF	
+	MOV	M,system		;system number in binary
+	LAHF	
+	INC	BX	
+	SAHF	
+	MOV	M,DH			;high byte origin number
+	LAHF				;get the serial number
+	INC	BX
+	SAHF
+	XCHG	BX,DX	
+	MOV	BX,Word Ptr bserial	
+	XCHG	BX,DX
+	MOV	M,DH	
+	LAHF	
+	INC	BX	
+	SAHF	
+	MOV	M,DL
+;MPMLDR serial number is copied
+	RET
+;
+nomatch:				;try for next match
+	POP	CX	
+	POP	BX	
+	INC	BX	
+	DEC	CX	
+	MOV	AL,CL	
+	OR	AL,CH
+	JNZ	search
+;not found
+	CALL	noserial	
+	JMP	rddsk
+;
+rdwrsrlfl:
+	MOV	Byte Ptr iof,AL		;save rdseqf / wrseqf func code
+	PUSH	DX	
+	PUSH	BX
+	MOV	DX,32	
+	LAHF	
+	ADD	BX,DX	
+	RCR	SI,1	
+	SAHF	
+	RCL	SI,1	
+	MOV	M,0			;set nr = 0
+	POP	BX	
+	POP	DX	
+	MOV	CH,nsrlsec		;count = 4 sectors
+flrdwr:
+	PUSH	CX	
+	PUSH	DX	
+	PUSH	BX
+	MOV	CL,stdmadr	
+	INT	224
+	POP	DX	
+	PUSH	DX
+	MOV	AL,Byte Ptr iof	
+	MOV	CL,AL	
+	INT	224
+	POP	BX	
+	POP	DX	
+	POP	CX
+	INC	AL	
+	JZ	srlflerr
+	DEC	CH	
+	JNZ	L@17
+	RET
+L@17:
+	PUSH	BX	
+	MOV	BX,secsiz	
+	LAHF
+	ADD	BX,DX
+	RCR	SI,1
+	SAHF
+	RCL	SI,1
+	XCHG	BX,DX	
+	POP	BX
+	JMPS	flrdwr
+srlflerr:
+	CALL	badMPM	
+	JMP	rddsk
+;
+srlfile:
+;update serial # in all files in the FCB table
+;HL = FCBTable address
+	MOV	Word Ptr FCBtableadr,BX
+;reset disk system
+	PUSH	BX	
+	MOV	CL,resetds	
+	INT	224	
+	POP	BX
+srlflopn:
+	MOV	AL,M	
+	OR	AL,AL	
+	JZ	srlflrdwrvr
+	PUSH	BX	
+	XCHG	BX,DX	
+	MOV	CL,openf
+	INT	224			;open next file from FCB Table
+	POP	BX	
+	INC	AL	
+	JZ	srlflerr
+	MOV	DX,33	
+	ADD	BX,DX	
+	JMPS	srlflopn
+srlflrdwrvr:
+	MOV	BX,Word Ptr FCBtableadr
+flrdwrvr:
+	MOV	AL,M	
+	OR	AL,AL	
+	JNZ	L@18
+	RET
+L@18:
+	PUSH	BX
+srlflrd:
+	MOV	DX,(Offset ibuff)	;dma buffer is ibuff
+	MOV	AL,rdseqf	
+	CALL	rdwrsrlfl
+srlflwr:
+	CALL	serialize		;patch in serial #
+	POP	BX	
+	PUSH	BX
+	MOV	DX,(Offset ibuff)	;dma buffer is ibuff
+	MOV	AL,wrseqf	
+	CALL	rdwrsrlfl
+srlflvr:
+	POP	BX	
+	PUSH	BX
+	MOV	DX,(Offset obuff)	;dma buffer is obuff
+	MOV	AL,rdseqf	
+	CALL	rdwrsrlfl
+	MOV	BX,(Offset ibuff)	
+	MOV	DX,(Offset obuff)	
+	MOV	CX,nsrlsec*secsiz
+flvr:
+	MOV	SI,DX	
+	MOV	AL,[SI]	
+	CMP	AL,M
+	JZ	L@19	
+	JMP	srlflerr
+L@19:
+	INC	BX	
+	INC	DX	
+	DEC	CX
+	MOV	AL,CH	
+	OR	AL,CL
+	JNZ	flvr
+	POP	BX	
+	MOV	DX,33	
+	ADD	BX,DX
+	JMPS	flrdwrvr
+L@20	EQU	$
+	DSEG
+	ORG	Offset L@20
+;
+FCBtablesysdisk1	RS	0
+;
+;	MPM.SYS
+	DB	dstdsk+1		;drive code
+	DB	'MPM     '		;file name
+	DB	'SYS'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+FCBtabledisk1	RS	0
+;	SUP.MPM
+	DB	dstdsk+1		;drive code
+	DB	'SUP     '		;file name
+	DB	'MPM'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+;	RTM.MPM
+	DB	dstdsk+1		;drive code
+	DB	'RTM     '		;file name
+	DB	'MPM'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+;	MEM.MPM
+	DB	dstdsk+1		;drive code
+	DB	'MEM     '		;file name
+	DB	'MPM'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;	CIO.MPM
+	DB	dstdsk+1		;drive code
+	DB	'CIO     '		;file name
+	DB	'MPM'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+;	BDOS.MPM
+	DB	dstdsk+1		;drive code
+	DB	'BDOS    '		;file name
+	DB	'MPM'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+;	GENSYS.CMD
+	DB	dstdsk+1		;drive code
+	DB	'GENSYS  '		;file name
+	DB	'CMD'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+;	MPMLDR.CMD
+	DB	dstdsk+1		;drive code
+	DB	'MPMLDR  '		;file name
+	DB	'CMD'			;file type
+	DB	0			;extent
+	RS	2
+	DB	0			;record count
+	RS	16			;allocation map
+	DB	0			;next record
+;
+	DB	0			;end of FCB Table
+;
+;
+FCBtabledisk2	RS	0
+;			if files on second disk are to be serialized
+;			put their FCBs here
+	DB	0			;end of FCB Table
+L@21	EQU	$
+	CSEG
+	ORG	Offset L@21
+;	print strings
+insmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@22	EQU	$
+	DSEG
+	ORG	Offset L@22
+	DB	cr,lf,'Insert control diskette in '
+	DB	'A'+srcdsk
+	DB	':, type return$'
+L@23	EQU	$
+	CSEG
+	ORG	Offset L@23
+;
+signonmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@24	EQU	$
+	DSEG
+	ORG	Offset L@24
+	DB	cr,lf,'MP/M-86 V'
+	DB	version/10+'0','.',version mod 10 +'0'
+	DB	' Serialization',cr,lf,'$'
+L@25	EQU	$
+	CSEG
+	ORG	Offset L@25
+;
+sysdskmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@26	EQU	$
+	DSEG
+	ORG	Offset L@26
+	DB	cr,lf,'System disk (Y/N)? $'
+L@27	EQU	$
+	CSEG
+	ORG	Offset L@27
+;
+dskslctmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@28	EQU	$
+	DSEG
+	ORG	Offset L@28
+	DB	cr,lf,'Select type of disk serialization:'
+	DB	cr,lf,'  1 = Disk 1/2'
+	DB	cr,lf,'  2 = Disk 2/2'
+	DB	cr,lf,'  3 = Disk 1/2 & 2/2'
+	DB	cr,lf,'?$'
+L@29	EQU	$
+	CSEG
+	ORG	Offset L@29
+;
+orgmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@30	EQU	$
+	DSEG
+	ORG	Offset L@30
+	DB	cr,lf,'Origin number? $'
+L@31	EQU	$
+	CSEG
+	ORG	Offset L@31
+;
+sermsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@32	EQU	$
+	DSEG
+	ORG	Offset L@32
+	DB	cr,lf,'Starting serial number? $'
+L@33	EQU	$
+	CSEG
+	ORG	Offset L@33
+;
+invalid:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@34	EQU	$
+	DSEG
+	ORG	Offset L@34
+	DB	cr,lf,'Invalid number, try again $'
+L@35	EQU	$
+	CSEG
+	ORG	Offset L@35
+;
+curmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@36	EQU	$
+	DSEG
+	ORG	Offset L@36
+	DB	cr,lf,'Serializing disk $'
+L@37	EQU	$
+	CSEG
+	ORG	Offset L@37
+;
+asermsg:
+	MOV	DX,(Offset aorigin)	
+	CALL	prmsg
+	MOV	DX,(Offset aserial)	
+	JMP	prmsg
+;
+newmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@38	EQU	$
+	DSEG
+	ORG	Offset L@38
+	DB	cr,lf,'Insert new diskette in '
+	DB	'A'+dstdsk
+	DB	':, type return$'
+L@39	EQU	$
+	CSEG
+	ORG	Offset L@39
+;
+noserial:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@40	EQU	$
+	DSEG
+	ORG	Offset L@40
+	DB	cr,lf,'Non MP/M-86 diskette, cannot serialize$'
+L@41	EQU	$
+	CSEG
+	ORG	Offset L@41
+;
+badMPM:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@42	EQU	$
+	DSEG
+	ORG	Offset L@42
+	DB	cr,lf,'Bad MP/M-86 files on disk$'
+L@43	EQU	$
+	CSEG
+	ORG	Offset L@43
+;
+vererr:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@44	EQU	$
+	DSEG
+	ORG	Offset L@44
+	DB	cr,lf,'Verification error, bad disk$'
+L@45	EQU	$
+	CSEG
+	ORG	Offset L@45
+;
+overmsg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@46	EQU	$
+	DSEG
+	ORG	Offset L@46
+	DB	cr,lf,'Serial number overflow$'
+L@47	EQU	$
+	CSEG
+	ORG	Offset L@47
+read0msg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@48	EQU	$
+	DSEG
+	ORG	Offset L@48
+	DB	cr,lf,'Error on source disk, replace$'
+L@49	EQU	$
+	CSEG
+	ORG	Offset L@49
+;
+write0msg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@50	EQU	$
+	DSEG
+	ORG	Offset L@50
+	DB	cr,lf,'Cannot write new disk, replace$'
+L@51	EQU	$
+	CSEG
+	ORG	Offset L@51
+;
+read1msg:
+	MOV	DX,(Offset $)+6	
+	JMP	prmsg
+L@52	EQU	$
+	DSEG
+	ORG	Offset L@52
+	DB	cr,lf,'Cannot re-read new disk, replace$'
+;
+;
+;	miscellaneous data areas
+;
+bpb	rb	5			;direct bios param block
+disk	RS	1			;1=1/2, 2=2/2, 3=1/2 & 2/2
+sysdsk	DB	0			;0ffh="system disk"
+strtrk	RS	1			;start track, begtrk or dirtrk
+FCBtableadr RS	2			;FCB table address
+origin	RS	2			;binary origin
+aorig	DB	cr,lf
+aorigin	RS	0
+	DB	'00000-$'
+trmsg	DB	cr,lf
+trcount	RS	0
+	DB	'00 tracks verified$'
+bserial	RS	0
+	RS	2			;binary serial number
+aserial	RS	0
+	DB	'00000$'
+;	skew table  (first byte 0 if no skewing)
+skewtbl	RS	0
+	DB	0			;no skew table for MDS-800
+;	input buffer
+maxlen	DB	7
+comlen	RS	1
+cbuff	RS	8
+;
+	RS	32			;stack
+stack	RS	0
+trlen	EQU	sectrk*secsiz		;buffer size
+ibuff	RS	trlen
+obuff	RS	trlen
+	DB	1			;force hex generation
+	END

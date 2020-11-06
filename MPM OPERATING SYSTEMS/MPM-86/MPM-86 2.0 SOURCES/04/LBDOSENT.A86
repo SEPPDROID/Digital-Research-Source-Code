@@ -1,0 +1,212 @@
+;******************** BDOS entry module ********************
+;
+;       Perform branching, error handling and special
+;       8086 stuff.
+;
+;
+cseg    cpmsegment
+org     bdosoffset
+;
+        db      0,0,0,0,0,0
+;
+;       enter here from the user's program with function number in cl,
+;       and information address in dx
+;
+        JMP  bdose              ;past parameter block
+;
+;       ************************************************
+;       *** relative locations 0009 - 000e           ***
+;       ************************************************
+pererr  dw      persub          ;permanent error subroutine
+seler   dw      selsub          ;select error subroutine
+roderr  dw      rodsub          ;ro disk error subroutine
+rofer   dw      rofsub          ;ro file error subroutine
+;
+;
+bdose:                          ;arrive here from user progs
+        mov     axsave,ax       ;switch stack segment
+        mov     SS_save,ss
+        mov     SP_save,sp
+        mov     ax,cs
+;       add     ax,(bdosoffset+bdoscodesize)/16
+        mov     ss,ax
+        lea     sp,endstack
+;
+                                ;pick up parameter segment
+        mov     ax,ds
+;
+        push    ds              ;save registers
+        push    es
+        push    bp
+        push    di
+        push    si
+;
+        push    ss              ;switch to local segment registers
+        push    ss
+        pop     es
+        pop     ds
+;
+        mov     parametersegment,ax
+        mov     ax,axsave
+;
+        call    oldbdos         ;call 8080 BDOS
+;
+        pop     si              ;unsave 8086 registers
+        pop     di
+        pop     bp
+        pop     es
+        pop     ds
+;
+                                ;switch back to entry stack
+        mov     sp,SP_save
+        mov     ss,SS_save
+        iret                    ; return from interrupt
+;
+;
+oldbdos:                                ;8080 bdos entry point
+        MOV     info,dx                 ;info=dx
+        MOV     linfo,dl                ;linfo = low(info) - don't equ
+        MOV     aret,0                  ;return value defaults to 0000
+        mov     parcopfl,false          ;set true if parameter
+                                        ;block copied from user
+;       MOV     entsp,sp                ;entsp = stackptr
+;       LEA     sp,lstack               ;local stack setup
+        XOR     AL,AL
+        MOV     fcbdsk,AL
+        MOV     resel,AL                ;fcbdsk,resel=false
+        MOV     BX,offset goback        ;common return point
+        PUSH    BX                      ;jmp goback equivalent to ret
+        CMP     cl,nfuncs80
+        jb      branch
+        sub     cl,sfunc86-nfuncs80
+        cmp     cl,nfuncs
+        jb      branch
+        RET
+;                                       ;skip if invalid #
+branch: MOV     bl,cl
+        mov     bh,0
+        MOV     CL,DL                   ;possible output char. to CL
+        add     bx,bx                   ;branch
+        jmp     cs:functab[bx]
+;
+;       dispatch table for functions
+;
+functab dw      wbootf,func1,func2,func3
+        dw      punchf,listf,func6,func7
+        dw      func8,func9,func10,func11
+diskf   equ     12                      ;beginning of disk functions
+        dw      func12,func13,func14,func15
+        dw      func16,func17,func18,func19
+        dw      func20,func21,func22,func23
+        dw      func24,func25,func26,func27
+        dw      func28,func29,func30,func31
+        dw      func32,func33,func34,func35
+        dw      func36,func37,func38,func39
+        dw      func40
+      	dw      func50,func51,func52,func53     ;8086 functions
+ 	dw      func54,func55,func56,func57
+
+nfuncs80        equ     41      ;number of 8080 functions
+sfunc86         equ     50      ;start number for 8086 functions
+nfuncs          equ     49      ;total number of BDOS functions
+;
+;
+;       error subroutines
+persub:                                 ;report permanent error
+        LEA     BX,permsg
+        CALL    errflg                  ;to report the error
+        CMP     AL,ctlc
+        jnz     parret                  ;rnz
+        JMP     wbootf
+                                        ;reboot if response is ctlc
+                                        ;and ignore the error
+;
+selsub:                                 ;report select error
+        LEA     BX,selmsg
+        JMPS    waiterr                 ;wait console before boot
+;
+rodsub:                                 ;report write to R/O disk
+        LEA     BX,rodmsg
+        JMPS    waiterr
+;
+rofsub:                                 ;report read/only file
+        LEA     BX,rofmsg               ;wait for console
+;
+waiterr:
+                                        ;wait for response before boot
+        CALL    errflg
+        JMP     wbootf
+;
+errflg:
+                                        ;report error to console,
+                                        ;message address in BX
+        PUSH    BX
+        CALL    crlf                    ;stack mssg address, new line
+        MOV     AL,curdsk
+        ADD     AL,'A'
+        MOV     dskerr,AL               ;current disk name
+        LEA     CX,dskmsg
+        CALL    print                   ;the error message
+        POP     CX
+        CALL    print                   ;error mssage tail
+        jmp     coninf                   ;jump to input character
+	;note: conin is now coninf for cpm loader, goes to bios
+;
+parsave:
+        ;copy parameterblock from user segment to BDOS segment
+        ;CL-reg = lenght of parameter block
+;
+        push    ds
+        push    ax
+        push    cx
+        mov     parcopfl,true
+        mov     parlg,cl
+        xor     ch,ch
+        mov     si,info
+        mov     infosave,si
+        lea     di,loc_par_area
+        mov     info,di
+	mov	ds,parametersegment
+rep     movs    al,al
+        pop     cx
+        pop     ax
+        pop     ds
+parret: ret
+;
+parsave33:
+        ;copy 33 byte length parameterblock
+        push    cx
+        mov     cl,33
+        jmps    pscommon
+;
+parsave36:
+        ;copy 36 byte length parameterblock
+        push    cx
+        mov     cl,36
+pscommon:
+        call    parsave
+        pop     cx
+        ret
+;
+parunsave:
+        ;copy local parameter block to user segment
+;
+        push    es
+        push    ax
+        push    cx
+        mov     cl,parlg
+        xor     ch,ch
+        mov     es,parametersegment
+        lea     si,loc_par_area
+        mov     di,infosave
+        mov     info,di
+rep     movs    al,al
+        pop     cx
+        pop     ax
+        pop     es
+        ret
+;
+;
+;***************** end BDOS entry module ****************
+end
+
